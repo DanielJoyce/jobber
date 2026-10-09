@@ -1066,7 +1066,7 @@
   verified: "2026-10-09"
   family_signals: ["state-of-arizona.career-pages.com link; Clinch Talent asset buckets; robots comment 'State of Arizona Robots Txt'; AWS WAF challenge.js on page"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.azstatejobs.gov: Robots allows search and detail (Crawl-delay 5; only candidate_details, /me/, /api/, block fragments disallowed). The page loads an AWS WAF challenge script and the Virginia twin on the same platform answered a second request with a 202 challenge, so it is treated as bot-gated until proven otherwise. Follow-up."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.azstatejobs.gov: Robots allows search and detail (Crawl-delay 5; only candidate_details, /me/, /api/, block fragments disallowed). The page loads an AWS WAF challenge script and the Virginia twin on the same platform answered a second request with a 202 challenge, so it is treated as bot-gated until proven otherwise. Re-tested later on 2026-10-09 (plain polite client, 7 s apart): the home page, /jobs/search?query=analyst and robots.txt all answered 200 with server-rendered results and no 202 challenge, so it is a build candidate. Left manual pending a re-test on two or three more days because the survey's challenge was intermittent; a 202 means stop, never retry around it."}
   policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -2113,7 +2113,7 @@
   verified: "2026-10-09"
   family_signals: ["www.jobs.virginia.gov rec-marketing assets and va-careers.career-pages.com links; robots comment 'Commonwealth of VA Careers Robots Txt'"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.jobs.virginia.gov: Robots allows search and detail (Crawl-delay 5). First request returned the listing, the second a 202 AWS WAF challenge, so treated as bot-gated. The bare host jobs.virginia.gov also fails TLS verification (missing intermediate); use www. Follow-up."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.jobs.virginia.gov: Robots allows search and detail (Crawl-delay 5). First request returned the listing, the second a 202 AWS WAF challenge, so treated as bot-gated. The bare host jobs.virginia.gov also fails TLS verification (missing intermediate); use www. Re-tested later on 2026-10-09 (plain polite client, 7 s apart): the home page, /jobs/search?query=analyst and robots.txt all answered 200 with server-rendered results and no 202 challenge, so it is a build candidate. Left manual pending a re-test on two or three more days because the survey's challenge was intermittent; a 202 means stop, never retry around it."}
   policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
