@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791578811,"nonce":"ARU6bdxfsOsZT2SG+kZDtKcuip8=","message":"Landed in PR #29 (85c3c4d). Derived status over an append-only event log, kanban with closed lane and staleness, drawer with history/contacts/attachments/next action, follow-ups with 21-day nudges, keyboard moves.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791578811,"nonce":"fUiA2bQSu09xmVf6CrAg7MIN2KU=","status":2}]}
