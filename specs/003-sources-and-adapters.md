@@ -220,6 +220,7 @@ from datetime import datetime
 from jobhunter.core.models import JobStub, JobDetail, SourceRow, Query
 from jobhunter.core.fetch import FetchContext
 
+
 class SourceAdapter(Protocol):
     family: str
 
@@ -243,7 +244,7 @@ class SourceAdapter(Protocol):
 class FetchContext:
     def get(self, url, *, params=None, ttl=None) -> CachedResponse: ...
     def post(self, url, *, data=None, json=None) -> CachedResponse: ...
-    def session(self) -> httpx.Client: ...          # per-source cookie jar, warmed
+    def session(self) -> httpx.Client: ...  # per-source cookie jar, warmed
     def page(self) -> "playwright.sync_api.Page": ...  # lazy; raises if tier != browser
     def policy(self) -> SourcePolicy: ...
 ```
