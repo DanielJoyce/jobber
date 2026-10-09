@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% macro err(name) %}{% if errors.get(name) %}<p class="field-error" id="err-{{ name | replace('.', '-') }}" role="alert">{{ errors[name] }}</p>{% endif %}{% endmacro %}
+{% macro inv(name) %}{% if errors.get(name) %} aria-invalid="true" aria-describedby="err-{{ name | replace('.', '-') }}"{% endif %}{% endmacro %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='prefs.css') }}">{% endblock %}
+{% block main %}
+<div class="prefs">
+  <header class="prefs-head">
+    <h1>Preferences</h1>
+    <p class="muted">Edits <code>{{ source_file }}</code>. Comments and ordering in the file are kept; hand edits are logged below.</p>
+    <nav class="prefs-toc" aria-label="Sections">
+      {% for id, label in sections %}<a href="#sec-{{ id }}"{% if id == "recency" %} class="paid-link"{% endif %}>{{ label }}</a>{% endfor %}
+      <a href="#sec-history">History</a>
+    </nav>
+  </header>
+
+  {% if conflict %}
+  <div class="banner banner-conflict" role="alert">
+    <strong>The preferences file changed on disk since this page loaded.</strong>
+    Nothing was saved, so the hand edit is not overwritten. Your unsaved values are still in the form below.
+    <a class="button" href="/prefs">Reload from file</a>
+  </div>
+  {% endif %}
+  {% if flash %}<div class="banner banner-ok" role="status">{{ flash }}</div>{% endif %}
+  {% if errors %}
+  <div class="banner banner-error" role="alert">
+    <strong>Not saved.</strong> Fix the highlighted fields; nothing is written until the whole profile validates.
+    {% for k, m in other_errors.items() %}<div><code>{{ k }}</code>: {{ m }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="prefs-layout">
+    <form id="prefs-form" class="prefs-form" method="post" action="/prefs/save"
+          hx-post="/prefs/preview" hx-target="#prefs-preview" hx-swap="innerHTML"
+          hx-trigger="input delay:500ms, change delay:500ms, prefs-changed from:body delay:100ms">
+      <input type="hidden" name="mtime_ns" value="{{ mtime_ns }}">
+
+      <section class="panel" id="sec-pay">
+        <h2>Pay <span class="kind free">free</span></h2>
+        <div class="grid2">
+          <label>Salary floor
+            <input type="text" inputmode="decimal" name="hard.salary_floor.amount" value="{{ v['hard.salary_floor.amount'] }}" placeholder="none"{{ inv('hard.salary_floor.amount') }}>
+          </label>
+          <label>Target salary
+            <input type="text" inputmode="decimal" name="hard.salary_target.amount" value="{{ v['hard.salary_target.amount'] }}" placeholder="floor × 1.2"{{ inv('hard.salary_target.amount') }}>
+          </label>
+          <label>Period
+            <select name="salary_period"{{ inv('salary_period') }}>
+              {% for p in periods %}<option value="{{ p }}"{% if v['salary_period'] == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+            </select>
+          </label>
+        </div>
+        {{ err('hard.salary_floor.amount') }}{{ err('hard.salary_target.amount') }}{{ err('salary_period') }}
+        <label class="check"><input type="checkbox" name="hard.hide_unstated_salary" value="1"{% if v['hard.hide_unstated_salary'] %} checked{% endif %}> Hide jobs with no stated salary</label>
+        <p class="hint">Off by default: a missing salary is not evidence of low pay.</p>
+      </section>
+
+      <section class="panel" id="sec-where">
+        <h2>Where <span class="kind free">free</span></h2>
+        <p class="hint">Click a state to cycle it: neutral → ranked → excluded. Ranked states show their rank; re-rank by cycling a state back to neutral and ranking it again.</p>
+        {% include "_prefs_states.html" %}
+        {{ err('state_ranking') }}{{ err('states_excluded') }}
+        {% if states_allowed != "all" %}<p class="hint">From the file, <code>states_allowed</code> is limited to {{ states_allowed | join(", ") }}; edit the file to change it.</p>{% endif %}
+        <div class="grid2">
+          <label class="check"><input type="checkbox" name="hard.remote_ok" value="1"{% if v['hard.remote_ok'] %} checked{% endif %}> Remote OK</label>
+          <label>Remote bonus
+            <input type="number" step="1" name="soft.remote_bonus" value="{{ v['soft.remote_bonus'] }}"{{ inv('soft.remote_bonus') }}>
+          </label>
+          <label class="check"><input type="checkbox" name="hard.relocation_ok" value="1"{% if v['hard.relocation_ok'] %} checked{% endif %}> Relocation OK</label>
+        </div>
+        {{ err('soft.remote_bonus') }}
+      </section>
+
+      <section class="panel" id="sec-what">
+        <h2>What <span class="kind free">free</span></h2>
+        <div class="grid2">
+          <label>Target titles <span class="hint">one per line</span>
+            <textarea name="target_titles" rows="4"{{ inv('target_titles') }}>{{ v['target_titles'] }}</textarea>
+          </label>
+          <label>Title exclusions <span class="hint">one per line</span>
+            <textarea name="hard.title_exclusions" rows="4"{{ inv('hard.title_exclusions') }}>{{ v['hard.title_exclusions'] }}</textarea>
+          </label>
+        </div>
+        {{ err('target_titles') }}{{ err('hard.title_exclusions') }}
+        <fieldset class="checks">
+          <legend>Employment types excluded</legend>
+          {% for e in employment_choices %}<label class="check"><input type="checkbox" name="hard.employment_types_excluded" value="{{ e }}"{% if e in v['hard.employment_types_excluded'] %} checked{% endif %}> {{ e | replace('_', ' ') }}</label>{% endfor %}
+        </fieldset>
+        {{ err('hard.employment_types_excluded') }}
+        <fieldset class="checks">
+          <legend>Credentials you lack</legend>
+          {% for c in credential_choices %}<label class="check"><input type="checkbox" name="hard.requires_i_lack" value="{{ c }}"{% if c in v['hard.requires_i_lack'] %} checked{% endif %}> {{ c | replace('_', ' ') }}</label>{% endfor %}
+        </fieldset>
+        {{ err('hard.requires_i_lack') }}
+      </section>
+
+      <section class="panel" id="sec-weights">
+        <h2>Weights <span class="kind free">free</span></h2>
+        <p class="hint">Normalized to 1.0 on save.</p>
+        <div class="weights">
+          {% for k in weight_keys %}
+          <label class="weight">
+            <span>{{ k }}</span>
+            <input type="range" min="0" max="100" step="1" name="w.{{ k }}" value="{{ v['w.' ~ k] }}" data-weight>
+            <output data-weight-out="{{ k }}">{{ "%.2f" | format((v['w.' ~ k] | int) / 100) }}</output>
+          </label>
+          {% endfor %}
+        </div>
+        {{ err('weights') }}
+      </section>
+
+      <section class="panel" id="sec-buckets">
+        <h2>Buckets <span class="kind free">free</span></h2>
+        <p class="hint">Thresholds for A–G (specs/006). Defaults in grey.</p>
+        <div class="thresholds">
+          {% for k in threshold_keys %}
+          <label>{{ k | replace('_', ' ') }}
+            <input type="number" step="1" min="0" max="100" name="buckets.{{ k }}" value="{{ v['buckets.' ~ k] }}"{{ inv('buckets.' ~ k) }}>
+            <span class="hint">default {{ defaults[k] | int }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% for k in threshold_keys %}{{ err('buckets.' ~ k) }}{% endfor %}
+      </section>
+
+      <section class="panel" id="sec-queries">
+        <h2>Search queries <span class="kind free">free; affects the next run</span></h2>
+        <p class="hint">One query per line: comma-separated keywords, or a mapping such as <code>{keywords: [systems], occupation_code: "2210"}</code>.</p>
+        <textarea name="queries" rows="5" class="mono"{{ inv('queries') }}>{{ v['queries'] }}</textarea>
+        {{ err('queries') }}
+      </section>
+
+      <section class="panel" id="sec-spend">
+        <h2>Spend <span class="kind">read-only</span></h2>
+        <dl class="kv">
+          <dt>Daily LLM cap</dt><dd>${{ "%.2f" | format(spend.daily_cap_usd) }}</dd>
+          <dt>Weekly LLM cap</dt><dd>${{ "%.2f" | format(spend.weekly_cap_usd) }}</dd>
+          <dt>Stage 3 shortlist</dt><dd>{{ spend.deep_shortlist }} jobs</dd>
+        </dl>
+        <p class="hint">Caps live in <code>config.toml</code> under <code>[scoring]</code>; edit them there.</p>
+      </section>
+
+      <div class="paid-divider" role="separator"><span>Paid: changes below cost money to re-apply to existing jobs</span></div>
+
+      <section class="panel paid" id="sec-recency">
+        <h2>Recency <span class="kind paid">paid</span></h2>
+        <div class="grid2">
+          <label>Since <span class="hint">YYYY-MM</span>
+            <input type="text" name="current_focus.since" value="{{ v['current_focus.since'] }}" placeholder="2024-01"{{ inv('current_focus.since') }}>
+          </label>
+        </div>
+        {{ err('current_focus.since') }}
+        <label>What you're doing now
+          <textarea name="current_focus.doing" rows="3"{{ inv('current_focus.doing') }}>{{ v['current_focus.doing'] }}</textarea>
+        </label>
+        <div class="grid2">
+          <label>Want more of <span class="hint">one per line</span>
+            <textarea name="current_focus.want_more_of" rows="4">{{ v['current_focus.want_more_of'] }}</textarea>
+          </label>
+          <label>Done with <span class="hint">one per line</span>
+            <textarea name="current_focus.done_with" rows="4">{{ v['current_focus.done_with'] }}</textarea>
+          </label>
+        </div>
+        {{ err('current_focus.doing') }}{{ err('current_focus.want_more_of') }}{{ err('current_focus.done_with') }}
+      </section>
+
+      <section class="panel paid" id="sec-narrative">
+        <h2>Narrative <span class="kind paid">paid</span></h2>
+        {% for k, label in [("want", "Want"), ("avoid", "Avoid"), ("dealbreakers_soft", "Soft dealbreakers"), ("context", "Context")] %}
+        <label>{{ label }}
+          <textarea name="narrative.{{ k }}" rows="4"{{ inv('narrative.' ~ k) }}>{{ v['narrative.' ~ k] }}</textarea>
+        </label>
+        {{ err('narrative.' ~ k) }}
+        {% endfor %}
+      </section>
+
+      <section class="panel paid" id="sec-resume">
+        <h2>Resume <span class="kind paid">paid</span></h2>
+        <dl class="kv">
+          <dt>Path</dt><dd><code>{{ resume.path or "—" }}</code></dd>
+          <dt>Last modified</dt><dd>{{ resume.modified or "—" }}</dd>
+          <dt>Hash</dt><dd><code>{{ resume.sha256 }}</code></dd>
+        </dl>
+        {% if resume.changed %}
+        <p class="warn" role="status">Changed since last scoring: the resume, recency or narrative differ from what the latest scores used. New jobs use the new version; existing scores keep the old one until re-scored.</p>
+        {% elif not resume.scored %}<p class="hint">Nothing scored yet.</p>
+        {% else %}<p class="hint">Unchanged since the last scoring run.</p>{% endif %}
+        <p class="hint">Edit the resume file directly; the change is detected on the next page load.</p>
+      </section>
+
+      <div class="actions">
+        <a class="button" href="/prefs">Cancel</a>
+        <button type="submit" class="button primary">Save</button>
+      </div>
+    </form>
+
+    <aside class="prefs-side" aria-live="polite">
+      <div class="panel" id="prefs-preview">
+        <p class="muted">Change a setting to preview its effect before saving.</p>
+      </div>
+      {% if pending %}
+      <div class="panel">
+        <h2>Queued re-scores</h2>
+        <ul class="plain">
+          {% for r in pending %}<li>{{ r.scope }}: {{ r.job_count }} jobs ≈ ${{ "%.2f" | format(r.estimated_usd) }} <span class="muted">{{ r.requested_at[:10] }}</span></li>{% endfor %}
+        </ul>
+        <p class="hint">Picked up by the next scoring run; counts against the spend cap.</p>
+      </div>
+      {% endif %}
+    </aside>
+  </div>
+
+  <section class="panel" id="sec-history">
+    <h2>History</h2>
+    {% if history %}
+    <div class="table-wrap">
+      <table class="history">
+        <thead><tr><th>When</th><th>Field</th><th>Old</th><th>New</th><th>Source</th><th></th></tr></thead>
+        <tbody>
+          {% for h in history %}
+          <tr>
+            <td class="nowrap">{{ h.at[:16] | replace('T', ' ') }}</td>
+            <td><code>{{ h.field_path }}</code></td>
+            <td>{{ h.old }}</td>
+            <td>{{ h.new }}</td>
+            <td>{{ h.source }}</td>
+            <td>{% if h.revertable %}<form method="post" action="/prefs/revert/{{ h.id }}"><button type="submit" class="button small">Revert</button></form>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<p class="muted">No changes yet.</p>{% endif %}
+  </section>
+</div>
+<script src="{{ url_for('static', path='prefs.js') }}" defer></script>
+{% endblock %}

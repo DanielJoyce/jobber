@@ -18,7 +18,13 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.config import Settings
 from jobhunter.console import dashboard as dash
-from jobhunter.console import detail_routes, inbox_routes, pages_routes, tracking_routes
+from jobhunter.console import (
+    detail_routes,
+    inbox_routes,
+    pages_routes,
+    prefs_routes,
+    tracking_routes,
+)
 from jobhunter.core import db, geo
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile
 
@@ -236,6 +242,7 @@ def create_app(
         return templates.TemplateResponse(request, "_state_table.html", ctx)
 
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
+    prefs_routes.register(app, templates, get_conn, NAV, now)
 
     # Placeholders last, only for nav pages no module has claimed yet. New pages need no
     # edit here (this list used to conflict on every parallel console branch).

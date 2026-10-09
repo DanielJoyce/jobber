@@ -1,0 +1,18 @@
+<div id="state-picker" class="state-picker">
+  <input type="hidden" name="state_ranking" value="{{ picker.ranking | join(',') }}">
+  <input type="hidden" name="states_excluded" value="{{ picker.excluded | join(',') }}">
+  <div class="tile-grid" style="grid-template-columns: repeat({{ picker.cols }}, 1fr); grid-template-rows: repeat({{ picker.rows }}, auto);">
+    {% for t in picker.tiles %}
+    <button type="button" class="tile tile-{{ t.state }}" style="grid-row: {{ t.row }}; grid-column: {{ t.col }};"
+            data-state="{{ t.code }}" aria-label="{{ t.label }}" title="{{ t.label }}"
+            hx-post="/prefs/state/{{ t.code }}" hx-target="#state-picker" hx-swap="outerHTML"
+            hx-include="#state-picker">
+      <span class="code">{{ t.code }}</span>{% if t.rank %}<span class="rank">{{ t.rank }}</span>{% elif t.state == "excluded" %}<span class="rank">×</span>{% endif %}
+    </button>
+    {% endfor %}
+  </div>
+  <p class="picker-summary">
+    <span class="legend-item"><span class="swatch tile-ranked"></span> ranked: {{ picker.ranking | join(" › ") or "none" }}</span>
+    <span class="legend-item"><span class="swatch tile-excluded"></span> excluded: {{ picker.excluded | join(", ") or "none" }}</span>
+  </p>
+</div>
