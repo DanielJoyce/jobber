@@ -1,0 +1,38 @@
+{# KPI row (specs/013 "KPI row"). Context: k = dashboard.kpis(), range. #}
+{% macro spark(series, label) -%}
+{% set pts = sparkline(series) %}
+{% if pts %}<svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" role="img" aria-label="{{ label }}"><polyline points="{{ pts }}" /></svg>{% endif %}
+{%- endmacro %}
+<div class="kpi-row">
+  <a class="kpi" href="/inbox?bucket=A,B&amp;new={{ range }}">
+    <span class="kpi-label">New A + B</span>
+    <span class="kpi-value" data-kpi="new_ab">{{ k.new_ab.value }}</span>
+    <span class="kpi-sub">{% if k.new_ab.delta > 0 %}+{% endif %}{{ k.new_ab.delta }} vs previous {{ range }}d</span>
+    {{ spark(k.new_ab.series, "New A+B per day, last " ~ range ~ " days") }}
+  </a>
+  <a class="kpi" href="/pipeline">
+    <span class="kpi-label">In flight</span>
+    <span class="kpi-value" data-kpi="in_flight">{{ k.in_flight.value }}</span>
+    <span class="kpi-sub">applied through interview</span>
+    {{ spark(k.in_flight.series, "Applications in flight per day") }}
+  </a>
+  <a class="kpi" href="/followups">
+    <span class="kpi-label">Follow-ups</span>
+    <span class="kpi-value" data-kpi="followups">{{ k.followups.due }} <small>due</small></span>
+    <span class="kpi-sub">{% if k.followups.overdue %}<span class="status-serious" aria-hidden="true">&#9888;</span> {{ k.followups.overdue }} overdue{% else %}none overdue{% endif %}</span>
+  </a>
+  <a class="kpi" href="/pipeline">
+    <span class="kpi-label">Response rate (30d)</span>
+    {% set rr = k.response_rate %}
+    <span class="kpi-value" data-kpi="response_rate">{% if rr.rate is not none %}{{ (rr.rate * 100) | round | int }}%{% else %}&mdash;{% endif %} <small>({{ rr.numerator }}/{{ rr.denominator }})</small></span>
+    <span class="kpi-sub">responses / applied</span>
+    {{ spark(rr.series, "Response rate per week") }}
+  </a>
+  <a class="kpi" href="/costs">
+    <span class="kpi-label">LLM spend / week</span>
+    {% set sp = k.llm_spend %}
+    <span class="kpi-value" data-kpi="llm_spend">${{ "%.2f" | format(sp.week_usd) }} <small>/ ${{ "%.0f" | format(sp.cap_usd) }}</small></span>
+    <span class="kpi-sub">{% if sp.over_cap %}<span class="status-critical" aria-hidden="true">&#9888;</span> over cap{% else %}last 7 days{% endif %}</span>
+    {{ spark(sp.series, "LLM spend per day") }}
+  </a>
+</div>
