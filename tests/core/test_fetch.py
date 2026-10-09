@@ -459,6 +459,34 @@ def test_rate_limiter_jitter_bounds():
     assert len(set(waits)) > 1
 
 
+def page_times(server, path: str) -> list[float]:
+    return [t for r, t in zip(server.requests, server.times, strict=True) if r.url.path == path]
+
+
+def test_crawl_delay_floors_the_interval(make_ctx, server):
+    server.route(f"{HOST}/robots.txt", httpx.Response(200, text="User-agent: *\nCrawl-delay: 10\n"))
+    server.route(f"{HOST}/a", httpx.Response(200, text="a"))
+    server.route(f"{HOST}/b", httpx.Response(200, text="b"))
+    # rps 1.0 asks for 1s; jitter would scatter that to 0.75-1.25s, but the floor holds at 10s.
+    ctx = make_ctx(make_source(rate_limit={"rps": 1.0, "jitter": True}))
+    ctx.get(f"{HOST}/a")
+    ctx.get(f"{HOST}/b")
+    a, b = page_times(server, "/a")[0], page_times(server, "/b")[0]
+    assert b - a >= 10
+
+
+def test_crawl_delay_prefers_our_product_token(make_ctx, server):
+    robots = "User-agent: *\nCrawl-delay: 2\n\nUser-agent: jobhunter\nCrawl-delay: 30\n"
+    server.route(f"{HOST}/robots.txt", httpx.Response(200, text=robots))
+    server.route(f"{HOST}/a", httpx.Response(200, text="a"))
+    server.route(f"{HOST}/b", httpx.Response(200, text="b"))
+    ctx = make_ctx(make_source(rate_limit={"rps": 1.0}))
+    ctx.get(f"{HOST}/a")
+    ctx.get(f"{HOST}/b")
+    a, b = page_times(server, "/a")[0], page_times(server, "/b")[0]
+    assert b - a >= 30
+
+
 def test_default_rate_limit_from_settings(make_ctx, server, settings):
     server.route(f"{HOST}/a", httpx.Response(200))
     ctx = make_ctx(make_source(rate_limit=None))

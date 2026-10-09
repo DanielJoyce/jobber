@@ -354,6 +354,7 @@ class FetchContext:
                 sleep=self._sleep,
                 jitter=self.rate_limit.jitter,
                 rng=self._rng,
+                floor=self._crawl_delay(str(request.url)),
             )
             retry_after: float | None = None
             with gsem, self._source_sem:
@@ -389,6 +390,16 @@ class FetchContext:
             log.info("retrying %s in %.1fs after %s", url, delay, detail)
             self._sleep(delay)
         raise TransientFetchError(url, f"{detail} after {attempt + 1} attempt(s)", status=status)
+
+    def _crawl_delay(self, url: str) -> float:
+        """Robots Crawl-delay for the URL's origin, if its rules are already cached; else 0.
+
+        The per-host interval is max(1/rps, crawl_delay). Rules are only read from the cache so
+        that fetching robots.txt itself never recurses.
+        """
+        rules = ROBOTS.cached(url)
+        delay = rules.crawl_delay() if rules is not None else None
+        return delay or 0.0
 
     def _backoff(self, attempt: int) -> float:
         base = min(BACKOFF_CAP_S, BACKOFF_BASE_S * (2**attempt))
@@ -448,6 +459,7 @@ class FetchContext:
                 sleep=self._sleep,
                 jitter=self.rate_limit.jitter,
                 rng=self._rng,
+                floor=self._crawl_delay(request.url),
             )
         route.continue_()
 

@@ -30,10 +30,15 @@ class HostRateLimiter:
         sleep: Sleep,
         jitter: bool = False,
         rng: random.Random | None = None,
+        floor: float = 0.0,
     ) -> float:
-        """Block until ``host`` may be hit again. Returns the seconds waited."""
+        """Block until ``host`` may be hit again. Returns the seconds waited.
+
+        ``floor`` is a minimum interval that jitter never goes below (robots Crawl-delay).
+        """
         if jitter:
             interval *= (rng or random.Random()).uniform(0.75, 1.25)
+        interval = max(interval, floor)
         with self._lock:
             now = clock()
             start = max(now, self._next.get(host, now))
