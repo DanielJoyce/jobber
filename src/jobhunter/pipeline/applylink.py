@@ -162,6 +162,14 @@ def _fetchable(url: str) -> str:
     return urldefrag(url).url
 
 
+def _http_target(value: str) -> bool:
+    """Whether a redirect target is an http(s) URL. Malformed values are not."""
+    try:
+        return is_http_url(value)
+    except ValueError:  # urlsplit rejects e.g. "http://["
+        return False
+
+
 def _is_html(resp: CachedResponse) -> bool:
     ctype = resp.headers.get("content-type", "").lower()
     return not ctype or "html" in ctype
@@ -196,7 +204,7 @@ def resolve_url(
     def step(target: str, method: HopMethod) -> bool:
         """Append a hop; False (with res filled in) if the walk must stop."""
         nonlocal url
-        if not is_http_url(target):
+        if not _http_target(target):
             res.error = f"non-http destination: {target[:200]}"
             res.final_url = url
             return False
@@ -242,14 +250,14 @@ def resolve_url(
         except FetchError as exc:  # TransientFetchError and friends
             res.error, res.final_url = str(exc), url
             return res
-        except Exception as exc:  # e.g. httpx.InvalidURL from a malformed Location header
-            res.error, res.final_url = f"{type(exc).__name__}: {exc}", url
-            return res
         set_status(resp.status)
         res.final_url = url
 
         if resp.is_redirect:
             target = resp.location or ""
+            if not _http_target(target):
+                res.error = f"non-http destination: {target[:200]}"
+                return res
             if _left_posting(rule, url, target):
                 res.status, res.ats = ApplyStatus.expired, rule.name if rule else None
                 res.fetched = True
@@ -473,6 +481,10 @@ def reverify(
     try:
         resp = ctx.get(_fetchable(url), follow_redirects=False)
         if resp.is_redirect and resp.location:
+            if not _http_target(resp.location):
+                link.error = f"non-http destination: {resp.location[:200]}"
+                _save(conn, link)
+                return link
             left_posting = _left_posting(rule, url, resp.location)
             if not left_posting:
                 url = resp.location
@@ -481,7 +493,7 @@ def reverify(
         link.status, link.error = ApplyStatus.blocked, str(exc)
         _save(conn, link)
         return link
-    except Exception as exc:  # FetchError, or httpx.InvalidURL from a malformed Location
+    except FetchError as exc:
         link.error = f"{type(exc).__name__}: {exc}"
         _save(conn, link)
         return link

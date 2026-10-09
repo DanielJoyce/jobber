@@ -459,6 +459,34 @@ def test_rate_limiter_jitter_bounds():
     assert len(set(waits)) > 1
 
 
+def page_times(server, path: str) -> list[float]:
+    return [t for r, t in zip(server.requests, server.times, strict=True) if r.url.path == path]
+
+
+def test_crawl_delay_floors_the_interval(make_ctx, server):
+    server.route(f"{HOST}/robots.txt", httpx.Response(200, text="User-agent: *\nCrawl-delay: 10\n"))
+    server.route(f"{HOST}/a", httpx.Response(200, text="a"))
+    server.route(f"{HOST}/b", httpx.Response(200, text="b"))
+    # rps 1.0 asks for 1s; jitter would scatter that to 0.75-1.25s, but the floor holds at 10s.
+    ctx = make_ctx(make_source(rate_limit={"rps": 1.0, "jitter": True}))
+    ctx.get(f"{HOST}/a")
+    ctx.get(f"{HOST}/b")
+    a, b = page_times(server, "/a")[0], page_times(server, "/b")[0]
+    assert b - a >= 10
+
+
+def test_crawl_delay_prefers_our_product_token(make_ctx, server):
+    robots = "User-agent: *\nCrawl-delay: 2\n\nUser-agent: jobhunter\nCrawl-delay: 30\n"
+    server.route(f"{HOST}/robots.txt", httpx.Response(200, text=robots))
+    server.route(f"{HOST}/a", httpx.Response(200, text="a"))
+    server.route(f"{HOST}/b", httpx.Response(200, text="b"))
+    ctx = make_ctx(make_source(rate_limit={"rps": 1.0}))
+    ctx.get(f"{HOST}/a")
+    ctx.get(f"{HOST}/b")
+    a, b = page_times(server, "/a")[0], page_times(server, "/b")[0]
+    assert b - a >= 30
+
+
 def test_default_rate_limit_from_settings(make_ctx, server, settings):
     server.route(f"{HOST}/a", httpx.Response(200))
     ctx = make_ctx(make_source(rate_limit=None))
@@ -584,3 +612,64 @@ def test_cached_response_decoding(tmp_path):
     resp = mk({})
     resp.content_hash = jh
     assert resp.json() == {"a": 1}
+
+
+CP1252_PAGE = "<html><body>café</body></html>".encode("cp1252")
+
+
+def test_windows_1252_charset_survives_ttl_and_304(make_ctx, server, conn):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("if-none-match") == '"p1"':
+            return httpx.Response(304, headers={"ETag": '"p1"'})
+        return httpx.Response(
+            200,
+            content=CP1252_PAGE,
+            headers={"Content-Type": "text/html; charset=windows-1252", "ETag": '"p1"'},
+        )
+
+    server.route(f"{HOST}/old", handler)
+    ctx = make_ctx()
+    first = ctx.get(f"{HOST}/old")
+    assert first.text == "<html><body>café</body></html>"
+    from_ttl = ctx.get(f"{HOST}/old", ttl=timedelta(hours=1))
+    assert from_ttl.from_cache and from_ttl.text == first.text
+    from_304 = ctx.get(f"{HOST}/old")
+    assert from_304.from_cache and from_304.text == first.text
+    assert server.hits("/old") == 2  # the ttl hit made no request
+    # One row for the 200 and one for the 304; ttl hits write no row.
+    rows = log_rows(conn, f"{HOST}/old")
+    assert [r["http_status"] for r in rows] == [200, 304]
+    assert [r["content_type"] for r in rows] == ["text/html; charset=windows-1252"] * 2
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        '<meta charset="windows-1252">',
+        '<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">',
+    ],
+)
+def test_meta_charset_sniffed_when_no_content_type_charset(make_ctx, server, meta):
+    body = f"<html><head>{meta}</head><body>café</body></html>".encode("cp1252")
+    server.route(
+        f"{HOST}/sniff", httpx.Response(200, content=body, headers={"Content-Type": "text/html"})
+    )
+    resp = make_ctx().get(f"{HOST}/sniff")
+    assert resp.encoding == "cp1252"
+    assert "café" in resp.text
+
+
+def test_no_charset_anywhere_falls_back_to_utf8_replacement(make_ctx, server):
+    server.route(f"{HOST}/plain", httpx.Response(200, content=CP1252_PAGE))
+    assert "caf�" in make_ctx().get(f"{HOST}/plain").text
+
+
+@pytest.mark.parametrize("location", ["mailto:jobs@example.com", "javascript:void(0)", "http://["])
+@pytest.mark.parametrize("follow", [False, True])
+def test_non_http_location_is_returned_not_raised(make_ctx, server, location, follow):
+    server.route(f"{HOST}/go", httpx.Response(302, headers={"Location": location}))
+    resp = make_ctx().get(f"{HOST}/go", follow_redirects=follow)
+    assert resp.status == 302
+    assert resp.is_redirect
+    assert resp.location == location
+    assert server.hits("/go") == 1  # never followed

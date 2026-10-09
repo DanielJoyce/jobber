@@ -90,6 +90,27 @@ def _host_key(url: httpx.URL) -> str:
     return url.netloc.decode("ascii").lower()
 
 
+def _is_http_url(value: str) -> bool:
+    try:
+        parts = urlsplit(value)
+    except ValueError:  # e.g. "http://[" (unbalanced IPv6 bracket)
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
+
+
+_RAW_RESPONSE = "jobhunter.raw_response"
+
+
+def _keep_response(response: httpx.Response) -> None:
+    """Response hook: runs before httpx builds the next redirect hop.
+
+    httpx raises while building that hop when Location is not http(s) (mailto:, javascript:,
+    malformed). Keeping the 3xx here lets _send return it instead of leaking the exception.
+    """
+    response.read()
+    response.request.extensions[_RAW_RESPONSE] = response
+
+
 class FetchContext:
     """Per-source network access: cache, fetch_log, robots, rate limits, retries, sessions."""
 
@@ -143,6 +164,7 @@ class FetchContext:
                 headers={"User-Agent": self.settings.user_agent},
                 timeout=self.settings.fetch.timeout_s,
                 follow_redirects=False,
+                event_hooks={"response": [_keep_response]},
             )
         return self._client
 
@@ -229,9 +251,12 @@ class FetchContext:
     ) -> CachedResponse:
         self._check_policy()
         client = self.session()
-        request = client.build_request(
-            method, url, params=params, headers=headers, data=data, json=json
-        )
+        try:
+            request = client.build_request(
+                method, url, params=params, headers=headers, data=data, json=json
+            )
+        except httpx.InvalidURL as exc:
+            raise FetchError(f"invalid URL: {exc}", url=url) from exc
         ttl_s = ttl.total_seconds() if isinstance(ttl, timedelta) else ttl
         hops = 0
         while True:
@@ -243,7 +268,12 @@ class FetchContext:
                 return result
             if raise_on_denied and response.status_code in (401, 403):
                 raise AccessDenied(str(request.url), response.status_code)
-            if follow_redirects and response.next_request is not None:
+            # A redirect to a non-http(s) Location is returned as is, never followed.
+            if (
+                follow_redirects
+                and response.next_request is not None
+                and _is_http_url(result.location or "")
+            ):
                 hops += 1
                 if hops > MAX_REDIRECTS:
                     raise FetchError(f"more than {MAX_REDIRECTS} redirects", url=url)
@@ -287,6 +317,7 @@ class FetchContext:
                 fetched_at,
                 prior["bytes"],
                 from_cache=True,
+                content_type=headers.get("content-type") or prior["content_type"],
             )
             return self._from_prior(url, prior, headers, fetched_at), None
 
@@ -304,6 +335,7 @@ class FetchContext:
             fetched_at,
             len(body),
             from_cache=False,
+            content_type=headers.get("content-type"),
         )
         result = CachedResponse(
             url=url,
@@ -326,6 +358,8 @@ class FetchContext:
             merged.setdefault("etag", prior["etag"])
         if prior["last_modified"]:
             merged.setdefault("last-modified", prior["last_modified"])
+        if prior["content_type"]:
+            merged.setdefault("content-type", prior["content_type"])
         return CachedResponse(
             url=url,
             final_url=url,
@@ -354,11 +388,12 @@ class FetchContext:
                 sleep=self._sleep,
                 jitter=self.rate_limit.jitter,
                 rng=self._rng,
+                floor=self._crawl_delay(str(request.url)),
             )
             retry_after: float | None = None
             with gsem, self._source_sem:
                 try:
-                    response = client.send(request)
+                    response = self._send(client, request)
                 except httpx.TransportError as exc:
                     status, detail = None, f"{type(exc).__name__}: {exc}"
                     self._log(url, request.method, rhash, None, None, None, None, _now(), None)
@@ -378,6 +413,7 @@ class FetchContext:
                         None,
                         _now(),
                         len(body),
+                        content_type=response.headers.get("content-type"),
                     )
                     retry_after = _retry_after_seconds(response.headers.get("retry-after"))
             if attempt == attempts - 1:
@@ -389,6 +425,30 @@ class FetchContext:
             log.info("retrying %s in %.1fs after %s", url, delay, detail)
             self._sleep(delay)
         raise TransientFetchError(url, f"{detail} after {attempt + 1} attempt(s)", status=status)
+
+    def _crawl_delay(self, url: str) -> float:
+        """Robots Crawl-delay for the URL's origin, if its rules are already cached; else 0.
+
+        The per-host interval is max(1/rps, crawl_delay). Rules are only read from the cache so
+        that fetching robots.txt itself never recurses.
+        """
+        rules = ROBOTS.cached(url)
+        delay = rules.crawl_delay() if rules is not None else None
+        return delay or 0.0
+
+    def _send(self, client: httpx.Client, request: httpx.Request) -> httpx.Response:
+        """client.send, except that a 3xx whose Location httpx cannot turn into a request is
+        returned (with no next hop) instead of raising."""
+        request.extensions.pop(_RAW_RESPONSE, None)
+        try:
+            return client.send(request)
+        except (httpx.InvalidURL, httpx.TransportError) as exc:
+            raw = request.extensions.pop(_RAW_RESPONSE, None)
+            if raw is not None:
+                return raw
+            if isinstance(exc, httpx.InvalidURL):
+                raise FetchError(f"invalid URL: {exc}", url=str(request.url)) from exc
+            raise
 
     def _backoff(self, attempt: int) -> float:
         base = min(BACKOFF_CAP_S, BACKOFF_BASE_S * (2**attempt))
@@ -448,6 +508,7 @@ class FetchContext:
                 sleep=self._sleep,
                 jitter=self.rate_limit.jitter,
                 rng=self._rng,
+                floor=self._crawl_delay(request.url),
             )
         route.continue_()
 
@@ -460,7 +521,8 @@ class FetchContext:
 
     def _latest_ok(self, rhash: str) -> sqlite3.Row | None:
         row = self.conn.execute(
-            "SELECT content_hash, etag, last_modified, fetched_at, bytes FROM fetch_log "
+            "SELECT content_hash, etag, last_modified, content_type, fetched_at, bytes "
+            "FROM fetch_log "
             "WHERE request_hash = ? AND content_hash IS NOT NULL AND http_status IN (200, 304) "
             "ORDER BY fetched_at DESC, id DESC LIMIT 1",
             (rhash,),
@@ -482,12 +544,13 @@ class FetchContext:
         size: int | None,
         *,
         from_cache: bool = False,
+        content_type: str | None = None,
     ) -> None:
         with self._db_lock:
             self.conn.execute(
                 "INSERT INTO fetch_log (source_key, url, method, request_hash, content_hash, "
-                "http_status, etag, last_modified, fetched_at, bytes, from_cache) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "http_status, etag, last_modified, fetched_at, bytes, from_cache, content_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._log_key,
                     url,
@@ -500,6 +563,7 @@ class FetchContext:
                     fetched_at.isoformat(),
                     size,
                     int(from_cache),
+                    content_type,
                 ),
             )
 

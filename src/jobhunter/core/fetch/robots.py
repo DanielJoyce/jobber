@@ -39,6 +39,13 @@ class RobotsRules:
     reason: str
     parser: RobotFileParser | None = field(default=None, repr=False)
 
+    def crawl_delay(self) -> float | None:
+        """Crawl-delay for our product token, falling back to ``*``. None when unspecified."""
+        if self.verdict != "parsed" or self.parser is None:
+            return None
+        delay = self.parser.crawl_delay(ROBOTS_UA)
+        return float(delay) if delay is not None else None
+
     def allows(self, url: str) -> bool:
         if self.verdict == "allow_all":
             return True
@@ -114,6 +121,11 @@ class RobotsPolicy:
                 why_not_enforced,
             )
         return False
+
+    def cached(self, url: str) -> RobotsRules | None:
+        """Rules already fetched for ``url``'s origin. Never fetches (safe inside a request)."""
+        with self._lock:
+            return self._rules.get(origin_of(url))
 
     def reset(self) -> None:
         with self._lock:

@@ -415,6 +415,16 @@ def test_reverify_phrase_after_one_redirect(conn, factory, server):
     assert link is not None and link.status == ApplyStatus.expired
 
 
+def test_reverify_non_http_location_is_an_error(conn, factory, server):
+    server.page(GH)
+    gid = add_group(conn, (GH, None))
+    assert resolve_group(conn, gid, now=NOW, ctx_factory=factory).status == ApplyStatus.live
+    server.redirect(GH, "mailto:jobs@example.com")
+    link = reverify(conn, gid, now=NOW + timedelta(days=2), ctx_factory=factory)
+    assert link is not None and link.status == ApplyStatus.live
+    assert "non-http destination" in (link.error or "")
+
+
 def test_reverify_leaves_blocked_alone(conn, factory, server):
     server.route(f"{BOARD}/robots.txt", httpx.Response(200, text="User-agent: *\nDisallow: /\n"))
     gid = add_group(conn, (f"{BOARD}/jobs/50", None))
