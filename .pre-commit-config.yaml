@@ -1,0 +1,24 @@
+# Secret and personal-data guards. Install once per clone: uv run pre-commit install
+# Never bypass with --no-verify; if a finding is a false positive, allowlist it in
+# .gitleaks.toml with a comment saying why.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      - id: forbid-personal-paths
+        name: forbid personal data paths (resume/, profile/, data/, config.toml)
+        language: fail
+        entry: "Personal data must stay local; these paths are gitignored. Unstage them."
+        files: ^(resume/|profile/|data/|config\.toml$|.*\.local\.toml$)

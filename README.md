@@ -16,6 +16,13 @@ local web console.
 | `profile/` | Your preferences (salary, states, narrative). **Local only, gitignored** |
 | `data/` | SQLite database and raw HTTP cache. **Local only, gitignored** |
 
+## Setup
+
+```bash
+uv sync
+scripts/setup-hooks.sh     # secret-scanning git hooks; asks before downloading Go
+```
+
 ## Work tracking
 
 Issues live in [`git-bug`](https://github.com/git-bug/git-bug), stored in the repository itself:
