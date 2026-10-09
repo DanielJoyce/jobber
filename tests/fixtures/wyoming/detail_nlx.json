@@ -1,0 +1,66 @@
+{
+ "statusCode": 200,
+ "data": {
+  "_id": "6ac83cb7b5984230ee1fa785",
+  "cardDetails": {
+   "jobName": "Technical Account Engineer",
+   "companyName": "Zoom"
+  },
+  "subValues": {
+   "location": [
+    {
+     "location": {
+      "locationName": "Cheyenne",
+      "city": "Cheyenne",
+      "state": "WY",
+      "zipcode": "82009"
+     }
+    }
+   ],
+   "jobType": "Full-time",
+   "createdAt": 1791507639664,
+   "salaryInterval": "Year",
+   "minimumSalary": 0,
+   "maximumSalary": 0,
+   "hoursPerWeek": 40,
+   "noOfApplicants": 0,
+   "jobExpiryDate": 1823043639664,
+   "noOfVacancies": 1,
+   "hasVirtualInterview": false,
+   "answerType": "typed",
+   "screeningQuestions": []
+  },
+  "sendResume": true,
+  "notifyWorkforceCenterStaff": true,
+  "emailPaperResumeToThisAddress": true,
+  "callThisPhoneNumber": true,
+  "instructions": "Please visit to your nearest Workforce Center to apply for this job.",
+  "isExternal": true,
+  "jobDetails": {
+   "Job Description": "<p>Immigration sponsorship is not available for this position What You Can Expect </p>\n<p> As a Technical Account Engineer, you serve as the primary technical point of contact for Zoom's most strategic enterprise customers, owning integration challenges from first report through resolution across our full suite of Video, Native, Mobile, and CoBrowse SDKs. Working closely with SDK engineering, Solutions Engineers, and Customer Success Managers, you diagnose complex technical problems, lead customer troubleshooting sessions, and translate real-world pain into documented solutions that enterprise developers worldwide rely on. This role sits at the intersection of deep technical depth and</p>",
+   "Start Date": null,
+   "End Date": null,
+   "Minimum Experience": 0,
+   "Minimum Education": "No School Grades Completed",
+   "Eligible Applicants": null,
+   "Benefits Offered": {},
+   "experienceRequirements": {}
+  },
+  "companyDetails": {
+   "jobId": "NLX-298175195",
+   "companyLocation": {
+    "location": []
+   },
+   "companyWebsite": "https://nlx.jobsyn.org/6359a1cfe30a44e4a54e1aa265cc46e9179",
+   "displayWorksiteStreetAddress": true,
+   "displayCompanyName": true
+  },
+  "howToApplyJob": {
+   "redirectCompanyWebsite": "https://nlx.jobsyn.org/6359a1cfe30a44e4a54e1aa265cc46e9179"
+  },
+  "isSave": false,
+  "isApplied": null,
+  "appliedAt": null,
+  "withdrawnAt": null
+ }
+}
