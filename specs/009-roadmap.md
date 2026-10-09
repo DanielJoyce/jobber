@@ -33,8 +33,9 @@ one bug.
 - Check `robots.txt` on all 54 banks (24 done so far); set `policy` for each
 - Classify the 18 unclassified banks
 - **Output: the open set.** Every source where the job search path *and* the job detail path are
-  allowed. Known so far: **national NLx (`usnlx.com`)**, MT, NY, KY (NLx), WY (Next.js `/api/`),
-  OH, MN, WI, WA, TN
+  allowed. Surveyed 2026-10-09 ([010](010-source-inventory.md)): **national NLx (`usnlx.com`)**,
+  KY, MT, NY (NLx), WY (Next.js `/api/`), MI, UT, WI, LA (the one VOS host without robots),
+  OK and WA (Salesforce communities, JavaScript-rendered), WV (`Crawl-delay: 10`), MP
 - Capture fixtures for each open family
 
 **Done when** every row has a family, a policy and a dated robots record, and the open set is
@@ -60,7 +61,7 @@ API tier first, then HTML.
   project. **Measure its real coverage per state before relying on it.** How much of a blocked
   state's postings shows up in NLx is unknown, and finding out is part of this milestone.
 - **Wyoming:** find the `/api/` route behind the Next.js app; `api` tier
-- **OH, MN, WI, WA, TN** and any other open boards from M1: `htmlconfig` rows, or a family
+- **MI, UT, WI, LA, WV, MP** and the Salesforce boards (OK, WA): `htmlconfig` rows, or a family
   adapter when one exists
 - Volume floors and shape assertions per source
 - **Apply-link resolver**: redirector unwrapping, hop following with per-hop robots checks, the

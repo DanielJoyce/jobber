@@ -100,7 +100,7 @@ be round-tripped, and search is a POST against a cookie session. This is the fid
 to write and by far the highest-value one. Get a guest session, hold the cookie jar, post the
 search form, paginate via the postback event target. **One adapter, 25 sources.**
 
-### 2. Shared-codebase "JobLink" family (probably AJLA-TS) — 7 sources
+### 2. Shared-codebase "JobLink" family (probably AJLA-TS) — 8 sources
 
 Ruby on Rails with Webpacker (`/assets/application-<digest>.js`, `/packs/js/<chunk>-<hash>.js`).
 
@@ -111,11 +111,11 @@ similar vendor.
 
 > AZ (azjobconnection.gov), AR (arjoblink.arkansas.gov), DE (joblink.delaware.gov),
 > ID (idahoworks.gov), IL (illinoisjoblink.illinois.gov), KS (kansasworks.com),
-> ME (joblink.maine.gov)
+> ME (joblink.maine.gov), and VT (vermontjoblink.com), confirmed by the full survey
 
 Adapter notes: **a JSON API exists.** `GET /ada/r/search/jobs` returned **HTTP 401 with a
 26-byte body** — authentication required, not "no such route". `/search/jobs` returned 202.
-**But all 7 hosts disallow `/search/jobs` in `robots.txt`**
+**But all 8 hosts disallow `/search/jobs` in `robots.txt`**
 ([008](008-compliance.md#verified-robotstxt-survey-2026-10-09)), so under the robots decision
 this family is collected through email alerts, not search. Detail pages are *not* disallowed,
 so jobs arriving by email can still be resolved to full descriptions

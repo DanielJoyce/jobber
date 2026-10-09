@@ -67,9 +67,9 @@ Everything below was verified by live probe on **2026-10-09**:
   the search response (so it needs *zero* detail fetches), plus occupational series and GS grade
   as structured seniority signals ([011](011-federal-and-geography.md)).
 - **Most of the job banks disallow crawlers in `robots.txt`** — *correcting an earlier version
-  of this README, which said only NEOGOV did.* 11 of 12 sampled VOS hosts serve `Disallow: /`;
-  all 7 JobLink hosts disallow `/search/jobs` specifically. Respecting robots, roughly **10–20
-  of 54 banks plus federal** are reachable by direct collection. Email job alerts become the
+  of this README, which said only NEOGOV did.* 22 of 25 VOS hosts serve `Disallow: /`;
+  all 8 JobLink hosts disallow `/search/jobs` specifically. Respecting robots, **12 of 54
+  banks plus national NLx and federal** are reachable by direct collection. Email job alerts become the
   primary channel for the rest. Full survey and options in
   [008](008-compliance.md#verified-robotstxt-survey-2026-10-09).
 
