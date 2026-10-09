@@ -101,8 +101,8 @@ from robots.txt only; every row still needs an adapter and a fixture, and the ca
 |---|---|---|---|---|
 | US (national NLx) | `https://usnlx.com/` | `nlx` | PARTIAL (feeds only) | none |
 | KY | `https://kyjobs.usnlx.com/jobs/` | `nlx` | PARTIAL (feeds only) | none |
-| MT | `https://montanaworks.gov/` | `nlx` | ABSENT; `montana.usnlx.com` feeds only | search is served from the NLx host, inferred not fetched |
-| NY | `https://newyork.usnlx.com/index.asp` | `nlx` | ABSENT; `myjobsny.usnlx.com` feeds only | legacy entry; search host inferred |
+| MT | `https://montana.usnlx.com/jobs/` (landing `montanaworks.gov`) | `nlx` | ABSENT; `montana.usnlx.com` feeds only | search host confirmed 2026-10-09 (same NLx app, X-Origin `montana.usnlx.com`) |
+| NY | `https://myjobsny.usnlx.com/jobs/` (legacy `newyork.usnlx.com`) | `nlx` | ABSENT; `myjobsny.usnlx.com` feeds only | search host confirmed 2026-10-09 (same NLx app, X-Origin `myjobsny.usnlx.com`) |
 | WY | `https://hire.wyo.gov/home` | `next/custom` | ABSENT | none |
 | LA | `https://www.louisianaworks.net/hire/vosnet/Default.aspx` | `vos` | ABSENT | the only VOS host without `Disallow: /`; needs the VOS adapter |
 | MI | `https://jobs.mitalent.org/job-search` (entry `www.mitalent.org`) | `?` | PARTIAL (`/Feedback/`, `/bot-trap/`) | robots read from `jobs.mitalent.org`, not the entry host |
@@ -125,6 +125,60 @@ That is 12 state/territory sources plus national NLx. Near misses, not in the op
 
 Correction: TN was previously read as "no disallow". `jobs4tn.gov` now redirects to a `tn.gov`
 page and the live VOS host `jobs4tnwfs.tn.gov` serves `Disallow: /`. The entry URL above is stale.
+
+## NLx coverage (2026-10-09)
+
+How much of a robots-blocked state's market does national NLx (`usnlx.com`) carry? Measured
+with `scripts/nlx_coverage.py`: one query per state, `q="software engineer"` (quoted, which is
+what the adapter sends for a title), against the national site's search API filtered to the
+state's location slug, at most one request per 5 s. Ten states, chosen to bound load; nine are
+`blocked` in the registry and CO is a near miss (`manual`).
+
+**How NLx search works** (found by reading the site's Nuxt bundles; no browser was available):
+the pages are client-rendered shells. Search is
+`GET https://prod-search-api.jobsyn.org/api/v1/solr/search?q=&location=&sort=date&num_items=&offset=`
+with an `X-Origin` header naming the site; the site fixes the page size (15 national, 10 on
+Montana) and paging is by `offset`. Detail is `GET https://microsites.dejobs.org/ALL_JOBS/<GUID>.json`.
+Neither JSON host serves a robots.txt (404); every `*.usnlx.com` site disallows only
+`/*feed/` and `/*feeds/`. The KY, MT and NY sites are the same app and index: their
+`X-Origin` widens or narrows a regional scope (the KY site's default results include TN, OH
+and WV), so state rows also filter by `location=<state slug>`.
+
+| ST | Registry policy | Results for "software engineer" | Page 1 in state |
+|---|---|---:|---|
+| TX | blocked | 3,601 | 15/15 |
+| CA | blocked | 6,540 | 15/15 |
+| FL | blocked | 1,761 | 15/15 |
+| NC | blocked | 1,543 | 15/15 |
+| VA | blocked | 3,342 | 15/15 |
+| GA | blocked | 1,433 | 15/15 |
+| IL | blocked | 1,709 | 15/15 |
+| MA | blocked | 1,691 | 15/15 |
+| PA | blocked | 1,562 | 15/15 |
+| CO | manual | 2,326 | 15/15 |
+
+For scale, the same query nationally returned 68,154; the in-state sites returned 762 (KY),
+626 (MT) and 3,493 (NY). Every result on each first page was in the filtered state, and the
+newest was posted the same day.
+
+**Reading.** National NLx carries thousands of current software postings in every blocked
+state measured, so it is worth running as the main route into those states. It does not
+replace the state boards, and these numbers do not show what share of a board's inventory it
+holds:
+
+- **Not measured: overlap with the blocked boards.** Their robots.txt forbids searching them,
+  so there is no denominator. The counts are what NLx holds, not a coverage percentage.
+- NLx is mostly employer-ATS syndication (DirectEmployers members) plus state-bank feeds. Jobs
+  posted only on a state board by small employers are the likeliest to be missing.
+- Counts include multi-state duplicates: some employers post one remote role in every state
+  (Oracle lists the same role in each capital, e.g. Helena MT and Frankfort KY). Dedupe
+  collapses these; raw counts overstate distinct jobs.
+- Results are matched loosely. Even quoted, the phrase matches inside longer titles and
+  descriptions, so the counts include adjacent roles.
+- One query, one day, ten states. Not measured: other titles, other blocked states, lag
+  between a board posting and its NLx appearance, or expiry behaviour.
+
+Re-run with `uv run python scripts/nlx_coverage.py` (all blocked states) or `--states`.
 
 ## Not in this list
 
