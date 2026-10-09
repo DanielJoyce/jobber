@@ -95,7 +95,7 @@ case "$model" in
     hf="ggml-org/gpt-oss-20b-GGUF"; otag="gpt-oss:20b"; kind=moe ;;
   gemma-4-26b-a4b)
     size="about 15 GB (Q4)"; need_ram="16-18 GB"; where="CPU, attention on the GPU (MoE experts stay in RAM)"
-    hf="ggml-org/gemma-4-26b-a4b-it-GGUF"; otag="gemma4:26b"; kind=moe ;;
+    hf="google/gemma-4-26B-A4B-it-qat-q4_0-gguf"; otag="gemma4:26b"; kind=moe ;;
   granite-4.0-h-micro)
     size="about 2 GB (Q4)"; need_ram="3 GB"; where="entirely on the 4 GB GPU"
     hf="ibm-granite/granite-4.0-h-micro-GGUF"; otag="granite4:micro-h"; kind=small ;;
