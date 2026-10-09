@@ -8,11 +8,14 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "jobhunter"
-GUARDED_PACKAGES = ["sources", "pipeline", "scoring"]
+GUARDED_PACKAGES = ["sources", "pipeline", "scoring", "mail"]
 FORBIDDEN = {"httpx", "playwright"}
 # API clients (not scrapers) that may use httpx: the OpenAI-compatible scorer talks to an LLM
 # endpoint the user configured. Keep this list explicit and tiny.
 ALLOWED = {"scoring/scorers.py"}
+# jobhunter.mail talks to the user's own Gmail through Google's official client libraries.
+# It is an API client, not a scraper, so it is exempt from the FetchContext rule.
+ALLOWED_PREFIXES = ("mail/",)
 
 
 def network_imports(path: Path, root: Path = SRC) -> list[str]:
@@ -42,7 +45,8 @@ def test_guarded_packages_exist():
 
 @pytest.mark.parametrize("path", guarded_modules(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_direct_network_imports(path):
-    if str(path.relative_to(SRC)) in ALLOWED:
+    rel = str(path.relative_to(SRC))
+    if rel in ALLOWED or rel.startswith(ALLOWED_PREFIXES):
         pytest.skip("explicitly allowed API client")
     assert network_imports(path) == [], "use jobhunter.core.fetch.FetchContext instead"
 
