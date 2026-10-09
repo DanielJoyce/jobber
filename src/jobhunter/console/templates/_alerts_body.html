@@ -1,0 +1,67 @@
+<div id="alerts-body">
+  {% if data.placeholder %}
+  <div class="callout" role="status"><strong>Set your alerts address first.</strong> <code>mail.alerts_address</code> is still the placeholder, so addresses below show <code>{{ alerts_placeholder }}</code>. Set your real <code>+jobs</code> address in <code>config.toml</code>. <a href="{{ setup_doc }}">Setup notes</a></div>
+  {% endif %}
+  {% if profile_error is not none %}
+  <div class="callout" role="alert"><strong>No profile yet.</strong> Keyword suggestions are empty until a profile loads. <span class="muted">{{ profile_error }}</span></div>
+  {% endif %}
+
+  <p><strong>{{ data.summary.subscribed }} of {{ data.summary.total }}</strong> boards subscribed &middot; <strong>{{ data.summary.receiving }}</strong> receiving alerts &middot; <strong>{{ data.summary.stale }}</strong> stale</p>
+
+  {% if data.toml_line %}
+  <div class="callout">
+    <p>Some boards refused the <code>+jobs</code> address, so filters need their sender domain. Add this line under <code>[mail]</code> in <code>~/.config/jobhunter/config.toml</code> (replace any existing <code>fallback_sender_domains</code> line), then run <code>jobhunter mail setup</code>:</p>
+    <pre><code>{{ data.toml_line }}</code></pre>
+  </div>
+  {% endif %}
+
+  {% if data.rows %}
+  <div class="table-wrap">
+  <table class="pg-table" id="alerts-table">
+    <thead><tr><th>Board</th><th>Sign up</th><th>Send alerts to</th><th>Criteria</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for r in data.rows %}
+    <tr id="alert-{{ r.key }}">
+      <td><strong>{{ r.name }}</strong><br><span class="muted">{{ r.state or "national" }} &middot; class {{ r.class_ }} &middot; {{ r.policy }}</span></td>
+      <td><a href="{{ r.entry }}" target="_blank" rel="noopener">{{ r.entry }}</a><br><span class="muted">Usually under the board's job-seeker account area.</span></td>
+      <td>
+        <code>{{ r.address }}</code>
+        {% if r.address_is_placeholder %}<br><span class="muted">placeholder: set <code>mail.alerts_address</code> (<a href="{{ setup_doc }}">setup notes</a>)</span>{% endif %}
+        {% if r.plain_address %}<br><span class="muted">plain address{% if r.in_config %} (fallback filter set){% endif %}</span>{% endif %}
+        {% if r.rejected and not r.in_config %}<br><span class="muted">rejected: add the TOML line above</span>{% endif %}
+      </td>
+      <td>
+        {% if r.keywords %}{{ r.keywords | join(", ") }}{% else %}<span class="muted">none yet</span>{% endif %}
+        <br><span class="muted">Posted within {{ r.posted_within }}; no other filters.</span>
+      </td>
+      <td>
+        <span class="tag">{{ r.status }}</span>
+        {% if r.subscribed_at %}<br><span class="muted">subscribed {{ r.subscribed_at.date().isoformat() }}</span>{% endif %}
+        <br><span class="muted">last alert: {{ r.last_alert_at.date().isoformat() if r.last_alert_at else "none yet" }}</span>
+        {% if r.warning %}<br><span class="flag warn">{{ r.warning }}</span>{% endif %}
+      </td>
+      <td>
+        {% if r.subscribed_at %}
+        <form method="post" action="/alerts/{{ r.key }}/unsubscribe" hx-post="/alerts/{{ r.key }}/unsubscribe" hx-target="#alerts-body" hx-swap="outerHTML">
+          <button type="submit" class="act">mark unsubscribed</button>
+        </form>
+        {% else %}
+        <form method="post" action="/alerts/{{ r.key }}/subscribe" hx-post="/alerts/{{ r.key }}/subscribe" hx-target="#alerts-body" hx-swap="outerHTML">
+          <button type="submit" class="act">mark subscribed</button>
+        </form>
+        {% endif %}
+        {% if not r.rejected %}
+        <form method="post" action="/alerts/{{ r.key }}/reject-plus" hx-post="/alerts/{{ r.key }}/reject-plus" hx-target="#alerts-body" hx-swap="outerHTML">
+          <button type="submit" class="act" title="The board refused the +jobs address">+ rejected</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No blocked or manual boards in the registry, so there is nothing to subscribe to.</p>
+  {% endif %}
+</div>
