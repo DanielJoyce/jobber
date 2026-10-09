@@ -1023,14 +1023,37 @@
   state: "AR"
   class: "B"
   name: "Arkansas state employer careers (successfactors)"
-  family: "successfactors"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://arcareers.arkansas.gov/"
   verified: "2026-10-09"
-  family_signals: ["arcareers.arkansas.gov links career41.sapsf.com/career?company=stateofark; robots is the SuccessFactors career-site default"]
+  family_signals: ["arcareers.arkansas.gov (jobs2web table template, same markup as IN)"]
+  # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host arcareers.arkansas.gov: Robots allows search and detail (disallows /applybutton/, /talentcommunity/, /services/ and similar). Same SuccessFactors jobs2web template as IL and IN is likely but unverified; follow-up."}
-  policy: "manual"
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host arcareers.arkansas.gov: Built (htmlconfig HTML), table template (the date sits in the title cell), 25 results per page, startrow paging, max 4 pages. Robots disallows /applybutton/, /talentcommunity/, /services/ and similar; none is requested."}
+  policy: "enabled"
+  config:
+    base_url: "https://arcareers.arkansas.gov"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "tr.data-row"
+      id: {sel: "td.colTitle a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "td.colTitle a.jobTitle-link::text"
+      url: "td.colTitle a.jobTitle-link::attr(href)"
+      location: "td.colLocation span.jobLocation::text"
+      posted_at: "td.colTitle span.jobDate::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1044,7 +1067,7 @@
   verified: "2026-10-09"
   family_signals: ["state-of-arizona.career-pages.com link; Clinch Talent asset buckets; robots comment 'State of Arizona Robots Txt'; AWS WAF challenge.js on page"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.azstatejobs.gov: Robots allows search and detail (Crawl-delay 5; only candidate_details, /me/, /api/, block fragments disallowed). The page loads an AWS WAF challenge script and the Virginia twin on the same platform answered a second request with a 202 challenge, so it is treated as bot-gated until proven otherwise. Follow-up."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.azstatejobs.gov: Robots allows search and detail (Crawl-delay 5; only candidate_details, /me/, /api/, block fragments disallowed). The page loads an AWS WAF challenge script and the Virginia twin on the same platform answered a second request with a 202 challenge, so it is treated as bot-gated until proven otherwise. Re-tested later on 2026-10-09 (plain polite client, 7 s apart): the home page, /jobs/search?query=analyst and robots.txt all answered 200 with server-rendered results and no 202 challenge, so it is a build candidate. Left manual pending a re-test on two or three more days because the survey's challenge was intermittent; a 202 means stop, never retry around it."}
   policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -1083,14 +1106,39 @@
   state: "CT"
   class: "B"
   name: "Connecticut state employer careers (jobaps)"
-  family: "jobaps"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://www.jobapscloud.com/CT/"
   verified: "2026-10-09"
   family_signals: ["jobapscloud.com/CT/ (classic JobAps)"]
+  # platform: jobaps
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "robots host www.jobapscloud.com: jobapscloud.com robots.txt is 404 (no restrictions). Classic server-rendered JobAps bulletins; good follow-up candidate shared with MD."}
-  policy: "manual"
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host www.jobapscloud.com: Built (htmlconfig HTML). robots.txt is 404 (no restrictions). One server-rendered page lists every open bulletin (about 150), no paging and no query (the search form is a POST filter, so the whole list is read and screened locally). Public, internship and seasonal tables are read; the two employees-only tables are skipped. No apply_url: the Apply link needs a JobAps account."}
+  policy: "enabled"
+  config:
+    base_url: "https://www.jobapscloud.com"
+    timezone: "America/New_York"
+    date_formats: ["%A, %B %d, %Y %I:%M %p", "%m/%d/%Y %I:%M:%S %p"]
+    search:
+      method: "GET"
+      path: "/CT/"
+    list:
+      rows: "#EmpDiv1 + table.JobListing tbody tr, #EmpDiv4 + table.JobListing tbody tr, #EmpDiv5 + table.JobListing tbody tr"
+      id: {sel: "a.JobTitle::attr(title)", re: "-(\\d{6}-[0-9A-Z]+-\\d{3})$"}
+      title: "a.JobTitle::text"
+      url: "a.JobTitle::attr(href)"
+      location: "td.Locs div::text"
+      employer: "td.Dept::text"
+      closes_at: "td:nth-of-type(4)::text"
+    detail:
+      title: "#JobBulletinTitle::text"
+      description: "#JobBulletinBody::html"
+      posted_at: {label: "Date Opened"}
+      closes_at: {label: "Close Date"}
+      salary_raw: {label: "Salary"}
+      location: {label: "Location"}
+      employer: {sel: "script[type='application/ld+json']::text", re: '"hiringOrganization":\{[^}]*?"name":"([^"]+)"'}
+  pagination: {kind: "none"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1128,14 +1176,37 @@
   state: "FL"
   class: "B"
   name: "Florida state employer careers (successfactors)"
-  family: "successfactors"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://jobs.myflorida.com/"
   verified: "2026-10-09"
-  family_signals: ["jobs.myflorida.com 'People First' career site; SuccessFactors default robots"]
+  family_signals: ["jobs.myflorida.com (jobs2web table template, same markup as IN)"]
+  # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host jobs.myflorida.com: Robots allows search and detail. Same jobs2web family as IL and IN; not built because of the 8-board cap (follow-up)."}
-  policy: "manual"
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host jobs.myflorida.com: Built (htmlconfig HTML), table template, 25 results per page, startrow paging, max 4 pages. Robots disallows /applybutton/, /talentcommunity/, /services/ and similar; none is requested."}
+  policy: "enabled"
+  config:
+    base_url: "https://jobs.myflorida.com"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "tr.data-row"
+      id: {sel: "td.colTitle a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "td.colTitle a.jobTitle-link::text"
+      url: "td.colTitle a.jobTitle-link::attr(href)"
+      location: "td.colLocation span.jobLocation::text"
+      posted_at: "td.colDate span.jobDate::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1240,7 +1311,7 @@
   family_signals: ["illinois.jobs2web.com (SuccessFactors/jobs2web); cms.illinois.gov links it"]
   # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host illinois.jobs2web.com: Built (htmlconfig HTML). 15 results per page; paging parameter not verified, so one page per query."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host illinois.jobs2web.com: Built (htmlconfig HTML). Tile template, 25 results per page; /search/ pages with startrow=<offset> (verified 2026-10-09: startrow=25 returned rows 26-50, no overlap), max 4 pages (100 rows) per query."}
   policy: "enabled"
   config:
     base_url: "https://illinois.jobs2web.com"
@@ -1264,7 +1335,7 @@
       closes_at: "meta[itemprop='validThrough']::attr(content)"
       employer: "meta[itemprop='hiringOrganization']::attr(content)"
       location: "span.jobGeoLocation::text"
-  pagination: {kind: "none", order: "newest_first"}
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1279,7 +1350,7 @@
   family_signals: ["workforindiana.in.gov (jobs2web RMK); linked from in.gov/spd"]
   # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host workforindiana.in.gov: Built (htmlconfig HTML), table template; one page per query."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host workforindiana.in.gov: Built (htmlconfig HTML), table template, 25 results per page; pages with startrow=<offset> (the pager links use it, verified 2026-10-09), max 4 pages (100 rows) per query."}
   policy: "enabled"
   config:
     base_url: "https://workforindiana.in.gov"
@@ -1302,7 +1373,7 @@
       closes_at: "meta[itemprop='validThrough']::attr(content)"
       employer: "meta[itemprop='hiringOrganization']::attr(content)"
       location: "span.jobGeoLocation::text"
-  pagination: {kind: "none", order: "newest_first"}
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1370,14 +1441,40 @@
   state: "MD"
   class: "B"
   name: "Maryland state employer careers (jobaps)"
-  family: "jobaps"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://www.jobapscloud.com/MD/"
   verified: "2026-10-09"
   family_signals: ["jobapscloud.com/MD/ ; dbm.maryland.gov 'State Job Openings' links jobaps.com/MD"]
+  # platform: jobaps
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "robots host www.jobapscloud.com: jobapscloud.com robots.txt is 404. Classic JobAps; follow-up with CT."}
-  policy: "manual"
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host www.jobapscloud.com: Built (htmlconfig HTML). robots.txt is 404 (no restrictions). One server-rendered page lists every current recruitment (about 320, repeated across category tables and de-duplicated by recruitment number), no paging and no query. No apply_url: the Apply link needs a JobAps account."}
+  policy: "enabled"
+  config:
+    base_url: "https://www.jobapscloud.com"
+    timezone: "America/New_York"
+    date_formats: ["%A, %B %d, %Y %I:%M %p", "%m/%d/%Y %I:%M:%S %p"]
+    search:
+      method: "GET"
+      path: "/MD/"
+    list:
+      rows: "table.ListingPanel tbody tr"
+      id: "a.JobNum::text"
+      title: "a.JobTitle::text"
+      url: "a.JobTitle::attr(href)"
+      location: "td.Locs::text"
+      employer: "td.Dept::text"
+      salary_raw: "td.Salary::text"
+      closes_at: "td:nth-of-type(4)::text"
+    detail:
+      title: "#JobBulletinTitle::text"
+      description: "#JobBulletinBody::html"
+      posted_at: {label: "Date Opened"}
+      closes_at: {label: "Filing Deadline"}
+      salary_raw: {label: "Salary"}
+      location: {label: "Work Location"}
+      employer: {sel: "script[type='application/ld+json']::text", re: '"hiringOrganization":\{[^}]*?"name":"([^"]+)"'}
+  pagination: {kind: "none"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1392,7 +1489,7 @@
   family_signals: ["maine.gov/bhr/state-jobs 'Open Jobs' links maine.wd5.myworkdayjobs.com/Executive; /wday/cxs/maine/Executive/jobs answered 200 JSON"]
   # platform: workday
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host maine.wd5.myworkdayjobs.com: Built (htmlconfig JSON). Executive branch site only; the same tenant also has Judicial and Legislature sites (follow-up)."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host maine.wd5.myworkdayjobs.com: Built (htmlconfig JSON). Executive branch site only; the same tenant's Judicial and Legislature sites are me-judicial-employer and me-legislature-employer."}
   policy: "enabled"
   config:
     base_url: "https://maine.wd5.myworkdayjobs.com"
@@ -1411,6 +1508,96 @@
       title: "title"
       url: {template: "https://maine.wd5.myworkdayjobs.com/wday/cxs/maine/Executive{externalPath}"}
       apply_url: {template: "https://maine.wd5.myworkdayjobs.com/Executive{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "me-judicial-employer"
+  state: "ME"
+  class: "B"
+  name: "Maine Judicial Branch employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://maine.wd5.myworkdayjobs.com/Judicial"
+  verified: "2026-10-09"
+  family_signals: ["maine.wd5.myworkdayjobs.com/Judicial; robots.txt lists Allow: /Judicial/ and a sitemap for it"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host maine.wd5.myworkdayjobs.com: Built (htmlconfig JSON): the Judicial site of the same Maine Workday tenant (court marshals, clerks; 20 postings on 2026-10-09). Executive is me-employer. Robots allows /Judicial/ and only disallows /refreshFacet/."}
+  policy: "enabled"
+  config:
+    base_url: "https://maine.wd5.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/maine/Judicial/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://maine.wd5.myworkdayjobs.com/wday/cxs/maine/Judicial{externalPath}"}
+      apply_url: {template: "https://maine.wd5.myworkdayjobs.com/Judicial{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "me-legislature-employer"
+  state: "ME"
+  class: "B"
+  name: "Maine Legislature employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://maine.wd5.myworkdayjobs.com/Legislature"
+  verified: "2026-10-09"
+  family_signals: ["maine.wd5.myworkdayjobs.com/Legislature; robots.txt lists Allow: /Legislature/ and a sitemap for it"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host maine.wd5.myworkdayjobs.com: Built (htmlconfig JSON): the Legislature site of the same Maine Workday tenant. It had no postings on 2026-10-09 (total 0), so there is no saved posting fixture beyond the empty answer; the row is identical in shape to the others. Robots allows /Legislature/ and only disallows /refreshFacet/."}
+  policy: "enabled"
+  config:
+    base_url: "https://maine.wd5.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/maine/Legislature/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://maine.wd5.myworkdayjobs.com/wday/cxs/maine/Legislature{externalPath}"}
+      apply_url: {template: "https://maine.wd5.myworkdayjobs.com/Legislature{externalPath}"}
       location: "locationsText"
       posted_at: {path: "postedOn", re: "Posted (.*)"}
     detail:
@@ -1835,14 +2022,40 @@
   state: "SD"
   class: "B"
   name: "South Dakota state employer careers (hireclick)"
-  family: "hireclick"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://statesdgovt.hireclick.com/"
   verified: "2026-10-09"
   family_signals: ["statesdgovt.hireclick.com/jobboard (HireClick); bhr.sd.gov/workforus per state web pages"]
-  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "open", checked: "2026-10-09", note: "robots host statesdgovt.hireclick.com: Robots: Crawl-delay 10 for *, AI crawlers disallowed by name (our UA is not one). Open by robots; follow-up."}
-  policy: "manual"
+  # platform: hireclick
+  rate_limit: {rps: 0.1, concurrency: 1, jitter: true}
+  robots: {status: "open", checked: "2026-10-09", note: "robots host statesdgovt.hireclick.com: Built (htmlconfig JSON list, HTML detail). robots.txt is Crawl-delay 10 for * (so rps 0.1) and disallows only named AI crawlers; our UA is not one. The job board page loads its jobs from /api/Controllers/JobBoard/GetSettingsAndJobs?orgGUID=<state org> (anonymous, not disallowed): one request returns every open posting (about 240) as a JSON string, so there is no query or paging and the list is screened locally. Detail pages /jb/<slug>/view/<id> are server-rendered. The list has no dates or agency; the detail supplies them."}
+  policy: "enabled"
+  config:
+    base_url: "https://statesdgovt.hireclick.com"
+    timezone: "America/Chicago"
+    date_formats: ["%m/%d/%Y %I:%M:%S %p"]
+    search:
+      method: "GET"
+      path: "/api/Controllers/JobBoard/GetSettingsAndJobs"
+      params: {orgGUID: "16343DEB-35A1-4A0B-9922-A7FC866656E9"}
+      headers: {Accept: "application/json"}
+    list:
+      format: "json"
+      rows: "JobList"
+      id: {path: "JobURL", re: "/view/(\\d+)$"}
+      title: "JobTitle"
+      url: "JobURL"
+      location: "JobCity"
+    detail:
+      title: "#plcLeft_lblJobName::text"
+      description: "#plcLeft_lblJobLongDesc::html"
+      location: "#plcLeft_lblLocation::text"
+      posted_at: {sel: "script[type='application/ld+json']::text", re: '"datePosted":"([^"]+)"'}
+      employer: {sel: "#plcLeft_lblJobLongDesc::html", re: "Agency:\\s*([^<]+)", template: "{value}"}
+      salary_raw: {sel: "#plcLeft_lblJobLongDesc::html", re: "Salary:\\s*([^<]+)", template: "{value}"}
+      closes_at: {sel: "#plcLeft_lblJobLongDesc::html", re: "Closing Date:\\s*([A-Za-z]{3,9}\\.? \\d{1,2}, \\d{4}|\\d{1,2}/\\d{1,2}/\\d{4})"}
+  pagination: {kind: "none"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1901,7 +2114,7 @@
   verified: "2026-10-09"
   family_signals: ["www.jobs.virginia.gov rec-marketing assets and va-careers.career-pages.com links; robots comment 'Commonwealth of VA Careers Robots Txt'"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.jobs.virginia.gov: Robots allows search and detail (Crawl-delay 5). First request returned the listing, the second a 202 AWS WAF challenge, so treated as bot-gated. The bare host jobs.virginia.gov also fails TLS verification (missing intermediate); use www. Follow-up."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.jobs.virginia.gov: Robots allows search and detail (Crawl-delay 5). First request returned the listing, the second a 202 AWS WAF challenge, so treated as bot-gated. The bare host jobs.virginia.gov also fails TLS verification (missing intermediate); use www. Re-tested later on 2026-10-09 (plain polite client, 7 s apart): the home page, /jobs/search?query=analyst and robots.txt all answered 200 with server-rendered results and no 202 challenge, so it is a build candidate. Left manual pending a re-test on two or three more days because the survey's challenge was intermittent; a 202 means stop, never retry around it."}
   policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -1910,14 +2123,37 @@
   state: "VT"
   class: "B"
   name: "Vermont state employer careers (successfactors)"
-  family: "successfactors"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://careers.vermont.gov/"
   verified: "2026-10-09"
-  family_signals: ["careers.vermont.gov (SuccessFactors default robots)"]
+  family_signals: ["careers.vermont.gov (jobs2web table template, same markup as IN)"]
+  # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host careers.vermont.gov: Robots allows search and detail. Same jobs2web family as IL and IN; not built because of the 8-board cap (follow-up)."}
-  policy: "manual"
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host careers.vermont.gov: Built (htmlconfig HTML), table template, 25 results per page, startrow paging, max 4 pages. Robots disallows /applybutton/, /talentcommunity/, /services/ and similar; none is requested."}
+  policy: "enabled"
+  config:
+    base_url: "https://careers.vermont.gov"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "tr.data-row"
+      id: {sel: "td.colTitle a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "td.colTitle a.jobTitle-link::text"
+      url: "td.colTitle a.jobTitle-link::attr(href)"
+      location: "td.colLocation span.jobLocation::text"
+      posted_at: "td.colDate span.jobDate::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 

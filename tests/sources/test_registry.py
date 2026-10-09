@@ -23,7 +23,8 @@ OPEN_SET_KEYS = {
     "ny-newyork",
     "us-nlx",
     "us-usajobs",
-    # class B: six Workday tenants (JSON API) and two SuccessFactors jobs2web sites (specs/010).
+    # class B: eight Workday sites (JSON API), five SuccessFactors jobs2web sites, two JobAps
+    # sites and HireClick (specs/010).
     "ga-employer",
     "me-employer",
     "nc-employer",
@@ -32,6 +33,14 @@ OPEN_SET_KEYS = {
     "or-employer",
     "il-employer",
     "in-employer",
+    "ar-employer",
+    "fl-employer",
+    "vt-employer",
+    "ct-employer",
+    "md-employer",
+    "sd-employer",
+    "me-judicial-employer",
+    "me-legislature-employer",
 }
 
 
@@ -42,10 +51,10 @@ def rows():
 
 def test_packaged_registry_loads(rows):
     # 54 state/territory job banks + national NLx and email alerts (state null) + USAJOBS
-    # (class C) + 51 class B state-employer rows (50 states + DC).
-    assert len(rows) == 57 + 51
+    # (class C) + 51 class B state-employer rows (50 states + DC) + 2 extra Maine Workday sites.
+    assert len(rows) == 57 + 53
     assert sum(r.class_ is SourceClass.A for r in rows) == 56
-    assert sum(r.class_ is SourceClass.B for r in rows) == 51
+    assert sum(r.class_ is SourceClass.B for r in rows) == 53
     assert sum(r.class_ is SourceClass.A and r.state is None for r in rows) == 2
     assert sum(r.class_ is SourceClass.C for r in rows) == 1
 
@@ -99,7 +108,10 @@ def test_manual_rows_are_the_undeterminable_ones(rows):
 def test_class_b_has_one_row_per_state_and_dc(rows):
     b = [r for r in rows if r.class_ is SourceClass.B]
     assert len({r.state for r in b}) == 51
-    assert all(r.key == f"{r.state.lower()}-employer" for r in b)
+    # one `<st>-employer` row per state; Maine's Judicial and Legislature sites are extra rows
+    extra = {"me-judicial-employer", "me-legislature-employer"}
+    assert all(r.key == f"{r.state.lower()}-employer" for r in b if r.key not in extra)
+    assert {r.key for r in b if r.key in extra} == extra
     assert all(r.robots.checked is not None for r in b)
 
 
@@ -111,7 +123,22 @@ def test_class_b_neogov_is_always_blocked(rows):
 
 def test_class_b_enabled_rows_are_the_built_htmlconfig_ones(rows):
     enabled = {r.state for r in rows if r.class_ is SourceClass.B and r.policy is Policy.enabled}
-    assert enabled == {"GA", "ME", "NC", "NE", "OK", "OR", "IL", "IN"}
+    assert enabled == {
+        "GA",
+        "ME",
+        "NC",
+        "NE",
+        "OK",
+        "OR",
+        "IL",
+        "IN",
+        "AR",
+        "FL",
+        "VT",
+        "CT",
+        "MD",
+        "SD",
+    }
     assert all(
         r.family == "htmlconfig" for r in rows if r.key.endswith("-employer") and r.state in enabled
     )
@@ -165,9 +192,9 @@ def test_loader_rejects_duplicate_keys(tmp_path):
 def test_sync_upserts_idempotently_and_keeps_run_status(rows):
     conn = connect(":memory:")
     migrate(conn)
-    assert sync_sources_table(conn, rows) == 108
-    assert sync_sources_table(conn, rows) == 108
-    assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 108
+    assert sync_sources_table(conn, rows) == 110
+    assert sync_sources_table(conn, rows) == 110
+    assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 110
 
     ny = conn.execute("SELECT policy, status, robots_checked FROM source WHERE key='ny-newyork'")
     row = ny.fetchone()

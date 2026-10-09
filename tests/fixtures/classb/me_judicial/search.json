@@ -1,0 +1,177 @@
+{
+ "total": 20,
+ "jobPostings": [
+  {
+   "title": "Deputy Marshal (#577)",
+   "externalPath": "/job/Augusta-Maine/Deputy-Marshal---577-_R26-04100",
+   "timeType": "Full time",
+   "locationsText": "Augusta, Maine",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "R26-04100"
+   ]
+  },
+  {
+   "title": "Deputy Marshal (#751)",
+   "externalPath": "/job/No-Address---Bangor/Deputy-Marshal---751-_R26-04139",
+   "timeType": "Full time",
+   "locationsText": "No Address - Bangor",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "R26-04139"
+   ]
+  },
+  {
+   "title": "Assistant Clerk (#447)",
+   "externalPath": "/job/Augusta-Maine/Assistant-Clerk---447-_R26-04198",
+   "timeType": "Full time",
+   "locationsText": "Augusta, Maine",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "R26-04198"
+   ]
+  },
+  {
+   "title": "SC/VB Assistant Clerk (#200025217)",
+   "externalPath": "/job/No-Address/SC-VB-Assistant-Clerk---200025217-_R26-04191",
+   "timeType": "Full time",
+   "locationsText": "No Address",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "R26-04191"
+   ]
+  },
+  {
+   "title": "Deputy Marshal (#620)",
+   "externalPath": "/job/Ellsworth-Maine/Deputy-Marshal---620-_R25-01383",
+   "timeType": "Full time",
+   "locationsText": "Ellsworth, Maine",
+   "postedOn": "Posted 2 Days Ago",
+   "bulletFields": [
+    "R25-01383"
+   ]
+  }
+ ],
+ "facets": [
+  {
+   "facetParameter": "jobFamilyGroup",
+   "descriptor": "Job Category",
+   "values": [
+    {
+     "descriptor": "Judicial",
+     "id": "473d696f7b7210013044f07b95b50000",
+     "count": 19
+    }
+   ]
+  },
+  {
+   "facetParameter": "workerSubType",
+   "descriptor": "Job Type",
+   "values": [
+    {
+     "descriptor": "Acting Capacity (Fixed Term)",
+     "id": "c5bc45ac4f57100130712933ce350000",
+     "count": 2
+    },
+    {
+     "descriptor": "Limited Period (Fixed Term)",
+     "id": "c5bc45ac4f57100130712500370f0000",
+     "count": 2
+    },
+    {
+     "descriptor": "Permanent",
+     "id": "c5bc45ac4f5710013071280050070001",
+     "count": 16
+    }
+   ]
+  },
+  {
+   "facetParameter": "timeType",
+   "descriptor": "Full/Part-time",
+   "values": [
+    {
+     "descriptor": "Full time",
+     "id": "45ea54d4c88f1000645eca9a6ed70000",
+     "count": 18
+    }
+   ]
+  },
+  {
+   "facetParameter": "locationMainGroup",
+   "values": [
+    {
+     "facetParameter": "locations",
+     "descriptor": "Locations",
+     "values": [
+      {
+       "descriptor": "11 Market Street, Waldo Judicial Center",
+       "id": "1dfc592a9316100100971abfa57e0000",
+       "count": 1
+      },
+      {
+       "descriptor": "250 Goddard Street, Lewiston (SC/VB)",
+       "id": "1e05545d3bf81001035fe92ee3e70000",
+       "count": 1
+      },
+      {
+       "descriptor": "Auburn, Maine",
+       "id": "473d696f7b721001094760edb29f0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Augusta, Maine",
+       "id": "473d696f7b72100109460054bada0000",
+       "count": 3
+      },
+      {
+       "descriptor": "Bangor, Maine",
+       "id": "473d696f7b721001094a2def27f30000",
+       "count": 1
+      },
+      {
+       "descriptor": "Biddeford, Maine",
+       "id": "473d696f7b721001094b828d07410000",
+       "count": 1
+      },
+      {
+       "descriptor": "Ellsworth, Maine",
+       "id": "473d696f7b7210010945fa544ce60000",
+       "count": 2
+      },
+      {
+       "descriptor": "Lewiston, Maine",
+       "id": "473d696f7b7210010946d88e84cb0000",
+       "count": 2
+      },
+      {
+       "descriptor": "Machias, Maine",
+       "id": "473d696f7b721001094a79b0569e0000",
+       "count": 1
+      },
+      {
+       "descriptor": "No Address",
+       "id": "c6610f6be5d31000d815b3abf1f80000",
+       "count": 1
+      },
+      {
+       "descriptor": "No Address - Bangor",
+       "id": "473d696f7b721001094be0db06000000",
+       "count": 2
+      },
+      {
+       "descriptor": "No Address - Portland",
+       "id": "473d696f7b721001094a821a24fa0000",
+       "count": 1
+      },
+      {
+       "descriptor": "No Address - Presque Isle",
+       "id": "473d696f7b721001094bc2d3fa7f0000",
+       "count": 1
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

@@ -1,4 +1,4 @@
-"""Illinois state employer careers: SuccessFactors "jobs2web" career site read as HTML.
+"""Vermont state employer careers: SuccessFactors "jobs2web" career site read as HTML.
 
 Fixtures are real pages captured 2026-10-09 (search trimmed to five rows, two details).
 """
@@ -28,12 +28,12 @@ def conn():
 
 
 def test_row_is_an_enabled_class_b_http_row():
-    assert_enabled_class_b("IL", "http")
+    assert_enabled_class_b("VT", "http")
 
 
 def test_search_and_resolve(conn, tmp_path):
-    check_jobs2web("IL", "illinois.jobs2web.com", conn, tmp_path, employer_in_list=True)
+    check_jobs2web("VT", "careers.vermont.gov", conn, tmp_path, employer_in_list=False)
 
 
 def test_pages_by_startrow(conn, tmp_path):
-    check_jobs2web_paging("IL", conn, tmp_path)
+    check_jobs2web_paging("VT", conn, tmp_path)

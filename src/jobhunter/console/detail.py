@@ -360,7 +360,7 @@ def load_detail(
             {
                 "title": m["title"],
                 "employer": m["employer"] or m["agency_raw"],
-                "url": m["url"],
+                "url": m["apply_url"] or m["url"],
                 "source": sources.get(m["source_key"], m["source_key"]),
             }
         )

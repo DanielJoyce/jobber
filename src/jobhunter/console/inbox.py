@@ -157,7 +157,7 @@ def _item(conn: sqlite3.Connection, row: sqlite3.Row, profile: Profile, now: dat
         employment_type=None if row["employment_type"] == "unknown" else row["employment_type"],
         remote=None if row["remote"] == "unknown" else row["remote"],
         posted=posted_age(row["posted_at"], now),
-        url=row["url"],
+        url=row["apply_url"] or row["url"],  # the human page when `url` is a JSON endpoint
         source_name=row["source_name"],
         source_badge=SOURCE_BADGE.get(row["source_class"], "state"),
         recency_skills=fit.recency_weighted_skills,
