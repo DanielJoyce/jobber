@@ -82,8 +82,9 @@ def posting_text(job: Mapping[str, Any], locations_summary: str) -> str:
     ]
     if job.get("description_completeness") == "partial":
         lines.append(
-            "Note: the description below is partial (a summary or truncated listing); "
-            "the full posting may say more."
+            "Note: the description below is partial (a summary or truncated listing, such as "
+            "an email alert entry); the full posting was not available and may say more. "
+            "Do not treat missing requirements or details as evidence either way."
         )
     lines += ["", "## Description", "", description]
     return "\n".join(lines) + "\n"
@@ -231,6 +232,7 @@ def _write_fit_score(
     batch_id: str | None,
     now: datetime,
     served_model: str = "",
+    input_rev: int = 0,
 ) -> tuple[int | None, bool]:
     """Insert one fit_score row; returns (row id or None if it already existed, unverified)."""
     checks = evidence_checks(screen, _posting_haystack(job))
@@ -253,17 +255,19 @@ def _write_fit_score(
     )
     cur = conn.execute(
         "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
-        "verdict, overall, dimensions, evidence, blockers, missing_info, tailoring_hints, "
-        "shape_flags, evidence_unverified, input_tokens, output_tokens, cache_read_tokens, "
-        "cost_usd, batch_id, created_at, served_model) "
-        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT (job_group_id, tier, prompt_version, scoring_version, model) DO NOTHING",
+        "input_rev, verdict, overall, dimensions, evidence, blockers, missing_info, "
+        "tailoring_hints, shape_flags, evidence_unverified, input_tokens, output_tokens, "
+        "cache_read_tokens, cost_usd, batch_id, created_at, served_model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (job_group_id, tier, prompt_version, scoring_version, model, input_rev) "
+        "DO NOTHING",
         (
             group_id,
             TIER,
             key.model,
             key.prompt_version,
             key.scoring_version,
+            input_rev,
             screen.verdict.value,
             json.dumps(dimensions),
             json.dumps(evidence),
@@ -324,14 +328,15 @@ def _all_input_tokens(usage: Any) -> int:
 # ─── Selection and spend ────────────────────────────────────────────────────
 
 _ELIGIBLE = """
-SELECT g.id AS group_id, j.*
+SELECT g.id AS group_id, g.description_rev AS input_rev, j.*
 FROM job_group g
 JOIN job j ON j.id = g.canonical_job_id
 JOIN prefilter_result p ON p.job_id = j.id AND p.passed = 1 AND p.filter_version = :filter_version
 WHERE NOT EXISTS (
     SELECT 1 FROM fit_score f
     WHERE f.job_group_id = g.id AND f.tier = :tier AND f.model = :model
-      AND f.prompt_version = :prompt_version AND f.scoring_version = :scoring_version)
+      AND f.prompt_version = :prompt_version AND f.scoring_version = :scoring_version
+      AND f.input_rev = g.description_rev)
   AND NOT EXISTS (
     SELECT 1 FROM score_batch_item i JOIN score_batch b ON b.id = i.batch_id
     WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier
@@ -347,8 +352,10 @@ def eligible_groups(
 ) -> list[sqlite3.Row]:
     """Groups whose canonical job passed the current prefilter and have no screen yet.
 
-    A job with no prefilter_result row is not yet eligible. Groups already in an uncollected
-    batch for the same key are skipped so they are never submitted twice.
+    "Yet" is per description revision: pasting a description bumps
+    ``job_group.description_rev`` and the group is screened again (specs/012); the earlier
+    score stays. A job with no prefilter_result row is not yet eligible. Groups already in an
+    uncollected batch for the same key are skipped so they are never submitted twice.
     """
     return conn.execute(
         _ELIGIBLE,
@@ -437,8 +444,9 @@ def submit_batch(
             ),
         )
         conn.executemany(
-            "INSERT INTO score_batch_item (batch_id, custom_id, job_group_id) VALUES (?, ?, ?)",
-            [(batch_id, f"g{g['group_id']}", g["group_id"]) for g in groups],
+            "INSERT INTO score_batch_item (batch_id, custom_id, job_group_id, input_rev) "
+            "VALUES (?, ?, ?, ?)",
+            [(batch_id, f"g{g['group_id']}", g["group_id"], g["input_rev"]) for g in groups],
         )
     logger.info("submitted screen batch %s with %d requests", batch_id, len(requests))
     return batch_id
@@ -510,13 +518,14 @@ def collect_batch(
         logger.warning("batch %s was scored with an older profile scoring_version", batch_id)
 
     key = _Key(batch_row["model"], batch_row["prompt_version"], batch_row["scoring_version"])
-    items = {
-        r["custom_id"]: r["job_group_id"]
-        for r in conn.execute(
-            "SELECT custom_id, job_group_id FROM score_batch_item WHERE batch_id = ?",
-            (batch_id,),
-        )
-    }
+    items: dict[str, int] = {}
+    revs: dict[str, int] = {}
+    for r in conn.execute(
+        "SELECT custom_id, job_group_id, input_rev FROM score_batch_item WHERE batch_id = ?",
+        (batch_id,),
+    ):
+        items[r["custom_id"]] = r["job_group_id"]
+        revs[r["custom_id"]] = r["input_rev"]
     out = CollectResult()
     outcomes: dict[str, str] = {}
     cache_reads: list[int] = []
@@ -558,7 +567,17 @@ def collect_batch(
                 outcomes[custom_id] = "invalid"
                 continue
             row_id, unverified = _write_fit_score(
-                conn, group_id, screen, _row(job), usage, cost, key, batch_id, now, entry.model
+                conn,
+                group_id,
+                screen,
+                _row(job),
+                usage,
+                cost,
+                key,
+                batch_id,
+                now,
+                entry.model,
+                revs.get(custom_id, 0),
             )
             outcomes[custom_id] = "succeeded"
             if row_id is None:
@@ -655,9 +674,12 @@ def score_with(
     cost = scorer.cost(usage, batch=False)
     scorer_name = scorer.name
     key = _Key(scorer_name, PROMPT_VERSION, profile.scoring_version)
+    rev = conn.execute(
+        "SELECT description_rev FROM job_group WHERE id = ?", (group_id,)
+    ).fetchone()[0]
     with _txn(conn):
         row_id, _ = _write_fit_score(
-            conn, group_id, screen, _row(job), usage, cost, key, None, now, result.model
+            conn, group_id, screen, _row(job), usage, cost, key, None, now, result.model, rev
         )
         _record_spend(
             conn,
@@ -739,7 +761,17 @@ def score_sync(
                 out.invalid += 1
                 continue
             row_id, unverified = _write_fit_score(
-                conn, g["group_id"], screen, _row(g), res.usage, cost, key, None, now, res.model
+                conn,
+                g["group_id"],
+                screen,
+                _row(g),
+                res.usage,
+                cost,
+                key,
+                None,
+                now,
+                res.model,
+                g["input_rev"],
             )
             if row_id is None:
                 out.duplicate += 1

@@ -306,7 +306,8 @@ def test_migration_0007_preserves_rows_fks_and_allows_apply_url(monkeypatch):
     monkeypatch.setattr(db, "_load_migrations", real)
     assert db.migrate(c) == [v for v, _, _ in real() if v >= 7]
 
-    assert dict(c.execute("SELECT * FROM job_group").fetchone()) == before
+    after = dict(c.execute("SELECT * FROM job_group").fetchone())
+    assert {k: after[k] for k in before} == before  # later migrations may add columns
     assert c.execute("PRAGMA foreign_key_check").fetchall() == []
     assert c.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     c.execute(

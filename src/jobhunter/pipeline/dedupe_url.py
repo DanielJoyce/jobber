@@ -209,15 +209,15 @@ def _merge_apply_link(conn: sqlite3.Connection, s: int, a: int) -> None:
 
 def _merge_scores(conn: sqlite3.Connection, s: int, a: int, res: MergeResult) -> None:
     rows = conn.execute(
-        "SELECT id, tier, prompt_version, scoring_version, model FROM fit_score "
+        "SELECT id, tier, prompt_version, scoring_version, model, input_rev FROM fit_score "
         "WHERE job_group_id = ?",
         (a,),
     ).fetchall()
     for r in rows:
         dup = conn.execute(
             "SELECT 1 FROM fit_score WHERE job_group_id = ? AND tier = ? AND prompt_version = ? "
-            "AND scoring_version = ? AND model = ?",
-            (s, r["tier"], r["prompt_version"], r["scoring_version"], r["model"]),
+            "AND scoring_version = ? AND model = ? AND input_rev = ?",
+            (s, r["tier"], r["prompt_version"], r["scoring_version"], r["model"], r["input_rev"]),
         ).fetchone()
         if dup:
             conn.execute("DELETE FROM fit_score WHERE id = ?", (r["id"],))

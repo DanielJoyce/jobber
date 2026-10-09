@@ -48,11 +48,13 @@ def _txn(conn: sqlite3.Connection) -> Iterator[None]:
 _UPSERT = """
 INSERT INTO job (
   source_key, external_id, url, title, agency_raw, employer, description_raw,
+  description_completeness,
   posted_at, posted_at_estimated, closes_at, salary_raw, location_raw,
   stage, needs_resolve, first_seen_at, last_seen_at,
   apply_url, occupation_code, pay_plan, grade_low, grade_high
 ) VALUES (
   :source_key, :external_id, :url, :title, :agency_raw, :agency_raw, :description_raw,
+  :completeness,
   :posted_at, :posted_est, :closes_at, :salary_raw, :location_raw,
   'listed', :needs_resolve, :now, :now,
   :apply_url, :occupation_code, :pay_plan, :grade_low, :grade_high
@@ -108,6 +110,7 @@ def upsert_stubs(conn: sqlite3.Connection, stubs: Iterable[JobStub], now: dateti
                     "title": stub.title,
                     "agency_raw": stub.agency_raw,
                     "description_raw": stub.description_raw,
+                    "completeness": stub.description_completeness.value,
                     "posted_at": now_iso if estimated else to_iso(stub.posted_at),  # type: ignore[arg-type]
                     "posted_est": 1 if estimated else 0,
                     "closes_at": to_iso(stub.closes_at) if stub.closes_at else None,

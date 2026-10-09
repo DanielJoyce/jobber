@@ -292,6 +292,7 @@ class ComputedFit:
     recency_weighted_skills: int
     seniority_direction: str = "match"
     blockers: list[str] = field(default_factory=list)
+    partial: bool = False  # description partial: bucket capped at B (specs/012)
 
 
 def _score(dim: Any, default: int = 0) -> int:
@@ -311,13 +312,29 @@ def _loads(raw: Any, default: Any) -> Any:
     return raw
 
 
+def _completeness(job_row: Mapping[str, Any]) -> str | None:
+    """``description_completeness`` when the row carries it (some callers select a subset)."""
+    try:
+        return job_row["description_completeness"]
+    except (KeyError, IndexError):
+        return None
+
+
+def cap_partial(bucket: Bucket, partial: bool) -> Bucket:
+    """A partial description never reaches A: a guess is not a bullseye (specs/012)."""
+    return Bucket.B if partial and bucket is Bucket.A else bucket
+
+
 def compute_row(
     fit_score_row: Mapping[str, Any],
     job_row: Mapping[str, Any],
     locations: Sequence[JobLocation],
     profile: Profile,
 ) -> ComputedFit:
-    """Recompute every derived field from stored model dimensions and current settings."""
+    """Recompute every derived field from stored model dimensions and current settings.
+
+    A job whose description is ``partial`` is capped at bucket B (specs/012).
+    """
     dims = _loads(fit_score_row["dimensions"], {})
     if not isinstance(dims, dict):
         dims = {}
@@ -355,16 +372,18 @@ def compute_row(
         blockers=blockers,
         thresholds=th,
     )
+    partial = _completeness(job_row) == "partial"
     return ComputedFit(
         comp=comp,
         location=loc,
         overall=total,
-        bucket=bucket,
+        bucket=cap_partial(bucket, partial),
         verdict=verdict_for(total, blockers, th),
         raw_skills=raw,
         recency_weighted_skills=recency,
         seniority_direction=direction,
         blockers=blockers,
+        partial=partial,
     )
 
 
@@ -372,7 +391,7 @@ def compute_row(
 
 _PREVIEW_SQL = """
 SELECT fs.*, j.id AS job_id, j.salary_min, j.salary_max, j.salary_period, j.salary_stated,
-       j.location_scope, j.title
+       j.location_scope, j.title, j.description_completeness
 FROM fit_score fs
 JOIN job_group g ON g.id = fs.job_group_id
 JOIN job j ON j.id = g.canonical_job_id

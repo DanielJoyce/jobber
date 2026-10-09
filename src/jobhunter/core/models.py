@@ -189,6 +189,8 @@ class JobStub(BaseModel):
     salary_raw: str | None = None
     agency_raw: str | None = None
     description_raw: str | None = None
+    # 'partial' for email-alert stubs (specs/012); the list stage stores it on insert.
+    description_completeness: DescriptionCompleteness = DescriptionCompleteness.full
     needs_resolve: bool = True
     apply_url: str | None = None
     locations: list[JobLocation] = Field(default_factory=list)
@@ -209,7 +211,6 @@ class JobDetail(JobStub):
     """Output of adapter.resolve (specs/004 stage 3). Stub fields plus parsed detail."""
 
     employment_type: EmploymentType = EmploymentType.unknown
-    description_completeness: DescriptionCompleteness = DescriptionCompleteness.full
     # Federal-only structured signals (specs/011), None elsewhere.
     occupation_code: str | None = None
     pay_plan: str | None = None
