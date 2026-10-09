@@ -1,0 +1,847 @@
+{
+ "total": 62,
+ "jobPostings": [
+  {
+   "title": "Analyst",
+   "externalPath": "/job/Wake-County-NC/Analyst_JR-107414",
+   "locationsText": "Wake County, NC",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "JR-107414",
+    "State Budget & Management"
+   ]
+  },
+  {
+   "title": "Disability Analyst",
+   "externalPath": "/job/Wake-County-NC/Disability-Analyst_JR-111039",
+   "locationsText": "Wake County, NC",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "JR-111039",
+    "Health & Human Services",
+    "9999-12-31"
+   ]
+  },
+  {
+   "title": "Business Analyst",
+   "externalPath": "/job/Wake-County-NC/Business-Analyst_JR-121574",
+   "locationsText": "Wake County, NC",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "JR-121574",
+    "State Budget & Management"
+   ]
+  },
+  {
+   "title": "Data Analyst",
+   "externalPath": "/job/Wake-County-NC/Data-Analyst_JR-125761",
+   "locationsText": "Wake County, NC",
+   "postedOn": "Posted 4 Days Ago",
+   "bulletFields": [
+    "JR-125761",
+    "Elections",
+    "2026-10-16"
+   ]
+  },
+  {
+   "title": "Program Analyst",
+   "externalPath": "/job/Wake-County-NC/Program-Analyst_JR-125594",
+   "locationsText": "Wake County, NC",
+   "postedOn": "Posted 3 Days Ago",
+   "bulletFields": [
+    "JR-125594",
+    "Public Safety",
+    "2026-10-14"
+   ]
+  }
+ ],
+ "facets": [
+  {
+   "facetParameter": "hiringCompany",
+   "descriptor": "Agency",
+   "values": [
+    {
+     "descriptor": "Health & Human Services",
+     "id": "4c5533ba0a02100160ed34489ecc0000",
+     "count": 10
+    },
+    {
+     "descriptor": "Adult Correction",
+     "id": "4c5533ba0a02100160edc6cfc3770000",
+     "count": 7
+    },
+    {
+     "descriptor": "Justice",
+     "id": "4c5533ba0a02100160eccb1f92250000",
+     "count": 5
+    },
+    {
+     "descriptor": "Insurance",
+     "id": "4c5533ba0a02100160ecda24adf40000",
+     "count": 5
+    },
+    {
+     "descriptor": "Judicial Branch",
+     "id": "4c5533ba0a02100160c8551e907a0000",
+     "count": 4
+    },
+    {
+     "descriptor": "Department of Transportation",
+     "id": "4c5533ba0a02100160ed5721e48e0000",
+     "count": 4
+    },
+    {
+     "descriptor": "State Budget & Management",
+     "id": "4c5533ba0a02100160efd4d07e210000",
+     "count": 3
+    },
+    {
+     "descriptor": "Agriculture & Consumer Services",
+     "id": "4c5533ba0a02100160ed4fec67d30000",
+     "count": 3
+    },
+    {
+     "descriptor": "State Treasurer",
+     "id": "4c5533ba0a02100160ed43e822590000",
+     "count": 3
+    },
+    {
+     "descriptor": "Public Safety",
+     "id": "4c5533ba0a02100160ed1cd9975a0000",
+     "count": 2
+    },
+    {
+     "descriptor": "Office of the State Auditor",
+     "id": "4c5533ba0a02100160ed039da7700000",
+     "count": 2
+    },
+    {
+     "descriptor": "OSHR Temporary Solutions",
+     "id": "4c5533ba0a02100160f1a294173c0000",
+     "count": 2
+    },
+    {
+     "descriptor": "DIT EBS",
+     "id": "4c5533ba0a02100160f16121fa4b0000",
+     "count": 2
+    },
+    {
+     "descriptor": "Commerce",
+     "id": "4c5533ba0a02100160ef92c4fe000000",
+     "count": 2
+    },
+    {
+     "descriptor": "Public Instruction",
+     "id": "4c5533ba0a02100160ecc3ea9a780000",
+     "count": 1
+    },
+    {
+     "descriptor": "Office of the State Controller",
+     "id": "4c5533ba0a02100160f2aacae3b30000",
+     "count": 1
+    },
+    {
+     "descriptor": "Department of Environmental Quality",
+     "id": "4c5533ba0a02100160f268be09540000",
+     "count": 1
+    },
+    {
+     "descriptor": "Commerce - DES , DWS",
+     "id": "4c5533ba0a02100160f226b2391d0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Elections",
+     "id": "4c5533ba0a02100160f0dd045a9e0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Community Colleges",
+     "id": "4c5533ba0a02100160f099c2c9f20000",
+     "count": 1
+    },
+    {
+     "descriptor": "State Bureau of Investigation",
+     "id": "4c5533ba0a02100160ee505279de0000",
+     "count": 1
+    },
+    {
+     "descriptor": "NC School for the Deaf",
+     "id": "4c5533ba0a02100160ee4aeb0cfb0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamily",
+   "descriptor": "Job Family",
+   "values": [
+    {
+     "descriptor": "Program Management",
+     "id": "4c5533ba0a0210015bacca0f11f10000",
+     "count": 12
+    },
+    {
+     "descriptor": "Financial and Business Management",
+     "id": "4c5533ba0a0210015bae069528080000",
+     "count": 11
+    },
+    {
+     "descriptor": "Agricultural, Environmental & Scientific",
+     "id": "4c5533ba0a0210015bacc24052c50000",
+     "count": 7
+    },
+    {
+     "descriptor": "Information Technology",
+     "id": "4c5533ba0a0210015bae463acd240000",
+     "count": 5
+    },
+    {
+     "descriptor": "Medical and Health",
+     "id": "4c5533ba0a0210015bacde8426cb0000",
+     "count": 5
+    },
+    {
+     "descriptor": "Human Services",
+     "id": "4c5533ba0a0210015badc78a16b90000",
+     "count": 4
+    },
+    {
+     "descriptor": "Corrections",
+     "id": "4c5533ba0a0210015bacba7152330000",
+     "count": 4
+    },
+    {
+     "descriptor": "Legal",
+     "id": "4c5533ba0a0210015bad0fc274100000",
+     "count": 3
+    },
+    {
+     "descriptor": "Operations and Trades",
+     "id": "4c5533ba0a0210015bacd4e86b510000",
+     "count": 2
+    },
+    {
+     "descriptor": "Administrative Support",
+     "id": "4c5533ba0a0210015bacb509bbf50000",
+     "count": 2
+    },
+    {
+     "descriptor": "Human Resources",
+     "id": "4c5533ba0a0210015bad092668650000",
+     "count": 1
+    },
+    {
+     "descriptor": "Executive",
+     "id": "4c5533ba0a0210015baccd182e160000",
+     "count": 1
+    },
+    {
+     "descriptor": "Engineering",
+     "id": "4c5533ba0a0210015bacc54106700000",
+     "count": 1
+    },
+    {
+     "descriptor": "Budget",
+     "id": "4c5533ba0a0210015ad29d92dd5e0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Program Management -",
+     "id": "4c5533ba0a0210015ad2364ad6cd0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Law Enforcement and Public Safety",
+     "id": "4c5533ba0a0210015bad4838099d0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Planning and Economic Development",
+     "id": "4c5533ba0a0210015bad152acee60000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "workerSubType",
+   "descriptor": "Job Type",
+   "values": [
+    {
+     "descriptor": "Permanent",
+     "id": "4c5533ba0a02100138f36f74712a0000",
+     "count": 52
+    },
+    {
+     "descriptor": "Temporary",
+     "id": "4c5533ba0a02100138f36e4126080000",
+     "count": 5
+    },
+    {
+     "descriptor": "Time Limited",
+     "id": "4c5533ba0a02100138f36bdaa18a0000",
+     "count": 4
+    },
+    {
+     "descriptor": "Permanent - EHRA",
+     "id": "4c5533ba0a02100138f36d0dea720000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "timeType",
+   "descriptor": "Time Type",
+   "values": [
+    {
+     "descriptor": "Full time",
+     "id": "4c5533ba0a0210012cfd14730b2c0000",
+     "count": 59
+    },
+    {
+     "descriptor": "Part time",
+     "id": "4c5533ba0a0210012cfd13d9352c0000",
+     "count": 3
+    }
+   ]
+  },
+  {
+   "facetParameter": "remoteType",
+   "descriptor": "Remote Type",
+   "values": [
+    {
+     "descriptor": "Hybrid",
+     "id": "4c5533ba0a02100136ad4fd3d2190000",
+     "count": 11
+    },
+    {
+     "descriptor": "Remote",
+     "id": "4c5533ba0a02100136ad5107217e0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "locationMainGroup",
+   "values": [
+    {
+     "facetParameter": "locations",
+     "descriptor": "Locations",
+     "values": [
+      {
+       "descriptor": "3200 Beachleaf Court Wake",
+       "id": "4c5533ba0a02100158600ea6c02d0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Alamance County, NC",
+       "id": "4c5533ba0a0210014f335580b8650000",
+       "count": 1
+      },
+      {
+       "descriptor": "Alexander County, NC",
+       "id": "4c5533ba0a0210014f336482c8e80000",
+       "count": 1
+      },
+      {
+       "descriptor": "Alleghany County, NC",
+       "id": "4c5533ba0a0210014f336f525d0e0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Anson County, NC",
+       "id": "4c5533ba0a0210014f33798766970000",
+       "count": 2
+      },
+      {
+       "descriptor": "Ashe County, NC",
+       "id": "4c5533ba0a0210014f3383bbec7b0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Avery County, NC",
+       "id": "4c5533ba0a0210014f338df13ad90000",
+       "count": 1
+      },
+      {
+       "descriptor": "Beaufort County, NC",
+       "id": "4c5533ba0a0210014f33978caa910000",
+       "count": 1
+      },
+      {
+       "descriptor": "Bertie County, NC",
+       "id": "4c5533ba0a0210014f33a25c3db30000",
+       "count": 1
+      },
+      {
+       "descriptor": "Bladen County, NC",
+       "id": "4c5533ba0a0210014f33abf7e2d20000",
+       "count": 1
+      },
+      {
+       "descriptor": "Brunswick County, NC",
+       "id": "4c5533ba0a0210014f33b62bce030000",
+       "count": 1
+      },
+      {
+       "descriptor": "Buncombe County, NC",
+       "id": "4c5533ba0a0210014f33c0fb35000000",
+       "count": 1
+      },
+      {
+       "descriptor": "Burke County, NC",
+       "id": "4c5533ba0a0210014f33ccfbe4b20000",
+       "count": 5
+      },
+      {
+       "descriptor": "Cabarrus County, NC",
+       "id": "4c5533ba0a0210014f33d7ca91ee0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Caldwell County, NC",
+       "id": "4c5533ba0a0210014f33e1ff70c50000",
+       "count": 1
+      },
+      {
+       "descriptor": "Camden County, NC",
+       "id": "4c5533ba0a0210014f33eb9b02700000",
+       "count": 1
+      },
+      {
+       "descriptor": "Carteret County, NC",
+       "id": "4c5533ba0a0210014f33f5d0a3630000",
+       "count": 2
+      },
+      {
+       "descriptor": "Caswell County, NC",
+       "id": "4c5533ba0a0210014f34000650050000",
+       "count": 1
+      },
+      {
+       "descriptor": "Catawba County, NC",
+       "id": "4c5533ba0a0210014f3409a214c90000",
+       "count": 1
+      },
+      {
+       "descriptor": "Chatham County, NC",
+       "id": "4c5533ba0a0210014f3413d78b780000",
+       "count": 1
+      },
+      {
+       "descriptor": "Cherokee County, NC",
+       "id": "4c5533ba0a0210014f341e0f16af0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Chowan County, NC",
+       "id": "4c5533ba0a0210014f3428dfc6710000",
+       "count": 1
+      },
+      {
+       "descriptor": "Clay County, NC",
+       "id": "4c5533ba0a0210014f34344857360000",
+       "count": 1
+      },
+      {
+       "descriptor": "Cleveland County, NC",
+       "id": "4c5533ba0a0210014f343f17da720000",
+       "count": 1
+      },
+      {
+       "descriptor": "Columbus County, NC",
+       "id": "4c5533ba0a0210014f34494d91ef0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Craven County, NC",
+       "id": "4c5533ba0a0210014f34541d24fd0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Cumberland County, NC",
+       "id": "4c5533ba0a0210014f345e5138b00000",
+       "count": 1
+      },
+      {
+       "descriptor": "Currituck County, NC",
+       "id": "4c5533ba0a0210014f3468858cda0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Dare County, NC",
+       "id": "4c5533ba0a0210014f34722070b80000",
+       "count": 1
+      },
+      {
+       "descriptor": "Davidson County, NC",
+       "id": "4c5533ba0a0210014f347bbb98860000",
+       "count": 1
+      },
+      {
+       "descriptor": "Davie County, NC",
+       "id": "4c5533ba0a0210014f3485f0f3d20000",
+       "count": 1
+      },
+      {
+       "descriptor": "Downtown Raleigh Wake",
+       "id": "4c5533ba0a02100158c81ce194f20000",
+       "count": 1
+      },
+      {
+       "descriptor": "Duplin County, NC",
+       "id": "4c5533ba0a0210014f3490bf6e310000",
+       "count": 1
+      },
+      {
+       "descriptor": "Durham County, NC",
+       "id": "4c5533ba0a0210014f349c28370f0000",
+       "count": 2
+      },
+      {
+       "descriptor": "Edgecombe County, NC",
+       "id": "4c5533ba0a0210014f34a6f6ab6a0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Forsyth County, NC",
+       "id": "4c5533ba0a0210014f34b12ccb2b0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Franklin County, NC",
+       "id": "4c5533ba0a0210014f34bb61f9dc0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Gaston County, NC",
+       "id": "4c5533ba0a0210014f34c59728590000",
+       "count": 1
+      },
+      {
+       "descriptor": "Gates County, NC",
+       "id": "4c5533ba0a0210014f34cfcd6a720000",
+       "count": 1
+      },
+      {
+       "descriptor": "Graham County, NC",
+       "id": "4c5533ba0a0210014f34e09d48ab0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Granville County, NC",
+       "id": "4c5533ba0a0210014f34ead1a3310000",
+       "count": 2
+      },
+      {
+       "descriptor": "Greene County, NC",
+       "id": "4c5533ba0a0210014f34f5a07ee00000",
+       "count": 1
+      },
+      {
+       "descriptor": "Guilford County, NC",
+       "id": "4c5533ba0a0210014f350070f1120000",
+       "count": 1
+      },
+      {
+       "descriptor": "Halifax County, NC",
+       "id": "4c5533ba0a0210014f350bd9bc830000",
+       "count": 1
+      },
+      {
+       "descriptor": "Harnett County, NC",
+       "id": "4c5533ba0a0210014f35160eb9c90000",
+       "count": 1
+      },
+      {
+       "descriptor": "Haywood County, NC",
+       "id": "4c5533ba0a0210014f3520dda3f50000",
+       "count": 1
+      },
+      {
+       "descriptor": "Henderson County, NC",
+       "id": "4c5533ba0a0210014f352a7946590000",
+       "count": 1
+      },
+      {
+       "descriptor": "Hertford County, NC",
+       "id": "4c5533ba0a0210014f3534af218b0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Hoke County, NC",
+       "id": "4c5533ba0a0210014f353ee27c780000",
+       "count": 1
+      },
+      {
+       "descriptor": "Hyde County, NC",
+       "id": "4c5533ba0a0210014f3549171d280000",
+       "count": 1
+      },
+      {
+       "descriptor": "Iredell County, NC",
+       "id": "4c5533ba0a0210014f3552b318880000",
+       "count": 1
+      },
+      {
+       "descriptor": "Jackson County, NC",
+       "id": "4c5533ba0a0210014f355c4eaa970000",
+       "count": 1
+      },
+      {
+       "descriptor": "Johnston County, NC",
+       "id": "4c5533ba0a0210014f35671dbf9f0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Jones County, NC",
+       "id": "4c5533ba0a0210014f357285cd530000",
+       "count": 1
+      },
+      {
+       "descriptor": "Lee County, NC",
+       "id": "4c5533ba0a0210014f357cbc11380000",
+       "count": 1
+      },
+      {
+       "descriptor": "Lenoir County, NC",
+       "id": "4c5533ba0a0210014f35878b9e910000",
+       "count": 1
+      },
+      {
+       "descriptor": "Lincoln County, NC",
+       "id": "4c5533ba0a0210014f3591c100c80000",
+       "count": 1
+      },
+      {
+       "descriptor": "Macon County, NC",
+       "id": "4c5533ba0a0210014f359b5bffaf0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Madison County, NC",
+       "id": "4c5533ba0a0210014f35a594ac220000",
+       "count": 1
+      },
+      {
+       "descriptor": "Martin County, NC",
+       "id": "4c5533ba0a0210014f35af340f520000",
+       "count": 1
+      },
+      {
+       "descriptor": "McDowell County, NC",
+       "id": "4c5533ba0a0210014f35b969fb510000",
+       "count": 1
+      },
+      {
+       "descriptor": "Mecklenburg County, NC",
+       "id": "4c5533ba0a0210014f35c30560e10000",
+       "count": 2
+      },
+      {
+       "descriptor": "Mitchell County, NC",
+       "id": "4c5533ba0a0210014f35cd3b2a760000",
+       "count": 1
+      },
+      {
+       "descriptor": "Montgomery County, NC",
+       "id": "4c5533ba0a0210014f35d8a27d0b0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Moore County, NC",
+       "id": "4c5533ba0a0210014f35e2d86cf20000",
+       "count": 1
+      },
+      {
+       "descriptor": "Nash County, NC",
+       "id": "4c5533ba0a0210014f35eda758230000",
+       "count": 1
+      },
+      {
+       "descriptor": "New Hanover County, NC",
+       "id": "4c5533ba0a0210014f35f7dc87b90000",
+       "count": 1
+      },
+      {
+       "descriptor": "Northampton County, NC",
+       "id": "4c5533ba0a0210014f360177eb4b0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Onslow County, NC",
+       "id": "4c5533ba0a0210014f360baeaa1f0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Orange County, NC",
+       "id": "4c5533ba0a0210014f36154a66230000",
+       "count": 1
+      },
+      {
+       "descriptor": "Pamlico County, NC",
+       "id": "4c5533ba0a0210014f3629b5f82a0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Pasquotank County, NC",
+       "id": "4c5533ba0a0210014f3633ea40360000",
+       "count": 1
+      },
+      {
+       "descriptor": "Pender County, NC",
+       "id": "4c5533ba0a0210014f363febee550000",
+       "count": 1
+      },
+      {
+       "descriptor": "Perquimans County, NC",
+       "id": "4c5533ba0a0210014f364a21c2580000",
+       "count": 1
+      },
+      {
+       "descriptor": "Person County, NC",
+       "id": "4c5533ba0a0210014f365457180e0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Pitt County, NC",
+       "id": "4c5533ba0a0210014f365df198b20000",
+       "count": 1
+      },
+      {
+       "descriptor": "Polk County, NC",
+       "id": "4c5533ba0a0210014f36682623f00000",
+       "count": 1
+      },
+      {
+       "descriptor": "Randolph County, NC",
+       "id": "4c5533ba0a0210014f3671c125570000",
+       "count": 1
+      },
+      {
+       "descriptor": "Richmond County, NC",
+       "id": "4c5533ba0a0210014f367bf63de10000",
+       "count": 1
+      },
+      {
+       "descriptor": "Robeson County, NC",
+       "id": "4c5533ba0a0210014f36862cbbb50000",
+       "count": 1
+      },
+      {
+       "descriptor": "Rockingham County, NC",
+       "id": "4c5533ba0a0210014f369062b8570000",
+       "count": 1
+      },
+      {
+       "descriptor": "Rowan County, NC",
+       "id": "4c5533ba0a0210014f369a9851710000",
+       "count": 3
+      },
+      {
+       "descriptor": "Rutherford County, NC",
+       "id": "4c5533ba0a0210014f36a60111fb0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Sampson County, NC",
+       "id": "4c5533ba0a0210014f36b03595d60000",
+       "count": 1
+      },
+      {
+       "descriptor": "Scotland County, NC",
+       "id": "4c5533ba0a0210014f36ba6a5e1a0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Stanly County, NC",
+       "id": "4c5533ba0a0210014f36c53859480000",
+       "count": 1
+      },
+      {
+       "descriptor": "Stokes County, NC",
+       "id": "4c5533ba0a0210014f36cf6db4310000",
+       "count": 1
+      },
+      {
+       "descriptor": "Surry County, NC",
+       "id": "4c5533ba0a0210014f36d908d7dc0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Swain County, NC",
+       "id": "4c5533ba0a0210014f36e33e49fa0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Transylvania County, NC",
+       "id": "4c5533ba0a0210014f36ecdaa3c80000",
+       "count": 1
+      },
+      {
+       "descriptor": "Tyrrell County, NC",
+       "id": "4c5533ba0a0210014f36f67576810000",
+       "count": 1
+      },
+      {
+       "descriptor": "Union County, NC",
+       "id": "4c5533ba0a0210014f370142dcb10000",
+       "count": 1
+      },
+      {
+       "descriptor": "Vance County, NC",
+       "id": "4c5533ba0a0210014f370cab850d0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Wake County, NC",
+       "id": "4c5533ba0a0210014f3716df87c40000",
+       "count": 28
+      },
+      {
+       "descriptor": "Warren County, NC",
+       "id": "4c5533ba0a0210014f3721ae23620000",
+       "count": 1
+      },
+      {
+       "descriptor": "Washington County, NC",
+       "id": "4c5533ba0a0210014f372b4913220000",
+       "count": 1
+      },
+      {
+       "descriptor": "Watauga County, NC",
+       "id": "4c5533ba0a0210014f3736192a9f0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Wayne County, NC",
+       "id": "4c5533ba0a0210014f37404f85ae0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Wilkes County, NC",
+       "id": "4c5533ba0a0210014f374a857a000000",
+       "count": 1
+      },
+      {
+       "descriptor": "Wilson County, NC",
+       "id": "4c5533ba0a0210014f375553c3d10000",
+       "count": 1
+      },
+      {
+       "descriptor": "Yadkin County, NC",
+       "id": "4c5533ba0a0210014f37645797d40000",
+       "count": 1
+      },
+      {
+       "descriptor": "Yancey County, NC",
+       "id": "4c5533ba0a0210014f376f25ac3e0000",
+       "count": 1
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

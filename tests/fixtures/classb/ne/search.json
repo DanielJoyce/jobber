@@ -1,0 +1,300 @@
+{
+ "total": 17,
+ "jobPostings": [
+  {
+   "title": "Accountant I",
+   "externalPath": "/job/Lincoln-NE/Accountant-I_JR2026-00029309",
+   "timeType": "Full time",
+   "locationsText": "Lincoln, NE",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "JR2026-00029309"
+   ]
+  },
+  {
+   "title": "Fiscal Compliance Analyst",
+   "externalPath": "/job/Lincoln-NE/Fiscal-Compliance-Analyst_JR2026-00029805",
+   "timeType": "Full time",
+   "locationsText": "Lincoln, NE",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "JR2026-00029805"
+   ]
+  },
+  {
+   "title": "Scientist II - Nebraska Public Health Environmental Lab",
+   "externalPath": "/job/Lincoln-NE/Scientist-II---Nebraska-Public-Health-Environmental-Lab_JR2026-00029743",
+   "timeType": "Full time",
+   "locationsText": "Lincoln, NE",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "JR2026-00029743"
+   ]
+  },
+  {
+   "title": "Accountant I",
+   "externalPath": "/job/Lincoln-NE/Accountant-I_JR2026-00029721-1",
+   "timeType": "Full time",
+   "locationsText": "Lincoln, NE",
+   "postedOn": "Posted 2 Days Ago",
+   "bulletFields": [
+    "JR2026-00029721"
+   ]
+  },
+  {
+   "title": "IT Business Systems Analyst - MMIS",
+   "externalPath": "/job/Lincoln-NE/IT-Business-Systems-Analyst---MMIS_JR2026-00029701",
+   "timeType": "Full time",
+   "locationsText": "Lincoln, NE",
+   "postedOn": "Posted 2 Days Ago",
+   "bulletFields": [
+    "JR2026-00029701"
+   ]
+  }
+ ],
+ "facets": [
+  {
+   "facetParameter": "CF_LRV_Agency__mas-impl__Extended",
+   "descriptor": "Agency",
+   "values": [
+    {
+     "descriptor": "Health & Human Services - Agency 25",
+     "id": "32dfc804b3f142d7b526d1fa3df0a5c9",
+     "count": 6
+    },
+    {
+     "descriptor": "Administrative Services - Agency 65",
+     "id": "115ffcfe67f846d99f4a1d4d75a0d476",
+     "count": 5
+    },
+    {
+     "descriptor": "Revenue - Agency 16",
+     "id": "a05a8768bb854406905569ee9eb140f5",
+     "count": 1
+    },
+    {
+     "descriptor": "Motor Vehicles - Agency 24",
+     "id": "9e7300993d6a45c4b1db010e27f04674",
+     "count": 1
+    },
+    {
+     "descriptor": "Military - Agency 31",
+     "id": "3c9f02fa67224c37a90f08ba269cdf68",
+     "count": 1
+    },
+    {
+     "descriptor": "Game & Parks Commission - Agency 33",
+     "id": "0ec7c2e462594d2d88d2793611defb99",
+     "count": 1
+    },
+    {
+     "descriptor": "Foster Care Review Office - Agency 70",
+     "id": "583296114b4647b986e16ea04042939d",
+     "count": 1
+    },
+    {
+     "descriptor": "Economic Development - Agency 72",
+     "id": "16cd832cec654fcea19dd28f5bc6c33a",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "workerSubType",
+   "descriptor": "Job Type",
+   "values": [
+    {
+     "descriptor": "Regular",
+     "id": "60812ffe2ffd4b0eb7d8d3ba8ecd94cf",
+     "count": 16
+    },
+    {
+     "descriptor": "Agency Temporary > 6 mo.",
+     "id": "b56b0891b7744d6f8dc89c850101effb",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "Job_Requisition_Categories",
+   "descriptor": "Job Categories",
+   "values": [
+    {
+     "descriptor": "Information and Telecommunications Technologies",
+     "id": "5eca664239074bffad42df700b26bb8d",
+     "count": 9
+    },
+    {
+     "descriptor": "Business Operations",
+     "id": "7feb1efe2a34409cbf091ff47fa778b3",
+     "count": 5
+    },
+    {
+     "descriptor": "Engineering, Architecture, Surveying and Sciences",
+     "id": "894e4c30a2474c44a03827dd65592721",
+     "count": 1
+    },
+    {
+     "descriptor": "Commerce Development and Financial Regulation",
+     "id": "1d0471b37c674614a47b8da9ae5a5bcc",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "timeType",
+   "descriptor": "Full/Part-time",
+   "values": [
+    {
+     "descriptor": "Full time",
+     "id": "e5a0cdf4a3da41928a85cdaf0344b5da",
+     "count": 17
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamily",
+   "descriptor": "Bargaining Unit",
+   "values": [
+    {
+     "descriptor": "Administrative Professional Bargaining Unit",
+     "id": "eef47ce613124b7ebce8c0ade9c9c967",
+     "count": 11
+    },
+    {
+     "descriptor": "Management Group",
+     "id": "67fb0c2b628e4ff789b96c04f1be5870",
+     "count": 2
+    },
+    {
+     "descriptor": "Temporary Group",
+     "id": "4df89dbf53ae477895acbfff9b112e03",
+     "count": 1
+    },
+    {
+     "descriptor": "Non-Classified",
+     "id": "e38ba4d2e52244fe8cb7de2a0fbc1c89",
+     "count": 1
+    },
+    {
+     "descriptor": "Engineering, Science and Research Bargaining Unit",
+     "id": "3f5ba4664ce14fcd9e8b56f924902a3d",
+     "count": 1
+    },
+    {
+     "descriptor": "Confidential Group",
+     "id": "954c9b64817c465983f92e68ad78529a",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "Organization",
+   "descriptor": "Management Organization",
+   "values": [
+    {
+     "descriptor": "Revenue OIT - Operations (Derek R Forgey (80015205) (Inherited))",
+     "id": "d2e6a36a4d2010011744596e077e0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Motor Vehicles Legal (Kenneth Lackey (1949940))",
+     "id": "1e1074cd23534d459b97aaf763dd3d81",
+     "count": 1
+    },
+    {
+     "descriptor": "Military Department Command Group (Morgan Mathis (80050124)[C])",
+     "id": "7ead0825f4440189ec41186abd0a6af4",
+     "count": 1
+    },
+    {
+     "descriptor": "Game & Parks IT (Troy D Kroeger (110608))",
+     "id": "7364faa0c5ea4ee18eda2fb89a866372",
+     "count": 1
+    },
+    {
+     "descriptor": "Foster Care Research (Heather M Wood (6131206))",
+     "id": "5dd95e6b8c8c01faf4d485046a482ce4",
+     "count": 1
+    },
+    {
+     "descriptor": "Economic Development Tax Incentive Division 02 (Shaun J Grantski (80007088))",
+     "id": "90834872f6170100ce9ccbe8b48b0000",
+     "count": 1
+    },
+    {
+     "descriptor": "DHHS Public Health Laboratory (Mary Frances Boden (118485))",
+     "id": "aa96a30c74fa451db98c073a0f163f2e",
+     "count": 1
+    },
+    {
+     "descriptor": "DHHS IT Supervisor (Lavanya Ganesh (80014277))",
+     "id": "b1231b25ad7d10020fb000ad477e0000",
+     "count": 1
+    },
+    {
+     "descriptor": "DHHS IS&T IT Supervisor (Melissa Kolm (306921))",
+     "id": "54f90c643bb14eec97798c523a88f3e2",
+     "count": 1
+    },
+    {
+     "descriptor": "DHHS IS&T IT Business System Analyst - Supervisor (Sandra M Johnson (114674))",
+     "id": "ce39dd6057224258a95fc92683241edd",
+     "count": 1
+    },
+    {
+     "descriptor": "DHHS Financial Services Grants (Ann Murphy (80021552))",
+     "id": "13f5762f2cc0018800e070c9f335408d",
+     "count": 1
+    },
+    {
+     "descriptor": "DHHS Chief of Staff (Shannon Grotrian (122944))",
+     "id": "a606bd45868a1001f7af37c9bf5a0001",
+     "count": 1
+    },
+    {
+     "descriptor": "AS oCIO LAN Supervisor (Benjamin John Sharp (80055656))",
+     "id": "ce869c4623ef4bdb831c3c211050ab1e",
+     "count": 1
+    },
+    {
+     "descriptor": "AS oCIO IT Supervisor (Elliott D Karella (80030719))",
+     "id": "d6f505c304500138cd01f6306644cbc4",
+     "count": 1
+    },
+    {
+     "descriptor": "AS oCIO (Matthew McCarville (80048597))",
+     "id": "4f6b315f3d3e4880be4742ac4264afd2",
+     "count": 1
+    },
+    {
+     "descriptor": "AS Central Finance (Vickie L Kress (113106))",
+     "id": "8c55171bfb4540839ea697ca090ddb4d",
+     "count": 1
+    },
+    {
+     "descriptor": "AS Budget - OCIO (Ashir Immanuel | Graceson Immanuel (80020646))",
+     "id": "fcb45f06523f107d6606a249417e93d1",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "locationMainGroup",
+   "values": [
+    {
+     "facetParameter": "locations",
+     "descriptor": "Locations",
+     "values": [
+      {
+       "descriptor": "Lincoln, NE",
+       "id": "b91af9e471e41001f6e61ccbeaf80000",
+       "count": 17
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

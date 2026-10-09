@@ -211,9 +211,188 @@ holds:
 
 Re-run with `uv run python scripts/nlx_coverage.py` (all blocked states) or `--states`.
 
+## Class B — state employer sites (2026-10-09)
+
+The "work for the state" side ([003](003-sources-and-adapters.md#what-kind-of-board-these-are--read-this-first)):
+one official career site per state (50 states plus DC), found from a state `.gov` page, classified
+by platform and checked against `robots.txt`. Raw per-state evidence is in
+[`data/class-b-survey-2026-10-09.json`](data/class-b-survey-2026-10-09.json) (state, site, referring
+`.gov` URL, family and signal, robots host and class, search/detail allowed, notes). Registry rows
+are `<st>-employer`, `class: B`.
+
+**Method.** At most one request per 5 s per host, User-Agent
+`jobhunter/0.1 (personal job search; <you>@example.com)`, no logins or accounts, no CAPTCHA or
+bot-wall bypass (a wall is recorded and the state goes to `manual`). For each state: fetch the
+referring `.gov` HR page and look for a link to the careers host, fetch the site, classify from
+signals (host names, redirects, `sapsf`/`jobs2web`, `myworkdayjobs`, `/psp/` PeopleSoft paths,
+`csod.com`, `taleo.net`, `jobaps`), fetch `robots.txt` on the host that serves search, and test the
+search and detail paths for our agent. Where the careers site hands off to another host (Workday,
+NEOGOV, PeopleSoft), robots was read on that serving host.
+
+### Family distribution
+
+| Family | States | Which |
+|---|---:|---|
+| `neogov` | 13 | AK, CO, DE, HI, IA, LA, MI, MS, PA, SC, WA, WV, WY |
+| `workday` | 7 | GA, ME, NC, NE, OK, OR, RI |
+| `custom` | 5 | AL, CA, NJ, NV, NY |
+| `successfactors` | 5 | AR, FL, IL, IN, VT |
+| `peoplesoft` | 5 | DC, KS, ND, NM, WI |
+| `unknown` | 5 | MA, MN, NH, OH, TX |
+| `clinch` | 2 | AZ, VA |
+| `jobaps` | 2 | CT, MD |
+| `cornerstone` | 2 | KY, UT |
+| `infor` | 1 | ID |
+| `hiretrue` | 1 | MO |
+| `taleo` | 1 | MT |
+| `hireclick` | 1 | SD |
+| `oracle-apex` | 1 | TN |
+
+Policy: **8 enabled**, **15 blocked**, **28 manual**.
+
+- **NEOGOV (13) is all blocked.** `governmentjobs.com` allowlists seven search crawlers and gives
+  `User-agent: *` `Disallow: /` ([008](008-compliance.md#class-b-state-employer-sites)). Two
+  state vanity sites (`jobs.la.gov`, `careers.wa.gov`) publish an empty robots.txt, but they only
+  front NEOGOV searches, so they stay blocked. These states are covered by email alerts
+  ([012](012-email-ingest.md)), not scraping.
+- **Workday (7)** is the cheap tier. Six tenants allow us (robots lists `Allow: /<site>/` and
+  disallows only `/refreshFacet/`) and answer an anonymous JSON `POST /wday/cxs/<tenant>/<site>/jobs`
+  plus `GET .../job/<path>`. Rhode Island's tenant is the exception: `Disallow: /RI/`, so blocked.
+- **SuccessFactors (5)** is the older jobs2web template. robots only disallows apply/talent-community
+  paths. IL and IN are built; AR, FL and VT are the same family and are follow-ups.
+
+### The table
+
+| ST | Careers site | Referring `.gov` page | Family | Robots | Search | Detail | Policy |
+|---|---|---|---|---|---|---|---|
+| AK | `https://www.governmentjobs.com/careers/alaska` | `https://doa.alaska.gov/dop/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| AL | `https://personnel.alabama.gov/CurrentJobs.aspx` | `https://personnel.alabama.gov/Jobs` | `custom` | OPEN (`personnel.alabama.gov`) | yes | yes | manual |
+| AR | `https://arcareers.arkansas.gov/` | `https://portal.arkansas.gov/service/arkansas-state-government-career-search/` | `successfactors` | PARTIAL (`arcareers.arkansas.gov`) | yes | yes | manual |
+| AZ | `https://www.azstatejobs.gov/` | `https://housing.az.gov/node/63` | `clinch` | PARTIAL (`www.azstatejobs.gov`) | yes | yes | manual |
+| CA | `https://calcareers.ca.gov/` | `https://www.calhr.ca.gov/` | `custom` | OPEN (`calcareers.ca.gov`) | yes | yes | manual |
+| CO | `https://www.governmentjobs.com/careers/colorado` | `https://dpa.colorado.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| CT | `https://www.jobapscloud.com/CT/` | `https://portal.ct.gov/das/` | `jobaps` | ABSENT (`www.jobapscloud.com`) | yes | yes | manual |
+| DC | `https://careers.dc.gov/` | `https://dchr.dc.gov/` | `peoplesoft` | ABSENT (`careers.dc.gov`) | yes | yes | manual |
+| DE | `https://www.governmentjobs.com/careers/delaware` | `https://dhr.delaware.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| FL | `https://jobs.myflorida.com/` | `https://www.dms.myflorida.com/` | `successfactors` | PARTIAL (`jobs.myflorida.com`) | yes | yes | manual |
+| GA | `https://careers.georgia.gov/` | `https://doas.ga.gov/` | `workday` | PARTIAL (`georgia.wd5.myworkdayjobs.com`) | yes | yes | enabled |
+| HI | `https://www.governmentjobs.com/careers/hawaii` | `https://dhrd.hawaii.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| IA | `https://www.governmentjobs.com/careers/iowa` | `https://das.iowa.gov/state-employees/human-resources` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| ID | `https://statecareers.idaho.gov/` | `https://dhr.idaho.gov/` | `infor` | ABSENT (`css-idaho-prd.tam.inforgov.com`) | yes | yes | manual |
+| IL | `https://illinois.jobs2web.com/` | `https://cms.illinois.gov/` | `successfactors` | PARTIAL (`illinois.jobs2web.com`) | yes | yes | enabled |
+| IN | `https://workforindiana.in.gov/` | `https://www.in.gov/spd/` | `successfactors` | PARTIAL (`workforindiana.in.gov`) | yes | yes | enabled |
+| KS | `https://jobs.sok.ks.gov/` | `https://admin.ks.gov/` | `peoplesoft` | ABSENT (`jobs.sok.ks.gov`) | yes | yes | manual |
+| KY | `kypersonnelcabinet.csod.com/...` | `https://personnel.ky.gov/` | `cornerstone` | OPEN (`kypersonnelcabinet.csod.com`) | yes | yes | manual |
+| LA | `https://jobs.la.gov/` | `https://www.civilservice.louisiana.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| MA | `https://www.mass.gov/find-your-career-at-the-commonwealth` | `https://www.mass.gov/orgs/human-resources-division` | `unknown` | UNKNOWN (`www.mass.gov`) | ? | ? | manual |
+| MD | `https://www.jobapscloud.com/MD/` | `https://dbm.maryland.gov/` | `jobaps` | ABSENT (`www.jobapscloud.com`) | yes | yes | manual |
+| ME | `https://maine.wd5.myworkdayjobs.com/Executive` | `https://www.maine.gov/bhr/state-jobs` | `workday` | PARTIAL (`maine.wd5.myworkdayjobs.com`) | yes | yes | enabled |
+| MI | `https://www.governmentjobs.com/careers/michigan` | `https://www.michigan.gov/mdcs` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| MN | `https://mn.gov/careers/` | `https://mn.gov/mmb/careers/applicant-help/using-the-state-of-minnesota-job-application-website` | `unknown` | UNKNOWN | ? | ? | manual |
+| MO | `https://mocareers.mo.gov/` | `https://oa.mo.gov/personnel` | `hiretrue` | ABSENT (`mocareers.mo.gov`) | yes | yes | manual |
+| MS | `https://www.governmentjobs.com/careers/mississippi` | `https://www.mspb.ms.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| MT | `https://mtstatejobs.taleo.net/careersection/200/jobsearch.ftl?lang=en` | `https://doa.mt.gov/shrd/state-careers/` | `taleo` | ABSENT (`mtstatejobs.taleo.net`) | yes | yes | manual |
+| NC | `https://nc.wd108.myworkdayjobs.com/NC_Careers` | `https://oshr.nc.gov/work-nc` | `workday` | PARTIAL (`nc.wd108.myworkdayjobs.com`) | yes | yes | enabled |
+| ND | `www.cnd.nd.gov/...` | `https://www.omb.nd.gov/team-nd-careers/career-openings` | `peoplesoft` | DISALLOW_ALL (`www.cnd.nd.gov`) | **no** | **no** | blocked |
+| NE | `https://son.wd108.myworkdayjobs.com/NebraskaStateCareers` | `https://das.nebraska.gov/personnel/` | `workday` | PARTIAL (`son.wd108.myworkdayjobs.com`) | yes | yes | enabled |
+| NH | `https://www.das.nh.gov/jobsearch/` | `https://www.das.nh.gov/` | `unknown` | DISALLOW_ALL (`www.das.nh.gov`) | **no** | **no** | manual |
+| NJ | `info.csc.nj.gov/...` | `https://www.nj.gov/csc/jobs/` | `custom` | UNKNOWN (`info.csc.nj.gov`) | ? | ? | manual |
+| NM | `https://careers.share.nm.gov/` | `https://www.spo.state.nm.us/` | `peoplesoft` | ABSENT (`careers.share.nm.gov`) | yes | yes | manual |
+| NV | `https://nvapps.state.nv.us/NEATS/Recruiting/ViewJobsHome.aep2` | `https://hr.nv.gov/` | `custom` | ABSENT (`nvapps.state.nv.us`) | yes | yes | manual |
+| NY | `https://statejobs.ny.gov/` | `https://www.cs.ny.gov/` | `custom` | ABSENT (`statejobs.ny.gov`) | yes | yes | manual |
+| OH | `https://careers.ohio.gov/` | `https://www.ohio.gov/` | `unknown` | UNKNOWN (`careers.ohio.gov`) | ? | ? | manual |
+| OK | `https://okgov.wd1.myworkdayjobs.com/okgovjobs` | `https://oklahoma.gov/omes.html` | `workday` | PARTIAL (`okgov.wd1.myworkdayjobs.com`) | yes | yes | enabled |
+| OR | `https://oregon.wd5.myworkdayjobs.com/SOR_External_Career_Site` | `https://www.oregon.gov/das/hr/` | `workday` | PARTIAL (`oregon.wd5.myworkdayjobs.com`) | yes | yes | enabled |
+| PA | `https://www.governmentjobs.com/careers/pabureau` | `https://www.pa.gov/agencies/employment/open-jobs` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| RI | `https://ri.wd5.myworkdayjobs.com/RI` | `https://hr.ri.gov/` | `workday` | PARTIAL (`ri.wd5.myworkdayjobs.com`) | **no** | **no** | blocked |
+| SC | `https://www.governmentjobs.com/careers/sc` | `https://careers.sc.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| SD | `https://statesdgovt.hireclick.com/` | `https://bhr.sd.gov/job-seekers` | `hireclick` | OPEN (`statesdgovt.hireclick.com`) | yes | yes | manual |
+| TN | `https://hub.edison.tn.gov/ords/r/tn_er/tn-careers-external/home` | `https://www.tn.gov/careers/apply-here/external-candidate.html` | `oracle-apex` | UNKNOWN (`hub.edison.tn.gov`) | ? | ? | manual |
+| TX | none found | `https://hr.sao.texas.gov/` | `unknown` | UNKNOWN | ? | ? | manual |
+| UT | `https://utdgohcm.csod.com/ux/ats/careersite/4/home?c=utdgohcm` | `https://dhrm.utah.gov/` | `cornerstone` | OPEN (`utdgohcm.csod.com`) | yes | yes | manual |
+| VA | `https://www.jobs.virginia.gov/` | `https://www.dhrm.virginia.gov/` | `clinch` | PARTIAL (`www.jobs.virginia.gov`) | yes | yes | manual |
+| VT | `https://careers.vermont.gov/` | `https://humanresources.vermont.gov/` | `successfactors` | PARTIAL (`careers.vermont.gov`) | yes | yes | manual |
+| WA | `https://careers.wa.gov/` | `https://des.wa.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| WI | `https://wisc.jobs/` | `https://dpm.wi.gov/Pages/home.aspx` | `peoplesoft` | ABSENT (`wj.wi.gov`) | yes | yes | manual |
+| WV | `https://www.governmentjobs.com/careers/wv` | `https://personnel.wv.gov/empopp` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+| WY | `https://www.governmentjobs.com/careers/wyoming` | `https://ai.wyo.gov/` | `neogov` | DISALLOW_ALL (`www.governmentjobs.com`) | **no** | **no** | blocked |
+
+"Search" and "Detail" are our agent's verdict on a representative search path and a representative
+detail path from the serving host's `robots.txt` (`?` where robots could not be read or the
+platform could not be observed). Robots class is `ABSENT` (404), `OPEN`, `PARTIAL` (some
+disallows for `*`) or `DISALLOW_ALL`. Per-row notes and the signals that identified each
+platform are in the JSON and in each registry row's `family_signals` and `robots.note`.
+
+### Built (8 enabled rows)
+
+| ST | Platform | Tier | How |
+|---|---|---|---|
+| GA | Workday `georgia.wd5` / `TGC` | api | `htmlconfig` JSON |
+| ME | Workday `maine.wd5` / `Executive` | api | `htmlconfig` JSON (Executive site only) |
+| NC | Workday `nc.wd108` / `NC_Careers` | api | `htmlconfig` JSON |
+| NE | Workday `son.wd108` / `NebraskaStateCareers` | api | `htmlconfig` JSON |
+| OK | Workday `okgov.wd1` / `okgovjobs` | api | `htmlconfig` JSON |
+| OR | Workday `oregon.wd5` / `SOR_External_Career_Site` | api | `htmlconfig` JSON |
+| IL | SuccessFactors jobs2web `illinois.jobs2web.com` | http | `htmlconfig` HTML (tiles) |
+| IN | SuccessFactors jobs2web `workforindiana.in.gov` | http | `htmlconfig` HTML (table) |
+
+Workday needs no new code. `htmlconfig` already renders a JSON `POST` body: `{"appliedFacets": {},
+"limit": 20, "searchText": "{query}"}`, with `offset` added by `pagination: offset`. The list rows
+give the title, location and a relative "Posted N Days Ago"; the description, an ISO start date and
+the employer come from the detail call. Two judgment calls: the stub's `url` is the **JSON detail
+URL** (the adapter's resolve step fetches `stub.url`), and the human job page is carried in
+`apply_url`; and `posted_at` from the list is parsed from the relative text against the wall clock,
+so it is approximate to the day (the detail's `startDate` replaces it on resolve). jobs2web returns
+15 results per page with no paging parameter verified, so IL and IN read one page per query,
+newest first.
+
+### What was and wasn't verified
+
+Verified live on 2026-10-09:
+
+- Every site URL in the table was requested once (status, redirect chain, title, signals recorded)
+  except TX (no statewide portal found; the candidate host did not resolve).
+- `robots.txt` was read on the serving host for every row except MN, NJ, TN, TX, OH and MA's
+  search host (bot wall, 401/403, DNS failure or 404 on every path); those are `manual` with
+  robots recorded as unknown.
+- The referring `.gov` page was fetched for 44 of 51 states; the automated scan found a link to
+  the careers host on 31 of them. The others were reached from a sibling `.gov` page or a web search result
+  naming the page; `provenance_check` in the JSON says which. AK, AZ, CO, MA, NH, OH and TN
+  referring pages returned 403, 404 or a connection reset to this client.
+- The eight built boards: a real search and two real details were fetched and saved as fixtures
+  (e-mail addresses and phone numbers replaced); tests replay them through `httpx.MockTransport`.
+
+**Not** verified:
+
+- Any board marked `manual` was not scraped, so for those only robots and the landing page were
+  looked at. "Robots allows" is not "the board is readable": PeopleSoft, Cornerstone, Taleo and
+  Infor sites are script-driven and untested here.
+- Anything behind a bot wall: Massachusetts (mass.gov 403), Minnesota (Radware captcha), New Hampshire
+  (Akamai 403), New Jersey (403 from `info.csc.nj.gov`), Ohio (404 on every path from this client),
+  Tennessee (401 on robots), Arizona and Virginia (AWS WAF challenge script; VA served a 202
+  challenge on a second request). None was bypassed.
+- Coverage: counts, freshness and overlap with Class A boards and NLx were not measured. The
+  family of MA, MN, NH, OH and TX is `unknown`, and TX has no single statewide portal that we found.
+- Judicial and legislative branch sites (several Workday tenants have them) and university
+  systems are out of scope; only the executive-branch careers site was built.
+
+### Follow-ups (not built because of the 8-board cap or because they need other work)
+
+1. **Open by robots, same family as a built board:** AR, FL, VT (jobs2web, reuse the IL config);
+   Maine's `Judicial` and `Legislature` Workday sites; CT and MD (JobAps, robots 404, classic
+   server-rendered bulletins at `jobapscloud.com`).
+2. **Open by robots, different platform:** SD (HireClick, Crawl-delay 10), AL (ASP.NET list page),
+   NY (frame-based `statejobs.ny.gov`), NV (NEATS), CA (CalCareers), MO (`/hiretrue/`).
+3. **Open by robots, probably gated:** AZ and VA (Clinch Talent with AWS WAF); re-test with a
+   plain polite client over a few days before trusting either way.
+4. **Browser tier:** DC, KS, NM, WI (PeopleSoft HCM, stateful), KY and UT (Cornerstone), MT (Taleo),
+   ID (Infor).
+5. **Walls to revisit:** MA, MN, NH, NJ, OH, TN. TX: enumerate per-agency CAPPS Recruit pages.
+6. Paging past the first page for jobs2web (find the real page-size/`startrow` rule), and a
+   display-URL field so Workday stubs can keep the human URL in `url`.
+7. Re-run `jobhunter sources verify` weekly: Workday tenant names change when a state migrates.
+
 ## Not in this list
 
 - **Puerto Rico** — absent from the CareerOneStop page. Worth adding manually if wanted.
-- **Class B (state-employer career sites)** — a separate inventory, not yet built. The six rows
-  probed while drafting [003](003-sources-and-adapters.md) are recorded there, including the
-  finding that `governmentjobs.com` disallows generic crawlers ([008](008-compliance.md)).
+- **Class B (state-employer career sites)** — inventoried above (51 rows, 8 built).

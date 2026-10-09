@@ -1,0 +1,315 @@
+{
+ "total": 28,
+ "jobPostings": [
+  {
+   "title": "Utility Analyst",
+   "externalPath": "/job/Hallowell-Maine/Utility-Analyst_R26-03965",
+   "locationsText": "Hallowell, Maine",
+   "postedOn": "Posted 17 Days Ago",
+   "bulletFields": [
+    "R26-03965"
+   ]
+  },
+  {
+   "title": "Systems Analyst",
+   "externalPath": "/job/Augusta-Maine/Systems-Analyst_R26-03755",
+   "locationsText": "Augusta, Maine",
+   "postedOn": "Posted 11 Days Ago",
+   "bulletFields": [
+    "R26-03755"
+   ]
+  },
+  {
+   "title": "Programmer Analyst",
+   "externalPath": "/job/Augusta-Maine/Programmer-Analyst_R26-04016",
+   "locationsText": "Augusta, Maine",
+   "postedOn": "Posted Yesterday",
+   "bulletFields": [
+    "R26-04016"
+   ]
+  },
+  {
+   "title": "Senior Programmer Analyst",
+   "externalPath": "/job/Augusta-Maine/Senior-Programmer-Analyst_R26-03708",
+   "locationsText": "Augusta, Maine",
+   "postedOn": "Posted 11 Days Ago",
+   "bulletFields": [
+    "R26-03708"
+   ]
+  },
+  {
+   "title": "Transportation Planning Analyst",
+   "externalPath": "/job/Augusta-Maine/Transportation-Planning-Analyst_R26-04028",
+   "locationsText": "Augusta, Maine",
+   "postedOn": "Posted 11 Days Ago",
+   "bulletFields": [
+    "R26-04028"
+   ]
+  }
+ ],
+ "facets": [
+  {
+   "facetParameter": "Department",
+   "descriptor": "Department",
+   "values": [
+    {
+     "descriptor": "Department of Administrative and Financial Services",
+     "id": "473d696f7b721000e48cbd7020910000",
+     "count": 14
+    },
+    {
+     "descriptor": "Quasi-Independent Agencies",
+     "id": "473d696f7b721000e48cd00cd8590000",
+     "count": 3
+    },
+    {
+     "descriptor": "Secretary of State",
+     "id": "473d696f7b721000e48ca60445f30000",
+     "count": 3
+    },
+    {
+     "descriptor": "Department of Transportation",
+     "id": "473d696f7b721000e48cd60dbf2a0000",
+     "count": 3
+    },
+    {
+     "descriptor": "Department of Public Safety",
+     "id": "473d696f7b721000e48cd7da9e600000",
+     "count": 2
+    },
+    {
+     "descriptor": "Department of Labor",
+     "id": "473d696f7b721000e48ccd0b694d0000",
+     "count": 2
+    },
+    {
+     "descriptor": "Department of Health and Human Services",
+     "id": "473d696f7b721000e48cd1407b4b0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamilyGroup",
+   "descriptor": "Job Category",
+   "values": [
+    {
+     "descriptor": "Information Technology",
+     "id": "c5bc45ac4f571001307a12e035e20000",
+     "count": 7
+    },
+    {
+     "descriptor": "Accounting, Finance and Budget",
+     "id": "c5bc45ac4f571001307838c8ddf70000",
+     "count": 4
+    },
+    {
+     "descriptor": "Analysts, Auditors, Examiners",
+     "id": "c5bc45ac4f5710013077d8b63e2e0000",
+     "count": 4
+    },
+    {
+     "descriptor": "Business Operations",
+     "id": "473d696f7b7210013045649379ab0000",
+     "count": 3
+    },
+    {
+     "descriptor": "Legal",
+     "id": "c5bc45ac4f5710013077e722649b0000",
+     "count": 2
+    },
+    {
+     "descriptor": "Enforcement",
+     "id": "c5bc45ac4f57100130782c2da7540001",
+     "count": 2
+    },
+    {
+     "descriptor": "Management",
+     "id": "473d696f7b72100130452ad273550000",
+     "count": 2
+    },
+    {
+     "descriptor": "Advisory Consulting",
+     "id": "c5bc45ac4f5710013077d3e7b1500000",
+     "count": 1
+    },
+    {
+     "descriptor": "Physical Sciences",
+     "id": "c5bc45ac4f5710013078352f086b0002",
+     "count": 1
+    },
+    {
+     "descriptor": "Transportation",
+     "id": "c5bc45ac4f5710013078275fede30002",
+     "count": 1
+    },
+    {
+     "descriptor": "Inspection, Regulation and Licensing",
+     "id": "473d696f7b72100130441a616ddc0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "timeType",
+   "descriptor": "Time Type",
+   "values": [
+    {
+     "descriptor": "Full time",
+     "id": "45ea54d4c88f1000645eca9a6ed70000",
+     "count": 27
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamily",
+   "descriptor": "Job Family",
+   "values": [
+    {
+     "descriptor": "IT Analysts",
+     "id": "c5bc45ac4f5710013078366255cd0001",
+     "count": 6
+    },
+    {
+     "descriptor": "Accounting Support",
+     "id": "473d696f7b7210013044f5e54f280000",
+     "count": 4
+    },
+    {
+     "descriptor": "Business Analysts",
+     "id": "c5bc45ac4f5710013078292d05a20000",
+     "count": 3
+    },
+    {
+     "descriptor": "Public Service Managers",
+     "id": "c5bc45ac4f5710013077deb8e0d30002",
+     "count": 2
+    },
+    {
+     "descriptor": "Police Officer",
+     "id": "c5bc45ac4f57100130782b93eb620000",
+     "count": 2
+    },
+    {
+     "descriptor": "Managers",
+     "id": "c5bc45ac4f5710013077d81c74f10000",
+     "count": 2
+    },
+    {
+     "descriptor": "Attorney",
+     "id": "c5bc45ac4f5710013077d18021e20002",
+     "count": 1
+    },
+    {
+     "descriptor": "Business Manager",
+     "id": "c5bc45ac4f57100130781e5e797f0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Mapping",
+     "id": "c5bc45ac4f5710013078142930550002",
+     "count": 1
+    },
+    {
+     "descriptor": "General Analysts",
+     "id": "c5bc45ac4f571001307812f5e5960000",
+     "count": 1
+    },
+    {
+     "descriptor": "Paralegal",
+     "id": "c5bc45ac4f57100130781129497a0001",
+     "count": 1
+    },
+    {
+     "descriptor": "Public Service Coordinators",
+     "id": "c5bc45ac4f5710013079c13925cd0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Transportation Planning",
+     "id": "c5bc45ac4f5710013079bed291d30000",
+     "count": 1
+    },
+    {
+     "descriptor": "IT Managers",
+     "id": "c5bc45ac4f5710013079a0ccb8b30000",
+     "count": 1
+    },
+    {
+     "descriptor": "Program Inspectors",
+     "id": "473d696f7b721001304451c0e61d0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "locationMainGroup",
+   "values": [
+    {
+     "facetParameter": "locationCountry",
+     "descriptor": "Location Country",
+     "values": [
+      {
+       "descriptor": "United States of America",
+       "id": "bc33aa3152ec42d4995f4791a106ed09",
+       "count": 19
+      }
+     ]
+    },
+    {
+     "facetParameter": "locations",
+     "descriptor": "Locations",
+     "values": [
+      {
+       "descriptor": "Augusta, Maine",
+       "id": "473d696f7b72100109460054bada0000",
+       "count": 16
+      },
+      {
+       "descriptor": "Hallowell, Maine",
+       "id": "473d696f7b72100109457d7b78d10000",
+       "count": 2
+      },
+      {
+       "descriptor": "Warren, Maine",
+       "id": "473d696f7b7210010944fcfcffb10000",
+       "count": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "facetParameter": "distance",
+   "descriptor": "Distance (enter zip code: US/XXXXX)",
+   "values": [
+    {
+     "descriptor": "10 miles",
+     "id": "a538cdb60a631000078a2c60ed1700f3",
+     "count": 1
+    },
+    {
+     "descriptor": "25 miles",
+     "id": "a538cdb60a631000078a2c6a410300f4",
+     "count": 1
+    },
+    {
+     "descriptor": "50 miles",
+     "id": "a538cdb60a631000078a2c6eadd300f5",
+     "count": 1
+    },
+    {
+     "descriptor": "100 miles",
+     "id": "a538cdb60a631000078a2c71efcc00f6",
+     "count": 1
+    },
+    {
+     "descriptor": "Any Distance",
+     "id": "a538cdb60a631000078a2c74f73b00f7",
+     "count": 1
+    }
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

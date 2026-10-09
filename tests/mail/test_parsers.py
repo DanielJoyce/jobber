@@ -208,3 +208,33 @@ def test_scrub_replaces_address_variants():
     out = scrub(text, ["some.one+jobs@example.com"])
     assert "some.one" not in out.lower()
     assert "other@example.com" in out
+
+
+def test_shared_platform_host_matches_no_row():
+    # governmentjobs.com serves many states' boards; a sender on it must not be
+    # attributed to whichever state's row happens to come first.
+    from jobhunter.core.models import SourceRow
+    from jobhunter.mail.parsers import row_for_host
+
+    def row(key: str, state: str, entry: str) -> SourceRow:
+        return SourceRow.model_validate(
+            {
+                "key": key,
+                "state": state,
+                "class": "B",
+                "name": key,
+                "family": "neogov",
+                "tier": "http",
+                "entry": entry,
+                "policy": "blocked",
+            }
+        )
+
+    rows = [
+        row("ak-employer", "AK", "https://www.governmentjobs.com/careers/alaska"),
+        row("co-employer", "CO", "https://www.governmentjobs.com/careers/colorado"),
+        row("fl-employflorida", "FL", "https://www.employflorida.com/vosnet/Default.aspx"),
+    ]
+    assert row_for_host("governmentjobs.com", rows) is None
+    assert row_for_host("mail.governmentjobs.com", rows) is None
+    assert row_for_host("employflorida.com", rows).key == "fl-employflorida"
