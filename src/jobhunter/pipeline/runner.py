@@ -382,7 +382,11 @@ def _resolve_source(
 
 
 def _score_stage(
-    conn: sqlite3.Connection, profile: Profile | None, now: datetime, report: RunReport
+    conn: sqlite3.Connection,
+    settings: Settings,
+    profile: Profile | None,
+    now: datetime,
+    report: RunReport,
 ) -> None:
     if profile is None:
         return  # already reported up front
@@ -399,7 +403,16 @@ def _score_stage(
         report.messages.append(f"score: no Anthropic client ({exc}); skipped")
         return
     try:
-        result = screen.submit_batch(conn, client, profile, limit=DEFAULT_SCORE_LIMIT, now=now)
+        cap = settings.scoring.daily_cap_usd
+        result = screen.submit_batch(
+            conn,
+            client,
+            profile,
+            limit=DEFAULT_SCORE_LIMIT,
+            now=now,
+            scorer=settings.scoring.screen_scorer,
+            remaining_usd=lambda: screen.remaining_daily_budget(conn, cap, now),
+        )
     except Exception as exc:  # scoring trouble must not fail the ingest exit code
         logger.warning("score submit failed: %s", exc)
         report.messages.append(f"score: submit failed ({exc}); survivors stay queued")
@@ -526,7 +539,7 @@ def run_pipeline(
     if "prefilter" in stages and profile is not None:
         report.counts["prefilter"] = run_prefilter(conn, profile, now=now)
     if "score" in stages:
-        _score_stage(conn, profile, now, report)
+        _score_stage(conn, settings, profile, now, report)
 
     for key, res in results.items():
         conn.execute(
