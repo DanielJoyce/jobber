@@ -290,6 +290,10 @@
   entry: "https://kyjobs.usnlx.com/jobs/"
   verified: "2026-10-09"
   family_signals: ["usnlx strings (per 010)"]
+  config:
+    x_origin: "kyjobs.usnlx.com"
+    search_api: "https://prod-search-api.jobsyn.org/api/v1/solr/search"
+  pagination: {kind: offset, max_pages: 10}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
   robots: {status: "partial", checked: "2026-10-09", note: "Only feed paths disallowed"}
   policy: "enabled"
@@ -422,11 +426,15 @@
   name: "Jobs - Montana"
   family: "nlx"
   tier: "http"
-  entry: "https://montanaworks.gov/"
+  entry: "https://montana.usnlx.com/jobs/"
   verified: "2026-10-09"
-  family_signals: ["usnlx strings", "entry links to post.montana.usnlx.com (per 010)"]
+  family_signals: ["usnlx strings", "montanaworks.gov links to montana.usnlx.com", "same Nuxt app and search API as usnlx.com (x-origin montana.usnlx.com)"]
+  config:
+    x_origin: "montana.usnlx.com"
+    search_api: "https://prod-search-api.jobsyn.org/api/v1/solr/search"
+  pagination: {kind: offset, max_pages: 10}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "montanaworks.gov/robots.txt is 404."}
+  robots: {status: "partial", checked: "2026-10-09", note: "Search host montana.usnlx.com: only feed paths disallowed. Landing page montanaworks.gov has no robots.txt (404)."}
   policy: "enabled"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -512,11 +520,15 @@
   name: "Workforce New York"
   family: "nlx"
   tier: "http"
-  entry: "https://newyork.usnlx.com/index.asp"
+  entry: "https://myjobsny.usnlx.com/jobs/"
   verified: "2026-10-09"
-  family_signals: ["usnlx strings (per 010)"]
+  family_signals: ["usnlx strings", "same Nuxt app and search API as usnlx.com (x-origin myjobsny.usnlx.com)"]
+  config:
+    x_origin: "myjobsny.usnlx.com"
+    search_api: "https://prod-search-api.jobsyn.org/api/v1/solr/search"
+  pagination: {kind: offset, max_pages: 10}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "newyork.usnlx.com/robots.txt returns an HTML page (legacy ASP site), so no robots."}
+  robots: {status: "partial", checked: "2026-10-09", note: "Search host myjobsny.usnlx.com: only feed paths disallowed. Legacy entry newyork.usnlx.com serves no robots.txt."}
   policy: "enabled"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -827,9 +839,13 @@
   name: "National Labor Exchange (NLx)"
   family: "nlx"
   tier: "http"
-  entry: "https://usnlx.com/"
+  entry: "https://usnlx.com/jobs/"
   verified: "2026-10-09"
   family_signals: ["national NLx site (usnlx.com)"]
+  config:
+    x_origin: "usnlx.com"
+    search_api: "https://prod-search-api.jobsyn.org/api/v1/solr/search"
+  pagination: {kind: offset, max_pages: 20}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
   robots: {status: "partial", checked: "2026-10-09", note: "National aggregator."}
   policy: "enabled"

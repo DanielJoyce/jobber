@@ -2,7 +2,9 @@
 
 Interpretation:
 - 200 → parsed with ``urllib.robotparser`` for product token ``jobhunter``. An empty file, or one
-  whose directives are all commented out, allows everything.
+  whose directives are all commented out, allows everything. ``*`` and a trailing ``$`` in rule
+  paths are honoured (RFC 9309); the stdlib parser alone treats them literally, which would let
+  ``Disallow: /*feed/`` match nothing.
 - 404/410 and other 4xx (except 401/403) → no robots.txt → allow all.
 - 401/403 → disallow all (the long-standing robotparser convention).
 - Network error, 5xx after retries, redirect loop → disallow all for this run, logged.
@@ -11,12 +13,13 @@ Interpretation:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlsplit
-from urllib.robotparser import RobotFileParser
+from urllib.robotparser import RobotFileParser, RuleLine
 
 from jobhunter.core.fetch.errors import RobotsDisallowed
 
@@ -54,6 +57,38 @@ class RobotsRules:
         return self.parser.can_fetch(ROBOTS_UA, url)
 
 
+class _PatternRuleLine(RuleLine):
+    """A rule whose path uses ``*`` (any run of characters) or a trailing ``$`` (end anchor).
+
+    RuleLine stores the path percent-quoted, so the wildcards arrive as ``%2A`` and ``%24``;
+    the URL path it is matched against is quoted the same way by ``can_fetch``.
+    """
+
+    def __init__(self, line: RuleLine) -> None:
+        self.path = line.path
+        self.allowance = line.allowance
+        pattern = line.path
+        anchored = pattern.endswith("%24")
+        if anchored:
+            pattern = pattern[:-3]
+        body = ".*".join(re.escape(part) for part in pattern.split("%2A"))
+        self._regex = re.compile(body + ("$" if anchored else ""))
+
+    def applies_to(self, filename: str) -> bool:
+        return self._regex.match(filename) is not None
+
+
+def _enable_wildcards(parser: RobotFileParser) -> None:
+    entries = list(parser.entries)
+    if parser.default_entry is not None:
+        entries.append(parser.default_entry)
+    for entry in entries:
+        entry.rulelines = [
+            _PatternRuleLine(r) if "%2A" in r.path or r.path.endswith("%24") else r
+            for r in entry.rulelines
+        ]
+
+
 def rules_from_response(origin: str, status: int, text: str) -> RobotsRules:
     if status in (401, 403):
         return RobotsRules(origin, "deny_all", f"robots.txt returned {status}")
@@ -65,6 +100,7 @@ def rules_from_response(origin: str, status: int, text: str) -> RobotsRules:
         return RobotsRules(origin, "allow_all", "empty robots.txt")
     parser = RobotFileParser()
     parser.parse(text.splitlines())
+    _enable_wildcards(parser)
     return RobotsRules(origin, "parsed", "robots.txt", parser)
 
 
