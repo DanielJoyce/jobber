@@ -1,0 +1,11 @@
+# Template for `jobhunter schedule install`. Weekly, Sunday 04:00 local.
+[Unit]
+Description=Weekly jobhunter source verification (Sunday 04:00)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+Unit=jobhunter-verify.service
+
+[Install]
+WantedBy=timers.target

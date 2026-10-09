@@ -455,6 +455,16 @@ def test_collect_waits_for_batch_end(conn, profile):
     assert conn.execute("SELECT count(*) FROM fit_score").fetchone()[0] == 0
 
 
+def test_collect_pending_collects_each_batch_once(conn, profile):
+    client, batch_id = submit_three(conn, profile)
+    assert screen.pending_batch_ids(conn) == [batch_id]
+    results = screen.collect_pending(conn, client, profile, now=NOW)
+    assert set(results) == {batch_id}
+    assert (results[batch_id].written, results[batch_id].errored) == (2, 1)
+    assert screen.pending_batch_ids(conn) == []
+    assert screen.collect_pending(conn, client, profile, now=NOW) == {}
+
+
 def test_invalid_output_stays_eligible(conn, profile):
     add_group(conn, 1, profile)
     client = FakeClient()

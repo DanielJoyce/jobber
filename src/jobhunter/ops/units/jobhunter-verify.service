@@ -1,0 +1,12 @@
+# Template for `jobhunter schedule install`; paths are filled in when the units are written.
+# `sources verify` is still a stub on main; until it lands this unit reports "not implemented".
+[Unit]
+Description=jobhunter weekly source verification
+OnFailure=jobhunter-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@EXEC@ sources verify
+Nice=10
+Environment=PATH=@PATH@

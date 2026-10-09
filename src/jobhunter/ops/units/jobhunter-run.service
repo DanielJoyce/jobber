@@ -1,0 +1,11 @@
+# Template for `jobhunter schedule install`; paths are filled in when the units are written.
+[Unit]
+Description=jobhunter nightly run (ingest stages through score submit)
+OnFailure=jobhunter-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@EXEC@ run
+Nice=10
+Environment=PATH=@PATH@
