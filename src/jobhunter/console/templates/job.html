@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='detail.css') }}">
+<div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.job['apply_url'] or d.job['url'] }}">
+  <p><a href="/inbox">&larr; inbox</a></p>
+
+  {% if d.prompt %}
+  <div class="banner did-apply" id="did-apply" role="status">
+    <strong>Did you apply?</strong>
+    <button type="button" class="act" hx-post="/job/{{ d.group_id }}/applied?choice=yes" hx-target="#did-apply" hx-swap="outerHTML">Yes</button>
+    <button type="button" class="act" hx-post="/job/{{ d.group_id }}/applied?choice=not_yet" hx-target="#did-apply" hx-swap="outerHTML">Not yet</button>
+    <button type="button" class="act" hx-post="/job/{{ d.group_id }}/applied?choice=not_interested" hx-target="#did-apply" hx-swap="outerHTML">Not interested</button>
+  </div>
+  {% endif %}
+
+  <header class="job-head">
+    <h1>{{ d.job["title"] }}</h1>
+    <div class="job-sub">
+      <span>{{ d.employer }}</span>
+      <span>{{ d.location }}</span>
+      {% if d.salary_stated %}<span>{{ d.salary }}</span>{% else %}<span class="warn">salary not stated</span>{% endif %}
+      <span class="muted">{{ d.source_name }}</span>
+    </div>
+    {% if d.locations %}<div class="muted">locations: {{ d.locations | join("; ") }}</div>{% endif %}
+    {% if d.scored %}
+    <div class="job-score">
+      <span class="badge">bucket {{ d.bucket }}</span>
+      <span class="badge">overall {{ d.overall }}</span>
+      <span class="badge">verdict {{ d.verdict }}</span>
+      {% if d.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
+    </div>
+    {% else %}
+    <div class="muted">Not scored yet.</div>
+    {% endif %}
+  </header>
+
+  {% set b = d.button %}
+  {% include "_apply_button.html" %}
+
+  {% if d.scored %}
+  <section class="card">
+    <h2>Score breakdown</h2>
+    <table class="dims">
+      {% for name, score, why in d.dims %}
+      <tr><th>{{ name }}</th><td>{{ score }}</td><td>{{ why }}</td></tr>
+      {% endfor %}
+      <tr><th>skills (recency-weighted)</th><td>{{ d.recency_skills }}</td><td class="muted">raw skills {{ d.raw_skills }}{% if d.stale_skills %}; stale: {{ d.stale_skills | join(", ") }}{% endif %}</td></tr>
+      <tr><th>comp</th><td>{{ d.comp if d.comp is not none else "n/a" }}</td><td class="muted">computed from posted salary and your floor</td></tr>
+      <tr><th>location</th><td>{{ d.location_fit }}</td><td class="muted">computed from job locations and your states</td></tr>
+    </table>
+    {% if d.blockers %}<h3>Blockers</h3><ul>{% for x in d.blockers %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+    {% if d.missing_info %}<h3>Missing info</h3><ul>{% for x in d.missing_info %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+    {% if d.shape_flags %}<h3>Shape flags</h3><p>{% for x in d.shape_flags %}<span class="flag">&#9873; {{ x }}</span> {% endfor %}</p>{% endif %}
+    {% if d.tailoring_hints %}<h3>Tailoring hints</h3><ul>{% for x in d.tailoring_hints %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+    {% if d.text.unverified %}
+    <h3>Evidence not found in the posting</h3>
+    <ul class="unverified">
+      {% for e in d.text.unverified %}<li><span class="flag">unverified</span> {{ e.claim }}: &ldquo;{{ e.quote }}&rdquo;</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <h2>Description</h2>
+    {# TODO(Pass 2): partial-description banner with a "paste description" textarea. #}
+    {% for p in d.text.paragraphs %}<p class="desc">{{ p }}</p>{% else %}<p class="muted">No description text.</p>{% endfor %}
+  </section>
+
+  {% if d.siblings %}
+  <section class="card">
+    <h2>Also posted ({{ d.siblings | length }})</h2>
+    <ul>
+      {% for s in d.siblings %}
+      <li><a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.title }}</a> &middot; {{ s.employer or "employer not stated" }} <span class="muted">via {{ s.source }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <aside class="legend" aria-label="Keyboard shortcuts">
+    <strong>keys</strong>
+    <span><kbd>o</kbd> open posting</span>
+    <span><kbd>A</kbd> apply</span>
+    <span><kbd>b</kbd> back to inbox</span>
+  </aside>
+</div>
+<script src="{{ url_for('static', path='detail.js') }}" defer></script>
+{% endblock %}

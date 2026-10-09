@@ -1,0 +1,15 @@
+<div class="apply-block" id="apply-block" data-kind="{{ b.kind }}"
+  {%- if b.pending %} hx-get="/job/{{ b.group_id }}/apply-button" hx-trigger="load" hx-target="#apply-block" hx-swap="outerHTML"{% endif %}>
+  <div class="apply-line">
+    {% if b.kind == "expired" %}
+    <button type="button" class="apply-btn" disabled>{{ b.label }}</button>
+    <a class="muted" href="{{ b.open_anyway }}" target="_blank" rel="noopener noreferrer">open anyway</a>
+    {% else %}
+    <a class="apply-btn {{ b.kind }}" id="apply-link" href="{{ b.href }}">{{ b.label }}</a>
+    {% endif %}
+    {% if b.host %}<span class="muted">{{ b.host }}</span>{% endif %}
+    {% if b.verified %}<span class="muted">&middot; {{ b.verified }}</span>{% endif %}
+    {% if b.pending %}<span class="muted">resolving&hellip;</span>{% endif %}
+  </div>
+  {% if b.chain %}<div class="apply-chain muted">{{ b.chain }}</div>{% endif %}
+</div>
