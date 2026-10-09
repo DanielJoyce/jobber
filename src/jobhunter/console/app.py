@@ -23,6 +23,7 @@ from jobhunter.console import (
     inbox_routes,
     pages_routes,
     prefs_routes,
+    proposals_routes,
     tracking_routes,
 )
 from jobhunter.core import db, geo
@@ -243,6 +244,7 @@ def create_app(
 
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
+    proposals_routes.register(app, templates, get_conn, NAV, now)
 
     # Placeholders last, only for nav pages no module has claimed yet. New pages need no
     # edit here (this list used to conflict on every parallel console branch).

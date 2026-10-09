@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='tracking.css') }}">
+<div class="followups">
+  <h1>Proposals ({{ items|length }})</h1>
+  <p class="muted">Suggested from your mail by <code>jobhunter mail match</code>. Nothing changes until you accept. Only a short snippet is stored, never the message.</p>
+  {% if items %}
+  <ul class="fu-list">
+    {% for i in items %}
+    <li class="fu-row" id="prop-{{ i.id }}">
+      <span class="fu-due">{{ i.received_at[:10] }}<br><span class="muted">{{ "%.0f"|format(i.confidence * 100) }}%</span></span>
+      <span class="fu-body">
+        <strong>{{ i.kind }}</strong>:
+        {% if i.action == "add_event" %}
+          mark <a href="/pipeline/{{ i.app_id }}">{{ i.job_title }}</a> <span class="muted">{{ i.job_employer }}</span> as <strong>{{ i.status }}</strong>
+        {% elif i.group_id %}
+          create an application (applied) for {{ i.job_title }} <span class="muted">{{ i.job_employer }}</span>
+        {% else %}
+          create an application (applied) for an unknown job: {{ i.parsed_title or "title unknown" }} <span class="muted">{{ i.parsed_employer or "employer unknown" }}</span>
+        {% endif %}
+        <br><span class="muted">From {{ i.sender }}: {{ i.subject }}</span>
+        <br><em>{{ i.snippet }}</em>
+        {% if i.matched %}<br><span class="muted">matched on: {{ i.matched|join(", ") }}</span>{% endif %}
+      </span>
+      <span class="fu-actions">
+        {% if i.action == "create_application" and not i.group_id %}
+        <form method="post" action="/proposals/{{ i.id }}/accept">
+          <input name="employer" value="{{ i.parsed_employer or '' }}" placeholder="employer" aria-label="employer">
+          <input name="title" value="{{ i.parsed_title or '' }}" placeholder="job title" aria-label="job title">
+          <button type="submit" class="act">accept</button>
+        </form>
+        {% else %}
+        <button type="button" class="act" hx-post="/proposals/{{ i.id }}/accept" hx-target="#prop-{{ i.id }}" hx-swap="outerHTML">accept</button>
+        {% endif %}
+        <button type="button" class="act" hx-post="/proposals/{{ i.id }}/dismiss" hx-target="#prop-{{ i.id }}" hx-swap="outerHTML">dismiss</button>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No pending proposals. Run <code>jobhunter mail match</code> to scan recent mail.</p>
+  {% endif %}
+</div>
+{% endblock %}

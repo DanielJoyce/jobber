@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.console import proposals as props
 from jobhunter.console import tracking as t
 
 
@@ -88,7 +89,14 @@ def register(
         return templates.TemplateResponse(
             request,
             "pipeline.html",
-            page_ctx("Pipeline", "/pipeline", board=t.pipeline(conn, now()), detail=False),
+            page_ctx(
+                "Pipeline",
+                "/pipeline",
+                board=t.pipeline(conn, now()),
+                detail=False,
+                proposals=props.pending(conn, 3),
+                proposal_count=props.pending_count(conn),
+            ),
         )
 
     @app.get("/pipeline/{app_id}", response_class=HTMLResponse)
@@ -100,7 +108,15 @@ def register(
         return templates.TemplateResponse(
             request,
             "pipeline.html",
-            page_ctx("Pipeline", "/pipeline", board=t.pipeline(conn, now()), detail=True, **ctx),
+            page_ctx(
+                "Pipeline",
+                "/pipeline",
+                board=t.pipeline(conn, now()),
+                detail=True,
+                proposals=props.pending(conn, 3),
+                proposal_count=props.pending_count(conn),
+                **ctx,
+            ),
         )
 
     @app.post("/pipeline/{app_id}/move", response_class=HTMLResponse)

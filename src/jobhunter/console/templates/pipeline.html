@@ -3,6 +3,15 @@
 <link rel="stylesheet" href="{{ url_for('static', path='tracking.css') }}">
 <div class="pipeline">
   <header class="pipe-head"><h1>Pipeline</h1><span class="muted">amber = past the per-status threshold</span></header>
+  {% if proposal_count %}
+  <section class="proposals-panel" id="proposals-panel" aria-label="Mail proposals">
+    <a href="/proposals"><strong>Proposals ({{ proposal_count }})</strong></a>
+    <span class="muted">suggested from your mail; nothing applies until you accept</span>
+    <ul>
+      {% for i in proposals %}<li>{{ i.kind }}: {{ i.job_title or i.parsed_title or i.subject }} <span class="muted">{{ i.job_employer or i.parsed_employer or i.sender }}</span></li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
   <div class="board">
     {% for s in board_statuses %}
     <section class="pcol" id="col-{{ s }}" data-status="{{ s }}">

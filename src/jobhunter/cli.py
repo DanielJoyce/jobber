@@ -500,6 +500,47 @@ def mail_status() -> None:
         typer.echo(f"messages under label: {info['messages']}")
 
 
+@mail_app.command("match")
+def mail_match(
+    days: Annotated[int, typer.Option(help="How many days back to scan.")] = 14,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print proposals; write nothing.")
+    ] = False,
+) -> None:
+    """Propose application events/records from recent mail (never applied automatically)."""
+    from jobhunter.config import load_settings, resolve_path
+    from jobhunter.core import db
+    from jobhunter.mail import auth, match
+
+    settings = load_settings()
+    if auth.load_token() is None:
+        typer.echo("no Gmail token in the keyring; skipping. Run: jobhunter mail auth")
+        return
+    conn = db.connect(resolve_path(settings.paths.db_path))
+    try:
+        db.migrate(conn)
+        result = match.scan(
+            conn, auth.build_service(settings), settings, days=days, dry_run=dry_run
+        )
+    except auth.MailAuthError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        conn.close()
+    for p in result.proposals:
+        ev = p.evidence
+        typer.echo(
+            f"{p.confidence:.2f} {p.kind:<15} {p.proposed_action} -> {p.proposed_status} "
+            f"| {ev.get('sender', '')} | {ev.get('subject', '')}"
+        )
+    verb = "would store" if dry_run else "stored"
+    n = len(result.proposals) if dry_run else result.stored
+    typer.echo(
+        f"scanned {result.scanned} new messages ({result.already_seen} seen before); "
+        f"{verb} {n} proposals"
+    )
+
+
 @mail_app.command("sync")
 def mail_sync() -> None:
     """Ingest job-alert emails."""
