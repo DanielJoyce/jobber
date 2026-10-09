@@ -50,6 +50,16 @@
 # max_concurrency = 2
 # catalog_cache = "data/openrouter_models.json"
 
+# Only used when screen_scorer = "local:<model>" (specs/016): a model on this machine behind
+# llama.cpp's llama-server or Ollama. Nothing leaves the computer. Set up with
+# scripts/setup-local-llm.sh, which asks before installing anything.
+# [scoring.local]
+# runtime = "llama.cpp"          # "llama.cpp" -> http://127.0.0.1:8080, "ollama" -> http://127.0.0.1:11434/v1
+# base_url = ""                  # override the runtime's default URL
+# timeout_s = 900.0              # CPU inference is slow; per-request wait
+# max_concurrency = 1            # CPU-bound: one request at a time
+# json_schema = true
+
 [mail]
 # alerts_address = "<you>+jobs@gmail.com"
 # label = "jobhunter/alerts"
