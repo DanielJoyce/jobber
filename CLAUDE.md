@@ -46,8 +46,9 @@ with a comment saying why. CI rescans the full history on every push.
 
 - Branch from latest `main`: `bug/<git-bug-short-id>-<key>`, e.g. `bug/6c55bec-scaffold`.
 - Small, focused commits. Conventional prefixes: `feat:`, `fix:`, `test:`, `docs:`, `chore:`, `ci:`.
-- Every commit message ends with:
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
+- Every commit message ends with a `Co-Authored-By` trailer naming **the model you actually
+  are** (e.g. `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`), plus the
+  `Claude-Session:` line if your environment provides one. Attribution must be accurate.
 - Push your branch: `GIT_ASKPASS= git push -u origin <branch>`. Do not merge to `main`; the
   orchestrator opens and merges the PR.
 
