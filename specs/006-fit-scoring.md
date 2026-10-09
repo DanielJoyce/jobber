@@ -232,9 +232,12 @@ F  recency_weighted_skills < 55  and  raw_skills >= 70      # the keyword-search
 E  seniority_direction == "below"  and  comp_fit < 45
 C  seniority_direction == "above"  and  skills >= 65
 D  skills >= 60  and  domain < 55
-B  overall >= 62
 A  overall >= 80  and  recency_weighted_skills >= 80  and  no blockers
+B  overall >= 62
 ```
+
+A is checked before B. An earlier draft listed B first, which made A unreachable under
+"first match wins".
 
 Any `blockers` entry demotes one bucket (A→B, B→C) — a stated requirement you do not meet is a
 real obstacle, not a rounding error. `shape_flags` never change the bucket; they ride along as
