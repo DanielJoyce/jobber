@@ -38,7 +38,7 @@ from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.scalarstring import LiteralScalarString
 
-from jobhunter.config import resolve_path
+from jobhunter.config import Settings, resolve_path
 from jobhunter.core.geo import normalize_state
 from jobhunter.core.models import EmploymentType, Remote
 
@@ -373,7 +373,15 @@ def _resolve_resume(
     if argument is not None:
         location = resolve_path(argument)
     elif yaml_value:
+        # Relative paths are tried against the profile directory first, then its parent
+        # (the repo root, where resume/ lives next to profile/), then the working dir.
         location = resolve_path(yaml_value, base=profile_dir)
+        if not location.exists() and not Path(yaml_value).expanduser().is_absolute():
+            for base in (profile_dir.resolve().parent, Path.cwd()):
+                alt = resolve_path(yaml_value, base=base)
+                if alt.exists():
+                    location = alt
+                    break
     else:
         raise ProfileError(
             "no resume: pass resume_path or set resume_path in preferences.yaml",
@@ -406,6 +414,14 @@ def _read_resume(path: Path) -> str:
     if not text.strip():
         raise ProfileError("resume is empty", path=path)
     return text
+
+
+def load_profile_for(settings: Settings) -> Profile:
+    """Load the user's profile exactly as every entry point should: the configured
+    profile directory and the configured resume path (``paths.resume_path``)."""
+    return load_profile(
+        resolve_path(settings.paths.profile_dir), resolve_path(settings.paths.resume_path)
+    )
 
 
 def load_profile(profile_dir: Path, resume_path: Path | None = None) -> Profile:

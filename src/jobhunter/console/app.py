@@ -28,7 +28,7 @@ from jobhunter.console import (
 )
 from jobhunter.console import dashboard as dash
 from jobhunter.core import db, geo
-from jobhunter.scoring.profile import Profile, ProfileError, load_profile
+from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def default_profile_loader(settings: Settings) -> ProfileLoader:
 
     def load() -> Profile:
         try:
-            return load_profile(settings.paths.profile_dir)
+            return load_profile_for(settings)
         except ProfileError as exc:
             logger.warning("console: using default profile: %s", exc)
             return Profile()

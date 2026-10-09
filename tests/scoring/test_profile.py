@@ -269,3 +269,23 @@ def test_unset_values_use_defaults(tmp_path):
     assert profile.hard.states_allowed == "all"
     assert profile.hard.salary_floor is None
     assert profile.queries == []
+
+
+def test_yaml_resume_path_relative_to_repo_root(tmp_path, monkeypatch):
+    # Regression: preferences.yaml says resume_path: resume/<file>.md (relative to the repo,
+    # where resume/ sits next to profile/). It used to resolve under profile/ and fail.
+    from jobhunter.scoring.profile import load_profile
+
+    repo = tmp_path / "repo"
+    (repo / "profile").mkdir(parents=True)
+    (repo / "resume").mkdir()
+    (repo / "resume" / "Pat Example Resume.md").write_text("# Pat Example\n")
+    src = (
+        Path(__file__).resolve().parents[2] / "examples" / "preferences.example.yaml"
+    ).read_text()
+    (repo / "profile" / "preferences.yaml").write_text(
+        src.replace("resume_path: null", 'resume_path: "resume/Pat Example Resume.md"')
+    )
+    monkeypatch.chdir(tmp_path)  # cwd is NOT the repo, so only the parent fallback works
+    profile = load_profile(repo / "profile")
+    assert profile.resume_text.startswith("# Pat Example")
