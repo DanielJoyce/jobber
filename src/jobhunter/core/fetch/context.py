@@ -155,14 +155,18 @@ class FetchContext:
     def session(self) -> httpx.Client:
         """The per-source client: cookie jar, identifying User-Agent, configured timeout.
 
+        The timeout is the source row's ``timeout_s`` when set, else ``settings.fetch.timeout_s``.
         Redirects are never followed by httpx itself; FetchContext walks them hop by hop so each
         hop is robots-checked, rate-limited and logged.
         """
         if self._client is None:
+            timeout = self.source.timeout_s
+            if timeout is None:
+                timeout = self.settings.fetch.timeout_s
             self._client = httpx.Client(
                 transport=self._transport,
                 headers={"User-Agent": self.settings.user_agent},
-                timeout=self.settings.fetch.timeout_s,
+                timeout=timeout,
                 follow_redirects=False,
                 event_hooks={"response": [_keep_response]},
             )

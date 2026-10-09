@@ -403,6 +403,7 @@
       apply_url: "#MainContent_ApplyInfo a::attr(href)"
   pagination: {kind: "postback", max_pages: 4, page_size: 25, form: "form#JobSearchResults", target: "ctl00$MainContent$pageTop{page}", argument: ""}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  timeout_s: 60
   robots: {status: "partial", checked: "2026-10-09", note: "Rechecked 2026-10-09: jobs.mitalent.org/robots.txt disallows only /Feedback/ and /bot-trap/ (plus named scraper bots); the sitemap index is advertised. Search, results paging and detail pages are all anonymous."}
   policy: "enabled"
   queries: "from_profile"

@@ -152,6 +152,8 @@ class SourceRow(BaseModel):
     queries: Literal["from_profile"] | list[Query] = "from_profile"
     pagination: dict[str, Any] = Field(default_factory=dict)
     rate_limit: RateLimit | None = None
+    # Per-source HTTP timeout in seconds; None means settings.fetch.timeout_s.
+    timeout_s: float | None = Field(default=None, gt=0)
     robots: RobotsRecord = Field(default_factory=RobotsRecord)
     policy: Policy = Policy.enabled
     expect: dict[str, Any] = Field(default_factory=dict)

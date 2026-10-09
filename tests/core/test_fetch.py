@@ -497,6 +497,33 @@ def test_default_rate_limit_from_settings(make_ctx, server, settings):
     assert 0.75 * 5 <= gap <= 1.25 * 5
 
 
+def test_per_source_timeout_overrides_settings(make_ctx, server, settings):
+    # httpx records the timeout it was built with on each request; the fake transport ignores it.
+    seen: list[float] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"]["read"])
+        return httpx.Response(200, text="ok")
+
+    server.route(f"{HOST}/robots.txt", httpx.Response(200, text="User-agent: *\nAllow: /\n"))
+    server.route(f"{HOST}/slow", record)
+    server.route(f"{HOST}/fast", record)
+
+    slow = make_ctx(make_source(timeout_s=90.0))
+    slow.get(f"{HOST}/slow")
+    assert seen == [90.0]
+
+    # A source without an override keeps the global setting (no leakage between sources).
+    default = make_ctx(make_source(key="s2", timeout_s=None))
+    default.get(f"{HOST}/fast")
+    assert seen == [90.0, settings.fetch.timeout_s]
+
+
+def test_timeout_s_must_be_positive():
+    with pytest.raises(ValueError):
+        make_source(timeout_s=0)
+
+
 # ─── redirects and sessions ────────────────────────────────────────────────
 
 
