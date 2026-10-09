@@ -14,9 +14,12 @@ validated model, not from the file text.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
+import os
 import re
+import tempfile
 from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
@@ -31,7 +34,9 @@ from pydantic import (
     model_validator,
 )
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.error import YAMLError
+from ruamel.yaml.scalarstring import LiteralScalarString
 
 from jobhunter.config import resolve_path
 from jobhunter.core.geo import normalize_state
@@ -80,6 +85,30 @@ class ProfileError(Exception):
         if field:
             where = f"{where}: {field}"
         super().__init__(f"{where}: {message}")
+
+
+class ProfileValidationError(ProfileError):
+    """The profile failed model validation. ``errors`` maps every dotted field to its message.
+
+    ``field`` / ``reason`` describe the first error, as for any ``ProfileError``.
+    """
+
+    def __init__(self, errors: dict[str, str], *, path: Path | str | None = None) -> None:
+        self.errors = dict(errors)
+        field, message = next(iter(self.errors.items()), ("", "invalid profile"))
+        super().__init__(message, path=path, field=field or None)
+
+    @classmethod
+    def from_pydantic(cls, path: Path | str | None, exc: ValidationError) -> ProfileValidationError:
+        errors: dict[str, str] = {}
+        for err in exc.errors():
+            field = ".".join(str(part) for part in err["loc"])
+            errors.setdefault(field, str(err["msg"]).removeprefix("Value error, "))
+        return cls(errors, path=path)
+
+
+class ProfileConflict(ProfileError):
+    """The preferences file changed on disk since it was read; the save was refused."""
 
 
 # ─── Value helpers ──────────────────────────────────────────────────────────
@@ -338,13 +367,6 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return _plain(data)
 
 
-def _validation_error(path: Path, exc: ValidationError) -> ProfileError:
-    first = exc.errors()[0]
-    field = ".".join(str(part) for part in first["loc"]) or None
-    message = str(first["msg"]).removeprefix("Value error, ")
-    return ProfileError(message, path=path, field=field)
-
-
 def _resolve_resume(
     profile_dir: Path, prefs_file: Path, yaml_value: str | None, argument: Path | None
 ) -> Path:
@@ -394,8 +416,11 @@ def load_profile(profile_dir: Path, resume_path: Path | None = None) -> Profile:
     Unknown top-level keys are ignored and recorded in ``Profile.load_warnings``.
     """
     profile_dir = Path(profile_dir).expanduser()
-    prefs_file = profile_dir / PREFERENCES_FILE
+    return _load_file(profile_dir, profile_dir / PREFERENCES_FILE, resume_path)
 
+
+def _load_file(profile_dir: Path, prefs_file: Path, resume_path: Path | None) -> Profile:
+    """Load and validate ``prefs_file`` (normally ``profile_dir/preferences.yaml``)."""
     raw = _read_yaml(prefs_file)
     unknown = [key for key in raw if key not in _YAML_KEYS]
     warnings = tuple(f"{prefs_file}: unknown top-level key {key!r} ignored" for key in unknown)
@@ -406,7 +431,7 @@ def load_profile(profile_dir: Path, resume_path: Path | None = None) -> Profile:
     try:
         profile = Profile.model_validate(_clean(known))
     except ValidationError as exc:
-        raise _validation_error(prefs_file, exc) from exc
+        raise ProfileValidationError.from_pydantic(prefs_file, exc) from exc
 
     resume_file = _resolve_resume(profile_dir, prefs_file, profile.resume_path, resume_path)
     resume_text = _read_resume(resume_file)
@@ -459,3 +484,201 @@ def scoring_inputs(profile: Profile) -> str:
         sections.append("\n".join(narrative_lines))
 
     return "\n\n".join(sections) + "\n"
+
+
+# ─── Writing (specs/014 "Source of truth stays a file") ─────────────────────
+
+EDITABLE_KEYS = _YAML_KEYS
+
+
+def preferences_mtime_ns(profile_dir: Path) -> int:
+    """``st_mtime_ns`` of ``preferences.yaml``; the page sends it back to detect hand edits."""
+    return (Path(profile_dir).expanduser() / PREFERENCES_FILE).stat().st_mtime_ns
+
+
+def profile_data(profile: Profile) -> dict[str, Any]:
+    """The YAML-backed fields as plain JSON-able data, with empty blocks normalized.
+
+    ``current_focus`` None becomes an empty focus and ``buckets`` None an empty dict, so two
+    profiles that differ only in an absent vs empty block compare equal.
+    """
+    data = profile.model_dump(mode="json", include=set(EDITABLE_KEYS))
+    if data.get("current_focus") is None:
+        data["current_focus"] = CurrentFocus().model_dump(mode="json")
+    if data.get("buckets") is None:
+        data["buckets"] = {}
+    return data
+
+
+def validate_profile_data(data: Mapping[str, Any], *, base: Profile) -> Profile:
+    """Validate plain profile data (as from :func:`profile_data`) without touching disk.
+
+    File and resume fields are carried over from ``base``. Raises ``ProfileValidationError``.
+    """
+    known = {key: value for key, value in data.items() if key in EDITABLE_KEYS}
+    try:
+        profile = Profile.model_validate(_clean(json.loads(json.dumps(known))))
+    except ValidationError as exc:
+        raise ProfileValidationError.from_pydantic(base.source_file, exc) from exc
+    return profile.model_copy(
+        update={
+            "source_file": base.source_file,
+            "resume_file": base.resume_file,
+            "resume_text": base.resume_text,
+            "load_warnings": base.load_warnings,
+        }
+    )
+
+
+_KEY_LINE_RE = re.compile(r"^[^#\-\s][^#]*:\s*(#.*)?$")
+
+
+def _guess_indent(text: str) -> tuple[int, int]:
+    """(mapping indent, block-sequence dash offset) as the user wrote them; default (2, 0)."""
+    mapping: int | None = None
+    offset: int | None = None
+    parent: int | None = None  # indent of the previous line when it opened a block ("key:")
+    for line in text.splitlines():
+        stripped = line.lstrip(" ")
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(stripped)
+        if parent is not None:
+            if stripped == "-" or stripped.startswith("- "):
+                if offset is None:
+                    offset = indent - parent
+            elif indent > parent and mapping is None:
+                mapping = indent - parent
+        parent = indent if _KEY_LINE_RE.match(stripped) else None
+        if mapping is not None and offset is not None:
+            break
+    return mapping or 2, max(offset or 0, 0)
+
+
+def _yaml_writer(text: str) -> YAML:
+    yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True
+    yaml.width = 4096  # never re-wrap long lines the user wrote
+    mapping, offset = _guess_indent(text)
+    yaml.indent(mapping=mapping, sequence=offset + 2, offset=offset)
+    return yaml
+
+
+def _to_yaml(value: Any, old: Any = None) -> Any:
+    """Plain value -> ruamel node, keeping the old node's flow style for lists and maps.
+
+    New lists of scalars are written in flow style (``[CO, WA]``), as in the spec examples.
+    Multi-line strings become literal blocks. Map entries whose value is None are dropped.
+    """
+    if isinstance(value, Mapping):
+        node = CommentedMap()
+        for key, item in value.items():
+            if item is not None:
+                node[str(key)] = _to_yaml(item)
+        if isinstance(old, CommentedMap) and old.fa.flow_style():
+            node.fa.set_flow_style()
+        return node
+    if isinstance(value, list | tuple):
+        seq = CommentedSeq([_to_yaml(item) for item in value])
+        flow = old.fa.flow_style() if isinstance(old, CommentedSeq) else None
+        scalars = all(not isinstance(item, Mapping | list | tuple) for item in value)
+        if flow or (flow is None and scalars):
+            seq.fa.set_flow_style()
+        return seq
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and "\n" in value.strip():
+        return LiteralScalarString(value.strip("\n") + "\n")
+    return value
+
+
+def _set_path(doc: CommentedMap, path: str, value: Any) -> None:
+    """Set (or, for None, delete) a dotted path in a round-trip document."""
+    parts = path.split(".")
+    node: CommentedMap = doc
+    parents: list[tuple[CommentedMap, str]] = []
+    for part in parts[:-1]:
+        child = node.get(part)
+        if not isinstance(child, CommentedMap):
+            if value is None:
+                return  # deleting under a missing parent: nothing to do
+            child = CommentedMap()
+            node[part] = child
+        parents.append((node, part))
+        node = child
+    leaf = parts[-1]
+    if value is not None:
+        node[leaf] = _to_yaml(value, node.get(leaf))
+        return
+    if leaf in node:
+        del node[leaf]
+    # Prune maps the deletion left empty, so no `salary_target: {}` lingers.
+    for parent, key in reversed(parents):
+        if len(parent[key]):
+            break
+        del parent[key]
+
+
+def save_profile_changes(
+    profile_dir: Path,
+    changes: Mapping[str, Any],
+    *,
+    expected_mtime_ns: int,
+    resume_path: Path | None = None,
+) -> Profile:
+    """Apply ``{dotted.path: value}`` to ``preferences.yaml`` and return the reloaded profile.
+
+    Round-trips with ruamel so comments, key order and flow style survive; ``None`` removes a
+    key. The new text goes to a temp file in the same directory, is validated exactly as
+    :func:`load_profile` would, and only then replaces the original (``os.replace``), so a
+    failed save leaves the file untouched. Raises ``ProfileConflict`` when the file's mtime no
+    longer matches ``expected_mtime_ns`` and ``ProfileValidationError`` (fields as dotted
+    paths) when the result does not validate.
+    """
+    profile_dir = Path(profile_dir).expanduser()
+    prefs_file = profile_dir / PREFERENCES_FILE
+    try:
+        stat = prefs_file.stat()
+    except FileNotFoundError as exc:
+        raise ProfileError("file not found", path=prefs_file) from exc
+    if stat.st_mtime_ns != expected_mtime_ns:
+        raise ProfileConflict("changed on disk since the page was loaded", path=prefs_file)
+
+    text = prefs_file.read_text(encoding="utf-8")
+    yaml = _yaml_writer(text)
+    try:
+        doc = yaml.load(text)
+    except YAMLError as exc:
+        raise ProfileError(f"invalid YAML: {exc}", path=prefs_file) from exc
+    if doc is None:
+        doc = CommentedMap()
+    if not isinstance(doc, CommentedMap):
+        raise ProfileError("top level must be a mapping", path=prefs_file)
+    for path, value in changes.items():
+        _set_path(doc, path, value)
+    buf = io.StringIO()
+    yaml.dump(doc, buf)
+
+    fd, tmp_name = tempfile.mkstemp(dir=profile_dir, prefix=".preferences.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(buf.getvalue())
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, stat.st_mode & 0o7777)
+        try:
+            _load_file(profile_dir, tmp, resume_path)
+        except ProfileValidationError as exc:
+            raise ProfileValidationError(exc.errors, path=prefs_file) from exc
+        except ProfileError as exc:
+            if exc.path != tmp:
+                raise
+            # Report against the real file, not the temp name.
+            raise ProfileError(exc.reason, path=prefs_file, field=exc.field) from exc
+        if prefs_file.stat().st_mtime_ns != expected_mtime_ns:
+            raise ProfileConflict("changed on disk while saving", path=prefs_file)
+        os.replace(tmp, prefs_file)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return load_profile(profile_dir, resume_path)

@@ -1,0 +1,56 @@
+{% if conflict %}
+<div class="banner banner-conflict" role="alert">The file changed on disk since this page loaded. Saving will be refused. <a href="/prefs">Reload</a></div>
+{% endif %}
+{% if errors %}
+<h2>Can't preview yet</h2>
+<ul class="plain field-errors">{% for k, m in errors.items() %}<li><code>{{ k }}</code>: {{ m }}</li>{% endfor %}</ul>
+{% elif not changes %}
+<p class="muted">No unsaved changes.</p>
+{% else %}
+<h2>Unsaved changes</h2>
+<ul class="plain changes">
+  {% for path, (old, new) in changes.items() %}<li><code>{{ path }}</code> <span class="muted">{{ old | pref_value }}</span> → {{ new | pref_value }}</li>{% endfor %}
+</ul>
+
+{% if free %}
+<div class="preview-free">
+  <p>Preview against the last {{ days }} days ({{ buckets.total }} scored jobs):</p>
+  {% if bucket_lines %}
+  <ul class="plain deltas">
+    {% for b, before, after, delta in bucket_lines %}<li>Bucket {{ b }} {{ before }} → {{ after }} ({{ signed(delta) }})</li>{% endfor %}
+  </ul>
+  {% else %}<p class="muted">No bucket changes.</p>{% endif %}
+  {% if prefilter.reasons %}
+  <p>Prefilter over {{ prefilter.total }} jobs:</p>
+  <ul class="plain deltas">
+    {% for r in prefilter.reasons %}<li>{{ r.label }} {{ r.before }} → {{ r.after }} ({{ signed(r.delta) }})</li>{% endfor %}
+    <li class="muted">Rejected in total {{ prefilter.rejected.before }} → {{ prefilter.rejected.after }}</li>
+  </ul>
+  {% endif %}
+  {% if into_ab %}
+  <details>
+    <summary>Show the {{ into_ab | length }} job{{ "s" if into_ab | length != 1 }} that would move into A/B</summary>
+    <ul class="plain">
+      {% for m in into_ab %}<li><a href="/job/{{ m.job_group_id }}">{{ m.title }}</a> <span class="muted">{{ m.before }} → {{ m.after }}</span></li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  <p class="hint">Free: re-applied instantly over stored scores.</p>
+</div>
+{% endif %}
+
+{% if paid %}
+<fieldset class="preview-paid">
+  <legend>Applies to new jobs automatically from the next run. Re-score existing open jobs too?</legend>
+  {% for o in estimate.options %}
+  <label class="option">
+    <input type="radio" name="rescore" value="{{ o.scope }}" form="prefs-form"{% if rescore == o.scope %} checked{% endif %}>
+    <span>{{ o.label }}{% if o.scope != "none" %} <span class="muted">({{ o.jobs }} jobs)</span>{% endif %}</span>
+    <span class="cost">{% if o.scope == "none" %}$0.00{% else %}≈ ${{ "%.2f" | format(o.cost_usd) }}{% endif %}</span>
+  </label>
+  {% endfor %}
+  <p class="hint">At ${{ "%.4f" | format(estimate.cost_per_job) }} per job ({% if estimate.cost_source == "default" %}no spend measured yet; assumed{% else %}measured from {{ estimate.cost_source }}{% endif %}). Re-scoring is queued for the next scoring run, goes through the Batch API and counts against the spend cap.</p>
+</fieldset>
+{% endif %}
+<p class="actions"><a class="button" href="/prefs">Cancel</a> <button type="submit" form="prefs-form" class="button primary">{% if paid %}Save{% else %}Save — free{% endif %}</button></p>
+{% endif %}
