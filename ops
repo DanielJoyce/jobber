@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791575408,"nonce":"VFGbZASBaiedex6haL1kMSMzCtg=","message":"Landed in PR #3 (3ec97aa). Enums, SourceRow, Query, JobStub/JobDetail, JobLocation, Screen (model dims skills/seniority/domain only), ApplyLink. Adapter protocol now uses real types.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791575408,"nonce":"8ooywI39/qoy3LvT3VAyWUAV+YQ=","status":2}]}
