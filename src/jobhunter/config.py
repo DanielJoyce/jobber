@@ -108,6 +108,38 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
     return merged
 
 
+ENV_FILE_VAR = "JOBHUNTER_ENV_FILE"
+
+
+def env_files() -> list[Path]:
+    """Candidate .env files, highest precedence first.
+
+    ``$JOBHUNTER_ENV_FILE``, then ``./.env`` in the working directory, then ``~/.env``.
+    """
+    files: list[Path] = []
+    if explicit := os.environ.get(ENV_FILE_VAR):
+        files.append(Path(explicit).expanduser())
+    files += [Path.cwd() / ".env", Path.home() / ".env"]
+    return files
+
+
+def load_env_files() -> list[Path]:
+    """Load secrets such as ``USAJOBS_API_KEY`` from .env files into ``os.environ``.
+
+    Real environment variables always win, and an earlier file wins over a later one,
+    because nothing already set is overridden. Returns the files that were read.
+    Values are never logged.
+    """
+    from dotenv import load_dotenv
+
+    loaded: list[Path] = []
+    for path in env_files():
+        if path.is_file():
+            load_dotenv(path, override=False)
+            loaded.append(path)
+    return loaded
+
+
 def load_settings(
     config_path: Path | None = None,
     overrides: Mapping[str, Any] | None = None,
