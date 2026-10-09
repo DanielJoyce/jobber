@@ -446,7 +446,7 @@ def submit_batch(
 
 @dataclass
 class CollectResult:
-    status: str = "ended"  # ended | in_progress | already_collected
+    status: str = "ended"  # ended | in_progress | already_collected | error: <detail>
     succeeded: int = 0
     written: int = 0
     duplicate: int = 0
@@ -581,6 +581,32 @@ def collect_batch(
     if out.unknown_ids:
         logger.warning("batch %s returned unknown custom_ids: %s", batch_id, out.unknown_ids)
     return out
+
+
+def pending_batch_ids(conn: sqlite3.Connection) -> list[str]:
+    """Submitted screen batches not yet collected, oldest first."""
+    rows = conn.execute(
+        "SELECT id FROM score_batch WHERE collected_at IS NULL ORDER BY submitted_at, id"
+    )
+    return [r["id"] for r in rows]
+
+
+def collect_pending(
+    conn: sqlite3.Connection, client: Any, profile: Profile, *, now: datetime
+) -> dict[str, CollectResult]:
+    """Collect every uncollected batch (``jobhunter score --collect-pending``).
+
+    One failing batch (API error) is recorded as ``status="error: ..."`` and does not stop the
+    others; it stays uncollected and is retried on the next call.
+    """
+    results: dict[str, CollectResult] = {}
+    for batch_id in pending_batch_ids(conn):
+        try:
+            results[batch_id] = collect_batch(conn, client, batch_id, profile, now=now)
+        except Exception as exc:  # one bad batch must not block the rest
+            logger.warning("collect %s failed: %s", batch_id, exc)
+            results[batch_id] = CollectResult(status=f"error: {exc}")
+    return results
 
 
 # ─── Synchronous, on-demand path ────────────────────────────────────────────

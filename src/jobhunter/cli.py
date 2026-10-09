@@ -19,9 +19,11 @@ app = typer.Typer(
 sources_app = typer.Typer(help="Inspect and verify configured sources.", no_args_is_help=True)
 mail_app = typer.Typer(help="Email alert ingest.", no_args_is_help=True)
 applylinks_app = typer.Typer(help="Apply-link resolution.", no_args_is_help=True)
+schedule_app = typer.Typer(help="Nightly systemd --user timers.", no_args_is_help=True)
 app.add_typer(sources_app, name="sources")
 app.add_typer(mail_app, name="mail")
 app.add_typer(applylinks_app, name="applylinks")
+app.add_typer(schedule_app, name="schedule")
 
 NOT_IMPLEMENTED = "not implemented yet"
 
@@ -116,6 +118,13 @@ def score(
     collect: Annotated[
         str | None, typer.Option("--collect", metavar="BATCH_ID", help="Collect a batch.")
     ] = None,
+    collect_pending: Annotated[
+        bool,
+        typer.Option(
+            "--collect-pending",
+            help="Collect every submitted batch not yet collected (nightly 03:30 timer).",
+        ),
+    ] = False,
     limit: Annotated[int, typer.Option(help="Most job groups to submit.", min=1)] = 500,
     deep: Annotated[
         int | None,
@@ -136,9 +145,12 @@ def score(
     ] = None,
 ) -> None:
     """Screen batches (specs/006 Stage 2) or the Opus deep pass (Stage 3)."""
-    modes = [submit, collect is not None, deep is not None, deep_group is not None]
+    modes = [submit, collect is not None, collect_pending, deep is not None, deep_group is not None]
     if sum(modes) != 1:
-        typer.echo("pass exactly one of --submit, --collect, --deep or --deep-group", err=True)
+        typer.echo(
+            "pass exactly one of --submit, --collect, --collect-pending, --deep or --deep-group",
+            err=True,
+        )
         raise typer.Exit(2)
 
     from datetime import UTC, datetime
@@ -227,6 +239,15 @@ def score(
                 ),
             )
             typer.echo(f"submitted batch {batch_id}" if batch_id else "nothing to submit")
+        elif collect_pending:
+            assert client is not None  # the anthropic client is built for non-screen modes
+            results = screen.collect_pending(conn, client, profile, now=now)
+            if not results:
+                typer.echo("no pending batches")
+            else:
+                typer.echo(json.dumps({b: r.as_dict() for b, r in results.items()}, indent=2))
+            if any(r.status.startswith("error") for r in results.values()):
+                raise typer.Exit(1)
         else:
             assert collect is not None
             if client is None:
@@ -510,6 +531,51 @@ def applylinks_unknown(
     typer.echo(f"{'COUNT':>6}  HOST")
     for host, n in rows:
         typer.echo(f"{n:>6}  {host}")
+
+
+@schedule_app.command("install")
+def schedule_install(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print the units and commands; write nothing.")
+    ] = False,
+    enable: Annotated[
+        bool,
+        typer.Option("--enable", help="Also run systemctl daemon-reload and enable --now."),
+    ] = False,
+) -> None:
+    """Write systemd --user units to ~/.config/systemd/user (specs/002 Process model)."""
+    from jobhunter.ops import schedule
+
+    try:
+        inst = schedule.default_install()
+        typer.echo(schedule.install(inst, dry_run=dry_run, enable=enable))
+    except schedule.ScheduleError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2 if dry_run and enable else 1) from exc
+
+
+@schedule_app.command("status")
+def schedule_status() -> None:
+    """Show the jobhunter timers (systemctl --user list-timers, read-only)."""
+    from jobhunter.ops import schedule
+
+    try:
+        typer.echo(schedule.status())
+    except schedule.ScheduleError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@schedule_app.command("uninstall")
+def schedule_uninstall() -> None:
+    """Disable the timers and remove the unit files."""
+    from jobhunter.ops import schedule
+
+    try:
+        typer.echo(schedule.uninstall())
+    except schedule.ScheduleError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+# Template for `jobhunter schedule install`. Nightly at 02:00 local (specs/004 section 7).
+[Unit]
+Description=Nightly jobhunter run at 02:00
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=jobhunter-run.service
+
+[Install]
+WantedBy=timers.target

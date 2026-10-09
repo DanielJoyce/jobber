@@ -1,0 +1,9 @@
+# OnFailure= target; %i is the failed unit's name. Desktop notification via notify-send when it
+# is installed; the message always goes to the journal via systemd-cat. In this file "$$" is
+# systemd escape for a literal "$".
+[Unit]
+Description=Report failure of %i
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'unit="$$1"; hint="journalctl --user -u $$unit -n 20"; echo "jobhunter: $$unit failed; see: $$hint" | systemd-cat -t jobhunter-notify -p err; if command -v notify-send >/dev/null 2>&1; then notify-send -u critical "jobhunter: $$unit failed" "Last 20 journal lines: $$hint"; fi' jobhunter-notify %i
