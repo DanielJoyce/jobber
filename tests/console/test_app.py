@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from jobhunter.cli import app as cli_app
-from jobhunter.config import Settings
+from jobhunter.config import Paths, Settings
 from jobhunter.console.app import NAV, check_host, create_app
 from jobhunter.core import db
 
@@ -13,7 +13,8 @@ from jobhunter.core import db
 @pytest.fixture
 def client(tmp_path):
     path = tmp_path / "t.db"
-    return TestClient(create_app(Settings(), lambda: db.connect(path)))
+    settings = Settings(paths=Paths(profile_dir=tmp_path / "profile", db_path=path))
+    return TestClient(create_app(settings, lambda: db.connect(path)))
 
 
 def placeholder_paths() -> list[str]:

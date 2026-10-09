@@ -12,14 +12,16 @@ def test_help():
         assert cmd in result.output
 
 
-def test_run_dry_run_uses_packaged_registry_without_network():
+def test_run_dry_run_uses_packaged_registry_without_network(tmp_path, monkeypatch):
+    _config(tmp_path, monkeypatch)
     result = runner.invoke(app, ["run", "--dry-run", "--stage", "list,resolve"])
     assert result.exit_code == 0, result.output
     assert "Run plan" in result.output
     assert "us-usajobs" in result.output
 
 
-def test_run_dry_run_state_filter():
+def test_run_dry_run_state_filter(tmp_path, monkeypatch):
+    _config(tmp_path, monkeypatch)
     result = runner.invoke(app, ["run", "--dry-run", "--state", "WA"])
     assert result.exit_code == 0
     assert "us-usajobs" not in result.output
@@ -48,7 +50,8 @@ def test_score_requires_one_mode():
 def _config(tmp_path, monkeypatch):
     db_path = tmp_path / "jh.db"
     cfg = tmp_path / "config.toml"
-    cfg.write_text(f'[paths]\ndb_path = "{db_path}"\n')
+    # profile_dir too: the default is the cwd's profile/, which is the developer's real one.
+    cfg.write_text(f'[paths]\ndb_path = "{db_path}"\nprofile_dir = "{tmp_path / "profile"}"\n')
     monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
     return db_path
 
