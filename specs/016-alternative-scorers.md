@@ -53,6 +53,17 @@ How it fits here:
 
 ### Packed requests
 
+> **Why this exists.** Packing was built on the assumption that `typesafe/jev-router`
+> was a chat model priced at roughly $0.04 per request, so several judgments per request
+> would make the backlog affordable. Testing showed otherwise: Jev is a *decisions* model
+> (`/api/alpha/decisions`, priced per input token at about $0.042 per million), handled by
+> the dedicated Jev decisions scorer, which batches through its own state and question
+> format. Packing is kept because it still helps chat-completion scorers whose price is per
+> request or whose prompt prefix dominates the cost: the local llama.cpp model (one shared
+> rubric and profile per pack instead of per job) and any future OpenRouter chat model.
+> Measure with `eval --compare` before relying on it, since packing can affect judgment
+> quality.
+
 Jev bills about $0.04 per request whatever its size, so judge several jobs per request:
 `jobs_per_request` under `[scoring.openrouter]`, `[scoring.openai_compat]` or `[scoring.local]`
 (default 1, hard cap 16), or `--jobs-per-request N` on `jobhunter score --submit` and

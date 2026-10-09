@@ -47,8 +47,11 @@ packages = ["src/jobhunter"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not e2e'"
-markers = ["e2e: browser end-to-end tests (Playwright/chromium); run with -m e2e"]
+addopts = "-m 'not e2e and not live'"
+markers = [
+    "e2e: browser end-to-end tests (Playwright/chromium); run with -m e2e",
+    "live: calls real external services and may cost money; needs -m live AND JOBHUNTER_LIVE_TESTS=1",
+]
 
 [tool.ruff]
 line-length = 100
