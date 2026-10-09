@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791580762,"nonce":"71q9Nse/uFaDf1nbs9KCouX1gmU=","message":"Done: USAJOBS_API_KEY and USAJOBS_EMAIL are in ~/.env and loaded by the .env loader (PR #31). First live run fetched 1,084 USAJOBS postings.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791580762,"nonce":"ohq8t7QJj6mGY1ByEBG8RB1gxsQ=","status":2}]}
