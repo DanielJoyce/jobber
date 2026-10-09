@@ -214,6 +214,20 @@ def parse_message(message: Any) -> Screen:
         raise ScreenError(f"output does not match Screen: {exc.error_count()} errors") from exc
 
 
+_DIRECTION = re.compile(r"^\s*(above|below|match)\s*:", re.IGNORECASE)
+
+
+def seniority_direction(screen: Screen) -> str:
+    """ "above" / "below" / "match" from the rubric's required prefix on seniority.why.
+
+    Stored in the dimensions JSON as ``seniority_direction`` for buckets C and E.
+    A missing or malformed prefix falls back to "match".
+    """
+    dim = screen.dimensions.get("seniority")
+    m = _DIRECTION.match(dim.why) if dim is not None else None
+    return m.group(1).lower() if m else "match"
+
+
 @dataclass
 class _Key:
     model: str
@@ -248,6 +262,7 @@ def _write_fit_score(
         current_focus_overlap=screen.current_focus_overlap,
         stale_skills=screen.stale_skills,
         done_with_hits=screen.done_with_hits,
+        seniority_direction=seniority_direction(screen),
         evidence_unverified=unverified,
     )
     cur = conn.execute(

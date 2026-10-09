@@ -390,6 +390,7 @@ def test_collect_writes_scores(conn, profile):
     assert dims["recency_weighted_skills"] == 88
     assert dims["current_focus_overlap"] == 85
     assert dims["evidence_unverified"] is False
+    assert dims["seniority_direction"] == "match"
     assert json.loads(bad["dimensions"])["evidence_unverified"] is True
     assert [e["verified"] for e in json.loads(bad["evidence"])] == [True, False]
     assert json.loads(good["missing_info"]) == ["salary range"]
@@ -564,3 +565,30 @@ def test_score_one_refusal_raises(conn, profile):
     client.messages.parse_reply = message("{}", stop_reason="refusal")
     with pytest.raises(screen.ScreenError):
         screen.score_one(conn, client, profile, group_id, now=NOW, scorer=SCORER)
+
+
+@pytest.mark.parametrize(
+    ("why", "expected"),
+    [
+        ("above: leads four teams.", "above"),
+        ("Below: entry level", "below"),
+        ("no prefix", "match"),
+    ],
+)
+def test_seniority_direction_from_why(why, expected):
+    s = Screen.model_validate_json(screen_json(["x"]))
+    s.dimensions["seniority"].why = why
+    assert screen.seniority_direction(s) == expected
+
+
+def test_stored_row_feeds_buckets(conn, profile):
+    from jobhunter.scoring import buckets
+
+    client, batch_id = submit_three(conn, profile)
+    screen.collect_batch(conn, client, batch_id, profile, now=NOW)
+    row = conn.execute("SELECT * FROM fit_score WHERE job_group_id = 1").fetchone()
+    dims = json.loads(row["dimensions"])
+    assert buckets.seniority_direction(dims) == "match"
+    job = conn.execute("SELECT * FROM job WHERE job_group_id = 1").fetchone()
+    computed = buckets.compute_row(dict(row), dict(job), [], profile)
+    assert computed.raw_skills == 90
