@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from jobhunter.config import load_settings, resolve_path
+from jobhunter.config import load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
 from jobhunter.sources.registry import enabled_sources, load_registry
@@ -24,6 +24,12 @@ app.add_typer(mail_app, name="mail")
 app.add_typer(applylinks_app, name="applylinks")
 
 NOT_IMPLEMENTED = "not implemented yet"
+
+
+@app.callback()
+def _load_env() -> None:
+    """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs."""
+    load_env_files()
 
 
 def _stub() -> None:
