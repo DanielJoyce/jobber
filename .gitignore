@@ -1,0 +1,33 @@
+# Personal data — never commit (this repository is public).
+# resume/ has contact details; profile/ holds salary targets. Both stay local.
+resume/
+profile/
+config.toml
+*.local.toml
+
+# Runtime data: SQLite DB, raw HTTP cache, inbox drops
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Secrets
+.env
+*.pem
+token*.json
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
