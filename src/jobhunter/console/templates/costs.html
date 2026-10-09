@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='pages.css') }}">
+<div class="pg">
+  <h1>Costs</h1>
+  <p class="muted">Last {{ c.days }} days.
+    {% for d in ranges %}<a class="chip{% if d == c.days %} on{% endif %}" href="/costs?days={{ d }}">{{ d }}d</a> {% endfor %}</p>
+
+  {% set no_cache = c.zero_cache_batches or (c.cache_rate == 0 and c.input_tokens > 0) %}
+  <div class="callout{% if no_cache %} alert{% endif %}" id="cache-rate">
+    <span class="label">Cache hit rate (cache reads / (input + cache reads))</span>
+    <span class="big">{% if c.cache_rate is none %}n/a{% else %}{{ "%.1f" | format(c.cache_rate * 100) }}%{% endif %}</span>
+    <span class="muted">{{ "{:,}".format(c.cache_read_tokens) }} cached of {{ "{:,}".format(c.input_tokens + c.cache_read_tokens) }} prompt tokens</span>
+    {% if no_cache %}
+    <p><strong>&#9888; Warning: no cache hits.</strong> Prompt caching may be failing silently, which costs about 10x.
+      {% if c.zero_cache_batches %}Batches with zero cache reads: {{ c.zero_cache_batches | join(", ") }}.{% endif %}</p>
+    {% endif %}
+  </div>
+
+  <div class="stats">
+    <div><span class="label">Spend, {{ c.days }}d</span><span class="big">${{ "%.2f" | format(c.total) }}</span></div>
+    <div><span class="label">Today vs daily cap</span><span class="big">${{ "%.2f" | format(c.today) }}</span>of ${{ "%.2f" | format(c.daily_cap) }} cap{% if c.today > c.daily_cap %} &#9888; over cap{% endif %}</div>
+    <div><span class="label">Last 7 days vs weekly cap</span><span class="big">${{ "%.2f" | format(c.last7) }}</span>of ${{ "%.2f" | format(c.weekly_cap) }} cap{% if c.last7 > c.weekly_cap %} &#9888; over cap{% endif %}</div>
+    <div><span class="label">Per shortlisted job</span><span class="big">{% if c.per_shortlisted is none %}n/a{% else %}${{ "%.2f" | format(c.per_shortlisted) }}{% endif %}</span>{{ c.shortlisted }} shortlisted</div>
+  </div>
+
+  <h2>Daily spend</h2>
+  <div class="bars" id="daily-bars">
+    {% for day, cost in c.daily %}
+    <span>{{ day }}</span>
+    <span class="bar"><span style="width: {{ (cost / c.max_daily * 100) if c.max_daily else 0 }}%"></span></span>
+    <span class="val">${{ "%.2f" | format(cost) }}</span>
+    {% endfor %}
+  </div>
+
+  <h2>Weekly spend (weeks starting Monday)</h2>
+  <table class="pg-table" id="weekly">
+    <thead><tr><th>Week of</th><th class="num">Spend</th><th class="num">Of weekly cap</th></tr></thead>
+    <tbody>{% for w, cost in c.weekly %}<tr><td>{{ w }}</td><td class="num">${{ "%.2f" | format(cost) }}</td><td class="num">{{ "%.0f" | format(cost / c.weekly_cap * 100) if c.weekly_cap else "-" }}%</td></tr>{% else %}<tr><td colspan="3" class="muted">No spend recorded.</td></tr>{% endfor %}</tbody>
+  </table>
+
+  <h2>By model and tier</h2>
+  <table class="pg-table" id="by-model">
+    <thead><tr><th>Model</th><th>Tier</th><th class="num">Calls</th><th class="num">Input tokens</th><th class="num">Output tokens</th><th class="num">Spend</th></tr></thead>
+    <tbody>{% for m in c.by_model %}<tr><td>{{ m.model }}</td><td>{{ m.tier }}</td><td class="num">{{ m.calls }}</td><td class="num">{{ "{:,}".format(m.input) }}</td><td class="num">{{ "{:,}".format(m.output) }}</td><td class="num">${{ "%.2f" | format(m.cost) }}</td></tr>{% else %}<tr><td colspan="6" class="muted">No spend recorded.</td></tr>{% endfor %}</tbody>
+  </table>
+  <p class="muted">Scored tokens: {{ "{:,}".format(c.input_tokens) }} input, {{ "{:,}".format(c.output_tokens) }} output, {{ "{:,}".format(c.cache_read_tokens) }} cache read.</p>
+</div>
+{% endblock %}

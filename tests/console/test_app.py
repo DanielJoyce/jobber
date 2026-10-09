@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from jobhunter.cli import app as cli_app
 from jobhunter.config import Settings
-from jobhunter.console.app import NAV, PAGES, check_host, create_app
+from jobhunter.console.app import NAV, check_host, create_app
 from jobhunter.core import db
 
 
@@ -16,8 +16,17 @@ def client(tmp_path):
     return TestClient(create_app(Settings(), lambda: db.connect(path)))
 
 
-ROUTES = [p for p, _, _ in PAGES if p not in ("/", "/inbox", "/pipeline", "/followups")]
-# /, /inbox, /job, /pipeline and /followups have their own tests
+def placeholder_paths() -> list[str]:
+    """Nav pages no route module has claimed yet; they must render the placeholder."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = Settings.model_validate({"paths": {"db_path": f"{tmp}/p.db"}})
+        return list(create_app(settings).state.placeholder_paths)
+
+
+# Pages that still render the placeholder: whatever no route module has claimed.
+ROUTES = placeholder_paths()
 
 
 @pytest.mark.parametrize("route", ROUTES)

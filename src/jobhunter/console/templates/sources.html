@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='pages.css') }}">
+<div class="pg">
+  <h1>Sources</h1>
+  <p class="muted">{{ sources | length }} sources, {{ non_ok }} not ok. Non-ok sources are listed first.</p>
+  <div class="table-wrap">
+  <table class="pg-table" id="sources-table">
+    <thead><tr>
+      <th>Source</th><th>Family</th><th>Tier</th><th>Policy</th><th>Status</th>
+      <th>Last ok</th><th class="num">Jobs 7d / expected</th><th class="num">Resolve backlog</th>
+      <th class="num">Errors (last 10 runs)</th><th>Robots</th>
+    </tr></thead>
+    <tbody>
+    {% for s in sources %}
+    <tr data-key="{{ s.key }}" data-status="{{ s.status }}">
+      <td><strong>{{ s.key }}</strong><br><span class="muted">{{ s.name }}</span></td>
+      <td>{{ s.family }}</td>
+      <td>{{ s.tier }}</td>
+      <td>{{ s.policy }}</td>
+      <td class="note">
+        <span class="status"><span aria-hidden="true">{{ s.icon }}</span> {{ s.status }}</span>
+        {% if s.note %}<br>{{ s.note }}{% endif %}
+        {% if s.nlx_covered %}<br><span class="tag">covered via national NLx</span>{% endif %}
+      </td>
+      <td>{{ s.last_ok or "never" }}</td>
+      <td class="num">{{ s.jobs_7d }} / {{ s.min_per_week if s.min_per_week is not none else "-" }}{% if s.below_floor %} <span title="below expect.min_jobs_per_week">&#9888; below floor</span>{% endif %}</td>
+      <td class="num">{{ s.backlog }}</td>
+      <td class="num">{{ s.error_rate }}</td>
+      <td>{{ s.robots }}{% if s.robots_checked %}<br><span class="muted">checked {{ s.robots_checked }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Recent runs</h2>
+  {% if runs %}
+  <div class="table-wrap">
+  <table class="pg-table" id="runs-table">
+    <thead><tr><th class="num">Run</th><th>Started</th><th class="num">Duration</th><th>Exit</th><th>Counts</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+    <tr><td class="num">{{ r.id }}</td><td>{{ r.started_at }}</td><td class="num">{{ r.duration }}</td><td>{{ r.exit_status or "running" }}</td><td class="note">{{ r.counts }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}<p class="muted">No runs yet.</p>{% endif %}
+</div>
+{% endblock %}

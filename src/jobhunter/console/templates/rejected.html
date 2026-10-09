@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='pages.css') }}">
+<div class="pg">
+  <h1>Rejected</h1>
+  <p class="muted">What the prefilter dropped under the current filters. Scan this to check it is not hiding jobs you would want.</p>
+  {% if profile_error is not none %}
+  <div class="callout" role="alert"><strong>No profile yet.</strong> Prefilter results are keyed to your profile, so none can be listed. <span class="muted">{{ profile_error }}</span></div>
+  {% else %}
+  <h2>By reason</h2>
+  {% if data.summary %}
+  <p>
+    {% for r, n in data.summary.items() %}
+    <a class="chip{% if reason == r %} on{% endif %}" href="/rejected?reason={{ r | urlencode }}">{{ r }} {{ n }}</a>
+    {% endfor %}
+    {% if reason %}<a href="/rejected">clear filter</a>{% endif %}
+  </p>
+  {% else %}<p class="muted">No rejections for the current filter version.</p>{% endif %}
+
+  <h2>{{ data.total }} rejected job{{ "" if data.total == 1 else "s" }}{% if reason %} for {{ reason }}{% endif %}{% if data.jobs | length < data.total %} (showing {{ data.jobs | length }}){% endif %}</h2>
+  <div class="table-wrap">
+  <table class="pg-table" id="rejected-table">
+    <thead><tr><th>Title</th><th>Employer</th><th>Location</th><th>Salary</th><th>Reasons</th></tr></thead>
+    <tbody>
+    {% for j in data.jobs %}
+    <tr>
+      <td>{% if j.group_id %}<a href="/job/{{ j.group_id }}">{{ j.title }}</a>{% else %}{{ j.title }}{% endif %}</td>
+      <td>{{ j.employer }}</td><td>{{ j.location }}</td><td>{{ j.salary }}</td>
+      <td>{% for r in j.reasons %}<span class="tag">{{ r }}</span>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
