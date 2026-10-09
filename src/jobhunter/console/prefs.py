@@ -440,12 +440,14 @@ def apply_changes(
     expected_mtime_ns: int,
     source: str,
     now: datetime,
+    require_resume: bool = True,
 ) -> Profile:
     """Write the changes to the file (atomic, conflict-checked), then log them."""
     new = save_profile_changes(
         profile_dir,
         {path: new for path, (_, new) in changes.items()},
         expected_mtime_ns=expected_mtime_ns,
+        require_resume=require_resume,
     )
     with db.transaction(conn):
         record_changes(conn, changes, new, source, now)
@@ -736,3 +738,77 @@ def picker(ranking: Sequence[str], excluded: Sequence[str]) -> dict[str, Any]:
         "rows": max(r for r, _ in geo.TILE_GRID.values()) + 1,
         "cols": max(c for _, c in geo.TILE_GRID.values()) + 1,
     }
+
+
+# ─── plain-language help for the Buckets section ────────────────────────────
+
+BUCKET_INTRO = (
+    "Every scored job lands in one bucket. Rules are checked top to bottom; the first that "
+    "matches wins. Numbers are 0-100 scores from the fit model. Changing them is free: "
+    "buckets are recomputed instantly, nothing is re-scored."
+)
+BUCKET_NOTE = "Any stated requirement you don't meet (a blocker) drops a job one bucket."
+
+# (bucket, what it means, threshold keys it uses), in the order the rules are checked.
+BUCKET_RULES: list[tuple[str, str, str]] = [
+    ("G", "Mismatch (G) if skills score is below g_skills. Hidden from the inbox.", "g_skills"),
+    ("G", "Mismatch (G) if the domain fit is below g_domain.", "g_domain"),
+    (
+        "F",
+        "Stale match (F): the job matches your older experience (raw skills at least f_raw) "
+        "but not your recent work (recent skills below f_recency). This is the "
+        "keyword-search trap.",
+        "f_recency, f_raw",
+    ),
+    ("E", "Downlevel (E): the job is below your level AND pay fit is below e_comp.", "e_comp"),
+    (
+        "C",
+        "Stretch up (C): the job is above your level and your recent skills are at least c_skills.",
+        "c_skills",
+    ),
+    (
+        "D",
+        "Lateral (D): your skills transfer (at least d_skills) but the domain is unfamiliar "
+        "(below d_domain).",
+        "d_skills, d_domain",
+    ),
+    (
+        "A",
+        "Bullseye (A): overall at least a_overall AND recent skills at least a_recency AND "
+        "no blockers. Lower these if A stays empty.",
+        "a_overall, a_recency",
+    ),
+    ("B", "Strong (B): overall at least b_overall.", "b_overall"),
+]
+
+_VERDICT_TAIL = "Display only; it doesn't move jobs between buckets."
+BUCKET_HELP: dict[str, str] = {
+    "g_skills": "Mismatch (G) if skills score is below this. Hidden from the inbox.",
+    "g_domain": "Mismatch (G) if the domain fit is below this.",
+    "f_recency": "Stale match (F) if recent skills are below this while raw skills are high.",
+    "f_raw": (
+        "Stale match (F): the job matches your older experience (raw skills at least this) "
+        "but not your recent work."
+    ),
+    "e_comp": "Downlevel (E): the job is below your level AND pay fit is below this.",
+    "c_skills": (
+        "Stretch up (C): the job is above your level and your recent skills are at least this."
+    ),
+    "d_skills": "Lateral (D): your skills transfer (at least this) but the domain is unfamiliar.",
+    "d_domain": "Lateral (D) if the domain fit is below this while your skills transfer.",
+    "b_overall": "Strong (B): overall at least this.",
+    "a_overall": (
+        "Bullseye (A): overall at least this AND recent skills high enough AND no blockers. "
+        "Lower it if A stays empty."
+    ),
+    "a_recency": (
+        "Bullseye (A) also needs recent skills at least this. Lower it if A stays empty."
+    ),
+    "verdict_strong": f"Job card label: overall at least this reads strong. {_VERDICT_TAIL}",
+    "verdict_possible": f"Job card label: overall at least this reads possible. {_VERDICT_TAIL}",
+    "verdict_weak": f"Job card label: overall at least this reads weak. {_VERDICT_TAIL}",
+    "fallback_mismatch_overall": (
+        "Catch-all: a job no rule above matched is Mismatch (G) if its overall score is "
+        "below this, otherwise Lateral (D)."
+    ),
+}

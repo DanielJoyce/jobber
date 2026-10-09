@@ -165,7 +165,8 @@ def test_page_without_profile_shows_banner(tmp_path, db_path):
     c = TestClient(create_app(settings, lambda: db.connect(db_path)))
     r = c.get("/prefs")
     assert r.status_code == 200
-    assert "could not be loaded" in r.text
+    assert "No profile yet" in r.text
+    assert 'name="hard.salary_floor.amount"' in r.text
 
 
 def test_state_picker_cycle(client):
