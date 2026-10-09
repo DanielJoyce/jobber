@@ -23,7 +23,12 @@ All three must pass before you commit.
 
 ## Hard rules
 
-- **Tests never touch the network.** Use saved fixtures. Live probing is for discovery only.
+- **Tests never touch the network.** Use saved fixtures and `httpx.MockTransport`. Live probing
+  is for discovery only. `tests/conftest.py` enforces this: any non-localhost connection or DNS
+  lookup in a test raises. Scorers spend the user's prepaid API credits, and the user requires
+  that no test ever does so unless explicitly run. A test that truly needs a real service is
+  marked `@pytest.mark.live`; it is deselected by default and also skipped unless
+  `JOBHUNTER_LIVE_TESTS=1`. Never weaken or bypass the guard.
 - **Only `jobhunter.core.fetch.FetchContext` does network I/O.** Adapters must not import
   `httpx` or `playwright` directly. Robots.txt is always respected (`specs/008-compliance.md`).
 - **No personal data in the repo.** `resume/`, `profile/`, `data/`, `config.toml` are gitignored.
