@@ -25,7 +25,7 @@ from urllib.parse import unquote, urlsplit
 from jobhunter.config import Settings
 from jobhunter.core.db import transaction
 from jobhunter.core.fetch import FetchContext, FetchError, RobotsDisallowed
-from jobhunter.core.fetch.robots import ROBOTS_UA, RobotsRules, origin_of, rules_from_response
+from jobhunter.core.fetch.robots import RobotsRules, origin_of, rules_from_response
 from jobhunter.core.models import Policy, SourceRow, Tier
 
 Classification = Literal["ok", "drift", "broken", "blocked"]
@@ -133,16 +133,7 @@ def summarize_robots(origin: str, status: int, body: bytes) -> tuple[RobotsSumma
     if rules.verdict == "deny_all":
         name = "disallow_all" if status in (401, 403) else "unknown"
         return RobotsSummary(name, digest, [], rules.reason), rules
-    parser = rules.parser
-    assert parser is not None
-    entries = list(parser.entries)
-    if parser.default_entry is not None:
-        entries.append(parser.default_entry)
-    mine = [e for e in entries if e.applies_to(ROBOTS_UA)]
-    named = [e for e in mine if any(ROBOTS_UA in ua.lower() for ua in e.useragents)]
-    disallowed: list[str] = []
-    for entry in (named or mine)[:1]:
-        disallowed = [unquote(r.path) for r in entry.rulelines if not r.allowance and r.path]
+    disallowed = [unquote(p) for p in rules.disallowed_paths_for_us()]
     if not rules.allows(origin + "/") and not rules.allows(origin + "/zz-probe-path"):
         return RobotsSummary("disallow_all", digest, disallowed, "robots.txt"), rules
     return RobotsSummary("partial" if disallowed else "open", digest, disallowed, ""), rules

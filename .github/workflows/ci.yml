@@ -7,11 +7,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # An older pinned patch and the latest 3.13 patch: stdlib behaviour shifts within 3.13.
+        python-version: ["3.13.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
