@@ -206,14 +206,14 @@ def test_authenticate_stores_flow_token(monkeypatch, tmp_path):
             assert scopes == auth.SCOPES
             return cls()
 
-        def run_local_server(self, host, port, open_browser):
+        def run_local_server(self, host, port, open_browser, **kw):
             assert host == "127.0.0.1" and port == 0
             return Creds()
 
     import google_auth_oauthlib.flow as flow_mod
 
     monkeypatch.setattr(flow_mod, "InstalledAppFlow", Flow)
-    monkeypatch.setattr(auth, "store_token", saved.append)
+    monkeypatch.setattr(auth, "store_token", lambda t: saved.append(t) or "keyring")
     auth.authenticate(Settings())
     assert saved == ["rt"]
 

@@ -70,9 +70,29 @@ One time, about ten minutes. No billing is involved.
    `mail.client_secrets_path`, or the env var `JOBHUNTER_GOOGLE_CLIENT_SECRETS`). It stays
    outside the repo.
 5. Set `mail.alerts_address` in `~/.config/jobhunter/config.toml` to your real `+jobs` address.
-6. `jobhunter mail auth` opens the consent screen on `127.0.0.1` and stores the refresh token in
-   the OS keyring (service `jobhunter`, key `gmail`). Testing-mode tokens expire after 7 days;
-   re-run `mail auth` if Google says the token is invalid.
+6. `jobhunter mail auth` starts a one-shot server on `127.0.0.1`, always prints the full
+   authorization URL ("If no browser opened, open this URL in any browser on this machine."),
+   and tries to open it. The refresh token goes to the OS keyring (service `jobhunter`, key
+   `gmail`); if no keyring backend exists (containers) it goes to
+   `~/.config/jobhunter/gmail_token.json` (mode 0600) with a one-line warning. `mail status`
+   says which. Never printed.
+
+   **Containers (toolbox/distrobox, no browser installed).** Openers are tried in order, the
+   first success wins: Python `webbrowser` (only if a real, non-text browser is registered),
+   `xdg-open`, `flatpak-spawn --host xdg-open`, `distrobox-host-exec xdg-open`, then the
+   desktop portal (`gdbus ... org.freedesktop.portal.OpenURI.OpenURI`). If none works, open
+   the printed URL in the host's browser; toolbox shares the host network, so the redirect to
+   `127.0.0.1` reaches the waiting server. `--port N` fixes the loopback port; `--no-browser`
+   skips the openers. If the network is not shared, use `jobhunter mail auth --manual`: no
+   server; after approving, the browser tries to load `http://127.0.0.1:8765/?state=...&code=...`
+   (it may show an error page), and you paste that full URL back at the prompt. The state is
+   checked; a stale or wrong paste is rejected. Google retired the copy-the-code flow, so this
+   loopback paste is the fallback. `--manual --port N` changes the port in the URL.
+   **Production mode.** In Testing, refresh tokens expire after 7 days. Set the consent
+   screen's publishing status to **In production** (no verification needed for personal use of
+   an unverified app); sign-in then shows an "unverified app" warning, click Advanced, then
+   "Go to jobhunter (unsafe)". Tokens then last until revoked. Re-run `mail auth` if Google
+   says the token is invalid.
 7. `jobhunter mail setup --dry-run`, then `jobhunter mail setup`; `jobhunter mail status` checks.
 
 Prefer not to grant `gmail.settings.basic`? `jobhunter mail setup --xml` prints a filter file
