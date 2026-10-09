@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from jobhunter.core.models import JobDetail, JobStub, Query, SourceRow
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from datetime import datetime
 
     from jobhunter.core.fetch import FetchContext
-    from jobhunter.core.models import JobDetail, JobStub, Query, SourceRow
 
 
 class SourceAdapter(Protocol):
