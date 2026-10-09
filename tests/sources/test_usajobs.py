@@ -349,10 +349,11 @@ def test_queries_from_profile():
         ([], "it specialist", None),
         (None, "Management Analyst", None),
     ]
-    assert all(q.salary_min == 90000 for q in qs)
+    # The floor must not narrow the search; the prefilter applies it to the range max.
+    assert all(q.salary_min is None for q in qs)
 
 
-def test_salary_floor_ignored_unless_yearly():
+def test_hourly_floor_also_not_sent():
     profile = Profile.model_validate(
         {
             "target_titles": ["Analyst"],

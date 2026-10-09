@@ -255,16 +255,15 @@ class UsajobsAdapter:
 def queries_from_profile(profile: Profile) -> list[Query]:
     """Profile search net -> USAJOBS queries (specs/011 "Registry row").
 
-    The salary floor (yearly only) rides on every query as RemunerationMinimumAmount.
+    The salary floor is deliberately NOT sent as RemunerationMinimumAmount. USAJOBS
+    filters on a posting's minimum, so a $110k-$150k job would vanish against a $125k
+    floor. Queries are a broad net (specs/006 Stage 0); the prefilter compares the floor
+    against the top of the stated range instead.
     """
-    floor = profile.hard.salary_floor
-    salary_min = int(floor.amount) if floor and floor.amount and floor.period == "year" else None
-    queries = [
-        Query(**q.model_dump(exclude_none=True), salary_min=salary_min) for q in profile.queries
-    ]
+    queries = [Query(**q.model_dump(exclude_none=True)) for q in profile.queries]
     seen = {q.title.casefold() for q in queries if q.title}
     for title in profile.target_titles:
         if title.casefold() not in seen:
             seen.add(title.casefold())
-            queries.append(Query(title=title, salary_min=salary_min))
+            queries.append(Query(title=title))
     return queries
