@@ -86,10 +86,12 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
         "CREATE TABLE IF NOT EXISTS schema_version ("
         "version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)"
     )
-    done = current_version(conn)
+    # Apply every migration not yet recorded, not just those above the max. Parallel
+    # branches can merge a lower-numbered migration after a higher one has shipped.
+    done = {row[0] for row in conn.execute("SELECT version FROM schema_version")}
     applied: list[int] = []
     for version, name, script in _load_migrations():
-        if version <= done:
+        if version in done:
             continue
         with transaction(conn):
             for stmt in _split_statements(script):
