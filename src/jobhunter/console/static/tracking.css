@@ -1,0 +1,38 @@
+/* /pipeline and /followups (specs/007). Uses the shared tokens from app.css. */
+.pipe-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; }
+.board { display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 8px; overflow-x: auto; }
+.pcol { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px; min-height: 120px; }
+.pcol-head { display: flex; justify-content: space-between; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 2px 4px 6px; }
+.count { color: var(--text-muted); }
+.cards { display: flex; flex-direction: column; gap: 6px; }
+.pcard { background: var(--page); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 0.85rem; }
+.pcard.stale { border-color: var(--status-warning); border-left-width: 4px; }
+.pcard.focused { outline: 2px solid var(--text-secondary); outline-offset: 1px; }
+.pcard-title { color: var(--text-primary); font-weight: 600; text-decoration: none; }
+.pcard-employer, .pcard-loc { font-size: 0.8rem; }
+.pcard-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; font-size: 0.78rem; }
+.pcard-next { margin-top: 4px; font-size: 0.78rem; }
+.pcard-moves { display: flex; gap: 4px; margin-top: 6px; }
+.days.amber, .fu-due.amber { color: var(--status-warning); font-weight: 600; }
+.badge-status { border: 1px solid var(--axis); border-radius: 999px; padding: 0 8px; font-size: 0.75rem; }
+.closed-lane { margin-top: 16px; }
+.closed-lane .cards { flex-direction: row; flex-wrap: wrap; margin-top: 8px; }
+.closed-lane .pcard { width: 220px; }
+.drawer:not(:empty) { margin-top: 16px; border: 1px solid var(--axis); border-radius: 8px; padding: 12px 16px; background: var(--surface-1); }
+.drawer-head { display: flex; justify-content: space-between; gap: 12px; }
+.drawer h2 { margin: 0; font-size: 1.15rem; }
+.drawer h3 { font-size: 0.9rem; margin: 14px 0 6px; color: var(--text-secondary); }
+.inline-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+.inline-form input, .inline-form select { font: inherit; font-size: 0.85rem; padding: 2px 6px; color: var(--text-primary); background: var(--page); border: 1px solid var(--border); border-radius: 4px; }
+.events { margin: 8px 0 0; padding-left: 18px; font-size: 0.85rem; }
+.banner { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--status-critical); border-radius: 6px; }
+.act { font: inherit; font-size: 0.78rem; color: var(--text-secondary); background: transparent; border: 1px solid var(--border); border-radius: 4px; padding: 1px 8px; cursor: pointer; text-decoration: none; }
+.act:hover:not(:disabled) { color: var(--text-primary); border-color: var(--axis); }
+.act:disabled { opacity: 0.4; cursor: default; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 24px; font-size: 0.8rem; color: var(--text-secondary); }
+.fu-list { list-style: none; padding: 0; margin: 16px 0; }
+.fu-row { display: flex; gap: 16px; align-items: center; padding: 10px 4px; border-bottom: 1px solid var(--grid); }
+.fu-due { min-width: 160px; font-variant-numeric: tabular-nums; }
+.fu-body { flex: 1; }
+.fu-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+@media (max-width: 800px) { .board { grid-template-columns: repeat(7, 200px); } .fu-row { flex-wrap: wrap; } }

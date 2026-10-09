@@ -1,0 +1,6 @@
+<article id="card-{{ c.app_id }}" hx-swap-oob="delete"></article>
+{% set oob_card = "beforeend:#cards-" ~ lane %}
+{% include "_card.html" %}
+{% for l in [old_lane, lane] | unique %}
+<span class="count" id="count-{{ l }}" hx-swap-oob="true">{{ counts[l] }}</span>
+{% endfor %}

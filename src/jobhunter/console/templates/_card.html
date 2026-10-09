@@ -1,0 +1,16 @@
+{% set prev = status_neighbour(c.status, -1) %}{% set nxt = status_neighbour(c.status, 1) %}
+<article class="pcard{% if c.stale %} stale{% endif %}" id="card-{{ c.app_id }}" data-app="{{ c.app_id }}" data-status="{{ c.status }}" tabindex="-1"{% if oob_card %} hx-swap-oob="{{ oob_card }}"{% endif %}>
+  <a class="pcard-title" href="/pipeline/{{ c.app_id }}" hx-get="/pipeline/{{ c.app_id }}" hx-target="#drawer" hx-swap="innerHTML">{{ c.title }}</a>
+  <div class="pcard-employer">{{ c.employer }}</div>
+  <div class="pcard-loc muted">{{ c.location }}</div>
+  <div class="pcard-meta">
+    <span class="days{% if c.stale %} amber{% endif %}" title="days in {{ c.status }}">{{ c.days }}d{% if c.stale %} &#9888;{% endif %}</span>
+    {% if c.status not in board_statuses %}<span class="badge-status">{{ c.status }}</span>{% endif %}
+    {% if c.resume_version %}<span class="muted" title="resume version">resume {{ c.resume_version }}</span>{% endif %}
+  </div>
+  {% if c.next_action %}<div class="pcard-next" title="next action">&rarr; {{ c.next_action }}{% if c.next_action_at %} <span class="muted">{{ c.next_action_at[:10] }}</span>{% endif %}</div>{% endif %}
+  <div class="pcard-moves">
+    <button type="button" class="act" aria-label="move left"{% if prev %} hx-post="/pipeline/{{ c.app_id }}/move?to={{ prev }}" hx-swap="none"{% else %} disabled{% endif %}>&lsaquo;</button>
+    <button type="button" class="act" aria-label="move right"{% if nxt %} hx-post="/pipeline/{{ c.app_id }}/move?to={{ nxt }}" hx-swap="none"{% else %} disabled{% endif %}>&rsaquo;</button>
+  </div>
+</article>

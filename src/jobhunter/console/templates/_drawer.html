@@ -1,0 +1,93 @@
+<div class="drawer-body" data-app="{{ c.app_id }}">
+  <header class="drawer-head">
+    <div>
+      <h2><a href="/job/{{ c.group_id }}">{{ c.title }}</a></h2>
+      <div class="muted">{{ c.employer }} &middot; {{ c.location }}</div>
+      <div><span class="badge-status">{{ c.status }}</span> <span class="days{% if c.stale %} amber{% endif %}">{{ c.days }}d in status{% if c.stale %} &#9888; stale{% endif %}</span></div>
+    </div>
+    <button type="button" class="act" id="drawer-close" aria-label="close">close (Esc)</button>
+  </header>
+  {% if error %}<div class="banner" role="alert">{{ error }}</div>{% endif %}
+
+  <section>
+    <h3>Next action</h3>
+    <form method="post" action="/pipeline/{{ c.app_id }}/next-action" hx-post="/pipeline/{{ c.app_id }}/next-action" hx-target="#drawer" hx-swap="innerHTML" class="inline-form">
+      <input name="next_action" value="{{ a['next_action'] or '' }}" placeholder="what to do next" aria-label="next action">
+      <input name="next_action_at" type="date" value="{{ (a['next_action_at'] or '')[:10] }}" aria-label="due date">
+      <button class="act" type="submit">save</button>
+    </form>
+  </section>
+
+  <section>
+    <h3>Details</h3>
+    <form method="post" action="/pipeline/{{ c.app_id }}/details" hx-post="/pipeline/{{ c.app_id }}/details" hx-target="#drawer" hx-swap="innerHTML" class="inline-form">
+      <label>resume version <input name="resume_version" value="{{ a['resume_version'] or '' }}"></label>
+      <label>confirmation / external ref <input name="external_ref" value="{{ a['external_ref'] or '' }}"></label>
+      <button class="act" type="submit">save</button>
+    </form>
+  </section>
+
+  <section>
+    <h3>History</h3>
+    <form method="post" action="/pipeline/{{ c.app_id }}/event" hx-post="/pipeline/{{ c.app_id }}/event" hx-target="#drawer" hx-swap="innerHTML" class="inline-form">
+      <select name="status" aria-label="status">
+        {% for s in statuses %}<option value="{{ s }}"{% if s == c.status %} selected{% endif %}>{{ s }}</option>{% endfor %}
+      </select>
+      <input name="note" placeholder="note" aria-label="note">
+      <button class="act" type="submit">add event</button>
+    </form>
+    <ol class="events">
+      {% for e in events %}
+      <li><time>{{ e['at'][:16].replace('T', ' ') }}</time> <strong>{{ e['status'] }}</strong>{% if e['note'] %} &mdash; {{ e['note'] }}{% endif %} <span class="muted">({{ e['source'] }})</span></li>
+      {% endfor %}
+    </ol>
+  </section>
+
+  <section>
+    <h3>Contacts</h3>
+    {% for k in contacts %}
+    <div class="contact">
+      <form method="post" action="/pipeline/{{ c.app_id }}/contacts/{{ k['id'] }}/update" hx-post="/pipeline/{{ c.app_id }}/contacts/{{ k['id'] }}/update" hx-target="#drawer" hx-swap="innerHTML" class="inline-form">
+        <input name="name" value="{{ k['name'] or '' }}" placeholder="name" aria-label="name">
+        <input name="role" value="{{ k['role'] or '' }}" placeholder="role" aria-label="role">
+        <input name="email" value="{{ k['email'] or '' }}" placeholder="email" aria-label="email">
+        <input name="phone" value="{{ k['phone'] or '' }}" placeholder="phone" aria-label="phone">
+        <input name="note" value="{{ k['note'] or '' }}" placeholder="note" aria-label="note">
+        <button class="act" type="submit">save</button>
+        <button class="act" type="submit" formaction="/pipeline/{{ c.app_id }}/contacts/{{ k['id'] }}/delete" hx-post="/pipeline/{{ c.app_id }}/contacts/{{ k['id'] }}/delete">delete</button>
+      </form>
+    </div>
+    {% endfor %}
+    <form method="post" action="/pipeline/{{ c.app_id }}/contacts" hx-post="/pipeline/{{ c.app_id }}/contacts" hx-target="#drawer" hx-swap="innerHTML" class="inline-form">
+      <input name="name" placeholder="name" aria-label="new contact name">
+      <input name="role" placeholder="role" aria-label="new contact role">
+      <input name="email" placeholder="email" aria-label="new contact email">
+      <input name="phone" placeholder="phone" aria-label="new contact phone">
+      <input name="note" placeholder="note" aria-label="new contact note">
+      <button class="act" type="submit">add contact</button>
+    </form>
+  </section>
+
+  <section>
+    <h3>Attachments</h3>
+    <p class="muted">Local paths only; nothing is uploaded or copied.</p>
+    <ul>
+      {% for f in attachments %}
+      <li>{{ f['kind'] }}: <code>{{ f['path'] }}</code>
+        <form method="post" action="/pipeline/{{ c.app_id }}/attachments/{{ f['id'] }}/delete" hx-post="/pipeline/{{ c.app_id }}/attachments/{{ f['id'] }}/delete" hx-target="#drawer" hx-swap="innerHTML" class="inline-form"><button class="act" type="submit">remove</button></form></li>
+      {% endfor %}
+    </ul>
+    <form method="post" action="/pipeline/{{ c.app_id }}/attachments" hx-post="/pipeline/{{ c.app_id }}/attachments" hx-target="#drawer" hx-swap="innerHTML" class="inline-form">
+      <select name="kind" aria-label="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select>
+      <input name="path" placeholder="/absolute/path/to/file" aria-label="file path" required>
+      <button class="act" type="submit">add</button>
+    </form>
+  </section>
+</div>
+{% if oob_card %}
+<article id="card-{{ c.app_id }}" hx-swap-oob="delete"></article>
+{% set oob_card = "beforeend:#cards-" ~ lane_of(c.status) %}
+{% include "_card.html" %}
+{% for l, n in counts.items() %}<span class="count" id="count-{{ l }}" hx-swap-oob="true">{{ n }}</span>
+{% endfor %}
+{% endif %}
