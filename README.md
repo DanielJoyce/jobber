@@ -21,9 +21,11 @@ local web console.
 Issues live in [`git-bug`](https://github.com/git-bug/git-bug), stored in the repository itself:
 
 ```bash
-git bug pull origin      # fetch issues
-git bug bug              # list them
+git fetch origin 'refs/bugs/*:refs/bugs/*' 'refs/identities/*:refs/identities/*'
+git bug bug              # list issues
+git bug bug show <id>
 ```
 
 Labels: `milestone:M0`–`M9`, `pass:1|2`, `area:*`, `difficulty:easy|medium|hard`, and
-`agent:haiku|sonnet|opus` for the model each task is assigned to.
+`agent:haiku|sonnet|opus|human` for who the task is assigned to. Agent conventions are in
+[`CLAUDE.md`](CLAUDE.md).
