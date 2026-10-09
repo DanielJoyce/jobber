@@ -1,0 +1,151 @@
+{
+ "LanguageCode": "EN",
+ "SearchParameters": {},
+ "SearchResult": {
+  "SearchResultCount": 2,
+  "SearchResultCountAll": 5,
+  "SearchResultItems": [
+   {
+    "MatchedObjectId": "800004",
+    "MatchedObjectDescriptor": {
+     "PositionID": "26-800004-DE",
+     "PositionTitle": "Program Analyst",
+     "PositionURI": "https://www.usajobs.gov/job/800004",
+     "ApplyURI": [
+      "https://www.usajobs.gov/job/800004/apply",
+      "https://alt.example.gov/apply"
+     ],
+     "PositionLocationDisplay": "Fort Collins, Colorado",
+     "PositionLocation": [
+      {
+       "LocationName": "Fort Collins, Colorado",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "CO",
+       "CityName": "Fort Collins, Colorado",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      }
+     ],
+     "OrganizationName": "Forest Service",
+     "DepartmentName": "Department of Agriculture",
+     "JobCategory": [
+      {
+       "Name": "Information Technology Management",
+       "Code": "0343"
+      }
+     ],
+     "JobGrade": [
+      {
+       "Code": "GS"
+      }
+     ],
+     "PositionSchedule": [
+      {
+       "Name": "Full-time",
+       "Code": "1"
+      }
+     ],
+     "PositionRemuneration": [
+      {
+       "MinimumRange": "0",
+       "MaximumRange": "0",
+       "RateIntervalCode": "WC",
+       "Description": "Without Compensation"
+      }
+     ],
+     "PublicationStartDate": "2026-10-04T00:00:00.0000",
+     "ApplicationCloseDate": "2026-10-18T23:59:59.9970",
+     "QualificationSummary": "You must have one year of specialized experience at the GS-12 level.",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "This position is with Forest Service.\nYou will support mission systems.",
+       "MajorDuties": [
+        "Plans and coordinates projects",
+        "Briefs senior leadership"
+       ],
+       "Education": "Bachelor's degree in a related field.",
+       "Requirements": "Must be a U.S. citizen.",
+       "Evaluations": "Applicants are rated on qualifications.",
+       "LowGrade": "09",
+       "HighGrade": "09",
+       "TeleworkEligible": true,
+       "RemoteIndicator": false
+      }
+     }
+    }
+   },
+   {
+    "MatchedObjectId": "800005",
+    "MatchedObjectDescriptor": {
+     "PositionID": "26-800005-DE",
+     "PositionTitle": "Old Posting",
+     "PositionURI": "https://www.usajobs.gov/job/800005",
+     "ApplyURI": [
+      "https://www.usajobs.gov/job/800005/apply",
+      "https://alt.example.gov/apply"
+     ],
+     "PositionLocationDisplay": "Fort Collins, Colorado",
+     "PositionLocation": [
+      {
+       "LocationName": "Fort Collins, Colorado",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "CO",
+       "CityName": "Fort Collins, Colorado",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      }
+     ],
+     "OrganizationName": "Forest Service",
+     "DepartmentName": "Department of Agriculture",
+     "JobCategory": [
+      {
+       "Name": "Information Technology Management",
+       "Code": "0343"
+      }
+     ],
+     "JobGrade": [
+      {
+       "Code": "GS"
+      }
+     ],
+     "PositionSchedule": [
+      {
+       "Name": "Full-time",
+       "Code": "1"
+      }
+     ],
+     "PositionRemuneration": [
+      {
+       "MinimumRange": "60000",
+       "MaximumRange": "80000",
+       "RateIntervalCode": "PA",
+       "Description": "Per Year"
+      }
+     ],
+     "PublicationStartDate": "2026-09-01T00:00:00.0000",
+     "ApplicationCloseDate": "2026-10-18T23:59:59.9970",
+     "QualificationSummary": "You must have one year of specialized experience at the GS-12 level.",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "This position is with Forest Service.\nYou will support mission systems.",
+       "MajorDuties": [
+        "Plans and coordinates projects",
+        "Briefs senior leadership"
+       ],
+       "Education": "Bachelor's degree in a related field.",
+       "Requirements": "Must be a U.S. citizen.",
+       "Evaluations": "Applicants are rated on qualifications.",
+       "LowGrade": "09",
+       "HighGrade": "09",
+       "TeleworkEligible": true,
+       "RemoteIndicator": false
+      }
+     }
+    }
+   }
+  ],
+  "UserArea": {
+   "NumberOfPages": "2"
+  }
+ }
+}

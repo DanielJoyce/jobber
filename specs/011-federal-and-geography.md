@@ -57,6 +57,7 @@ range**, which maps to seniority far more reliably than a job title does.
   entry: https://data.usajobs.gov/api/search
   verified: 2026-10-09
   config:
+    sanctioned_api: true          # robots.txt not enforced on this entry host (008)
     auth: {email_env: USAJOBS_EMAIL, key_env: USAJOBS_API_KEY}
     results_per_page: 500
     date_posted_days: 7

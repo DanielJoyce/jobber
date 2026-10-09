@@ -46,7 +46,7 @@ def fts(conn, q):
 
 
 def test_migrate_fresh_memory_and_pragmas(conn):
-    assert db.current_version(conn) == 1
+    assert db.current_version(conn) == 2
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
 
@@ -54,7 +54,7 @@ def test_migrate_fresh_memory_and_pragmas(conn):
 def test_file_db_creates_parents_and_wal(tmp_path):
     path = tmp_path / "a" / "b" / "x.db"
     c = db.connect(path)
-    assert db.migrate(c) == [1]
+    assert db.migrate(c) == [1, 2]
     assert c.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     c.close()
     c2 = db.connect(path)
@@ -64,7 +64,7 @@ def test_file_db_creates_parents_and_wal(tmp_path):
 
 def test_idempotent(conn):
     assert db.migrate(conn) == []
-    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 2
 
 
 def test_all_tables_exist(conn):

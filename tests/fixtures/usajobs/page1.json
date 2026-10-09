@@ -1,0 +1,332 @@
+{
+ "LanguageCode": "EN",
+ "SearchParameters": {},
+ "SearchResult": {
+  "SearchResultCount": 3,
+  "SearchResultCountAll": 5,
+  "SearchResultItems": [
+   {
+    "MatchedObjectId": "800001",
+    "MatchedObjectDescriptor": {
+     "PositionID": "26-800001-DE",
+     "PositionTitle": "IT Specialist (INFOSEC)",
+     "PositionURI": "https://www.usajobs.gov/job/800001",
+     "ApplyURI": [
+      "https://www.usajobs.gov/job/800001/apply",
+      "https://alt.example.gov/apply"
+     ],
+     "PositionLocationDisplay": "Multiple Locations",
+     "PositionLocation": [
+      {
+       "LocationName": "Denver, Colorado",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "CO",
+       "CityName": "Denver, Colorado",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Colorado Springs, Colorado",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "CO",
+       "CityName": "Colorado Springs, Colorado",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Fort Carson, Colorado",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "CO",
+       "CityName": "Fort Carson, Colorado",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Washington, District of Columbia",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "DC",
+       "CityName": "Washington, District of Columbia",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Arlington, Virginia",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "VA",
+       "CityName": "Arlington, Virginia",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Bethesda, Maryland",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "MD",
+       "CityName": "Bethesda, Maryland",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Austin, Texas",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "TX",
+       "CityName": "Austin, Texas",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Dallas, Texas",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "TX",
+       "CityName": "Dallas, Texas",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Phoenix, Arizona",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "AZ",
+       "CityName": "Phoenix, Arizona",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Seattle, Washington",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "WA",
+       "CityName": "Seattle, Washington",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Portland, Oregon",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "OR",
+       "CityName": "Portland, Oregon",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Boise, Idaho",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "ID",
+       "CityName": "Boise, Idaho",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Salt Lake City, Utah",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "UT",
+       "CityName": "Salt Lake City, Utah",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Albuquerque, New Mexico",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "NM",
+       "CityName": "Albuquerque, New Mexico",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      }
+     ],
+     "OrganizationName": "Department of the Army",
+     "DepartmentName": "Department of Defense",
+     "JobCategory": [
+      {
+       "Name": "Information Technology Management",
+       "Code": "2210"
+      }
+     ],
+     "JobGrade": [
+      {
+       "Code": "GS"
+      }
+     ],
+     "PositionSchedule": [
+      {
+       "Name": "Full-time",
+       "Code": "1"
+      }
+     ],
+     "PositionRemuneration": [
+      {
+       "MinimumRange": "106823.00",
+       "MaximumRange": "164301.00",
+       "RateIntervalCode": "PA",
+       "Description": "Per Year"
+      }
+     ],
+     "PublicationStartDate": "2026-10-08T00:00:00.0000",
+     "ApplicationCloseDate": "2026-10-22T23:59:59.9970",
+     "QualificationSummary": "You must have one year of specialized experience at the GS-12 level.",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "This position is with Department of the Army.\nYou will support mission systems.",
+       "MajorDuties": [
+        "Plans and coordinates projects",
+        "Briefs senior leadership"
+       ],
+       "Education": "Bachelor's degree in a related field.",
+       "Requirements": "Must be a U.S. citizen.",
+       "Evaluations": "Applicants are rated on qualifications.",
+       "LowGrade": "12",
+       "HighGrade": "13",
+       "TeleworkEligible": true,
+       "RemoteIndicator": false
+      }
+     }
+    }
+   },
+   {
+    "MatchedObjectId": "800002",
+    "MatchedObjectDescriptor": {
+     "PositionID": "26-800002-DE",
+     "PositionTitle": "Management Analyst",
+     "PositionURI": "https://www.usajobs.gov/job/800002",
+     "ApplyURI": [
+      "https://www.usajobs.gov/job/800002/apply",
+      "https://alt.example.gov/apply"
+     ],
+     "PositionLocationDisplay": "Denver, Colorado",
+     "PositionLocation": [
+      {
+       "LocationName": "Denver, Colorado",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Colorado",
+       "CityName": "Denver, Colorado",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      },
+      {
+       "LocationName": "Denver, Colorado",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "CO",
+       "CityName": "Denver, Colorado",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      }
+     ],
+     "OrganizationName": "Bureau of Land Management",
+     "DepartmentName": "Department of the Interior",
+     "JobCategory": [
+      {
+       "Name": "Information Technology Management",
+       "Code": "0343"
+      }
+     ],
+     "JobGrade": [
+      {
+       "Code": "GS"
+      }
+     ],
+     "PositionSchedule": [
+      {
+       "Name": "Full-time",
+       "Code": "1"
+      }
+     ],
+     "PositionRemuneration": [
+      {
+       "MinimumRange": "45.10",
+       "MaximumRange": "58.62",
+       "RateIntervalCode": "PH",
+       "Description": "Per Hour"
+      }
+     ],
+     "PublicationStartDate": "2026-10-07T00:00:00.0000",
+     "ApplicationCloseDate": "2026-10-21T23:59:59.9970",
+     "QualificationSummary": "You must have one year of specialized experience at the GS-12 level.",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "This position is with Bureau of Land Management.\nYou will support mission systems.",
+       "MajorDuties": [
+        "Plans and coordinates projects",
+        "Briefs senior leadership"
+       ],
+       "Education": "Bachelor's degree in a related field.",
+       "Requirements": "Must be a U.S. citizen.",
+       "Evaluations": "Applicants are rated on qualifications.",
+       "LowGrade": "11",
+       "HighGrade": "12",
+       "TeleworkEligible": true,
+       "RemoteIndicator": false
+      }
+     }
+    }
+   },
+   {
+    "MatchedObjectId": "800003",
+    "MatchedObjectDescriptor": {
+     "PositionID": "26-800003-DE",
+     "PositionTitle": "Computer Scientist",
+     "PositionURI": "https://www.usajobs.gov/job/800003",
+     "ApplyURI": [
+      "https://www.usajobs.gov/job/800003/apply",
+      "https://alt.example.gov/apply"
+     ],
+     "PositionLocationDisplay": "Yokosuka, Japan",
+     "PositionLocation": [
+      {
+       "LocationName": "Yokosuka, Japan",
+       "CountryCode": "Japan",
+       "CountrySubDivisionCode": "",
+       "CityName": "Yokosuka, Japan",
+       "Longitude": -105.0,
+       "Latitude": 39.7
+      }
+     ],
+     "OrganizationName": "Department of the Navy",
+     "DepartmentName": "Department of Defense",
+     "JobCategory": [
+      {
+       "Name": "Information Technology Management",
+       "Code": "1550"
+      }
+     ],
+     "JobGrade": [
+      {
+       "Code": "NF"
+      }
+     ],
+     "PositionSchedule": [
+      {
+       "Name": "Full-time",
+       "Code": "1"
+      }
+     ],
+     "PositionRemuneration": [
+      {
+       "MinimumRange": "90000",
+       "MaximumRange": "120000",
+       "RateIntervalCode": "BW",
+       "Description": "Biweekly"
+      }
+     ],
+     "PublicationStartDate": "2026-10-06T00:00:00.0000",
+     "ApplicationCloseDate": "2026-10-20T23:59:59.9970",
+     "QualificationSummary": "You must have one year of specialized experience at the GS-12 level.",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "This position is with Department of the Navy.\nYou will support mission systems.",
+       "MajorDuties": [
+        "Plans and coordinates projects",
+        "Briefs senior leadership"
+       ],
+       "Education": "Bachelor's degree in a related field.",
+       "Requirements": "Must be a U.S. citizen.",
+       "Evaluations": "Applicants are rated on qualifications.",
+       "LowGrade": "03",
+       "HighGrade": "04",
+       "TeleworkEligible": true,
+       "RemoteIndicator": false
+      }
+     }
+    }
+   }
+  ],
+  "UserArea": {
+   "NumberOfPages": "2"
+  }
+ }
+}
