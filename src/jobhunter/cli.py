@@ -197,6 +197,31 @@ def score(
 
 
 @app.command()
+def dedupe(
+    apply_url: Annotated[
+        bool,
+        typer.Option("--apply-url", help="Merge job groups that share a normalized apply URL."),
+    ] = False,
+) -> None:
+    """Run dedupe passes by hand."""
+    if not apply_url:
+        typer.echo("nothing to do: pass --apply-url", err=True)
+        raise typer.Exit(2)
+    from jobhunter.pipeline.dedupe_url import merge_by_apply_url
+
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = db.connect(db_path)
+    try:
+        db.migrate(conn)
+        res = merge_by_apply_url(conn, now=datetime.now(UTC))
+    finally:
+        conn.close()
+    typer.echo(", ".join(f"{k}={v}" for k, v in vars(res).items()))
+
+
+@app.command()
 def console(
     host: Annotated[str | None, typer.Option(help="Bind host (default: config).")] = None,
     port: Annotated[int | None, typer.Option(help="Bind port (default: config).")] = None,

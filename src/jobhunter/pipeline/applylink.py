@@ -449,6 +449,11 @@ def resolve_pending(
             )
         except ValueError:
             continue
+    if done:
+        # Resolved final URLs can reveal groups that share one application target.
+        from jobhunter.pipeline.dedupe_url import merge_by_apply_url
+
+        merge_by_apply_url(conn, now=now)
     return done
 
 

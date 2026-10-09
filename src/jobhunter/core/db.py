@@ -11,6 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 MIGRATIONS_PACKAGE = "jobhunter.core.migrations"
+FK_OFF_MARKER = "-- migrate: foreign_keys=off"
 _MIGRATION_RE = re.compile(r"^(\d{4})_([A-Za-z0-9_]+)\.sql$")
 
 
@@ -96,12 +97,26 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
     for version, name, script in _load_migrations():
         if version in done:
             continue
-        with transaction(conn):
-            for stmt in _split_statements(script):
-                conn.execute(stmt)
-            conn.execute(
-                "INSERT INTO schema_version(version, name, applied_at) VALUES (?, ?, ?)",
-                (version, name, datetime.now(UTC).isoformat()),
-            )
+        # Table rebuilds (SQLite cannot alter a CHECK) need foreign_keys=OFF, and that PRAGMA is
+        # a no-op inside a transaction. A migration opts in with FK_OFF_MARKER; we switch it off
+        # before BEGIN, verify with foreign_key_check before COMMIT, and always restore it.
+        fk_off = FK_OFF_MARKER in script
+        if fk_off:
+            conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            with transaction(conn):
+                for stmt in _split_statements(script):
+                    conn.execute(stmt)
+                if fk_off and (bad := conn.execute("PRAGMA foreign_key_check").fetchall()):
+                    raise RuntimeError(
+                        f"migration {version}_{name} left {len(bad)} foreign key violation(s)"
+                    )
+                conn.execute(
+                    "INSERT INTO schema_version(version, name, applied_at) VALUES (?, ?, ?)",
+                    (version, name, datetime.now(UTC).isoformat()),
+                )
+        finally:
+            if fk_off:
+                conn.execute("PRAGMA foreign_keys=ON")
         applied.append(version)
     return applied
