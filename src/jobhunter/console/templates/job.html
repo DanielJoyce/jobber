@@ -27,6 +27,7 @@
       <span class="badge">bucket {{ d.bucket }}</span>
       <span class="badge">overall {{ d.overall }}</span>
       <span class="badge">verdict {{ d.verdict }}</span>
+      {% if d.decisions_verdict %}<span class="badge" title="decisions model probability and confidence{% if d.served_model %}; served by {{ d.served_model }}{% endif %}">Jev: {{ d.decisions_verdict }}</span>{% endif %}
       {% if d.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
       {% if d.partial %}<span class="flag partial" title="scored from an email alert summary; capped at bucket B">partial: open to confirm</span>{% endif %}
       {% if d.pasted %}<span class="badge" title="description pasted by you">pasted description</span>{% endif %}
@@ -54,6 +55,13 @@
     {% if d.missing_info %}<h3>Missing info</h3><ul>{% for x in d.missing_info %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
     {% if d.shape_flags %}<h3>Shape flags</h3><p>{% for x in d.shape_flags %}<span class="flag">&#9873; {{ x }}</span> {% endfor %}</p>{% endif %}
     {% if d.tailoring_hints %}<h3>Tailoring hints</h3><ul>{% for x in d.tailoring_hints %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+    {% if d.evidence_mode == "none" %}
+    <h3>Decision probabilities</h3>
+    <p class="muted">Scored by a decisions model{% if d.served_model %} ({{ d.served_model }}){% endif %}: it gives probabilities, not quoted evidence. Each line is the probability of yes.</p>
+    {% if d.decisions_answers %}<table class="dims">
+      {% for label, p in d.decisions_answers %}<tr><th>{{ label }}</th><td>{{ p }}</td></tr>{% endfor %}
+    </table>{% endif %}
+    {% endif %}
     {% if d.text.unverified %}
     <h3>Evidence not found in the posting</h3>
     <ul class="unverified">

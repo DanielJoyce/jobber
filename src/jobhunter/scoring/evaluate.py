@@ -54,6 +54,9 @@ class Item:
     cost_usd: float | None
     d_fallback: bool
     served_model: str | None = None
+    # False for decisions-model rows (evidence_mode 'none'): no quotes, so they are left out
+    # of the evidence_unverified rate rather than counted as verified.
+    evidence_checked: bool = True
 
 
 @dataclass
@@ -174,6 +177,11 @@ def _dim_score(dims: Mapping[str, Any], name: str) -> int | None:
     return int(v) if isinstance(v, int | float) else None
 
 
+def _evidence_mode(row: sqlite3.Row) -> str:
+    keys = row.keys()  # sqlite3.Row: ``in`` tests values, not column names
+    return (row["evidence_mode"] if "evidence_mode" in keys else None) or "quotes"
+
+
 def _is_d_fallback(
     fit: ComputedFit, dims: Mapping[str, int | None], th: Mapping[str, float]
 ) -> bool:
@@ -234,6 +242,7 @@ def _build_items(
                 cost_usd=row["cost_usd"],
                 d_fallback=_is_d_fallback(fit, dims, th),
                 served_model=row["served_model"],
+                evidence_checked=_evidence_mode(row) != "none",
             )
         )
     return items
@@ -360,6 +369,7 @@ def _summarize(
     a_all = [i for i in items if i.fit.bucket is Bucket.A]
     ab_all = [i for i in items if is_ab(i)]
     strong = [i for i in items if i.fit.verdict is Verdict.strong]
+    checked = [i for i in items if i.evidence_checked]
     metrics = {
         "recall_verdict_strong_possible": _ratio(verdict_ok, len(pos)),
         "recall_bucket_ab": _ratio(sum(is_ab(i) for i in pos), len(pos)),
@@ -367,7 +377,7 @@ def _summarize(
         "precision_bucket_ab": _ratio(sum(i.positive for i in ab_all), len(ab_all)),
         "precision_verdict_strong": _ratio(sum(i.positive for i in strong), len(strong)),
         "discard_rate_not_interesting": _ratio(sum(not is_ab(i) for i in neg), len(neg)),
-        "evidence_unverified_rate": _ratio(sum(i.unverified for i in items), n),
+        "evidence_unverified_rate": _ratio(sum(i.unverified for i in checked), len(checked)),
     }
     buckets = {
         b.value: {
@@ -390,12 +400,20 @@ def _summarize(
         "evidence_unverified_rate": {
             "target": MAX_UNVERIFIED,
             "value": unv,
-            "pass": unv is not None and unv <= MAX_UNVERIFIED,
+            # No quote-bearing rows (a decisions scorer): nothing to fail, reported as n/a.
+            "pass": (unv is None and n > 0 and not checked)
+            or (unv is not None and unv <= MAX_UNVERIFIED),
+            "excluded": n - len(checked),
         },
     }
     notes = []
     if n < MIN_LABELS:
         notes.append(f"insufficient labels ({n}/{MIN_LABELS})")
+    if n > len(checked):
+        notes.append(
+            f"{n - len(checked)} decisions-scorer rows carry no evidence quotes and are left "
+            "out of the evidence_unverified rate"
+        )
     return EvalReport(
         tier=tier,
         variant={
