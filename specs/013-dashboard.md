@@ -165,7 +165,7 @@ of all states at once (unreadable past a handful; the map and table answer that 
 ## Implementation
 
 - Vendored static assets, no build step, no CDN: `d3` (geo path plus scales), `topojson-client`,
-  `us-atlas` `states-albers-10m.json`, and Observable Plot for the four charts.
+  `us-atlas` `states-albers-10m.json`. The four charts are plain d3 (no Observable Plot).
 - JSON endpoints feed the panels: `/api/dash/kpis`, `/api/dash/map?metric=&range=`,
   `/api/dash/series?...`. Every number is computed in SQL from the [005](005-data-model.md)
   tables, never cached in the browser.

@@ -11,6 +11,7 @@ from jobhunter.config import Settings
 from jobhunter.console import dashboard as dash
 from jobhunter.console.app import create_app
 from jobhunter.core import db, geo
+from jobhunter.core.models import Bucket
 from jobhunter.scoring.profile import Profile
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
@@ -463,6 +464,90 @@ def test_state_table_says_via_nlx(tmp_path):
     app = create_app(Settings(), lambda: db.connect(path), lambda: PROFILE, lambda: NOW)
     html = TestClient(app).get("/dash/state-table").text
     assert "collected directly via NLx" in html
+
+
+# ─── chart series ──────────────────────────────────────────────────────────
+
+
+def test_series_shapes(conn):
+    s = dash.series(conn, PROFILE, 7, NOW)
+    assert set(s) == {"range", "min_points", "line", "funnel", "mix", "status"}
+    assert [p["day"] for p in s["line"]["points"]] == dash._days(NOW, 7)
+    counts = {p["day"]: p["count"] for p in s["line"]["points"]}
+    assert counts["2026-10-09"] == 1 and counts["2026-10-08"] == 1 and counts["2026-10-07"] == 1
+    assert s["line"]["mean7"] == pytest.approx(3 / 7, abs=1e-3)
+    assert [x["key"] for x in s["mix"]["slots"]] == ["a", "b", "other", "f"]
+    assert len(s["mix"]["weeks"]) == 4
+    assert [i["status"] for i in s["status"]["items"]] == list(dash.STATUS_ORDER)
+
+
+def test_series_funnel_counts(conn):
+    stages = {x["key"]: x for x in dash.series(conn, PROFILE, 30, NOW)["funnel"]["stages"]}
+    assert list(stages) == [k for k, _ in dash.FUNNEL_STAGES]
+    found = stages["found"]["count"]
+    assert stages["prefilter"]["count"] == found  # the seed marks every job 'scored'
+    assert stages["ab"]["count"] == 3
+    assert stages["ab"]["pct_prev"] == pytest.approx(3 / found)
+    assert stages["applied"]["count"] == 7
+    assert stages["shortlisted"]["count"] == 1 + 7  # one label plus the seven applied groups
+    assert stages["responded"]["count"] == 3  # screening, rejected, interview
+    assert stages["interviewed"]["count"] == 1
+    assert stages["offer"]["count"] == 0
+    assert stages["found"]["pct_prev"] is None
+    assert stages["offer"]["pct_prev"] == 0
+
+
+def test_series_mix_folds_cde_and_excludes_g(conn):
+    add_job(conn, states=["CO"], first_seen="2026-10-08", dims=DIMS_G)
+    add_job(conn, states=["CO"], first_seen="2026-10-08", dims=DIMS_D)
+    wk = dash.series(conn, PROFILE, 7, NOW)["mix"]["weeks"][-1]
+    assert wk["week"] == "2026-10-09"
+    assert wk["a"] == 2 and wk["b"] == 1  # co_a, remote_a; fed_b
+    assert wk["other"] == 1  # the D job folds into other fits; the G job appears nowhere
+    facts = [f for f in dash.group_facts(conn, PROFILE, "2026-10-03") if f.bucket is not None]
+    assert wk["other"] == sum(1 for f in facts if f.bucket in (Bucket.C, Bucket.D, Bucket.E))
+    assert wk["f"] == sum(1 for f in facts if f.bucket == Bucket.F)
+    total = sum(wk[k] for k in ("a", "b", "other", "f"))
+    assert total == sum(1 for f in facts if f.bucket != Bucket.G)
+
+
+def test_series_status_counts(conn):
+    items = {i["status"]: i["count"] for i in dash.series(conn, PROFILE, 7, NOW)["status"]["items"]}
+    assert items["applied"] == 3 and items["interview"] == 1 and items["interested"] == 1
+    assert items["acknowledged"] == 1 and items["screening"] == 1 and items["rejected"] == 1
+    assert items["offer"] == 0
+
+
+def test_series_not_enough_data():
+    c = db.connect(":memory:")
+    db.migrate(c)
+    s = dash.series(c, PROFILE, 7, NOW)
+    for key in ("line", "funnel", "mix", "status"):
+        assert s[key]["enough"] is False
+    assert s["min_points"] == 3
+    c.close()
+
+
+def test_series_enough_flag_needs_three_points(conn):
+    s = dash.series(conn, PROFILE, 7, NOW)
+    assert s["line"]["enough"] is True  # 3 days with A+B
+    assert s["status"]["enough"] is True  # 6 distinct statuses
+
+
+def test_api_series(client):
+    r = client.get("/api/dash/series?range=30")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["range"] == 30 and len(body["line"]["points"]) == 30
+    assert client.get("/api/dash/series?range=5").json()["range"] == 7
+
+
+def test_today_page_has_chart_panels(client):
+    html = client.get("/").text
+    for cid in ("chart-line", "chart-funnel", "chart-mix", "chart-status"):
+        assert f'id="{cid}"' in html
+    assert "charts.js" in html
+    assert client.get("/static/charts.js").status_code == 200
 
 
 # ─── tokens ────────────────────────────────────────────────────────────────
