@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /*feed/
+Disallow: /*feeds/
+Allow: /
+Sitemap: https://usnlx.com/sitemaps/index.xml
