@@ -16,7 +16,8 @@ def client(tmp_path):
     return TestClient(create_app(Settings(), lambda: db.connect(path)))
 
 
-ROUTES = [p for p, _, _ in PAGES if p not in ("/", "/inbox")]  # /, /inbox, /job have own tests
+ROUTES = [p for p, _, _ in PAGES if p not in ("/", "/inbox", "/pipeline", "/followups")]
+# /, /inbox, /job, /pipeline and /followups have their own tests
 
 
 @pytest.mark.parametrize("route", ROUTES)

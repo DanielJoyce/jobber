@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='tracking.css') }}">
+<div class="pipeline">
+  <header class="pipe-head"><h1>Pipeline</h1><span class="muted">amber = past the per-status threshold</span></header>
+  <div class="board">
+    {% for s in board_statuses %}
+    <section class="pcol" id="col-{{ s }}" data-status="{{ s }}">
+      <h2 class="pcol-head"><span>{{ s }}</span><span class="count" id="count-{{ s }}">{{ board.columns[s]|length }}</span></h2>
+      <div class="cards" id="cards-{{ s }}">
+        {% for c in board.columns[s] %}{% include "_card.html" %}{% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+  <details class="closed-lane" id="col-closed"{% if detail and c.status not in board_statuses %} open{% endif %}>
+    <summary>closed (rejected, withdrawn, no response) <span class="count" id="count-closed">{{ board.closed|length }}</span></summary>
+    <div class="cards" id="cards-closed">
+      {% for c in board.closed %}{% include "_card.html" %}{% endfor %}
+    </div>
+  </details>
+  <aside id="drawer" class="drawer" aria-label="Application detail">{% if detail %}{% include "_drawer.html" %}{% endif %}</aside>
+  <aside class="legend" aria-label="Keyboard shortcuts">
+    <strong>keys</strong>
+    <span><kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> or arrows move focus</span>
+    <span><kbd>[</kbd><kbd>]</kbd> move card left / right</span>
+    <span><kbd>Enter</kbd> open detail</span>
+    <span><kbd>Esc</kbd> close</span>
+  </aside>
+</div>
+<script src="{{ url_for('static', path='tracking.js') }}" defer></script>
+{% endblock %}
