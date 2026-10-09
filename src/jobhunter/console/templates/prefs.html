@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% macro err(name) %}{% if errors.get(name) %}<p class="field-error" id="err-{{ name | replace('.', '-') }}" role="alert">{{ errors[name] }}</p>{% endif %}{% endmacro %}
 {% macro inv(name) %}{% if errors.get(name) %} aria-invalid="true" aria-describedby="err-{{ name | replace('.', '-') }}"{% endif %}{% endmacro %}
+{% macro help_btn(id, label) %}<button type="button" class="help-btn" data-help="{{ id }}" aria-expanded="false" aria-controls="help-{{ id }}" aria-label="Help: {{ label }}" title="What is this?">?</button>{% endmacro %}
+{% macro help_body(id, label) %}<div class="help-body" id="help-{{ id }}" role="region" aria-label="{{ label }} help" hidden>{{ caller() }}</div>{% endmacro %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', path='prefs.css') }}">{% endblock %}
 {% block main %}
 <div class="prefs">
@@ -13,6 +15,39 @@
     </nav>
   </header>
 
+  {% if st.kind == "missing" %}
+  <div class="banner banner-info" role="status">
+    <strong>No profile yet</strong> &mdash; fill this in and Save to create <code>profile/preferences.yaml</code>. The form starts from sensible defaults; add a resume in the Resume section.
+  </div>
+  {% elif st.kind == "broken" %}
+  <div class="banner banner-error" role="alert">
+    <strong>Your preferences file has problems.</strong> Every value that could be read is filled in below; fix the highlighted fields and Save to write a clean file. The broken file is kept next to it as a timestamped <code>.bak</code>.
+    {% if st.yaml_error %}<div class="muted">{{ st.yaml_error }}</div>{% endif %}
+  </div>
+  {% endif %}
+  {% if upload_error %}<div class="banner banner-error" role="alert" id="upload-error">{{ upload_error }}</div>{% endif %}
+  {% if upload %}
+  <div class="banner banner-ok" role="status" id="upload-result">
+    <strong>Resume saved</strong> as <code>{{ upload.name }}</code>. New hash <code>{{ upload.sha256 }}</code>.
+    <div>The resume is a model input, so this is a <strong>paid change</strong>: new jobs use it automatically; re-scoring jobs you already have would cost about:</div>
+    <ul class="plain">
+      {% for o in upload.estimate.options if o.scope != "none" %}<li>{{ o.label }}: {{ o.jobs }} jobs &asymp; ${{ "%.2f" | format(o.cost_usd) }}</li>{% endfor %}
+    </ul>
+    <div class="muted">Nothing is re-scored until you queue it from a Save in the Recency or Narrative sections.</div>
+  </div>
+  {% endif %}
+  {% if st.kind == "broken" %}
+  <section class="panel" id="sec-raw">
+    <h2>Advanced: edit the raw YAML</h2>
+    <p class="hint">Fix a syntax error directly. Saving checks the whole file first; the current file is kept as a timestamped <code>.bak</code>.</p>
+    {% if st.yaml_error %}<p class="field-error" id="err-yaml" role="alert">{{ st.yaml_error }}</p>{% endif %}
+    <form method="post" action="/prefs/raw">
+      <input type="hidden" name="mtime_ns" value="{{ mtime_ns }}">
+      <textarea name="raw_yaml" rows="14" class="mono" spellcheck="false" aria-label="Raw preferences.yaml">{{ raw_text }}</textarea>
+      <div class="actions"><button type="submit" class="button">Save raw YAML</button></div>
+    </form>
+  </section>
+  {% endif %}
   {% if conflict %}
   <div class="banner banner-conflict" role="alert">
     <strong>The preferences file changed on disk since this page loaded.</strong>
@@ -35,7 +70,8 @@
       <input type="hidden" name="mtime_ns" value="{{ mtime_ns }}">
 
       <section class="panel" id="sec-pay">
-        <h2>Pay <span class="kind free">free</span></h2>
+        <h2>Pay <span class="kind free">free</span> {{ help_btn('pay', 'Pay') }}</h2>
+        {% call help_body('pay', 'Pay') %}<p class="hint">Jobs paying below your floor are filtered out. The target is what you'd be happy with; pay fit is scored against both. Jobs with no stated pay are kept unless you hide them.</p>{% endcall %}
         <div class="grid2">
           <label>Salary floor
             <input type="text" inputmode="decimal" name="hard.salary_floor.amount" value="{{ v['hard.salary_floor.amount'] }}" placeholder="none"{{ inv('hard.salary_floor.amount') }}>
@@ -55,7 +91,8 @@
       </section>
 
       <section class="panel" id="sec-where">
-        <h2>Where <span class="kind free">free</span></h2>
+        <h2>Where <span class="kind free">free</span> {{ help_btn('where', 'Where') }}</h2>
+        {% call help_body('where', 'Where') %}<p class="hint">Ranked states score higher, in the order you ranked them. Excluded states are filtered out. Remote OK lets remote jobs through wherever they are.</p>{% endcall %}
         <p class="hint">Click a state to cycle it: neutral → ranked → excluded. Ranked states show their rank; re-rank by cycling a state back to neutral and ranking it again.</p>
         {% include "_prefs_states.html" %}
         {{ err('state_ranking') }}{{ err('states_excluded') }}
@@ -64,6 +101,7 @@
           <label class="check"><input type="checkbox" name="hard.remote_ok" value="1"{% if v['hard.remote_ok'] %} checked{% endif %}> Remote OK</label>
           <label>Remote bonus
             <input type="number" step="1" name="soft.remote_bonus" value="{{ v['soft.remote_bonus'] }}"{{ inv('soft.remote_bonus') }}>
+            <span class="hint">Extra location points (0-100 scale) for remote jobs, so they compete with jobs in your top states.</span>
           </label>
           <label class="check"><input type="checkbox" name="hard.relocation_ok" value="1"{% if v['hard.relocation_ok'] %} checked{% endif %}> Relocation OK</label>
         </div>
@@ -71,7 +109,8 @@
       </section>
 
       <section class="panel" id="sec-what">
-        <h2>What <span class="kind free">free</span></h2>
+        <h2>What <span class="kind free">free</span> {{ help_btn('what', 'What') }}</h2>
+        {% call help_body('what', 'What') %}<p class="hint">Titles you want, titles to drop outright, and hard no's such as employment types or credentials you don't have.</p>{% endcall %}
         <div class="grid2">
           <label>Target titles <span class="hint">one per line</span>
             <textarea name="target_titles" rows="4"{{ inv('target_titles') }}>{{ v['target_titles'] }}</textarea>
@@ -94,8 +133,9 @@
       </section>
 
       <section class="panel" id="sec-weights">
-        <h2>Weights <span class="kind free">free</span></h2>
-        <p class="hint">Normalized to 1.0 on save.</p>
+        <h2>Weights <span class="kind free">free</span> {{ help_btn('weights', 'Weights') }}</h2>
+        {% call help_body('weights', 'Weights') %}<p class="hint">How much each factor counts in the overall score. Move the sliders to taste.</p>{% endcall %}
+        <p class="hint">How much each factor counts in the overall score; they're normalized to add up to 100%.</p>
         <div class="weights">
           {% for k in weight_keys %}
           <label class="weight">
@@ -109,13 +149,25 @@
       </section>
 
       <section class="panel" id="sec-buckets">
-        <h2>Buckets <span class="kind free">free</span></h2>
-        <p class="hint">Thresholds for A–G (specs/006). Defaults in grey.</p>
+        <h2>Buckets <span class="kind free">free</span> {{ help_btn('buckets', 'Buckets') }}</h2>
+        {% call help_body('buckets', 'Buckets') %}<p class="hint">Buckets sort scored jobs into A (best) through G (mismatch) for your inbox. Lower a number to let more jobs through that rule; raise it to be pickier.</p>{% endcall %}
+        <p class="hint">{{ bucket_intro }}</p>
+        <div class="table-wrap">
+          <table class="bucket-rules">
+            <thead><tr><th>Bucket</th><th>When</th><th>Fields</th></tr></thead>
+            <tbody>
+              {% for b, text, keys in bucket_rules %}<tr><td><strong>{{ b }}</strong></td><td>{{ text }}</td><td><code>{{ keys }}</code></td></tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">{{ bucket_note }}</p>
+        <p class="hint">The preview panel shows which bucket counts change as you move these numbers.</p>
         <div class="thresholds">
           {% for k in threshold_keys %}
-          <label>{{ k | replace('_', ' ') }}
-            <input type="number" step="1" min="0" max="100" name="buckets.{{ k }}" value="{{ v['buckets.' ~ k] }}"{{ inv('buckets.' ~ k) }}>
+          <label title="{{ bucket_help[k] }}">{{ k | replace('_', ' ') }}
+            <input type="number" step="1" min="0" max="100" name="buckets.{{ k }}" value="{{ v['buckets.' ~ k] }}" title="{{ bucket_help[k] }}" aria-describedby="bh-{{ k }}"{{ inv('buckets.' ~ k) }}>
             <span class="hint">default {{ defaults[k] | int }}</span>
+            <span class="hint focus-hint" id="bh-{{ k }}">{{ bucket_help[k] }}</span>
           </label>
           {% endfor %}
         </div>
@@ -123,14 +175,16 @@
       </section>
 
       <section class="panel" id="sec-queries">
-        <h2>Search queries <span class="kind free">free; affects the next run</span></h2>
-        <p class="hint">One query per line: comma-separated keywords, or a mapping such as <code>{keywords: [systems], occupation_code: "2210"}</code>.</p>
+        <h2>Search queries <span class="kind free">free; affects the next run</span> {{ help_btn('queries', 'Search queries') }}</h2>
+        {% call help_body('queries', 'Search queries') %}<p class="hint">What's sent to the job boards. Keep it broad: the model does the filtering.</p>{% endcall %}
+        <p class="hint">What's sent to the job boards &mdash; keep it broad, the model does the filtering. One query per line: comma-separated keywords, or a mapping such as <code>{keywords: [systems], occupation_code: "2210"}</code>.</p>
         <textarea name="queries" rows="5" class="mono"{{ inv('queries') }}>{{ v['queries'] }}</textarea>
         {{ err('queries') }}
       </section>
 
       <section class="panel" id="sec-spend">
-        <h2>Spend <span class="kind">read-only</span></h2>
+        <h2>Spend <span class="kind">read-only</span> {{ help_btn('spend', 'Spend') }}</h2>
+        {% call help_body('spend', 'Spend') %}<p class="hint">Daily and weekly limits on model spending. Scoring stops when a limit is reached.</p>{% endcall %}
         <dl class="kv">
           <dt>Daily LLM cap</dt><dd>${{ "%.2f" | format(spend.daily_cap_usd) }}</dd>
           <dt>Weekly LLM cap</dt><dd>${{ "%.2f" | format(spend.weekly_cap_usd) }}</dd>
@@ -142,7 +196,8 @@
       <div class="paid-divider" role="separator"><span>Paid: changes below cost money to re-apply to existing jobs</span></div>
 
       <section class="panel paid" id="sec-recency">
-        <h2>Recency <span class="kind paid">paid</span></h2>
+        <h2>Recency <span class="kind paid">paid</span> {{ help_btn('recency', 'Recency') }}</h2>
+        {% call help_body('recency', 'Recency') %}<p class="hint">What you're doing now counts for more than the older parts of your resume. Changing these costs money to apply to already-scored jobs; new jobs use them automatically.</p>{% endcall %}
         <div class="grid2">
           <label>Since <span class="hint">YYYY-MM</span>
             <input type="text" name="current_focus.since" value="{{ v['current_focus.since'] }}" placeholder="2024-01"{{ inv('current_focus.since') }}>
@@ -164,7 +219,8 @@
       </section>
 
       <section class="panel paid" id="sec-narrative">
-        <h2>Narrative <span class="kind paid">paid</span></h2>
+        <h2>Narrative <span class="kind paid">paid</span> {{ help_btn('narrative', 'Narrative') }}</h2>
+        {% call help_body('narrative', 'Narrative') %}<p class="hint">Free-form notes the model reads: what you want, what to avoid. Changing these costs money to apply to already-scored jobs; new jobs use them automatically.</p>{% endcall %}
         {% for k, label in [("want", "Want"), ("avoid", "Avoid"), ("dealbreakers_soft", "Soft dealbreakers"), ("context", "Context")] %}
         <label>{{ label }}
           <textarea name="narrative.{{ k }}" rows="4"{{ inv('narrative.' ~ k) }}>{{ v['narrative.' ~ k] }}</textarea>
@@ -174,9 +230,13 @@
       </section>
 
       <section class="panel paid" id="sec-resume">
-        <h2>Resume <span class="kind paid">paid</span></h2>
+        <h2>Resume <span class="kind paid">paid</span> {{ help_btn('resume', 'Resume') }}</h2>
+        {% call help_body('resume', 'Resume') %}<p class="hint">The model reads your resume to judge every job. Upload a Markdown or text file; the old one is kept in a .previous folder. Changing it costs money to apply to already-scored jobs; new jobs use it automatically.</p>{% endcall %}
+        {% if st.resume_error %}
+        <p class="warn" role="alert" id="resume-warning">Resume not found at <code>{{ st.resume_target }}</code>. Upload one below.</p>
+        {% endif %}
         <dl class="kv">
-          <dt>Path</dt><dd><code>{{ resume.path or "—" }}</code></dd>
+          <dt>Path</dt><dd><code>{{ resume.path or st.resume_target or "—" }}</code></dd>
           <dt>Last modified</dt><dd>{{ resume.modified or "—" }}</dd>
           <dt>Hash</dt><dd><code>{{ resume.sha256 }}</code></dd>
         </dl>
@@ -184,14 +244,19 @@
         <p class="warn" role="status">Changed since last scoring: the resume, recency or narrative differ from what the latest scores used. New jobs use the new version; existing scores keep the old one until re-scored.</p>
         {% elif not resume.scored %}<p class="hint">Nothing scored yet.</p>
         {% else %}<p class="hint">Unchanged since the last scoring run.</p>{% endif %}
-        <p class="hint">Edit the resume file directly; the change is detected on the next page load.</p>
+        <div class="upload">
+          <label for="resume-file">Upload resume <span class="hint">.md or .txt, up to {{ max_upload_mb }} MB. For a PDF or Word file, export it as Markdown or text first.</span></label>
+          <input type="file" id="resume-file" name="file" accept=".md,.markdown,.txt,text/markdown,text/plain" form="resume-upload" required>
+          <button type="submit" class="button" form="resume-upload">Upload resume</button>
+        </div>
       </section>
 
       <div class="actions">
         <a class="button" href="/prefs">Cancel</a>
-        <button type="submit" class="button primary">Save</button>
+        <button type="submit" class="button primary">{% if st.kind == "missing" %}Save and create profile{% else %}Save{% endif %}</button>
       </div>
     </form>
+    <form id="resume-upload" method="post" action="/prefs/resume" enctype="multipart/form-data"></form>
 
     <aside class="prefs-side" aria-live="polite">
       <div class="panel" id="prefs-preview">

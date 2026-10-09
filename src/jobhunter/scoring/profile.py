@@ -443,8 +443,14 @@ def load_profile(profile_dir: Path, resume_path: Path | None = None) -> Profile:
     return _load_file(profile_dir, profile_dir / PREFERENCES_FILE, resume_path)
 
 
-def _load_file(profile_dir: Path, prefs_file: Path, resume_path: Path | None) -> Profile:
-    """Load and validate ``prefs_file`` (normally ``profile_dir/preferences.yaml``)."""
+def _load_file(
+    profile_dir: Path, prefs_file: Path, resume_path: Path | None, *, require_resume: bool = True
+) -> Profile:
+    """Load and validate ``prefs_file`` (normally ``profile_dir/preferences.yaml``).
+
+    With ``require_resume=False`` the resume is not read at all (the console lets you fix
+    preferences while the resume is missing); ``resume_text`` is then empty.
+    """
     raw = _read_yaml(prefs_file)
     unknown = [key for key in raw if key not in _YAML_KEYS]
     warnings = tuple(f"{prefs_file}: unknown top-level key {key!r} ignored" for key in unknown)
@@ -457,6 +463,8 @@ def _load_file(profile_dir: Path, prefs_file: Path, resume_path: Path | None) ->
     except ValidationError as exc:
         raise ProfileValidationError.from_pydantic(prefs_file, exc) from exc
 
+    if not require_resume:
+        return profile.model_copy(update={"source_file": prefs_file, "load_warnings": warnings})
     resume_file = _resolve_resume(profile_dir, prefs_file, profile.resume_path, resume_path)
     resume_text = _read_resume(resume_file)
 
@@ -649,6 +657,7 @@ def save_profile_changes(
     *,
     expected_mtime_ns: int,
     resume_path: Path | None = None,
+    require_resume: bool = True,
 ) -> Profile:
     """Apply ``{dotted.path: value}`` to ``preferences.yaml`` and return the reloaded profile.
 
@@ -692,7 +701,7 @@ def save_profile_changes(
             os.fsync(fh.fileno())
         os.chmod(tmp, stat.st_mode & 0o7777)
         try:
-            _load_file(profile_dir, tmp, resume_path)
+            _load_file(profile_dir, tmp, resume_path, require_resume=require_resume)
         except ProfileValidationError as exc:
             raise ProfileValidationError(exc.errors, path=prefs_file) from exc
         except ProfileError as exc:
@@ -705,4 +714,126 @@ def save_profile_changes(
         os.replace(tmp, prefs_file)
     finally:
         tmp.unlink(missing_ok=True)
+    if not require_resume:
+        return _load_file(profile_dir, prefs_file, resume_path, require_resume=False)
     return load_profile(profile_dir, resume_path)
+
+
+# ─── Creating and repairing the file (the console never dead-ends) ──────────
+
+NEW_FILE_HEADER = (
+    "Preferences for jobhunter. Edit here or on the console's Preferences page.\n"
+    "Comments you add are kept when the page saves.\n"
+)
+
+
+def _atomic_private_write(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` via a temp file in the same folder; the file ends up 0600."""
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def backup_preferences(profile_dir: Path, now: str) -> Path | None:
+    """Copy an existing preferences file to ``preferences.yaml.<now>.bak`` (0600)."""
+    prefs_file = Path(profile_dir).expanduser() / PREFERENCES_FILE
+    if not prefs_file.exists():
+        return None
+    bak = prefs_file.with_name(f"{PREFERENCES_FILE}.{now}.bak")
+    n = 1
+    while bak.exists():
+        bak = prefs_file.with_name(f"{PREFERENCES_FILE}.{now}-{n}.bak")
+        n += 1
+    fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(prefs_file.read_bytes())
+    return bak
+
+
+def write_preferences_data(
+    profile_dir: Path, data: Mapping[str, Any], *, backup_stamp: str
+) -> Path:
+    """Validate ``data`` and write it as a whole new ``preferences.yaml`` (atomic, 0600).
+
+    Used when there is no file or the existing one is unreadable; the old file, if any, is
+    copied to a timestamped ``.bak`` first. The profile dir is created 0700 if missing.
+    Raises ``ProfileValidationError`` before touching anything when ``data`` is invalid.
+    """
+    profile_dir = Path(profile_dir).expanduser()
+    validate_profile_data(data, base=Profile())
+    doc = CommentedMap()
+    for key, value in _clean(json.loads(json.dumps(dict(data)))).items():
+        if key in EDITABLE_KEYS:
+            doc[key] = _to_yaml(value)
+    doc.yaml_set_start_comment(NEW_FILE_HEADER.rstrip("\n"))
+    yaml = _yaml_writer("")
+    buf = io.StringIO()
+    yaml.dump(doc, buf)
+    return write_preferences_text(profile_dir, buf.getvalue(), backup_stamp=backup_stamp)
+
+
+def write_preferences_text(profile_dir: Path, text: str, *, backup_stamp: str) -> Path:
+    """Write raw YAML ``text`` as ``preferences.yaml`` (caller has validated it)."""
+    profile_dir = Path(profile_dir).expanduser()
+    if not profile_dir.exists():
+        profile_dir.mkdir(parents=True, mode=0o700)
+        os.chmod(profile_dir, 0o700)
+    backup_preferences(profile_dir, backup_stamp)
+    prefs_file = profile_dir / PREFERENCES_FILE
+    _atomic_private_write(prefs_file, text if text.endswith("\n") else text + "\n")
+    return prefs_file
+
+
+def salvage_preferences(text: str) -> tuple[Profile, dict[str, str]]:
+    """Read as much of ``text`` as validates. Returns (profile, errors keyed by dotted field).
+
+    Invalid fields are dropped one at a time and reported, so the form can show every
+    readable value next to the errors. Raises ``ProfileError`` for YAML that does not parse
+    or whose top level is not a mapping.
+    """
+    try:
+        raw = YAML(typ="rt").load(text)
+    except YAMLError as exc:
+        raise ProfileError(f"invalid YAML: {exc}") from exc
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise ProfileError("top level must be a mapping")
+    data: dict[str, Any] = {k: v for k, v in _plain(raw).items() if k in _YAML_KEYS}
+    errors: dict[str, str] = {}
+    for _ in range(50):
+        try:
+            return Profile.model_validate(_clean(data)), errors
+        except ValidationError as exc:
+            progressed = False
+            for err in exc.errors():
+                loc = list(err["loc"])
+                field = ".".join(str(p) for p in loc)
+                errors.setdefault(field, str(err["msg"]).removeprefix("Value error, "))
+                progressed |= _drop_path(data, loc) or _drop_path(data, loc[:1])
+            if not progressed:
+                break
+    return Profile(), errors
+
+
+def _drop_path(data: Any, loc: list[Any]) -> bool:
+    """Remove the value at ``loc`` (dict keys / list indexes) from ``data``; False if absent."""
+    node = data
+    for part in loc[:-1]:
+        try:
+            node = node[part]
+        except (KeyError, IndexError, TypeError):
+            return False
+    try:
+        del node[loc[-1]]
+    except (KeyError, IndexError, TypeError):
+        return False
+    return True
