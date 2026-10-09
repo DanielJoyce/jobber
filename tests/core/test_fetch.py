@@ -673,3 +673,19 @@ def test_non_http_location_is_returned_not_raised(make_ctx, server, location, fo
     assert resp.is_redirect
     assert resp.location == location
     assert server.hits("/go") == 1  # never followed
+
+
+# ─── robots wildcards (RFC 9309) ───────────────────────────────────────────
+
+
+def test_robots_wildcard_and_end_anchor():
+    from jobhunter.core.fetch.robots import rules_from_response
+
+    text = "User-agent: *\nDisallow: /*feed/\nDisallow: /*feeds/\nDisallow: /*.pdf$\nAllow: /\n"
+    rules = rules_from_response("https://usnlx.com", 200, text)
+    assert not rules.allows("https://usnlx.com/jobs/feeds/rss?q=x")
+    assert not rules.allows("https://usnlx.com/feed/")
+    assert not rules.allows("https://usnlx.com/a/b.pdf")
+    assert rules.allows("https://usnlx.com/a/b.pdf?page=2")
+    assert rules.allows("https://usnlx.com/jobs/?q=feed")
+    assert rules.allows("https://usnlx.com/lincoln-ne/x/ABC/job/")
