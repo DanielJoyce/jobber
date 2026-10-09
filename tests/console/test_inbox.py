@@ -150,6 +150,19 @@ def test_buckets_and_fields(seeded, profile):
     assert any(i.evidence_unverified for i in data.buckets["F"])
 
 
+def test_posting_link_prefers_the_human_apply_url(seeded, profile):
+    # Workday stubs keep the JSON detail endpoint in `url` and the human page in `apply_url`.
+    api = "https://tenant.example.gov/wday/cxs/t/Site/job/x"
+    seeded.execute("UPDATE job SET url = ? WHERE id = 1", (api,))
+    plain = inbox.inbox_items(seeded, profile).buckets["A"][0]
+    assert plain.url == api
+    seeded.execute(
+        "UPDATE job SET apply_url = ? WHERE id = 1", ("https://tenant.example.gov/Site/job/x",)
+    )
+    item = inbox.inbox_items(seeded, profile).buckets["A"][0]
+    assert item.url == "https://tenant.example.gov/Site/job/x"
+
+
 def test_f_summary_and_g_hidden(seeded, profile):
     data = inbox.inbox_items(seeded, profile)
     assert data.stale_summary == [("VMware", 2), ("Oracle", 1)]

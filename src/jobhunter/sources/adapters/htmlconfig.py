@@ -63,6 +63,8 @@ with any of
 Field spec (JSON): a dotted path (``"company.name"``), or a dict with ``path`` plus the same
 ``from``/``re``/``template``/``const`` keys.
 
+``url`` is what ``resolve()`` fetches (a Workday row keeps its JSON detail endpoint there); set
+``apply_url`` to the human page and the console links that instead (``apply_url or url``).
 A JSON body that is itself a JSON string (some ASP.NET handlers double-encode) is decoded once more.
 
 Robots, rate limits, cookies (WebForms sessions) and caching are ``FetchContext``'s business.
