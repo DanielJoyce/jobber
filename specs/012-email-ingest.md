@@ -57,6 +57,33 @@ filter if it's missing, adds any `fallback_sender_domains` filters, and lists wh
 you'd rather not grant the settings scope, it prints the filter XML for manual import under Gmail
 Settings → Filters and Blocked Addresses → Import filters.
 
+## Setting up Gmail
+
+One time, about ten minutes. No billing is involved.
+
+1. Create a project at <https://console.cloud.google.com/>.
+2. APIs & Services, Library: enable the **Gmail API**.
+3. OAuth consent screen: user type External; add your own Google account as a **Test user** and
+   leave the app in Testing (it is only ever you).
+4. Credentials, Create credentials, **OAuth client ID**, application type **Desktop app**.
+   Download the JSON and save it as `~/.config/jobhunter/google_client_secret.json` (or set
+   `mail.client_secrets_path`, or the env var `JOBHUNTER_GOOGLE_CLIENT_SECRETS`). It stays
+   outside the repo.
+5. Set `mail.alerts_address` in `~/.config/jobhunter/config.toml` to your real `+jobs` address.
+6. `jobhunter mail auth` opens the consent screen on `127.0.0.1` and stores the refresh token in
+   the OS keyring (service `jobhunter`, key `gmail`). Testing-mode tokens expire after 7 days;
+   re-run `mail auth` if Google says the token is invalid.
+7. `jobhunter mail setup --dry-run`, then `jobhunter mail setup`; `jobhunter mail status` checks.
+
+Prefer not to grant `gmail.settings.basic`? `jobhunter mail setup --xml` prints a filter file
+needing no OAuth; import it under Gmail Settings, Filters and Blocked Addresses.
+
+Privacy notes: the three scopes above are the only ones requested; there is no send scope and no
+modify scope. The refresh token never touches the repo, config files or logs. The OAuth client
+secret is not a user secret for an installed app, but is still kept out of the repo. Mail content
+is read only from the `jobhunter/alerts` label and processed locally. Filters use the Gmail
+action shape `addLabelIds: [<label>]`, `removeLabelIds: ["INBOX", "SPAM"]`.
+
 ## Pipeline
 
 The `mailalerts` adapter is an ordinary source in the registry

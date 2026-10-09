@@ -360,10 +360,77 @@ def sources_verify() -> None:
     _stub()
 
 
+@mail_app.command("auth")
+def mail_auth() -> None:
+    """Run the Gmail OAuth flow and store the refresh token in the OS keyring."""
+    from jobhunter.config import load_settings
+    from jobhunter.mail import auth
+
+    settings = load_settings()
+    try:
+        auth.authenticate(settings)
+    except auth.MailAuthError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    typer.echo("Gmail authorised; token stored in the OS keyring (service jobhunter, key gmail).")
+
+
 @mail_app.command("setup")
-def mail_setup() -> None:
-    """Set up Gmail access."""
-    _stub()
+def mail_setup(
+    xml: Annotated[
+        bool, typer.Option("--xml", help="Print Gmail filter XML; no OAuth needed.")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show what would be created; write nothing.")
+    ] = False,
+) -> None:
+    """Create the alerts label and the +jobs filters in Gmail (idempotent)."""
+    from jobhunter.config import load_settings
+    from jobhunter.mail import auth, setup
+
+    settings = load_settings()
+    try:
+        if xml:
+            typer.echo(setup.filters_xml(settings), nl=False)
+            return
+        setup.validate_address(settings)
+        if dry_run and (auth.load_token() is None):
+            # No credentials: show the plan without looking at the mailbox.
+            typer.echo(f"would ensure label {settings.mail.label}")
+            for crit in setup.wanted_filters(settings):
+                typer.echo(f"would ensure filter {setup.describe(crit)}")
+            return
+        service = auth.build_service(settings)
+        report = setup.setup_mailbox(service, settings, dry_run=dry_run)
+    except (setup.MailSetupError, auth.MailAuthError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    for line in report.lines():
+        typer.echo(line)
+
+
+@mail_app.command("status")
+def mail_status() -> None:
+    """Show token, label, filter and message-count status (read-only)."""
+    from jobhunter.config import load_settings
+    from jobhunter.mail import auth, setup
+
+    settings = load_settings()
+    has_token = auth.load_token() is not None
+    typer.echo(f"token in keyring: {'yes' if has_token else 'no'}")
+    if not has_token:
+        typer.echo("run: jobhunter mail auth")
+        raise typer.Exit(1)
+    try:
+        info = setup.mailbox_status(auth.build_service(settings), settings)
+    except (setup.MailSetupError, auth.MailAuthError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"label {info['label']}: {'present' if info['label_present'] else 'missing'}")
+    for desc, ok in info["filters"].items():
+        typer.echo(f"filter {desc}: {'present' if ok else 'missing'}")
+    if info["messages"] is not None:
+        typer.echo(f"messages under label: {info['messages']}")
 
 
 @mail_app.command("sync")

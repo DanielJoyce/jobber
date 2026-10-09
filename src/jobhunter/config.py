@@ -75,6 +75,9 @@ class Mail(BaseModel):
     alerts_address: str = "<you>+jobs@gmail.com"
     label: str = "jobhunter/alerts"
     fallback_sender_domains: list[str] = Field(default_factory=list)
+    # Google OAuth client secrets JSON (Desktop app), kept outside the repo. The env var
+    # JOBHUNTER_GOOGLE_CLIENT_SECRETS overrides it.
+    client_secrets_path: Path = Path("~/.config/jobhunter/google_client_secret.json")
 
 
 class Console(BaseModel):
