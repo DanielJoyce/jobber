@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from jobhunter.core.models import Bucket, Evidence, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
-from jobhunter.pipeline.locations import load_locations
+from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring import screen as stage2
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile, scoring_inputs
@@ -225,7 +225,7 @@ def shortlist(
         job = stage2._canonical_job(conn, row["gid"])
         if job is None:
             continue
-        fit = compute_row(row, job, load_locations(conn, job["id"]), profile)
+        fit = compute_row(row, job, load_job_group_locations(conn, job["id"]), profile)
         scored.append((fit.overall, row["gid"]))
     scored.sort(key=lambda t: (-t[0], t[1]))
     return [gid for _, gid in scored[: max(n, 0)]]
@@ -354,7 +354,7 @@ def _write(
         "dimensions": json.dumps(dimensions),
         "blockers": json.dumps(report.blockers),
     }
-    locations = load_locations(conn, job["id"])
+    locations = load_job_group_locations(conn, job["id"])
     deep_fit = compute_row(row_for_buckets, job, locations, profile)
 
     disagreement: dict[str, Any] = {

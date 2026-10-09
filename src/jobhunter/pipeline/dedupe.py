@@ -20,7 +20,7 @@ from jobhunter.pipeline.listing import _txn, to_iso
 SHINGLE_WORDS = 5
 _GENERIC = re.compile(
     r"\b(?:dept|department|division|div|office|bureau|of|the|and|inc|incorporated|llc|ltd|"
-    r"corp|corporation|co|company)\b"
+    r"limited|lp|llp|plc|corp|corporation|co|company)\b"
 )
 _NON_ALNUM = re.compile(r"[^a-z0-9\s]")
 _WORD = re.compile(r"[a-z0-9]+")
@@ -39,7 +39,9 @@ def normalize_employer(name: str | None) -> str | None:
     """Lowercase, drop punctuation and generic words ('dept of', 'inc', 'llc', ...)."""
     if not name:
         return None
-    s = _NON_ALNUM.sub(" ", name.lower().replace("&", " and "))
+    # Fold "L.L.C." / "Inc." / "O'Brien" before punctuation becomes a word break.
+    s = name.lower().replace("&", " and ").replace(".", "").replace("'", "").replace("\u2019", "")
+    s = _NON_ALNUM.sub(" ", s)
     s = " ".join(_GENERIC.sub(" ", s).split())
     return s or None
 

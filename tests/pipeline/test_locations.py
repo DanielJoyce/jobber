@@ -202,3 +202,35 @@ def test_derive_accepts_plain_mappings():
     )
     assert [(r.state, r.city, r.is_primary) for r in rows] == [("ID", "Boise", True)]
     assert sc is LocationScope.single and w == []
+
+
+def test_load_group_locations_unions_members(conn):
+    from jobhunter.pipeline.locations import load_group_locations, load_job_group_locations
+
+    gid = conn.execute(
+        "INSERT INTO job_group (member_count, method, created_at) VALUES (2, 'near_dupe', 'x')"
+    ).lastrowid
+    ids = []
+    for ext, state in (("a", "MI"), ("b", "OH"), ("c", "OH")):
+        jid = conn.execute(
+            "INSERT INTO job (source_key, external_id, url, title, job_group_id, stage, "
+            "first_seen_at, last_seen_at) VALUES ('wa', ?, 'u', 't', ?, 'grouped', 'x', 'x')",
+            (ext, gid),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO job_locations (job_id, state, is_primary) VALUES (?, ?, 1)", (jid, state)
+        )
+        ids.append(jid)
+    conn.execute("UPDATE job_group SET canonical_job_id = ? WHERE id = ?", (ids[1], gid))
+    locs = load_group_locations(conn, gid)
+    assert [loc.state for loc in locs] == ["OH", "MI"]  # canonical first, OH deduped
+    assert [loc.is_primary for loc in locs] == [True, False]
+    assert {loc.state for loc in load_job_group_locations(conn, ids[0])} == {"MI", "OH"}
+    solo = conn.execute(
+        "INSERT INTO job (source_key, external_id, url, title, stage, first_seen_at, "
+        "last_seen_at) VALUES ('wa', 'z', 'u', 't', 'normalized', 'x', 'x')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO job_locations (job_id, state, is_primary) VALUES (?, 'TX', 1)", (solo,)
+    )
+    assert [loc.state for loc in load_job_group_locations(conn, solo)] == ["TX"]

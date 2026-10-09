@@ -28,6 +28,7 @@ from jobhunter.core.fetch import (
 from jobhunter.core.models import JobStub, Policy, Query, SourceRow
 from jobhunter.pipeline.dedupe import group_pending
 from jobhunter.pipeline.dedupe_url import merge_by_apply_url
+from jobhunter.pipeline.dedupe_xstate import merge_cross_state
 from jobhunter.pipeline.listing import (
     compute_watermark,
     from_iso,
@@ -589,6 +590,8 @@ def run_pipeline(
         report.counts["dedupe"] = {k: v for k, v in vars(d).items() if isinstance(v, int)}
         m = merge_by_apply_url(conn, now=now)
         report.counts["dedupe_url"] = {k: v for k, v in vars(m).items() if isinstance(v, int)}
+        x = merge_cross_state(conn, now=now)
+        report.counts["dedupe_xstate"] = {k: v for k, v in vars(x).items() if isinstance(v, int)}
     if "prefilter" in stages and profile is not None:
         report.counts["prefilter"] = run_prefilter(conn, profile, now=now)
     if "score" in stages:

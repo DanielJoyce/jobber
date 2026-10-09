@@ -12,7 +12,7 @@ from typing import Any
 
 from jobhunter.console.inbox import BUCKETS, salary_text
 from jobhunter.core.models import SourceRow
-from jobhunter.pipeline.locations import load_locations, location_summary
+from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.prefilter import rejected_summary
 from jobhunter.scoring.profile import Profile
@@ -231,7 +231,9 @@ def rejected(conn: sqlite3.Connection, profile: Profile, reason: str | None = No
                     group_id=r["job_group_id"],
                     title=r["title"],
                     employer=r["employer"] or r["agency_raw"] or "employer not stated",
-                    location=location_summary(load_locations(conn, r["id"]), r["location_scope"]),
+                    location=location_summary(
+                        load_job_group_locations(conn, r["id"]), r["location_scope"]
+                    ),
                     salary=salary_text(r),
                     reasons=reasons,
                 )
@@ -332,7 +334,7 @@ def search(
     ranged = bucket_from in BUCKETS or bucket_to in BUCKETS
     hits: list[SearchHit] = []
     for r in rows:
-        locs = load_locations(conn, r["id"])
+        locs = load_job_group_locations(conn, r["id"])
         bucket = None
         if profile is not None and r["dimensions"] is not None:
             bucket = compute_row(r, r, locs, profile).bucket.value

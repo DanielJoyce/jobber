@@ -19,7 +19,7 @@ from typing import Any
 from jobhunter.core.models import JobLocation, LocationScope
 from jobhunter.core.textnorm import annualize
 from jobhunter.pipeline.listing import _txn
-from jobhunter.pipeline.locations import REMOTE_SCOPES, load_locations
+from jobhunter.pipeline.locations import REMOTE_SCOPES, load_job_group_locations
 from jobhunter.scoring.profile import Hard, Profile
 
 logger = logging.getLogger(__name__)
@@ -231,7 +231,7 @@ def run_prefilter(
     counts = {"evaluated": 0, "passed": 0, "rejected": 0}
     with _txn(conn):
         for job in jobs:
-            passed, reasons = evaluate(job, load_locations(conn, job["id"]), profile, now)
+            passed, reasons = evaluate(job, load_job_group_locations(conn, job["id"]), profile, now)
             conn.execute(
                 "INSERT OR REPLACE INTO prefilter_result "
                 "(job_id, passed, reasons, filter_version, evaluated_at) VALUES (?, ?, ?, ?, ?)",

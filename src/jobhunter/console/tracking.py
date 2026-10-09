@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from jobhunter.pipeline.locations import load_locations, location_summary
+from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 
 BOARD_STATUSES = (
     "interested",
@@ -178,7 +178,9 @@ def card(conn: sqlite3.Connection, app_id: int, now: datetime) -> Card | None:
         group_id=row["job_group_id"],
         title=row["title"],
         employer=row["employer"] or row["agency_raw"] or "employer not stated",
-        location=location_summary(load_locations(conn, row["job_id"]), row["location_scope"]),
+        location=location_summary(
+            load_job_group_locations(conn, row["job_id"]), row["location_scope"]
+        ),
         status=row["status"],
         days=days,
         stale=is_stale(row["status"], days),

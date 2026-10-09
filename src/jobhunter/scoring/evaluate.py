@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from jobhunter.core.models import Bucket, Verdict
-from jobhunter.pipeline.locations import load_locations
+from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring.buckets import ComputedFit, compute_row, thresholds_for
 from jobhunter.scoring.profile import Profile
 
@@ -206,7 +206,7 @@ def _build_items(
         if only is not None and gid not in only:
             continue
         row = scored[gid]
-        fit = compute_row(row, row, load_locations(conn, row["job_id"]), profile)
+        fit = compute_row(row, row, load_job_group_locations(conn, row["job_id"]), profile)
         try:
             raw_dims = json.loads(row["dimensions"])
         except (TypeError, ValueError):

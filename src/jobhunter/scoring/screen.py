@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from jobhunter.core.models import LocationScope, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
-from jobhunter.pipeline.locations import load_locations, location_summary
+from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.scoring.profile import Profile, scoring_inputs
 from jobhunter.scoring.rubric import (
     PROMPT_VERSION,
@@ -388,7 +388,7 @@ def remaining_daily_budget(conn: sqlite3.Connection, cap_usd: float, now: dateti
 
 
 def _summary_for(conn: sqlite3.Connection, job: Mapping[str, Any]) -> str:
-    return location_summary(load_locations(conn, job["id"]), job["location_scope"])
+    return location_summary(load_job_group_locations(conn, job["id"]), job["location_scope"])
 
 
 def _row(job: sqlite3.Row) -> dict[str, Any]:

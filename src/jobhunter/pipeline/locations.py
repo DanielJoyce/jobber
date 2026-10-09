@@ -223,6 +223,37 @@ def load_locations(conn: sqlite3.Connection, job_id: int) -> list[JobLocation]:
     ]
 
 
+def load_group_locations(conn: sqlite3.Connection, group_id: int) -> list[JobLocation]:
+    """Union of job_locations across every member of a group, canonical member's rows first.
+
+    A cross-state merged group keeps each member's own rows, so fit and display must look at
+    all of them. Duplicates (same state and city) collapse; exactly one row is primary.
+    """
+    rows = conn.execute(
+        "SELECT l.state, l.city, l.county, l.lat, l.lon FROM job_locations l "
+        "JOIN job j ON j.id = l.job_id JOIN job_group g ON g.id = j.job_group_id "
+        "WHERE g.id = ? ORDER BY (j.id = g.canonical_job_id) DESC, l.is_primary DESC, j.id, l.id",
+        (group_id,),
+    ).fetchall()
+    out = _dedupe(
+        JobLocation(
+            state=r["state"], city=r["city"], county=r["county"], lat=r["lat"], lon=r["lon"]
+        )
+        for r in rows
+    )
+    if out:
+        out[0] = out[0].model_copy(update={"is_primary": True})
+    return out
+
+
+def load_job_group_locations(conn: sqlite3.Connection, job_id: int) -> list[JobLocation]:
+    """``load_group_locations`` for the group of ``job_id``; the job's own rows if ungrouped."""
+    r = conn.execute("SELECT job_group_id FROM job WHERE id = ?", (job_id,)).fetchone()
+    if r is None or r["job_group_id"] is None:
+        return load_locations(conn, job_id)
+    return load_group_locations(conn, r["job_group_id"])
+
+
 def apply_locations(
     conn: sqlite3.Connection, *, limit: int | None = None, force: bool = False
 ) -> int:

@@ -386,23 +386,48 @@ def dedupe(
         bool,
         typer.Option("--apply-url", help="Merge job groups that share a normalized apply URL."),
     ] = False,
+    cross_state: Annotated[
+        bool,
+        typer.Option(
+            "--cross-state",
+            help="Merge the same posting syndicated to several states (employer + title block).",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="With --cross-state: report merges, write nothing."),
+    ] = False,
 ) -> None:
     """Run dedupe passes by hand."""
-    if not apply_url:
-        typer.echo("nothing to do: pass --apply-url", err=True)
+    if not (apply_url or cross_state):
+        typer.echo("nothing to do: pass --apply-url and/or --cross-state", err=True)
+        raise typer.Exit(2)
+    if dry_run and not cross_state:
+        typer.echo("--dry-run only applies to --cross-state", err=True)
         raise typer.Exit(2)
     from jobhunter.pipeline.dedupe_url import merge_by_apply_url
+    from jobhunter.pipeline.dedupe_xstate import merge_cross_state
 
     settings = load_settings()
     db_path = resolve_path(settings.paths.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
-        res = merge_by_apply_url(conn, now=datetime.now(UTC))
+        if not dry_run:
+            db.migrate(conn)
+        now = datetime.now(UTC)
+        if apply_url:
+            res = merge_by_apply_url(conn, now=now)
+            typer.echo(", ".join(f"{k}={v}" for k, v in vars(res).items()))
+        if cross_state:
+            xres = merge_cross_state(conn, now=now, dry_run=dry_run)
+            typer.echo(
+                ("dry-run: would merge " if dry_run else "merged ") + f"{xres.would_merge} groups"
+            )
+            typer.echo(", ".join(f"{k}={v}" for k, v in vars(xres).items()))
     finally:
         conn.close()
-    typer.echo(", ".join(f"{k}={v}" for k, v in vars(res).items()))
 
 
 @app.command()

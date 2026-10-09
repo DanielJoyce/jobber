@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jobhunter.core.models import Bucket
-from jobhunter.pipeline.locations import jobs_in_state, load_locations, location_summary
+from jobhunter.pipeline.locations import jobs_in_state, load_job_group_locations, location_summary
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile
 
@@ -132,7 +132,7 @@ LEFT JOIN label l ON l.job_group_id = g.id
 
 
 def _item(conn: sqlite3.Connection, row: sqlite3.Row, profile: Profile, now: datetime) -> InboxItem:
-    locs = load_locations(conn, row["job_id"])
+    locs = load_job_group_locations(conn, row["job_id"])
     fit = compute_row(row, row, locs, profile)
     dims = _json(row["dimensions"], {})
     if not isinstance(dims, dict):
