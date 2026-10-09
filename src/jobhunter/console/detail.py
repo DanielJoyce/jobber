@@ -278,7 +278,11 @@ def posting_url(job: sqlite3.Row) -> str:
 
 
 def did_you_apply(conn: sqlite3.Connection, group_id: int) -> bool:
-    """A click newer than the group's latest application event (and group not settled)."""
+    """A click newer than the group's latest application event (and group not settled).
+
+    The click's own interested->preparing event (same timestamp) is not an answer, so it is
+    ignored; otherwise shortlisted jobs would never show the prompt.
+    """
     click = conn.execute(
         "SELECT MAX(at) FROM apply_click WHERE job_group_id = ?", (group_id,)
     ).fetchone()[0]
@@ -289,7 +293,7 @@ def did_you_apply(conn: sqlite3.Connection, group_id: int) -> bool:
         return False
     ev = conn.execute(
         "SELECT MAX(e.at) FROM application_event e JOIN application a ON a.id = e.application_id "
-        "WHERE a.job_group_id = ?",
+        "WHERE a.job_group_id = ? AND COALESCE(e.note, '') != 'opened apply link'",
         (group_id,),
     ).fetchone()[0]
     return ev is None or click > ev

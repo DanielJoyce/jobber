@@ -326,6 +326,7 @@ browser = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "playwright" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "respx" },
@@ -352,6 +353,7 @@ provides-extras = ["browser"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "playwright", specifier = ">=1.63.0" },
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pytest", specifier = ">=8" },
     { name = "respx", specifier = ">=0.21" },
