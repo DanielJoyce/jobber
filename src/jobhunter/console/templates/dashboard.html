@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block head %}
+  <script src="{{ url_for('static', path='vendor/d3-7.9.0.min.js') }}" defer></script>
+  <script src="{{ url_for('static', path='vendor/topojson-client-3.1.0.min.js') }}" defer></script>
+  <script src="{{ url_for('static', path='dashboard.js') }}" defer></script>
+{% endblock %}
+{% block main %}
+<div class="dash-head">
+  <h1>Today <span class="muted">&middot; {{ today.strftime("%a %b ") }}{{ today.day }}</span></h1>
+  <form id="dash-controls" class="dash-controls" action="/" method="get">
+    <fieldset class="segmented">
+      <legend class="visually-hidden">Range</legend>
+      {% for r in ranges %}
+      <label><input type="radio" name="range" value="{{ r }}"{% if r == range %} checked{% endif %}><span>{{ r }}d</span></label>
+      {% endfor %}
+    </fieldset>
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir" value="{{ dir }}">
+    <noscript><button type="submit">Apply</button></noscript>
+  </form>
+</div>
+
+<section id="kpis" class="kpis" aria-label="Key numbers"
+         hx-get="/dash/kpis" hx-include="#dash-controls" hx-trigger="dash-refresh from:body" hx-swap="innerHTML">
+  {% include "_kpis.html" %}
+</section>
+
+<section class="panel map-panel" aria-labelledby="map-title">
+  <div class="map-toolbar">
+    <h2 id="map-title">Map</h2>
+    <label>metric
+      <select name="metric" form="dash-controls" id="map-metric">
+        {% for key, (label, kind) in metrics.items() %}
+        <option value="{{ key }}"{% if key == metric %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <fieldset class="segmented" id="map-view">
+      <legend class="visually-hidden">Map view</legend>
+      <label><input type="radio" name="map-view" value="shape" checked><span>Shape</span></label>
+      <label><input type="radio" name="map-view" value="grid"><span>Grid</span></label>
+    </fieldset>
+    <label class="check"><input type="checkbox" id="map-status" checked> status</label>
+  </div>
+  <div id="map" class="map" data-atlas="{{ url_for('static', path='vendor/us-atlas-3.0.1-states-albers-10m.json') }}"
+       data-api="/api/dash/map" aria-describedby="map-help">
+    <p class="muted map-loading">Loading map&hellip;</p>
+  </div>
+  <p id="map-help" class="visually-hidden">Each state is a link to the inbox filtered to that state. Tab moves through states in state-table order; Enter opens. The state table below has the same numbers.</p>
+  <div id="map-legend" class="map-legend" aria-label="Legend"></div>
+  <div id="map-tooltip" class="map-tooltip" role="tooltip" hidden></div>
+  <script type="application/json" id="tile-grid">{{ tile_grid | safe }}</script>
+  <script type="application/json" id="fips-usps">{{ fips | safe }}</script>
+  <script type="application/json" id="state-names">{{ names | safe }}</script>
+</section>
+
+<section id="charts" class="panel charts-placeholder" aria-labelledby="charts-title">
+  <h2 id="charts-title">Trends</h2>
+  <p class="muted">New A+B per day, funnel, bucket mix and applications by status arrive with the charts milestone.</p>
+</section>
+
+<section class="panel" aria-labelledby="table-title">
+  <h2 id="table-title">States</h2>
+  <div id="state-table" class="table-wrap" hx-disinherit="*"
+       hx-get="/dash/state-table" hx-include="#dash-controls" hx-trigger="dash-refresh from:body" hx-swap="innerHTML">
+    {% include "_state_table.html" %}
+  </div>
+</section>
+{% endblock %}

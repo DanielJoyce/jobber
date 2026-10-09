@@ -16,7 +16,9 @@ def client(tmp_path):
     return TestClient(create_app(Settings(), lambda: db.connect(path)))
 
 
-ROUTES = [p for p, _, _ in PAGES if p != "/inbox"] + ["/job/abc123"]  # /inbox: test_inbox.py
+ROUTES = [p for p, _, _ in PAGES if p not in ("/", "/inbox")] + [
+    "/job/abc123"
+]  # / and /inbox have own tests
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -24,6 +26,15 @@ def test_placeholder_routes(client, route):
     r = client.get(route)
     assert r.status_code == 200
     assert "Coming soon" in r.text
+    for _, label in NAV:
+        assert f">{label}</a>" in r.text
+    assert "htmx-2.0.4.min.js" in r.text
+
+
+def test_today_is_dashboard(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'id="map"' in r.text
     for _, label in NAV:
         assert f">{label}</a>" in r.text
     assert "htmx-2.0.4.min.js" in r.text

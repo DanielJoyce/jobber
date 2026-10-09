@@ -1,0 +1,55 @@
+{# State table: the map's accessible equivalent (specs/013 "Table view"). #}
+{% set cols = [
+  ("state", "State", "text"),
+  ("new_ab", "New A+B", "count"),
+  ("scored", "Scored", "count"),
+  ("shortlisted", "Shortlisted", "count"),
+  ("applied", "Applied", "count"),
+  ("responses", "Responses", "count"),
+  ("response_rate", "Response rate", "rate"),
+  ("median_salary", "Median salary", "money"),
+  ("col_adjusted", "COL-adjusted", "money"),
+  ("coverage", "Coverage", "text"),
+  ("applications", "Apps (all time)", "count"),
+  ("last_ok_at", "Last collected", "text"),
+] %}
+{% macro fmt(v, kind) -%}
+{%- if v is none -%}<span class="muted">&mdash;</span>
+{%- elif kind == "rate" -%}{{ (v * 100) | round | int }}%
+{%- elif kind == "money" -%}${{ "{:,.0f}".format(v) }}
+{%- else -%}{{ v }}{%- endif -%}
+{%- endmacro %}
+<table class="state-table" data-sort="{{ sort }}" data-dir="{{ dir }}" data-metric="{{ metric }}" data-range="{{ range }}">
+  <caption>Per-state stats, last {{ range }} days. Sorted by {{ sort }} ({{ dir }}). Multi-state jobs count in each state they list; remote jobs count once, in Remote (US).</caption>
+  <thead>
+    <tr>
+      {% for key, label, kind in cols %}
+      {% set next_dir = ("desc" if dir == "asc" else "asc") if key == sort else ("asc" if key == "state" else "desc") %}
+      {% set q = "range=" ~ range ~ "&metric=" ~ metric ~ "&sort=" ~ key ~ "&dir=" ~ next_dir %}
+      <th scope="col"{% if kind != "text" %} class="num"{% endif %}{% if key == sort %} aria-sort="{{ 'ascending' if dir == 'asc' else 'descending' }}"{% endif %}{% if key == metric %} data-metric-col{% endif %}>
+        <a href="/?{{ q }}" hx-get="/dash/state-table?{{ q }}" hx-target="#state-table" hx-swap="innerHTML">{{ label }}{% if key == sort %} {{ "▲" if dir == "asc" else "▼" }}{% endif %}</a>
+      </th>
+      {% endfor %}
+      <th scope="col">Sources</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr data-state="{{ r.state }}">
+      <th scope="row"><a href="/inbox?state={{ r.state }}">{{ r.name }}</a> <span class="muted">{{ r.state if r.state != "REMOTE" else "" }}</span></th>
+      <td class="num">{{ r.new_ab }}</td>
+      <td class="num">{{ r.scored }}</td>
+      <td class="num">{{ r.shortlisted }}</td>
+      <td class="num">{{ r.applied }}</td>
+      <td class="num">{{ r.responses }}</td>
+      <td class="num">{% if r.response_rate is none and r.applied %}<span class="muted" title="n = {{ r.applied }}, too few to rate">n={{ r.applied }}</span>{% else %}{{ fmt(r.response_rate, "rate") }}{% endif %}</td>
+      <td class="num">{{ fmt(r.median_salary, "money") }}</td>
+      <td class="num">{{ fmt(r.col_adjusted, "money") }}</td>
+      <td><span class="cov cov-{{ r.coverage }}" aria-hidden="true">{{ r.coverage_icon }}</span> {{ r.coverage_label }}</td>
+      <td class="num">{{ r.applications }}</td>
+      <td>{{ r.last_ok_at[:10] if r.last_ok_at else "" }}</td>
+      <td class="sources">{{ r.sources | join(", ") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

@@ -114,3 +114,112 @@ body {
 main { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
 h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .muted { color: var(--text-muted); }
+
+/* ─── Today dashboard (specs/013) ─────────────────────────────────────────── */
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+.dash-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.dash-head h1 { margin: 0; }
+.dash-controls { display: flex; gap: 8px; align-items: center; }
+
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; padding: 0; margin: 0; overflow: hidden; }
+.segmented label { cursor: pointer; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented span { display: inline-block; padding: 3px 12px; color: var(--text-secondary); }
+.segmented input:checked + span { background: var(--grid); color: var(--text-primary); }
+.segmented input:focus-visible + span { outline: 2px solid var(--series-1); outline-offset: -2px; }
+
+.panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  position: relative;
+}
+.panel h2 { font-size: 1rem; margin: 0 0 8px; }
+
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; color: var(--text-primary); text-decoration: none;
+}
+.kpi:hover { border-color: var(--axis); }
+.kpi-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+.kpi-value { font-size: 1.75rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.kpi-value small { font-size: 0.875rem; font-weight: 400; color: var(--text-secondary); }
+.kpi-sub { font-size: 0.8125rem; color: var(--text-secondary); }
+.spark { width: 100%; height: 28px; margin-top: 4px; }
+.spark polyline { fill: none; stroke: var(--series-1); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+
+.status-serious { color: var(--status-serious); }
+.status-critical { color: var(--status-critical); }
+
+.map-toolbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+.map-toolbar h2 { margin: 0; }
+.map-toolbar select { font: inherit; color: var(--text-primary); background: var(--page); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; }
+.map-toolbar .check { display: inline-flex; gap: 4px; align-items: center; color: var(--text-secondary); }
+
+.map { width: 100%; }
+.map-svg { width: 100%; height: auto; display: block; }
+.map-svg .cell { stroke: var(--surface-1); stroke-width: 0.75; cursor: pointer; }
+.map-svg rect.cell { stroke: var(--border); }
+.map-svg .cell:hover { stroke: var(--text-primary); stroke-width: 1.5; }
+.map-svg .cell:focus { outline: none; }
+.map-svg .cell:focus-visible { stroke: var(--text-primary); stroke-width: 2.5; }
+.map-svg .labels { pointer-events: none; }
+.map-svg .lbl { font-size: 11px; font-weight: 600; }
+.map-svg .lbl-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.map-svg .status { font-size: 11px; stroke: var(--surface-1); stroke-width: 2px; paint-order: stroke; }
+.map-svg.no-status .status { display: none; }
+.map-svg .leader { stroke: var(--text-muted); stroke-width: 0.75; }
+.map-svg .leader-dot { fill: var(--text-muted); }
+.map-svg .badge { fill: var(--surface-1); stroke: var(--text-secondary); stroke-width: 1; }
+.map-svg .badge-text { font-size: 10px; font-weight: 600; fill: var(--text-primary); }
+
+.cov-direct { color: var(--status-good); fill: var(--status-good); }
+.cov-email { color: var(--text-secondary); fill: var(--text-secondary); }
+.cov-email_stale { color: var(--status-warning); fill: var(--status-warning); }
+.cov-serious { color: var(--status-serious); fill: var(--status-serious); }
+.cov-critical { color: var(--status-critical); fill: var(--status-critical); }
+.cov-none { color: var(--text-muted); fill: var(--text-muted); }
+
+.map-legend { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; font-size: 0.8125rem; color: var(--text-secondary); }
+.legend-scale, .legend-status { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.legend-status.hidden { display: none; }
+.legend-title { color: var(--text-primary); }
+.legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; border: 1px solid var(--border); }
+.badge-html { display: inline-block; min-width: 16px; height: 16px; line-height: 14px; text-align: center; font-size: 10px; font-weight: 600; border: 1px solid var(--text-secondary); border-radius: 8px; color: var(--text-primary); }
+
+.map-tooltip {
+  position: absolute; z-index: 10; pointer-events: none;
+  background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--axis); border-radius: 6px;
+  padding: 8px 10px; font-size: 0.8125rem; max-width: 300px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.map-tooltip dl { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; margin: 4px 0 0; }
+.map-tooltip dt { color: var(--text-secondary); }
+.map-tooltip dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+.table-wrap { overflow-x: auto; }
+.state-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.state-table caption { text-align: left; color: var(--text-muted); padding-bottom: 6px; }
+.state-table th, .state-table td { padding: 4px 8px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
+.state-table thead th { color: var(--text-secondary); font-weight: 600; }
+.state-table thead a { color: inherit; text-decoration: none; }
+.state-table thead th[aria-sort] a, .state-table thead th[data-metric-col] a { color: var(--text-primary); }
+.state-table tbody th { font-weight: 400; }
+.state-table tbody th a { color: var(--text-primary); }
+.state-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.state-table .sources { white-space: normal; color: var(--text-secondary); min-width: 160px; }
