@@ -19,7 +19,10 @@ def connect(path: Path | str) -> sqlite3.Connection:
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     # isolation_level=None: autocommit; transactions are explicit via transaction().
-    conn = sqlite3.connect(str(path), isolation_level=None)
+    # check_same_thread=False: FastAPI opens a request's connection in one threadpool
+    # thread and may run the endpoint in another. Each connection is still owned by a
+    # single request or CLI process and never used concurrently.
+    conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

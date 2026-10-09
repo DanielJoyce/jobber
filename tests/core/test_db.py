@@ -168,3 +168,27 @@ def test_migrate_applies_lower_numbered_migration_merged_later(monkeypatch):
     monkeypatch.setattr(db, "_load_migrations", lambda: real)
     assert db.migrate(conn) == [skipped[0]]
     assert db.migrate(conn) == []
+
+
+def test_connection_usable_from_another_thread(tmp_path):
+    # Regression: the console's per-request connection is created in one threadpool
+    # thread and used in another; SQLite's default same-thread check made every real
+    # page load 500 while TestClient (single thread) passed.
+    import threading
+
+    from jobhunter.core.db import connect, migrate
+
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    errors: list[Exception] = []
+
+    def use() -> None:
+        try:
+            conn.execute("SELECT count(*) FROM job").fetchone()
+        except Exception as exc:
+            errors.append(exc)
+
+    t = threading.Thread(target=use)
+    t.start()
+    t.join()
+    assert errors == []
