@@ -17,14 +17,16 @@ import logging
 import os
 import re
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from jobhunter.config import OpenAICompat, Scoring
+from jobhunter.config import OpenAICompat, OpenRouter, Scoring
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +107,8 @@ class Usage:
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    cost_usd: float | None = None  # reported by the provider (OpenRouter); beats price tables
+    model: str = ""  # the model that served this request
 
 
 @dataclass
@@ -239,6 +243,14 @@ def extract_json(text: str) -> str:
     return text
 
 
+def _reported_cost(raw_usage: dict[str, Any]) -> float | None:
+    """The provider's own per-request cost (OpenRouter ``usage.cost``), if a sane number."""
+    cost = raw_usage.get("cost")
+    if isinstance(cost, bool) or not isinstance(cost, int | float) or cost < 0:
+        return None
+    return float(cost)
+
+
 class OpenAICompatScorer:
     """A generic ``/v1/chat/completions`` endpoint. No batching: bounded concurrency.
 
@@ -265,6 +277,9 @@ class OpenAICompatScorer:
         self._use_schema = config.json_schema
         self._warned_cost = False
         self._lock = threading.Lock()
+        self.extra_headers: dict[str, str] = {}
+        self.extra_body: dict[str, Any] = {}
+        self.config_section = "scoring.openai_compat"
 
     @property
     def url(self) -> str:
@@ -278,9 +293,9 @@ class OpenAICompatScorer:
             env = self._env if self._env is not None else os.environ
             key = env.get(var)
             if not key:
-                raise ScorerError(f"environment variable {var} (scoring.openai_compat) is not set")
+                raise ScorerError(f"environment variable {var} ({self.config_section}) is not set")
             headers["Authorization"] = f"Bearer {key}"
-        return headers
+        return {**headers, **self.extra_headers}
 
     def _body(self, request: ScoreRequest, *, schema: bool) -> dict[str, Any]:
         system = f"{request.system}\n\n{request.profile}"
@@ -294,6 +309,7 @@ class OpenAICompatScorer:
                 {"role": "user", "content": request.posting},
             ],
         }
+        body.update(self.extra_body)
         if schema:
             body["response_format"] = {
                 "type": "json_schema",
@@ -334,6 +350,8 @@ class OpenAICompatScorer:
         usage = Usage(
             input_tokens=int(raw_usage.get("prompt_tokens") or 0),
             output_tokens=int(raw_usage.get("completion_tokens") or 0),
+            cost_usd=_reported_cost(raw_usage),
+            model=str(data.get("model") or self.model),
         )
         finish = choice.get("finish_reason")
         stop = {"length": "max_tokens", "content_filter": "refusal"}.get(finish, finish)
@@ -380,6 +398,123 @@ class OpenAICompatScorer:
         ) / 1_000_000
 
 
+# ─── OpenRouter ─────────────────────────────────────────────────────────────
+
+CATALOG_MAX_AGE_S = 24 * 3600
+
+
+class OpenRouterScorer(OpenAICompatScorer):
+    """The openai-compat scorer preset for OpenRouter (specs/016).
+
+    ``model`` is the slug sent to OpenRouter (``openai/gpt-oss-120b``, ``...:free``,
+    ``typesafe/jev-router``). The reply's top-level ``model`` is what actually served the
+    request and lands in ``ScoreResult.model``. Cost: ``usage.cost`` from the response when
+    present, else the cached public ``/models`` catalog, else $0 with a one-time warning.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        config: OpenRouter,
+        *,
+        client: httpx.Client | None = None,
+        env: dict[str, str] | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        compat = OpenAICompat(
+            base_url=config.base_url,
+            api_key_env=config.api_key_env,
+            max_concurrency=config.max_concurrency,
+            json_schema=config.json_schema,
+        )
+        super().__init__(model, compat, client=client, env=env)
+        self.name = f"openrouter:{model}"
+        self.openrouter = config
+        self.config_section = "scoring.openrouter"
+        self._clock = clock
+        self._prices: dict[str, tuple[float, float]] | None = None
+        self.extra_headers = {"X-Title": config.title}
+        if config.referer:
+            self.extra_headers["HTTP-Referer"] = config.referer
+        self.extra_body = {"provider": dict(config.provider), "usage": {"include": True}}
+
+    # price catalog (USD per million tokens), cached on disk, refreshed at most daily
+
+    def _load_cache(self) -> tuple[float, dict[str, tuple[float, float]]] | None:
+        try:
+            raw = json.loads(Path(self.openrouter.catalog_cache).read_text())
+            prices = {k: (float(v[0]), float(v[1])) for k, v in raw["prices"].items()}
+            return float(raw["fetched_at"]), prices
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            return None
+
+    def _fetch_catalog(self) -> dict[str, tuple[float, float]]:
+        url = self.openrouter.base_url.rstrip("/") + "/models"
+        resp = self.client.get(url)
+        resp.raise_for_status()
+        prices: dict[str, tuple[float, float]] = {}
+        for entry in resp.json()["data"]:
+            try:
+                p_in = float(entry["pricing"]["prompt"]) * 1_000_000
+                p_out = float(entry["pricing"]["completion"]) * 1_000_000
+            except (KeyError, TypeError, ValueError):
+                continue
+            if p_in < 0 or p_out < 0:  # routers report -1: variable pricing
+                continue
+            prices[str(entry["id"])] = (p_in, p_out)
+        return prices
+
+    def catalog(self) -> dict[str, tuple[float, float]]:
+        with self._lock:
+            if self._prices is not None:
+                return self._prices
+            cached = self._load_cache()
+            now = self._clock()
+            if cached is not None and now - cached[0] < CATALOG_MAX_AGE_S:
+                self._prices = cached[1]
+                return self._prices
+            try:
+                self._prices = self._fetch_catalog()
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("openrouter: could not fetch model catalog (%s)", exc)
+                self._prices = cached[1] if cached else {}
+                return self._prices
+            path = Path(self.openrouter.catalog_cache)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps({"fetched_at": now, "prices": self._prices}, sort_keys=True)
+                )
+            except OSError as exc:
+                logger.warning("openrouter: could not cache model catalog (%s)", exc)
+            return self._prices
+
+    def _lookup(self, slug: str) -> tuple[float, float] | None:
+        prices = self.catalog()
+        return prices.get(slug) or prices.get(slug.partition(":")[0])
+
+    def cost(self, usage: Any, *, batch: bool = False) -> float:
+        reported = getattr(usage, "cost_usd", None)
+        if reported is not None:
+            return float(reported)
+        served = getattr(usage, "model", "") or ""
+        rates = (self._lookup(served) if served else None) or self._lookup(self.model)
+        if rates is None:
+            with self._lock:
+                if not self._warned_cost:
+                    self._warned_cost = True
+                    logger.warning(
+                        "%s: cost is unknown (not in response or model catalog); "
+                        "spend caps will not see this scorer's cost",
+                        self.name,
+                    )
+            return 0.0
+        return (
+            _usage_int(usage, "input_tokens") * rates[0]
+            + _usage_int(usage, "output_tokens") * rates[1]
+        ) / 1_000_000
+
+
 # ─── Factory ────────────────────────────────────────────────────────────────
 
 
@@ -405,6 +540,8 @@ def scorer_from_string(
     if provider == "openai-compat":
         config = (scoring or Scoring()).openai_compat
         return OpenAICompatScorer(name, config, client=http_client)
+    if provider == "openrouter":
+        return OpenRouterScorer(name, (scoring or Scoring()).openrouter, client=http_client)
     raise ScorerError(f"unknown scorer provider {provider!r} in {spec!r}")
 
 
@@ -413,6 +550,15 @@ def privacy_notice(spec: str, scoring: Scoring) -> str | None:
     provider, _ = split_scorer(spec)
     if provider == "anthropic":
         return None
+    if provider == "openrouter":
+        collection = scoring.openrouter.provider.get(
+            "data_collection", "unset (OpenRouter default)"
+        )
+        return (
+            f"notice: scorer {spec} sends your resume-derived profile and the job postings to "
+            f"openrouter.ai and the model provider it routes to; provider data_collection is "
+            f"{collection} (specs/008 personal data, specs/016)"
+        )
     target = scoring.openai_compat.base_url if provider == "openai-compat" else provider
     return (
         f"notice: scorer {spec} sends your resume-derived profile and the job postings to "

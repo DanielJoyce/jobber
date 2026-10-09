@@ -125,6 +125,15 @@ def score(
         int | None,
         typer.Option("--deep-group", metavar="GID", help="Deep-pass one job group."),
     ] = None,
+    scorer_override: Annotated[
+        str | None,
+        typer.Option(
+            "--scorer",
+            metavar="SPEC",
+            help="Screen with this scorer instead of scoring.screen_scorer, e.g. "
+            "openrouter:openai/gpt-oss-120b (for comparing scorers on the same jobs).",
+        ),
+    ] = None,
 ) -> None:
     """Screen batches (specs/006 Stage 2) or the Opus deep pass (Stage 3)."""
     modes = [submit, collect is not None, deep is not None, deep_group is not None]
@@ -148,7 +157,10 @@ def score(
     except ProfileError as exc:
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
-    scorer = settings.scoring.screen_scorer
+    if scorer_override is not None and not (submit or collect is not None):
+        typer.echo("--scorer applies to --submit and --collect only", err=True)
+        raise typer.Exit(2)
+    scorer = scorer_override or settings.scoring.screen_scorer
     screening = submit or collect is not None
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
         typer.echo(notice, err=True)

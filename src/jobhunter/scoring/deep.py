@@ -296,7 +296,18 @@ def deep_score(
         return DeepResult(status, cost_usd=cost, detail=str(exc))
 
     with _txn(conn):
-        result = _write(conn, group_id, report, job_d, usage, cost, scorer, profile, now)
+        result = _write(
+            conn,
+            group_id,
+            report,
+            job_d,
+            usage,
+            cost,
+            scorer,
+            profile,
+            now,
+            served_model=getattr(message, "model", "") or "",
+        )
         spend()
     result.cost_usd = cost
     return result
@@ -312,6 +323,7 @@ def _write(
     scorer: str,
     profile: Profile,
     now: datetime,
+    served_model: str = "",
 ) -> DeepResult:
     haystack = stage2._posting_haystack(job)
     _, bad_quotes = stage2.verify_evidence(report, haystack)
@@ -380,8 +392,8 @@ def _write(
         "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
         "verdict, overall, dimensions, evidence, blockers, missing_info, tailoring_hints, "
         "shape_flags, evidence_unverified, input_tokens, output_tokens, cache_read_tokens, "
-        "cost_usd, batch_id, created_at, deep_report) "
-        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+        "cost_usd, batch_id, created_at, deep_report, served_model) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
         (
             group_id,
             TIER,
@@ -402,6 +414,7 @@ def _write(
             cost,
             to_iso(now),
             json.dumps(stored_report),
+            served_model or None,
         ),
     )
     row = conn.execute("SELECT * FROM fit_score WHERE id = ?", (cur.lastrowid,)).fetchone()
