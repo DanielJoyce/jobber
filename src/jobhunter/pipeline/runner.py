@@ -40,6 +40,7 @@ from jobhunter.scoring.profile import Profile, ProfileError, load_profile
 from jobhunter.sources.adapters.base import SourceAdapter
 from jobhunter.sources.adapters.nlx import NlxAdapter
 from jobhunter.sources.adapters.usajobs import UsajobsAdapter, queries_from_profile
+from jobhunter.sources.adapters.wyoming import WyomingAdapter
 from jobhunter.sources.registry import sync_sources_table
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ FLUSH_EVERY = 100
 ADAPTERS: dict[str, Callable[[], SourceAdapter]] = {
     "usajobs": UsajobsAdapter,
     "nlx": NlxAdapter,
+    "wyo": WyomingAdapter,
 }
 
 CtxFactory = Callable[[SourceRow], AbstractContextManager[Any]]

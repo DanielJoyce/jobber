@@ -822,11 +822,15 @@
   state: "WY"
   class: "A"
   name: "Wyoming at Work"
-  family: "next"
+  family: "wyo"
   tier: "api"
-  entry: "https://hire.wyo.gov/home"
+  entry: "https://hire.wyo.gov/employer-api/api/jobs/search"
   verified: "2026-10-09"
-  family_signals: ["__NEXT_DATA__, /api/workflow (per 010)"]
+  family_signals: ["__NEXT_DATA__, /api/workflow (per 010)", "Career Edge Next.js platform; job board is the employer-jobseeker micro-frontend calling /employer-api/api/jobs/search anonymously"]
+  config:
+    api_base: "https://hire.wyo.gov/employer-api/api"
+    page_size: 30
+  pagination: {kind: offset, max_pages: 20}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
   robots: {status: "absent", checked: "2026-10-09", note: "robots.txt path returns the Next.js HTML shell (200), not a robots file."}
   policy: "enabled"

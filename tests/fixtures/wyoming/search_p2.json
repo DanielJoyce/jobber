@@ -1,0 +1,251 @@
+{
+ "statusCode": 200,
+ "data": [
+  {
+   "_id": "6ac4484151f94fcfff0be9a1",
+   "minimumWagePerHour": null,
+   "maximumWagePerHour": null,
+   "avgWagePerHour": null,
+   "Job Description": "<p>Regional Income Development Executive - West Division</p>\n<p>134613</p>\n<p>Due to continued sales success, Zurich is looking for a <strong>Regional Income Development Executive</strong> to support the sales efforts in our West Division. The ideal candidate will live in the Wstern Division which includes California, Arizona, Oregon, Washington, Utah, Idaho, Colorado and Nevada.</p>\n<p>Zurich Direct Markets specializes in providing Finance &amp; Insurance (F&amp;I) products, to the automotive industry. We have a dedicated sales force of F&amp;I professionals who meet regularly and directly with our customers.</p>\n<p>Our Regional Income Development Executives support growth and</p>",
+   "sendResume": true,
+   "notifyWorkforceCenterStaff": true,
+   "emailPaperResumeToThisAddress": true,
+   "callThisPhoneNumber": true,
+   "instructions": "Please visit to your nearest Workforce Center to apply for this job.",
+   "isExternal": true,
+   "source": "NLX",
+   "jobCreatedAt": "1791248449959",
+   "cardDetails": {
+    "jobName": "Regional Income Development Executive - West Division",
+    "companyName": "Zurich NA"
+   },
+   "subValues": {
+    "location": [
+     {
+      "location": {
+       "locationName": "Cheyenne",
+       "city": "Cheyenne",
+       "state": "WY",
+       "zipcode": "82009"
+      }
+     }
+    ],
+    "jobType": "Full-time",
+    "createdAt": 1791507639689,
+    "minimumSalary": 0,
+    "maximumSalary": 0,
+    "basisUnitSalary": "5",
+    "hoursPerWeek": 40,
+    "salaryInterval": "Year",
+    "noOfApplicants": 0,
+    "jobExpiryDate": 1823043639689,
+    "noOfVacancies": 1,
+    "hasVirtualInterview": false,
+    "answerType": "typed",
+    "screeningQuestions": []
+   },
+   "redirectCompanyWebsite": true,
+   "isSave": false,
+   "isApplied": null,
+   "appliedAt": null,
+   "withdrawnAt": null
+  },
+  {
+   "_id": "6abdb0c545ee3549fb6dec8a",
+   "minimumWagePerHour": null,
+   "maximumWagePerHour": null,
+   "avgWagePerHour": null,
+   "Job Description": "<p>Direct Markets Account Specialist I</p>\n<p>137046</p>\n<p>Zurich Direct Markets is looking for an Account Specialist to join the Sales &amp; Account Support team.</p>\n<p>The mission of the Sales &amp; Account Support Team is to partner with the field staff to acquire, retain, and service accounts. They are a dedicated resource and an extension to the field staff to help grow the business and provide support to our customers. They aim for \"first time right\" in everything they do through consistent processes, strong technical expertise, and high-quality controls.</p>\n<p>The ideal candidate will provide Property Casualty as well as Finance and Insurance support to regional sales staff to</p>",
+   "sendResume": true,
+   "notifyWorkforceCenterStaff": true,
+   "emailPaperResumeToThisAddress": true,
+   "callThisPhoneNumber": true,
+   "instructions": "Please visit to your nearest Workforce Center to apply for this job.",
+   "isExternal": true,
+   "source": "NLX",
+   "jobCreatedAt": "1790816453527",
+   "cardDetails": {
+    "jobName": "Direct Markets Account Specialist I",
+    "companyName": "Zurich NA"
+   },
+   "subValues": {
+    "location": [
+     {
+      "location": {
+       "locationName": "Cheyenne",
+       "city": "Cheyenne",
+       "state": "WY",
+       "zipcode": "82009"
+      }
+     }
+    ],
+    "jobType": "Full-time",
+    "createdAt": 1791507639687,
+    "minimumSalary": 0,
+    "maximumSalary": 0,
+    "basisUnitSalary": "5",
+    "hoursPerWeek": 40,
+    "salaryInterval": "Year",
+    "noOfApplicants": 0,
+    "jobExpiryDate": 1823043639687,
+    "noOfVacancies": 1,
+    "hasVirtualInterview": false,
+    "answerType": "typed",
+    "screeningQuestions": []
+   },
+   "redirectCompanyWebsite": true,
+   "isSave": false,
+   "isApplied": null,
+   "appliedAt": null,
+   "withdrawnAt": null
+  },
+  {
+   "_id": "6ab7194c2d11d98a57422f4f",
+   "minimumWagePerHour": null,
+   "maximumWagePerHour": null,
+   "avgWagePerHour": null,
+   "Job Description": "<p>Litigated Claims Specialist (General Liability)</p>\n<p>137066</p>\n<p>At Zurich North America, we are seeking a Litigated Claims Specialist to join our high-performing Commercial General Liability team. If you're passionate about resolving complex issues, collaborating with sharp legal and business minds, and delivering outstanding service to clients, this role could be the next exciting step in your career.</p>\n<p>The selected candidate will be expected to work a hybrid schedule from one of Zurich's office locations in Atlanta, GA; Maitland, FL; Addison, TX; Schaumburg, IL; Rocky Hill, CT; Parsippany, NJ; or Omaha, NE. Zurich is also open to considering a fully remote work arrangement</p>",
+   "sendResume": true,
+   "notifyWorkforceCenterStaff": true,
+   "emailPaperResumeToThisAddress": true,
+   "callThisPhoneNumber": true,
+   "instructions": "Please visit to your nearest Workforce Center to apply for this job.",
+   "isExternal": true,
+   "source": "NLX",
+   "jobCreatedAt": "1790384460661",
+   "cardDetails": {
+    "jobName": "Litigated Claims Specialist (General Liability)",
+    "companyName": "Zurich NA"
+   },
+   "subValues": {
+    "location": [
+     {
+      "location": {
+       "locationName": "Cheyenne",
+       "city": "Cheyenne",
+       "state": "WY",
+       "zipcode": "82009"
+      }
+     }
+    ],
+    "jobType": "Full-time",
+    "createdAt": 1791507639685,
+    "minimumSalary": 0,
+    "maximumSalary": 0,
+    "basisUnitSalary": "5",
+    "hoursPerWeek": 40,
+    "salaryInterval": "Year",
+    "noOfApplicants": 0,
+    "jobExpiryDate": 1823043639685,
+    "noOfVacancies": 1,
+    "hasVirtualInterview": false,
+    "answerType": "typed",
+    "screeningQuestions": []
+   },
+   "redirectCompanyWebsite": true,
+   "isSave": false,
+   "isApplied": null,
+   "appliedAt": null,
+   "withdrawnAt": null
+  },
+  {
+   "_id": "6ab7194c2d11d98a57422f4c",
+   "minimumWagePerHour": null,
+   "maximumWagePerHour": null,
+   "avgWagePerHour": null,
+   "Job Description": "<p>Underwriting Specialist OR Executive Underwriter - Large Contract Surety</p>\n<p>137155</p>\n<p>Zurich's  <strong>Large Contract West Region Surety Team</strong>  is looking for a motivated  <strong>Contract Surety Underwriter</strong>  to help us strengthen our portfolio, elevate our client relationships, and make a lasting impact across the 13 Western States.</p>\n<p>This is a highly technical position and requires experience with Surety lines of business.</p>\n<p>At Zurich, we foster a  <strong>collaborative, purpose-driven culture</strong>  with the backing of a  <strong>global brand</strong> . You'll have the opportunity to:</p>\n<ul>\n<li><p><strong>Lead with impact</strong>  by managing</p>",
+   "sendResume": true,
+   "notifyWorkforceCenterStaff": true,
+   "emailPaperResumeToThisAddress": true,
+   "callThisPhoneNumber": true,
+   "instructions": "Please visit to your nearest Workforce Center to apply for this job.",
+   "isExternal": true,
+   "source": "NLX",
+   "jobCreatedAt": "1790384460658",
+   "cardDetails": {
+    "jobName": "Underwriting Specialist OR Executive Underwriter - Large Contract Surety",
+    "companyName": "Zurich NA"
+   },
+   "subValues": {
+    "location": [
+     {
+      "location": {
+       "locationName": "Cheyenne",
+       "city": "Cheyenne",
+       "state": "WY",
+       "zipcode": "82009"
+      }
+     }
+    ],
+    "jobType": "Full-time",
+    "createdAt": 1791507639683,
+    "minimumSalary": 0,
+    "maximumSalary": 0,
+    "basisUnitSalary": "5",
+    "hoursPerWeek": 40,
+    "salaryInterval": "Year",
+    "noOfApplicants": 0,
+    "jobExpiryDate": 1823043639683,
+    "noOfVacancies": 1,
+    "hasVirtualInterview": false,
+    "answerType": "typed",
+    "screeningQuestions": []
+   },
+   "redirectCompanyWebsite": true,
+   "isSave": false,
+   "isApplied": null,
+   "appliedAt": null,
+   "withdrawnAt": null
+  },
+  {
+   "_id": "6ab7194c2d11d98a57422f49",
+   "minimumWagePerHour": null,
+   "maximumWagePerHour": null,
+   "avgWagePerHour": null,
+   "Job Description": "<p>Sr. Mass Litigation Claims Professional</p>\n<p>135733</p>\n<p>Zurich North America is currently seeking a <strong>Senior Mass Litigation Claims Professional</strong>  to join our  <strong>Latent &amp; Environmental Claims</strong>  team.</p>\n<p>This role offers a unique opportunity to manage moderate to high-severity commercial liability claims involving toxic torts, latent injuries, and class action litigation including complex coverage and litigated issues. You will be part of a <strong>Mass Litigation</strong>  team specializing in the handling of complex, multi-year claims under CGL, umbrella, excess liability, employers' liability, and other specialty coverages providing best in</p>",
+   "sendResume": true,
+   "notifyWorkforceCenterStaff": true,
+   "emailPaperResumeToThisAddress": true,
+   "callThisPhoneNumber": true,
+   "instructions": "Please visit to your nearest Workforce Center to apply for this job.",
+   "isExternal": true,
+   "source": "NLX",
+   "jobCreatedAt": "1790384460654",
+   "cardDetails": {
+    "jobName": "Sr. Mass Litigation Claims Professional",
+    "companyName": "Zurich NA"
+   },
+   "subValues": {
+    "location": [
+     {
+      "location": {
+       "locationName": "Cheyenne",
+       "city": "Cheyenne",
+       "state": "WY",
+       "zipcode": "82009"
+      }
+     }
+    ],
+    "jobType": "Full-time",
+    "createdAt": 1791507639681,
+    "minimumSalary": 0,
+    "maximumSalary": 0,
+    "basisUnitSalary": "5",
+    "hoursPerWeek": 40,
+    "salaryInterval": "Year",
+    "noOfApplicants": 0,
+    "jobExpiryDate": 1823043639681,
+    "noOfVacancies": 1,
+    "hasVirtualInterview": false,
+    "answerType": "typed",
+    "screeningQuestions": []
+   },
+   "redirectCompanyWebsite": true,
+   "isSave": false,
+   "isApplied": null,
+   "appliedAt": null,
+   "withdrawnAt": null
+  }
+ ],
+ "totalRecords": 6418
+}

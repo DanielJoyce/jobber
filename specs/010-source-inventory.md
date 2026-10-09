@@ -19,7 +19,7 @@ Updated 2026-10-09 after the robots survey and the Milestone 1 classification pa
 | `nlx` | 3 | 3 |
 | `sfdc` (Salesforce Experience Cloud community) | 2 (OK, WA) | new |
 | `wordpress` (info site; job backend not identified) | 1 (WV) | new |
-| `next/custom` | 1 | 1 |
+| `wyo` (was `next/custom`) | 1 | 1 |
 | `?` (custom / unidentified) | 13 | 18 |
 | `usajobs` (class C) | 1 | 1 |
 
@@ -88,7 +88,7 @@ serve a bot-challenge page to curl). The earlier expectation that most would fal
 | WA | Washington |  | `https://worksourcewa.com/home.aspx` | `sfdc` | **verified (2026-10-09)** - worksourcewa.com redirects to worksource.my.site.com/worksourcewa/ (Salesforce community; same default robots text as OK) | ABSENT (search host `worksource.my.site.com`: PARTIAL) | yes | yes |
 | WV | West Virginia | WorkForce West Virginia | `https://workforcewv.org/individuals/` | `wordpress` | **verified (2026-10-09)** - wp-content, WordPress (Yoast block in robots) | OPEN | yes | yes |
 | WI | Wisconsin | Wisconsin Job Center | `https://jobcenterofwisconsin.com/` | `?` | unclassified - ASP.NET WebForms (__VIEWSTATE), Presentation/JobSeekers/JobSearch.aspx | PARTIAL | yes | yes |
-| WY | Wyoming | Wyoming at Work | `https://hire.wyo.gov/home` | `next/custom` | **verified** — `__NEXT_DATA__`, `/api/workflow` | ABSENT | yes | yes |
+| WY | Wyoming | Wyoming at Work | `https://hire.wyo.gov/home` | `wyo` (Next.js custom) | **verified** — `__NEXT_DATA__`, `/api/workflow` | ABSENT | yes | yes |
 
 ## Open set (2026-10-09)
 
@@ -103,7 +103,7 @@ from robots.txt only; every row still needs an adapter and a fixture, and the ca
 | KY | `https://kyjobs.usnlx.com/jobs/` | `nlx` | PARTIAL (feeds only) | none |
 | MT | `https://montana.usnlx.com/jobs/` (landing `montanaworks.gov`) | `nlx` | ABSENT; `montana.usnlx.com` feeds only | search host confirmed 2026-10-09 (same NLx app, X-Origin `montana.usnlx.com`) |
 | NY | `https://myjobsny.usnlx.com/jobs/` (legacy `newyork.usnlx.com`) | `nlx` | ABSENT; `myjobsny.usnlx.com` feeds only | search host confirmed 2026-10-09 (same NLx app, X-Origin `myjobsny.usnlx.com`) |
-| WY | `https://hire.wyo.gov/home` | `next/custom` | ABSENT | none |
+| WY | `https://hire.wyo.gov/home` | `wyo` (Next.js custom) | ABSENT | API found 2026-10-09: anonymous JSON, no login. `GET /employer-api/api/jobs/search?skip&limit&sort=desc&searchText&location&postDate=MM/DD/YYYY` (list, full `totalRecords`) and `GET /employer-api/api/jobs/search/<_id>` (detail with description and apply link). The home page's `/api/workflow` is unrelated (internal workflow engine). Board is mostly NLx-fed (`source: NLX`) plus Workforce Services employer postings. Human URL `https://hire.wyo.gov/job/<_id>`. |
 | LA | `https://www.louisianaworks.net/hire/vosnet/Default.aspx` | `vos` | ABSENT | the only VOS host without `Disallow: /`; needs the VOS adapter |
 | MI | `https://jobs.mitalent.org/job-search` (entry `www.mitalent.org`) | `?` | PARTIAL (`/Feedback/`, `/bot-trap/`) | robots read from `jobs.mitalent.org`, not the entry host |
 | OK | `https://www.employoklahoma.gov/Participants/s/` | `sfdc` | PARTIAL (forgot-password) | entry redirects to a login page; guest access unverified; JS-rendered |

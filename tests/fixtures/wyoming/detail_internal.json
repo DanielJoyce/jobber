@@ -1,0 +1,88 @@
+{
+ "statusCode": 200,
+ "data": {
+  "_id": "6ac926070ee241d8513a2374",
+  "isHidden": false,
+  "cardDetails": {
+   "jobName": " New Accounts - Customer Service Representatives",
+   "companyName": "Bank of Commerce"
+  },
+  "subValues": {
+   "location": [
+    {
+     "_id": "65a142e381a6d186864aeee8",
+     "createdAt": "2011-09-20T14:55:42.367Z",
+     "modifiedAt": "2023-12-14T16:43:36.820Z",
+     "worksiteid": 39011,
+     "location": {
+      "locationName": "Bank of Commerce",
+      "city": "Rawlins",
+      "state": "WY",
+      "zipcode": "82301"
+     },
+     "type": 1,
+     "newLocation": true,
+     "employerMapped": true,
+     "status": 1
+    }
+   ],
+   "workMode": "fullTimeInPerson",
+   "jobType": 1,
+   "createdAt": 1791504000000,
+   "salaryInterval": "Hour",
+   "minimumSalary": 0,
+   "maximumSalary": 0,
+   "hoursPerWeek": 40,
+   "noOfApplicants": 1,
+   "jobExpiryDate": 1793491199999,
+   "doNotDisplaySalaryRequirement": false,
+   "noOfVacancies": 1,
+   "hasVirtualInterview": false,
+   "answerType": "none",
+   "screeningQuestions": []
+  },
+  "sendResume": true,
+  "notifyWorkforceCenterStaff": true,
+  "emailPaperResumeToThisAddress": true,
+  "callThisPhoneNumber": true,
+  "instructions": "Please visit to your nearest Workforce Center to apply for this job.",
+  "isExternal": false,
+  "jobDetails": {
+   "Job Description": "<p><strong>I/ General Purpose</strong></p><p>Plan, direct, coordinate, and sell all the products in the New Accounts Department. Customer</p><p>service and administering Banks Mission Statement is one of the most important purposes of</p><p>the department. Interviewing customers to obtain information needed for opening, closing,</p><p>changing accounts, and accommodating the customer’s needs. Familiar with bank products</p><p>and services.</p><p>&nbsp;</p><p><strong>II/ Essential Duties/ Responsibilities</strong></p><ul><li>Regular attendance and prompt punctuality to work.</li><li>Answer&nbsp;customers'&nbsp;questions&nbsp;and&nbsp;explain&nbsp;available&nbsp;products and</p>",
+   "Start Date": null,
+   "End Date": null,
+   "Minimum Experience": 0,
+   "Eligible Applicants": null,
+   "Skills": "-",
+   "Benefits Offered": {},
+   "experienceRequirements": {}
+  },
+  "companyDetails": {
+   "jobId": "10012070",
+   "companyLocation": {
+    "location": [
+     {
+      "locationName": "Bank of Commerce",
+      "city": "Rawlins",
+      "state": "WY",
+      "country": null,
+      "website": null,
+      "type": 1,
+      "zipcode": "82301",
+      "_id": "65ba6f9cc1d179bf7d0ddbdf"
+     }
+    ]
+   },
+   "companyWebsite": "https://www.bocrawlins.com/who-we-are/join-our-team",
+   "displayWorksiteStreetAddress": true,
+   "displayCompanyName": true
+  },
+  "howToApplyJob": {
+   "redirectCompanyWebsite": "https://www.bocrawlins.com/who-we-are/join-our-team"
+  },
+  "isSave": false,
+  "isApplied": null,
+  "appliedAt": null,
+  "withdrawnAt": null
+ }
+}
