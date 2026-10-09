@@ -1223,7 +1223,7 @@
   verified: "2026-10-09"
   family_signals: ["statecareers.idaho.gov meta-refreshes to css-idaho-prd.tam.inforgov.com/hcm/Jobs (Infor HCM)"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "robots host statecareers.idaho.gov: robots.txt on the Infor host is 404. Infor CloudSuite job board is script-driven; not examined further. Follow-up."}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host css-idaho-prd.tam.inforgov.com: robots.txt on the Infor host is 404. Infor CloudSuite job board is script-driven; not examined further. Follow-up."}
   policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -1641,11 +1641,11 @@
   name: "New Mexico state employer careers (peoplesoft)"
   family: "peoplesoft"
   tier: "browser"
-  entry: "https://www.spo.state.nm.us/"
+  entry: "https://careers.share.nm.gov/"
   verified: "2026-10-09"
   family_signals: ["spo.state.nm.us 'Apply now' links careers.share.nm.gov/psp/hprdcg/EMPLOYEE/HRMS (PeopleSoft)"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.spo.state.nm.us: robots.txt on careers.share.nm.gov is 404. PeopleSoft gateway; browser tier follow-up."}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host careers.share.nm.gov: robots.txt on careers.share.nm.gov is 404. PeopleSoft gateway; browser tier follow-up."}
   policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
