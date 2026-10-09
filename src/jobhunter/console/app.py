@@ -18,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.config import Settings
 from jobhunter.console import dashboard as dash
-from jobhunter.console import inbox_routes
+from jobhunter.console import detail_routes, inbox_routes
 from jobhunter.core import db, geo
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile
 
@@ -232,8 +232,6 @@ def create_app(
         ctx = table_context(conn, dash.clamp_range(range), dash.clamp_metric(metric), sort, dir)
         return templates.TemplateResponse(request, "_state_table.html", ctx)
 
-    @app.get("/job/{group_id}", response_class=HTMLResponse)
-    def job(request: Request, group_id: str) -> HTMLResponse:
-        return render(request, f"Job {group_id}", "/inbox")
+    detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
 
     return app
