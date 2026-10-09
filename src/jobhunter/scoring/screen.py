@@ -29,6 +29,17 @@ from jobhunter.pipeline.listing import _txn, to_iso
 from jobhunter.pipeline.locations import load_locations, location_summary
 from jobhunter.scoring.profile import Profile, scoring_inputs
 from jobhunter.scoring.rubric import PROMPT_VERSION, RUBRIC_TEXT, SCREEN_SCHEMA
+from jobhunter.scoring.scorers import (  # noqa: F401  (pricing/cost helpers re-exported)
+    PRICING_PER_MTOK,
+    AnthropicScorer,
+    FitScorer,
+    ScoreRequest,
+    ScoreResult,
+    _usage_int,
+    anthropic_params,
+    compute_cost,
+    model_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,52 +48,11 @@ DEFAULT_SCORER = "anthropic:claude-haiku-4-5"
 MAX_TOKENS = 2048
 # Planning estimate per request for spend caps (specs/006 "Cost": about $0.002 batched).
 ESTIMATED_COST_PER_REQUEST_USD = 0.002
-# USD per million tokens, standard (non-batch) rates: (input, output).
-PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5": (1.00, 5.00),
-    "claude-opus-5": (5.00, 25.00),
-}
-BATCH_DISCOUNT = 0.5
-CACHE_READ_MULTIPLIER = 0.1
-CACHE_WRITE_MULTIPLIER = 1.25  # 5-minute ephemeral cache writes
 _CUSTOM_ID = re.compile(r"^g(\d+)$")
 
 
 class ScreenError(Exception):
     """A screen result could not be turned into a Screen."""
-
-
-# ─── Model ids and cost ─────────────────────────────────────────────────────
-
-
-def model_id(scorer: str) -> str:
-    """``"anthropic:claude-haiku-4-5"`` -> ``"claude-haiku-4-5"``. Other providers raise."""
-    provider, sep, name = scorer.partition(":")
-    if not sep:
-        return scorer
-    if provider != "anthropic":
-        raise ValueError(f"scorer {scorer!r} is not an Anthropic model")
-    return name
-
-
-def _usage_int(usage: Any, name: str) -> int:
-    return int(getattr(usage, name, None) or 0)
-
-
-def compute_cost(usage: Any, model: str, *, batch: bool) -> float:
-    """USD for one response's ``usage``: uncached input, cache writes, cache reads, output."""
-    try:
-        in_rate, out_rate = PRICING_PER_MTOK[model_id(model)]
-    except KeyError as exc:
-        raise ValueError(f"no pricing for model {model!r}") from exc
-    factor = BATCH_DISCOUNT if batch else 1.0
-    cost = (
-        _usage_int(usage, "input_tokens") * in_rate
-        + _usage_int(usage, "cache_creation_input_tokens") * in_rate * CACHE_WRITE_MULTIPLIER
-        + _usage_int(usage, "cache_read_input_tokens") * in_rate * CACHE_READ_MULTIPLIER
-        + _usage_int(usage, "output_tokens") * out_rate
-    )
-    return cost * factor / 1_000_000
 
 
 # ─── Request construction ───────────────────────────────────────────────────
@@ -119,6 +89,25 @@ def posting_text(job: Mapping[str, Any], locations_summary: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_score_request(
+    job: Mapping[str, Any],
+    locations_summary: str,
+    profile: Profile,
+    *,
+    custom_id: str = "",
+    max_tokens: int = MAX_TOKENS,
+) -> ScoreRequest:
+    """The provider-neutral pieces of one screen call."""
+    return ScoreRequest(
+        custom_id=custom_id,
+        system=RUBRIC_TEXT,
+        profile=scoring_inputs(profile),
+        posting=posting_text(job, locations_summary),
+        schema=SCREEN_SCHEMA,
+        max_tokens=max_tokens,
+    )
+
+
 def build_request(
     job: Mapping[str, Any],
     locations_summary: str,
@@ -127,24 +116,9 @@ def build_request(
     scorer: str = DEFAULT_SCORER,
     max_tokens: int = MAX_TOKENS,
 ) -> dict[str, Any]:
-    """Messages API params for one screen. No ``thinking`` and no ``output_config.effort``.
-
-    Haiku 4.5 rejects ``effort``, and a bounded classification runs with thinking off.
-    """
-    return {
-        "model": model_id(scorer),
-        "max_tokens": max_tokens,
-        "system": [
-            {"type": "text", "text": RUBRIC_TEXT},
-            {
-                "type": "text",
-                "text": scoring_inputs(profile),
-                "cache_control": {"type": "ephemeral"},
-            },
-        ],
-        "messages": [{"role": "user", "content": posting_text(job, locations_summary)}],
-        "output_config": {"format": {"type": "json_schema", "schema": SCREEN_SCHEMA}},
-    }
+    """Anthropic Messages API params for one screen (see ``scorers.anthropic_params``)."""
+    request = build_score_request(job, locations_summary, profile, max_tokens=max_tokens)
+    return anthropic_params(request, model_id(scorer))
 
 
 # ─── Evidence verification ──────────────────────────────────────────────────
@@ -210,6 +184,17 @@ def parse_message(message: Any) -> Screen:
         raise ScreenError(f"stop_reason {stop}")
     try:
         return Screen.model_validate_json(_message_text(message))
+    except ValidationError as exc:
+        raise ScreenError(f"output does not match Screen: {exc.error_count()} errors") from exc
+
+
+def parse_result(result: ScoreResult) -> Screen:
+    if result.stop_reason in ("max_tokens", "refusal"):
+        raise ScreenError(f"stop_reason {result.stop_reason}")
+    if result.text is None:
+        raise ScreenError("response has no text block")
+    try:
+        return Screen.model_validate_json(result.text)
     except ValidationError as exc:
         raise ScreenError(f"output does not match Screen: {exc.error_count()} errors") from exc
 
@@ -398,6 +383,15 @@ def _row(job: sqlite3.Row) -> dict[str, Any]:
 # ─── Batch submit / collect ─────────────────────────────────────────────────
 
 
+def _score_requests(
+    conn: sqlite3.Connection, groups: list[sqlite3.Row], profile: Profile
+) -> list[ScoreRequest]:
+    return [
+        build_score_request(_row(g), _summary_for(conn, g), profile, custom_id=f"g{g['group_id']}")
+        for g in groups
+    ]
+
+
 def submit_batch(
     conn: sqlite3.Connection,
     client: Any,
@@ -424,20 +418,14 @@ def submit_batch(
     if not groups:
         return None
 
-    requests = [
-        {
-            "custom_id": f"g{g['group_id']}",
-            "params": build_request(_row(g), _summary_for(conn, g), profile, scorer=scorer),
-        }
-        for g in groups
-    ]
-    batch = client.messages.batches.create(requests=requests)
+    requests = _score_requests(conn, groups, profile)
+    batch_id = AnthropicScorer(client, scorer).submit(requests)
     with _txn(conn):
         conn.execute(
             "INSERT INTO score_batch (id, tier, model, prompt_version, scoring_version, "
             "request_count, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                batch.id,
+                batch_id,
                 TIER,
                 scorer,
                 PROMPT_VERSION,
@@ -448,10 +436,10 @@ def submit_batch(
         )
         conn.executemany(
             "INSERT INTO score_batch_item (batch_id, custom_id, job_group_id) VALUES (?, ?, ?)",
-            [(batch.id, f"g{g['group_id']}", g["group_id"]) for g in groups],
+            [(batch_id, f"g{g['group_id']}", g["group_id"]) for g in groups],
         )
-    logger.info("submitted screen batch %s with %d requests", batch.id, len(requests))
-    return batch.id
+    logger.info("submitted screen batch %s with %d requests", batch_id, len(requests))
+    return batch_id
 
 
 @dataclass
@@ -513,7 +501,8 @@ def collect_batch(
         raise ValueError(f"unknown batch {batch_id!r}")
     if batch_row["collected_at"] is not None:
         return CollectResult(status="already_collected")
-    if client.messages.batches.retrieve(batch_id).processing_status != "ended":
+    scorer = AnthropicScorer(client, batch_row["model"])
+    if not scorer.ready(batch_id):
         return CollectResult(status="in_progress")
     if batch_row["scoring_version"] != profile.scoring_version:
         logger.warning("batch %s was scored with an older profile scoring_version", batch_id)
@@ -532,23 +521,22 @@ def collect_batch(
     tokens_in = tokens_out = 0
 
     with _txn(conn):
-        for entry in client.messages.batches.results(batch_id):
+        for entry in scorer.collect(batch_id):
             custom_id = entry.custom_id
             group_id = items.get(custom_id)
             if group_id is None:
                 out.unknown_ids.append(custom_id)
                 continue
-            kind = entry.result.type
+            kind = entry.status
             if kind != "succeeded":
                 setattr(out, kind, getattr(out, kind) + 1)
                 outcomes[custom_id] = kind
                 if kind == "errored":
-                    logger.warning("batch %s %s errored: %s", batch_id, custom_id, entry.result)
+                    logger.warning("batch %s %s errored: %s", batch_id, custom_id, entry.detail)
                 continue
 
-            message = entry.result.message
-            usage = message.usage
-            cost = compute_cost(usage, key.model, batch=True)
+            usage = entry.usage
+            cost = scorer.cost(usage, batch=True)
             out.succeeded += 1
             out.cost_usd += cost
             tokens_in += _all_input_tokens(usage)
@@ -557,7 +545,7 @@ def collect_batch(
 
             job = _canonical_job(conn, group_id)
             try:
-                screen = parse_message(message)
+                screen = parse_result(entry)
             except ScreenError as exc:
                 logger.warning("batch %s %s: %s", batch_id, custom_id, exc)
                 out.invalid += 1
@@ -613,15 +601,120 @@ def score_one(
     job = _canonical_job(conn, group_id)
     if job is None:
         raise ValueError(f"job group {group_id} has no canonical job")
-    params = build_request(_row(job), _summary_for(conn, job), profile, scorer=scorer)
-    message = client.messages.parse(**params)
-    screen = parse_message(message)
-    usage = message.usage
-    cost = compute_cost(usage, scorer, batch=False)
-    key = _Key(scorer, PROMPT_VERSION, profile.scoring_version)
+    return score_with(conn, AnthropicScorer(client, scorer), profile, group_id, now=now)
+
+
+def score_with(
+    conn: sqlite3.Connection,
+    scorer: FitScorer,
+    profile: Profile,
+    group_id: int,
+    *,
+    now: datetime,
+) -> int | None:
+    """Screen one group now through any scorer's ``score_one`` (standard pricing)."""
+    job = _canonical_job(conn, group_id)
+    if job is None:
+        raise ValueError(f"job group {group_id} has no canonical job")
+    request = build_score_request(
+        _row(job), _summary_for(conn, job), profile, custom_id=f"g{group_id}"
+    )
+    result = scorer.score_one(request)
+    if result.status != "succeeded":
+        raise ScreenError(f"{result.status}: {result.detail}")
+    screen = parse_result(result)
+    usage = result.usage
+    cost = scorer.cost(usage, batch=False)
+    scorer_name = scorer.name
+    key = _Key(scorer_name, PROMPT_VERSION, profile.scoring_version)
     with _txn(conn):
         row_id, _ = _write_fit_score(conn, group_id, screen, _row(job), usage, cost, key, None, now)
         _record_spend(
-            conn, scorer, now, 1, _all_input_tokens(usage), _usage_int(usage, "output_tokens"), cost
+            conn,
+            scorer_name,
+            now,
+            1,
+            _all_input_tokens(usage),
+            _usage_int(usage, "output_tokens"),
+            cost,
         )
     return row_id
+
+
+@dataclass
+class SyncResult:
+    submitted: int = 0
+    written: int = 0
+    duplicate: int = 0
+    invalid: int = 0
+    errored: int = 0
+    unverified: int = 0
+    cost_usd: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+def score_sync(
+    conn: sqlite3.Connection,
+    scorer: FitScorer,
+    profile: Profile,
+    *,
+    limit: int,
+    now: datetime,
+    remaining_usd: Callable[[], float] | None = None,
+) -> SyncResult:
+    """Screen eligible groups through a non-batching scorer and write fit_score rows now.
+
+    Same eligibility, spend cap, evidence verification and write path as the batch route;
+    rows have ``batch_id`` NULL. Errored and unparseable results write nothing, so those
+    groups stay eligible for the next run.
+    """
+    out = SyncResult()
+    if remaining_usd is not None:
+        affordable = math.floor(max(remaining_usd(), 0.0) / ESTIMATED_COST_PER_REQUEST_USD)
+        if affordable < limit:
+            logger.warning("spend cap: screening limited to %d groups", affordable)
+        limit = min(limit, affordable)
+    if limit <= 0:
+        return out
+    groups = eligible_groups(conn, profile, scorer=scorer.name, limit=limit)
+    if not groups:
+        return out
+    by_id = {f"g{g['group_id']}": g for g in groups}
+    results = scorer.submit(_score_requests(conn, groups, profile))
+    if isinstance(results, str):
+        raise ValueError(f"scorer {scorer.name} batches; use submit_batch")
+    out.submitted = len(groups)
+    key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
+    tokens_in = tokens_out = calls = 0
+    with _txn(conn):
+        for res in results:
+            g = by_id.get(res.custom_id)
+            if g is None:
+                continue
+            if res.status != "succeeded":
+                out.errored += 1
+                logger.warning("%s %s: %s", scorer.name, res.custom_id, res.detail)
+                continue
+            cost = scorer.cost(res.usage, batch=False)
+            out.cost_usd += cost
+            calls += 1
+            tokens_in += _all_input_tokens(res.usage)
+            tokens_out += _usage_int(res.usage, "output_tokens")
+            try:
+                screen = parse_result(res)
+            except ScreenError as exc:
+                logger.warning("%s %s: %s", scorer.name, res.custom_id, exc)
+                out.invalid += 1
+                continue
+            row_id, unverified = _write_fit_score(
+                conn, g["group_id"], screen, _row(g), res.usage, cost, key, None, now
+            )
+            if row_id is None:
+                out.duplicate += 1
+            else:
+                out.written += 1
+                out.unverified += int(unverified)
+        _record_spend(conn, key.model, now, calls, tokens_in, tokens_out, out.cost_usd)
+    return out

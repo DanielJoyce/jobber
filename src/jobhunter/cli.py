@@ -140,6 +140,7 @@ def score(
     from jobhunter.core import db
     from jobhunter.scoring import screen
     from jobhunter.scoring.profile import ProfileError, load_profile
+    from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
 
     settings = load_settings()
     try:
@@ -147,11 +148,15 @@ def score(
     except ProfileError as exc:
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
+    scorer = settings.scoring.screen_scorer
+    screening = submit or collect is not None
+    if screening and (notice := privacy_notice(scorer, settings.scoring)):
+        typer.echo(notice, err=True)
     conn = db.connect(settings.paths.db_path)
     db.migrate(conn)
-    client = anthropic.Anthropic()
+    # The screen scorer may not be Anthropic; only build its client where it is needed.
+    client = None if screening and not scorer.startswith("anthropic:") else anthropic.Anthropic()
     now = datetime.now(UTC)
-    scorer = settings.scoring.screen_scorer
     try:
         if deep is not None or deep_group is not None:
             from jobhunter.scoring import deep as stage3
@@ -181,6 +186,22 @@ def score(
                 typer.echo(f"group {gid}: {res.status}{flag} {res.detail}".rstrip())
                 if res.status == "capped":
                     break
+        elif submit and client is None:
+            try:
+                sync = screen.score_sync(
+                    conn,
+                    scorer_from_string(scorer, scoring=settings.scoring),
+                    profile,
+                    limit=limit,
+                    now=now,
+                    remaining_usd=lambda: screen.remaining_daily_budget(
+                        conn, settings.scoring.daily_cap_usd, now
+                    ),
+                )
+            except ScorerError as exc:
+                typer.echo(f"scorer error: {exc}", err=True)
+                raise typer.Exit(1) from exc
+            typer.echo(json.dumps(sync.as_dict(), indent=2))
         elif submit:
             batch_id = screen.submit_batch(
                 conn,
@@ -196,6 +217,9 @@ def score(
             typer.echo(f"submitted batch {batch_id}" if batch_id else "nothing to submit")
         else:
             assert collect is not None
+            if client is None:
+                typer.echo(f"{scorer} does not batch; nothing to collect", err=True)
+                raise typer.Exit(2)
             result = screen.collect_batch(conn, client, collect, profile, now=now)
             typer.echo(json.dumps(result.as_dict(), indent=2))
     finally:

@@ -398,6 +398,29 @@ def _score_stage(
     except ImportError:
         report.messages.append("score: screen stage not installed; skipped")
         return
+    from jobhunter.scoring.scorers import privacy_notice, scorer_from_string
+
+    spec = settings.scoring.screen_scorer
+    if notice := privacy_notice(spec, settings.scoring):
+        report.messages.append(notice)
+    if not spec.startswith("anthropic:"):
+        try:
+            sync = screen.score_sync(
+                conn,
+                scorer_from_string(spec, scoring=settings.scoring),
+                profile,
+                limit=DEFAULT_SCORE_LIMIT,
+                now=now,
+                remaining_usd=lambda: screen.remaining_daily_budget(
+                    conn, settings.scoring.daily_cap_usd, now
+                ),
+            )
+        except Exception as exc:  # scoring trouble must not fail the ingest exit code
+            logger.warning("score failed: %s", exc)
+            report.messages.append(f"score: failed ({exc}); survivors stay queued")
+            return
+        report.counts["score"] = str(sync.written)
+        return
     try:
         import anthropic
 

@@ -26,6 +26,17 @@
 # weekly_cap_usd = 10.0
 # deep_shortlist = 40
 
+# Only used when screen_scorer = "openai-compat:<model>". Switching scorer sends your resume
+# profile and the postings to base_url (specs/008). The API key is read from the env var named
+# here, never from this file. Prices of 0 mean "unknown": cost is recorded as $0.
+# [scoring.openai_compat]
+# base_url = "http://localhost:8000"          # /v1/chat/completions is appended
+# api_key_env = "OPENAI_COMPAT_API_KEY"       # "" sends no Authorization header
+# input_usd_per_mtok = 0.0
+# output_usd_per_mtok = 0.0
+# max_concurrency = 2
+# json_schema = true                          # false: instruct JSON instead of response_format
+
 [mail]
 # alerts_address = "<you>+jobs@gmail.com"
 # label = "jobhunter/alerts"
