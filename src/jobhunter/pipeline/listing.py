@@ -49,11 +49,13 @@ _UPSERT = """
 INSERT INTO job (
   source_key, external_id, url, title, agency_raw, employer, description_raw,
   posted_at, posted_at_estimated, closes_at, salary_raw, location_raw,
-  stage, needs_resolve, first_seen_at, last_seen_at
+  stage, needs_resolve, first_seen_at, last_seen_at,
+  apply_url, occupation_code, pay_plan, grade_low, grade_high
 ) VALUES (
   :source_key, :external_id, :url, :title, :agency_raw, :agency_raw, :description_raw,
   :posted_at, :posted_est, :closes_at, :salary_raw, :location_raw,
-  'listed', :needs_resolve, :now, :now
+  'listed', :needs_resolve, :now, :now,
+  :apply_url, :occupation_code, :pay_plan, :grade_low, :grade_high
 )
 ON CONFLICT(source_key, external_id) DO UPDATE SET
   title = excluded.title,
@@ -64,6 +66,11 @@ ON CONFLICT(source_key, external_id) DO UPDATE SET
   needs_resolve = CASE WHEN job.description_raw IS NULL AND excluded.description_raw IS NOT NULL
                        THEN excluded.needs_resolve ELSE job.needs_resolve END
 """
+
+
+def _extra_str(stub: JobStub, key: str) -> str | None:
+    value = stub.extra.get(key)
+    return None if value is None or value == "" else str(value)
 
 
 def _store_stub_locations(conn: sqlite3.Connection, stub: JobStub) -> None:
@@ -108,6 +115,11 @@ def upsert_stubs(conn: sqlite3.Connection, stubs: Iterable[JobStub], now: dateti
                     "location_raw": stub.location_raw,
                     "needs_resolve": 1 if stub.needs_resolve else 0,
                     "now": now_iso,
+                    "apply_url": stub.apply_url,
+                    "occupation_code": _extra_str(stub, "occupation_code"),
+                    "pay_plan": _extra_str(stub, "pay_plan"),
+                    "grade_low": _extra_str(stub, "grade_low"),
+                    "grade_high": _extra_str(stub, "grade_high"),
                 },
             )
             if existed:
