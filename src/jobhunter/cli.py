@@ -6,6 +6,8 @@ from typing import Annotated
 
 import typer
 
+from jobhunter.sources.registry import enabled_sources, load_registry
+
 app = typer.Typer(
     help="jobhunter: sweep job banks, score fit, track applications.", no_args_is_help=True
 )
@@ -57,9 +59,25 @@ def eval_() -> None:
 
 
 @sources_app.command("list")
-def sources_list() -> None:
+def sources_list(
+    enabled: Annotated[bool, typer.Option("--enabled", help="Only enabled sources.")] = False,
+    state: Annotated[str | None, typer.Option(help="Only this state code, e.g. NY.")] = None,
+) -> None:
     """List configured sources."""
-    _stub()
+    rows = load_registry()
+    if enabled:
+        rows = enabled_sources(rows)
+    if state:
+        rows = [r for r in rows if (r.state or "").upper() == state.upper()]
+    if not rows:
+        typer.echo("no matching sources")
+        return
+    typer.echo(f"{'KEY':<24}{'ST':<4}{'FAMILY':<11}{'TIER':<9}{'POLICY':<9}ROBOTS")
+    for r in rows:
+        typer.echo(
+            f"{r.key:<24}{(r.state or '-'):<4}{r.family:<11}{r.tier.value:<9}"
+            f"{r.policy.value:<9}{r.robots.status}"
+        )
 
 
 @sources_app.command("verify")

@@ -1,0 +1,857 @@
+# Source registry: one row per job bank (specs/003 "The registry").
+#
+# Generated once from specs/data/robots-survey-2026-10-09.json and the specs/010 table by
+# scripts/gen_registry.py. The script is re-runnable, but this file is now hand-maintained:
+# edit rows here directly.
+#
+# class: A = workforce job bank (state null = national aggregator), C = federal (USAJOBS).
+# policy: enabled = robots allows search AND detail (the specs/010 open set);
+#         blocked = robots disallows the host or search; manual = robots unknown or undeterminable.
+# robots.status is the survey's robots class, lowercased. rate_limit defaults to 0.2 rps,
+# concurrency 1, jitter on; WV honours Crawl-delay 10. expect.min_jobs_per_week is a
+# placeholder until real runs are tuned.
+
+- key: "al-alabamaworks"
+  state: "AL"
+  class: "A"
+  name: "Alabama JobLink"
+  family: "vos"
+  tier: "http"
+  entry: "https://alabamaworks.alabama.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ak-alaskajobs"
+  state: "AK"
+  class: "A"
+  name: "Alaska Job Center Network"
+  family: "vos"
+  tier: "http"
+  entry: "https://alaskajobs.alaska.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "az-azjobconnection"
+  state: "AZ"
+  class: "A"
+  name: "Arizona Workforce Connection"
+  family: "joblink"
+  tier: "http"
+  entry: "https://www.azjobconnection.gov/"
+  verified: "2026-10-09"
+  family_signals: ["identical bundle sha 2c0d5d29e49fd986 (per 003/010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "/search/jobs disallowed"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ar-arjoblink"
+  state: "AR"
+  class: "A"
+  name: "Arkansas JobLink"
+  family: "joblink"
+  tier: "http"
+  entry: "https://www.arjoblink.arkansas.gov/"
+  verified: "2026-10-09"
+  family_signals: ["identical bundle sha 2c0d5d29e49fd986 (per 003/010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "/search/jobs disallowed"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ca-caljobs"
+  state: "CA"
+  class: "A"
+  name: "California CalJOBS"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.caljobs.ca.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "co-connectingcolorado"
+  state: "CO"
+  class: "A"
+  name: "Connecting Colorado"
+  family: "unknown"
+  tier: "http"
+  entry: "https://www.connectingcolorado.com/"
+  verified: "2026-10-09"
+  family_signals: ["entry redirects to myservices.connectingcolorado.gov (empyra WebManager, ASP.NET oneflow, __VIEWSTATE)", "job search delegated to jobs.connectingcolorado.gov/careerhub/explore/jobs (Eightfold-style /api/pcsx, /api/career_hub)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "connectingcolorado.com/robots.txt is 404, but the job search host is jobs.connectingcolorado.gov, which is Disallow: / with an explicit"}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ct-cthires"
+  state: "CT"
+  class: "A"
+  name: "Job and Career ConneCTion."
+  family: "vos"
+  tier: "http"
+  entry: "https://www.cthires.com/"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "de-joblink"
+  state: "DE"
+  class: "A"
+  name: "Delaware Job Link"
+  family: "joblink"
+  tier: "http"
+  entry: "https://joblink.delaware.gov/"
+  verified: "2026-10-09"
+  family_signals: ["identical bundle sha 2c0d5d29e49fd986 (per 003/010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "/search/jobs disallowed"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "dc-dcnetworks"
+  state: "DC"
+  class: "A"
+  name: "DCNetworks"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.dcnetworks.org/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots.txt and /vosnet/Default.aspx both return HTTP 403 (WAF) to a plain curl with an honest User-Agent"}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "fl-employflorida"
+  state: "FL"
+  class: "A"
+  name: "Employ Florida Marketplace"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.employflorida.com/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ga-worksourcegaportal"
+  state: "GA"
+  class: "A"
+  name: "WorkSource Georgia"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.worksourcegaportal.com/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "gu-hireguam"
+  state: "GU"
+  class: "A"
+  name: "Guam Department of Labor - Job Bank"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.hireguam.com/vosnet/default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "hi-hirenethawaii"
+  state: "HI"
+  class: "A"
+  name: "HireNet Hawaii"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.hirenethawaii.com/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "id-idahoworks"
+  state: "ID"
+  class: "A"
+  name: "Idaho Commerce and Labor Job Search"
+  family: "joblink"
+  tier: "http"
+  entry: "https://idahoworks.gov/"
+  verified: "2026-10-09"
+  family_signals: ["identical bundle sha 2c0d5d29e49fd986 (per 003/010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "/search/jobs disallowed"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "il-illinoisjoblink"
+  state: "IL"
+  class: "A"
+  name: "Illinois Department of Employment Security"
+  family: "joblink"
+  tier: "http"
+  entry: "https://illinoisjoblink.illinois.gov/"
+  verified: "2026-10-09"
+  family_signals: ["identical bundle sha 2c0d5d29e49fd986 (per 003/010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "/search/jobs disallowed"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "in-indianacareerconnect"
+  state: "IN"
+  class: "A"
+  name: "Indiana Workforce Development"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.indianacareerconnect.com/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ia-iowaworks"
+  state: "IA"
+  class: "A"
+  name: "IowaJobs"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.iowaworks.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ks-kansasworks"
+  state: "KS"
+  class: "A"
+  name: "KansasWorks"
+  family: "joblink"
+  tier: "http"
+  entry: "https://www.kansasworks.com/"
+  verified: "2026-10-09"
+  family_signals: ["identical bundle sha 2c0d5d29e49fd986 (per 003/010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "/search/jobs disallowed"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ky-kyjobs"
+  state: "KY"
+  class: "A"
+  name: "EmployKy"
+  family: "nlx"
+  tier: "http"
+  entry: "https://kyjobs.usnlx.com/jobs/"
+  verified: "2026-10-09"
+  family_signals: ["usnlx strings (per 010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "Only feed paths disallowed"}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "la-louisianaworks"
+  state: "LA"
+  class: "A"
+  name: "Louisiana Works"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.louisianaworks.net/hire/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots.txt at host root returns 404 (HTML page)."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "me-joblink"
+  state: "ME"
+  class: "A"
+  name: "Maine Employment Info Guide"
+  family: "joblink"
+  tier: "http"
+  entry: "https://joblink.maine.gov/"
+  verified: "2026-10-09"
+  family_signals: ["identical bundle sha 2c0d5d29e49fd986 (per 003/010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "/search/jobs disallowed"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "md-mwejobs"
+  state: "MD"
+  class: "A"
+  name: "Maryland Workforce Exchange"
+  family: "vos"
+  tier: "http"
+  entry: "https://mwejobs.maryland.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ma-jobquest"
+  state: "MA"
+  class: "A"
+  name: "Massachusetts JobQuest"
+  family: "unknown"
+  tier: "http"
+  entry: "https://jobquest.mass.gov/"
+  verified: "2026-10-09"
+  family_signals: ["ASP.NET WebForms (__VIEWSTATE), /JobQuest/Search.aspx", "no vosnet/Geographic Solutions strings", "stray \"taleo\" match not corroborated"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "Custom ASP.NET JobQuest app."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mi-mitalent"
+  state: "MI"
+  class: "A"
+  name: "Michigan's Talent Bank"
+  family: "unknown"
+  tier: "http"
+  entry: "https://www.mitalent.org/"
+  verified: "2026-10-09"
+  family_signals: ["Orchard CMS front (meta generator)", "job search on jobs.mitalent.org/job-search (CareerEvent.aspx, SAML paths)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "www.mitalent.org/robots.txt serves the HTML home page (200)."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mn-careerforce"
+  state: "MN"
+  class: "A"
+  name: "Minnesota's Job Bank - Where Job Seekers and Employers Click"
+  family: "unknown"
+  tier: "http"
+  entry: "https://careerforce.mn.gov/"
+  verified: "2026-10-09"
+  family_signals: ["Drupal 11 (meta generator)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "CORRECTION: earlier survey called this Drupal-admin-only."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ms-wings"
+  state: "MS"
+  class: "A"
+  name: "Increasing Employment in Mississippi"
+  family: "unknown"
+  tier: "http"
+  entry: "https://wings.mdes.ms.gov/wings/welcome.jsp"
+  verified: "2026-10-09"
+  family_signals: ["Spring/JSP app (/wings/spring/self-service/job-order/job-order-lookup)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "Custom MDES WINGS app."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mo-greathires"
+  state: "MO"
+  class: "A"
+  name: "GreatHires - Missouri's Workforce Resource"
+  family: "unknown"
+  tier: "http"
+  entry: "https://jobs.mo.gov/"
+  verified: "2026-10-09"
+  family_signals: ["entry returned a 205-byte Incapsula bot-challenge page to curl", "no family strings"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "Drupal-default robots"}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mt-montanaworks"
+  state: "MT"
+  class: "A"
+  name: "Jobs - Montana"
+  family: "nlx"
+  tier: "http"
+  entry: "https://montanaworks.gov/"
+  verified: "2026-10-09"
+  family_signals: ["usnlx strings", "entry links to post.montana.usnlx.com (per 010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "montanaworks.gov/robots.txt is 404."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ne-neworks"
+  state: "NE"
+  class: "A"
+  name: "NEworks"
+  family: "vos"
+  tier: "http"
+  entry: "https://neworks.nebraska.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nv-employnv"
+  state: "NV"
+  class: "A"
+  name: "Nevada"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.employnv.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nh-nhworksjobmatch"
+  state: "NH"
+  class: "A"
+  name: "New Hampshire"
+  family: "vos"
+  tier: "http"
+  entry: "https://nhworksjobmatch.nhes.nh.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots.txt and /vosnet/Default.aspx both return HTTP 403 (WAF) to a plain curl with an honest User-Agent"}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nj-labor"
+  state: "NJ"
+  class: "A"
+  name: "New Jersey Department of Labor and Workforce Development"
+  family: "unknown"
+  tier: "http"
+  entry: "https://nj.gov/labor/career-services/"
+  verified: "2026-10-09"
+  family_signals: ["nj.gov/labor/career-services is a static info page", "job search is jobsource.nj.gov/jz (JobZone, JSF guest.jsf)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "nj.gov rules are unrelated to jobs."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nm-dws"
+  state: "NM"
+  class: "A"
+  name: "New Mexico Workforce Connection"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.jobs.dws.nm.gov/"
+  verified: "2026-10-09"
+  family_signals: ["entry redirects to /vosnet/default.aspx", "page has vosnet, Geographic Solutions, __VIEWSTATE (newly classified)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "Same VOS robots file as the rest of the family."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ny-newyork"
+  state: "NY"
+  class: "A"
+  name: "Workforce New York"
+  family: "nlx"
+  tier: "http"
+  entry: "https://newyork.usnlx.com/index.asp"
+  verified: "2026-10-09"
+  family_signals: ["usnlx strings (per 010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "newyork.usnlx.com/robots.txt returns an HTML page (legacy ASP site), so no robots."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nc-ncworks"
+  state: "NC"
+  class: "A"
+  name: "The Employment Security Commission of North Carolina"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.ncworks.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nd-ndworkforceconnection"
+  state: "ND"
+  class: "A"
+  name: "JobService North Dakota - Your Workforce Connection"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.ndworkforceconnection.com/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mp-marianaslabor"
+  state: "MP"
+  class: "A"
+  name: "Northern Mariana Islands"
+  family: "unknown"
+  tier: "http"
+  entry: "https://marianaslabor.net/jvapub_list.asp"
+  verified: "2026-10-09"
+  family_signals: ["classic ASP (jvapub_list.asp)", "no vendor strings"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots.txt is 404 (IIS)."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "oh-ohiomeansjobs"
+  state: "OH"
+  class: "A"
+  name: "Ohio's Statewide Job Matching System"
+  family: "unknown"
+  tier: "http"
+  entry: "https://ohiomeansjobs.ohio.gov/home"
+  verified: "2026-10-09"
+  family_signals: ["none: every path on the host (including / and /home) returned a 404 page"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots.txt 404, but the whole site 404ed to curl on 2026-10-09 (entry /home and /), so search/detail could not be observed."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ok-employoklahoma"
+  state: "OK"
+  class: "A"
+  name: "Oklahoma Job Link"
+  family: "sfdc"
+  tier: "browser"
+  entry: "https://www.employoklahoma.gov/"
+  verified: "2026-10-09"
+  family_signals: ["Salesforce Experience Cloud community (SfdcApp redirect, \"default robots.txt for sfdc communities\")"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots.txt at the host root redirects to /Participants/robots.txt."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "or-emp"
+  state: "OR"
+  class: "A"
+  name: "Find work, post jobs and locate workforce services"
+  family: "unknown"
+  tier: "http"
+  entry: "https://secure.emp.state.or.us/jobs/index.cfm?bkmk=w9"
+  verified: "2026-10-09"
+  family_signals: ["entry is a JS bot-challenge page", "no family strings"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "Only PopeTech accessibility scanners are allowed."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "pa-pacareerlink"
+  state: "PA"
+  class: "A"
+  name: "Services for Job Seekers and Employers"
+  family: "unknown"
+  tier: "http"
+  entry: "https://www.pacareerlink.pa.gov/jponline/Common/LandingPage/"
+  verified: "2026-10-09"
+  family_signals: ["PA CareerLink /jponline/ (Java/JSP-style paths)", "no vendor strings"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "Inline comment \"# keep them out\" confirmed."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ri-employri"
+  state: "RI"
+  class: "A"
+  name: "Rhode Island Job Bank"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.employri.org/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "sc-scworks"
+  state: "SC"
+  class: "A"
+  name: "South Carolina Job Bank"
+  family: "vos"
+  tier: "http"
+  entry: "https://jobs.scworks.org/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "sd-southdakotaworks"
+  state: "SD"
+  class: "A"
+  name: "South Dakota Department of Labor and Regulation"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.southdakotaworks.org/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "tn-jobs4tn"
+  state: "TN"
+  class: "A"
+  name: "Tennessee Department of Labor and Workforce Development"
+  family: "vos"
+  tier: "http"
+  entry: "https://jobs4tnwfs.tn.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL", "jobs4tn.gov now redirects to tn.gov/jobs4tn, which links to jobs4tnwfs.tn.gov/vosnet/"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "CORRECTION: entry host jobs4tn.gov serves no robots.txt (redirects to an HTML page), which the earlier survey read as no disallow."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "tx-workintexas"
+  state: "TX"
+  class: "A"
+  name: "WorkInTexas"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.workintexas.com/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ut-jobconnection"
+  state: "UT"
+  class: "A"
+  name: "Utah's Job Connection"
+  family: "unknown"
+  tier: "http"
+  entry: "https://jobs.utah.gov/index.html"
+  verified: "2026-10-09"
+  family_signals: ["static CMS (opencms paths)", "no vendor strings"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "None of the disallowed paths are job search or job detail (hotjobs, /jobseeker/ outside Webhelp)."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "vt-vermontjoblink"
+  state: "VT"
+  class: "A"
+  name: "Vermont JobLink"
+  family: "joblink"
+  tier: "http"
+  entry: "https://www.vermontjoblink.com/"
+  verified: "2026-10-09"
+  family_signals: ["/packs/js/4743-860615d0fe49e3040bc6.js present", "fetched sha256 2c0d5d29e49fd986 matches (newly classified)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "Eighth JobLink host."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "vi-vidolviews"
+  state: "VI"
+  class: "A"
+  name: "Virgin Islands Job Bank"
+  family: "vos"
+  tier: "http"
+  entry: "https://www.vidolviews.org/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "va-vawc"
+  state: "VA"
+  class: "A"
+  name: "Virginia's Automated Labor Exchange"
+  family: "vos"
+  tier: "http"
+  entry: "https://vawc.virginia.gov/vosnet/Default.aspx"
+  verified: "2026-10-09"
+  family_signals: ["/vosnet/ in entry URL"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "User-agent * Disallow: /"}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wa-worksourcewa"
+  state: "WA"
+  class: "A"
+  name: "Washington"
+  family: "sfdc"
+  tier: "browser"
+  entry: "https://worksource.my.site.com/worksourcewa/"
+  verified: "2026-10-09"
+  family_signals: ["worksourcewa.com redirects to worksource.my.site.com/worksourcewa/ (Salesforce community", "same default robots text as OK)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "worksourcewa.com/robots.txt is 404 (empty)"}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wv-workforcewv"
+  state: "WV"
+  class: "A"
+  name: "WorkForce West Virginia"
+  family: "wordpress"
+  tier: "http"
+  entry: "https://workforcewv.org/individuals/"
+  verified: "2026-10-09"
+  family_signals: ["wp-content, WordPress (Yoast block in robots)"]
+  rate_limit: {rps: 0.1, concurrency: 1, jitter: true}
+  robots: {status: "open", checked: "2026-10-09", note: "Empty Disallow (allow all)."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wi-jobcenterofwisconsin"
+  state: "WI"
+  class: "A"
+  name: "Wisconsin Job Center"
+  family: "unknown"
+  tier: "http"
+  entry: "https://jobcenterofwisconsin.com/"
+  verified: "2026-10-09"
+  family_signals: ["ASP.NET WebForms (__VIEWSTATE), Presentation/JobSeekers/JobSearch.aspx", "no vosnet/Geographic Solutions strings"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "Only .axd resources disallowed"}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wy-hire"
+  state: "WY"
+  class: "A"
+  name: "Wyoming at Work"
+  family: "next"
+  tier: "api"
+  entry: "https://hire.wyo.gov/home"
+  verified: "2026-10-09"
+  family_signals: ["__NEXT_DATA__, /api/workflow (per 010)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots.txt path returns the Next.js HTML shell (200), not a robots file."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "us-nlx"
+  state: null
+  class: "A"
+  name: "National Labor Exchange (NLx)"
+  family: "nlx"
+  tier: "http"
+  entry: "https://usnlx.com/"
+  verified: "2026-10-09"
+  family_signals: ["national NLx site (usnlx.com)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "National aggregator."}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "us-usajobs"
+  state: null
+  class: "C"
+  name: "USAJOBS"
+  family: "usajobs"
+  tier: "api"
+  entry: "https://data.usajobs.gov/api/search"
+  verified: "2026-10-09"
+  family_signals: ["documented public API (data.usajobs.gov), keyed"]
+  config:
+    sanctioned_api: true
+    auth: {email_env: "USAJOBS_EMAIL", key_env: "USAJOBS_API_KEY"}
+    results_per_page: 500
+    date_posted_days: 7
+  rate_limit: {rps: 2, concurrency: 2, jitter: false}
+  robots: {status: "n/a", checked: null, note: "documented public API"}
+  policy: "enabled"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
