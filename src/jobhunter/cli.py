@@ -260,6 +260,98 @@ def score(
 
 
 @app.command()
+def backfill(
+    days: Annotated[int, typer.Option(help="Ingest postings listed in the last N days.", min=1)],
+    state: Annotated[
+        str | None, typer.Option(help="Comma list of state codes; US includes national rows.")
+    ] = None,
+    budget_usd: Annotated[
+        float | None,
+        typer.Option(
+            "--budget-usd",
+            min=0.0,
+            help="Ceiling for this backfill (default: scoring.weekly_cap_usd). Replaces the "
+            "daily cap for this command only.",
+        ),
+    ] = None,
+    scorer_override: Annotated[
+        str | None,
+        typer.Option("--scorer", metavar="SPEC", help="Screen with this scorer."),
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Ingest and print the estimate; submit nothing.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Submit without the y/N prompt.")] = False,
+    wait: Annotated[
+        bool, typer.Option("--wait", help="Poll batches until they finish or the wait ends.")
+    ] = False,
+    max_wait_minutes: Annotated[
+        int, typer.Option(help="With --wait: stop polling after this many minutes.", min=1)
+    ] = 240,
+    chunk_size: Annotated[int, typer.Option(help="Jobs per Message Batch.", min=1)] = 5000,
+    max_resolve: Annotated[
+        int, typer.Option(help="Cap on detail-page fetches during ingest.", min=0)
+    ] = 5000,
+) -> None:
+    """One-time historical ingest and screen within a budget (specs/006 Cost)."""
+    import sys
+
+    from jobhunter.pipeline import backfill as bf
+    from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
+
+    settings = load_settings()
+    rows = load_registry()
+    spec = scorer_override or settings.scoring.screen_scorer
+    try:
+        scorer = scorer_from_string(spec, scoring=settings.scoring)
+    except (ScorerError, ValueError) as exc:
+        typer.echo(f"scorer error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if notice := privacy_notice(scorer.name, settings.scoring):
+        typer.echo(notice, err=True)
+    client = getattr(scorer, "client", None) if scorer.supports_batching else None
+    budget = settings.scoring.weekly_cap_usd if budget_usd is None else budget_usd
+
+    def confirm(est: bf.Estimate) -> bool:
+        if yes:
+            return True
+        if not sys.stdin.isatty():
+            return False
+        return typer.confirm(
+            f"Submit up to {est.fundable} jobs (about ${est.cost_usd:.2f}, budget ${budget:.2f})?",
+            default=False,
+        )
+
+    db_path = resolve_path(settings.paths.db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = db.connect(db_path)
+    try:
+        db.migrate(conn)
+        result = bf.run_backfill(
+            conn,
+            settings,
+            rows,
+            scorer=scorer,
+            client=client,
+            days=days,
+            states=runner.parse_states(state),
+            budget_usd=budget,
+            chunk_size=chunk_size,
+            max_resolve=max_resolve,
+            dry_run=dry_run,
+            confirm=confirm,
+            wait=wait,
+            max_wait_s=max_wait_minutes * 60.0,
+            out=typer.echo,
+        )
+    finally:
+        conn.close()
+    if result.status == "declined" and not sys.stdin.isatty():
+        typer.echo("no terminal to confirm on; re-run with --yes to submit", err=True)
+    raise typer.Exit(result.exit_code)
+
+
+@app.command()
 def dedupe(
     apply_url: Annotated[
         bool,
