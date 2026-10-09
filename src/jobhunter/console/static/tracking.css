@@ -36,3 +36,5 @@
 .fu-body { flex: 1; }
 .fu-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 800px) { .board { grid-template-columns: repeat(7, 200px); } .fu-row { flex-wrap: wrap; } }
+.proposals-panel { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 8px 0; font-size: 0.85rem; }
+.proposals-panel ul { margin: 4px 0 0; padding-left: 18px; }
