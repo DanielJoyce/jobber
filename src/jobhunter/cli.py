@@ -45,9 +45,28 @@ def score() -> None:
 
 
 @app.command()
-def console() -> None:
+def console(
+    host: Annotated[str | None, typer.Option(help="Bind host (default: config).")] = None,
+    port: Annotated[int | None, typer.Option(help="Bind port (default: config).")] = None,
+    allow_remote: Annotated[
+        bool, typer.Option("--allow-remote", help="Allow a non-loopback host (no auth!).")
+    ] = False,
+) -> None:
     """Start the local web console."""
-    _stub()
+    import uvicorn
+
+    from jobhunter.config import load_settings
+    from jobhunter.console.app import check_host, create_app
+
+    settings = load_settings()
+    bind_host = host or settings.console.host
+    bind_port = port or settings.console.port
+    try:
+        check_host(bind_host, allow_remote)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    uvicorn.run(create_app(settings), host=bind_host, port=bind_port)
 
 
 @app.command(name="eval")
