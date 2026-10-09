@@ -732,6 +732,13 @@ def score_sync(
     rows have ``batch_id`` NULL. Errored and unparseable results write nothing, so those
     groups stay eligible for the next run.
     """
+    if getattr(scorer, "evidence_mode", "quotes") == "none":
+        # Decisions-model scorers (Jev) answer questions, not prompts: see decisions.py.
+        from jobhunter.scoring.decisions import score_decisions
+
+        return score_decisions(
+            conn, scorer, profile, limit=limit, now=now, remaining_usd=remaining_usd
+        )
     out = SyncResult()
     if int(getattr(scorer, "jobs_per_request", 1) or 1) > 1:
         return _score_sync_packed(
