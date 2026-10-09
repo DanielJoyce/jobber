@@ -19,7 +19,7 @@ from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline.applylink import get_apply_link
 from jobhunter.pipeline.ats_rules import host_of
 from jobhunter.pipeline.dedupe import _refresh_group, group_members
-from jobhunter.pipeline.locations import load_locations, location_summary
+from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.pipeline.normalize import normalize_job
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile
@@ -335,7 +335,7 @@ def load_detail(
     job = group_job(conn, group_id)
     if job is None:
         return None
-    locs = load_locations(conn, job["id"])
+    locs = load_job_group_locations(conn, job["id"])
     loc_lines = []
     for loc in locs:
         place = ", ".join(p for p in (loc.city, loc.state) if p)

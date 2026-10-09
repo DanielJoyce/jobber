@@ -24,7 +24,7 @@ from ruamel.yaml.error import YAMLError
 
 from jobhunter.core import db, geo
 from jobhunter.core.models import Bucket, EmploymentType
-from jobhunter.pipeline.locations import load_locations
+from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring import buckets as bk
 from jobhunter.scoring.prefilter import _CREDENTIAL_PATTERNS, evaluate
 from jobhunter.scoring.profile import (
@@ -526,7 +526,7 @@ def prefilter_delta(
     count_a: Counter[str] = Counter()
     rejected_b = rejected_a = 0
     for job in rows:
-        locs = load_locations(conn, job["id"])
+        locs = load_job_group_locations(conn, job["id"])
         passed_b, reasons_b = evaluate(job, locs, before, now)
         passed_a, reasons_a = evaluate(job, locs, after, now)
         rejected_b += not passed_b
@@ -629,7 +629,7 @@ def rescore_estimate(conn: sqlite3.Connection, profile: Profile, now: datetime) 
     for row in rows:
         if (row["seen_at"] or "") < cutoff:
             continue
-        locs = load_locations(conn, row["job_id"])
+        locs = load_job_group_locations(conn, row["job_id"])
         if bk.compute_row(row, row, locs, profile).bucket in OPEN_BUCKETS:
             recent += 1
     options = [

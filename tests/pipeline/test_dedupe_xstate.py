@@ -224,3 +224,36 @@ def test_cli_dry_run_reports_and_does_not_write(tmp_path, monkeypatch):
     c.close()
     r = CliRunner().invoke(cli.app, ["dedupe", "--cross-state"])
     assert r.exit_code == 0 and "merged 1 groups" in r.output
+
+
+@pytest.mark.parametrize(
+    ("u1", "u2"),
+    [
+        ("https://www.usajobs.gov/job/887826000", "https://www.usajobs.gov/job/887833200"),
+        ("https://boards.greenhouse.io/acme/jobs/1", "https://boards.greenhouse.io/acme/jobs/2"),
+    ],
+)
+def test_distinct_requisitions_on_same_host_do_not_merge(conn, u1, u2):
+    mkjob(conn, "a", state="TX", gid=mkgroup(conn), apply_url=u1)
+    mkjob(conn, "b", state="OH", gid=mkgroup(conn), apply_url=u2)
+    assert merge_cross_state(conn, now=NOW).would_merge == 0
+
+
+def test_cross_host_and_wrapper_apply_urls_still_merge(conn):
+    urls = [
+        "https://jobs.utah.gov/jsp/utjobs/single-job?j=11129818",
+        "http://jobseeker.ohiomeansjobs.monster.com/jobview/GetJob.aspx?JobId=2",
+        "https://www.aplitrak.com/?adid=AAA",
+        "https://www.aplitrak.com/?adid=BBB",
+    ]
+    for i, u in enumerate(urls):
+        mkjob(conn, f"u{i}", state="MI", gid=mkgroup(conn), apply_url=u)
+    assert merge_cross_state(conn, now=NOW).would_merge == 3
+
+
+def test_chain_cannot_bridge_distinct_requisitions(conn):
+    # a and c are distinct postings on one host; b (no apply URL) is similar to both.
+    mkjob(conn, "a", state="TX", gid=mkgroup(conn), apply_url="https://www.usajobs.gov/job/1")
+    mkjob(conn, "b", state="OH", gid=mkgroup(conn))
+    mkjob(conn, "c", state="CA", gid=mkgroup(conn), apply_url="https://www.usajobs.gov/job/2")
+    assert merge_cross_state(conn, now=NOW).would_merge == 1

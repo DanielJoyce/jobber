@@ -16,8 +16,10 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from jobhunter.core.models import LocationScope
+from jobhunter.pipeline.ats_rules import match_ats
 from jobhunter.pipeline.dedupe import _refresh_group, jaccard, normalize_employer, shingles
 from jobhunter.pipeline.dedupe_url import (
     MergeResult,
@@ -62,9 +64,40 @@ class _G:
     apply_keys: frozenset[str]
 
 
+def _posting_hosts(keys: frozenset[str]) -> dict[str, str]:
+    """key -> host label, for keys whose path names a posting on that host.
+
+    Known ATS rules label by ATS name (all its hosts); other hosts label by hostname, and only
+    when the path is non-trivial (a wrapper like ``aplitrak.com/?adid=...`` identifies nothing).
+    """
+    out: dict[str, str] = {}
+    for k in keys:
+        rule = match_ats(k)
+        if rule is not None:
+            out[k] = rule.name
+            continue
+        p = urlsplit(k)
+        if p.path.strip("/"):
+            out[k] = (p.hostname or "").lower()
+    return out
+
+
+def _distinct_requisitions(a: _G, b: _G) -> bool:
+    """True if both groups apply on the same host to different postings.
+
+    Different announcement/job ids on one ATS or board (USAJOBS, USA Staffing, Workday,
+    Greenhouse, ...) are separate requisitions even when the text is boilerplate-identical.
+    Cross-host differences (state boards, wrappers) prove nothing and are ignored.
+    """
+    ha, hb = _posting_hosts(a.apply_keys), _posting_hosts(b.apply_keys)
+    return any(ka != kb and na == nb for ka, na in ha.items() for kb, nb in hb.items())
+
+
 def _similar(a: _G, b: _G, jaccard_min: float, containment_min: float) -> bool:
     if a.apply_keys & b.apply_keys:
         return True
+    if _distinct_requisitions(a, b):
+        return False
     if jaccard(a.shingles, b.shingles) >= jaccard_min:
         return True
     small, big = sorted((a.shingles, b.shingles), key=len)
@@ -83,6 +116,15 @@ def _blocks(conn: sqlite3.Connection) -> dict[tuple[str, str], list[_G]]:
     for r in conn.execute(
         "SELECT j.apply_url, j.job_group_id FROM job j JOIN job_group g ON g.id = j.job_group_id "
         "WHERE j.apply_url IS NOT NULL AND g.method != 'manual'"
+    ):
+        k = normalize_apply_url(r[0])
+        if k and _identifies_job(k):
+            keys.setdefault(r[1], set()).add(k)
+    for r in conn.execute(
+        "SELECT a.final_url, a.job_group_id FROM apply_link a "
+        "JOIN job_group g ON g.id = a.job_group_id "
+        "WHERE a.status IN ('live', 'expired') AND a.final_url IS NOT NULL "
+        "AND g.method != 'manual'"
     ):
         k = normalize_apply_url(r[0])
         if k and _identifies_job(k):
@@ -109,10 +151,21 @@ def _components(groups: list[_G], jaccard_min: float, containment_min: float) ->
             x = parent[x]
         return x
 
+    members: dict[int, list[int]] = {i: [i] for i in range(len(groups))}
     for i in range(len(groups)):
         for j in range(i + 1, len(groups)):
-            if find(i) != find(j) and _similar(groups[i], groups[j], jaccard_min, containment_min):
-                parent[find(j)] = find(i)
+            ri, rj = find(i), find(j)
+            if ri == rj or not _similar(groups[i], groups[j], jaccard_min, containment_min):
+                continue
+            # Never let a chain of links bridge two distinct requisitions.
+            if any(
+                _distinct_requisitions(groups[x], groups[y])
+                for x in members[ri]
+                for y in members[rj]
+            ):
+                continue
+            parent[rj] = ri
+            members[ri].extend(members.pop(rj))
     comps: dict[int, list[_G]] = {}
     for i, g in enumerate(groups):
         comps.setdefault(find(i), []).append(g)

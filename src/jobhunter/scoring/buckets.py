@@ -18,7 +18,7 @@ from typing import Any
 
 from jobhunter.core.models import Bucket, JobLocation, LocationScope, Verdict
 from jobhunter.core.textnorm import annualize
-from jobhunter.pipeline.locations import load_locations
+from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring.profile import Profile
 
 REMOTE_BASE = 70
@@ -426,7 +426,7 @@ def preview(
     moves: list[dict[str, Any]] = []
     salary_before = salary_after = 0
     for row in rows:
-        locs = load_locations(conn, row["job_id"])
+        locs = load_job_group_locations(conn, row["job_id"])
         cb = compute_row(row, row, locs, profile_before)
         ca = compute_row(row, row, locs, profile_after)
         before[cb.bucket.value] += 1
