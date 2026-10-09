@@ -66,6 +66,21 @@ ON CONFLICT(source_key, external_id) DO UPDATE SET
 """
 
 
+def _store_stub_locations(conn: sqlite3.Connection, stub: JobStub) -> None:
+    """Keep adapter-structured locations; the locations stage normalizes them (specs/011)."""
+    if not stub.locations:
+        return
+    job_id = conn.execute(
+        "SELECT id FROM job WHERE source_key = ? AND external_id = ?",
+        (stub.source_key, stub.external_id),
+    ).fetchone()[0]
+    conn.executemany(
+        "INSERT OR IGNORE INTO job_locations (job_id, state, city, county, lat, lon, is_primary) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0)",
+        [(job_id, loc.state, loc.city, loc.county, loc.lat, loc.lon) for loc in stub.locations],
+    )
+
+
 def upsert_stubs(conn: sqlite3.Connection, stubs: Iterable[JobStub], now: datetime) -> UpsertResult:
     """Insert new stubs at stage 'listed'; on conflict touch only volatile fields."""
     now_iso = to_iso(now)
@@ -99,6 +114,7 @@ def upsert_stubs(conn: sqlite3.Connection, stubs: Iterable[JobStub], now: dateti
                 result.updated += 1
             else:
                 result.inserted += 1
+                _store_stub_locations(conn, stub)
     return result
 
 

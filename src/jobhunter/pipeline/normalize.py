@@ -20,6 +20,7 @@ from jobhunter.core.textnorm import (
     parse_salary,
 )
 from jobhunter.pipeline.listing import _txn, to_iso
+from jobhunter.pipeline.locations import apply_locations
 
 WARNING_PREFIX = "normalize: "
 _EMP_HEAD_CHARS = 1500
@@ -120,4 +121,5 @@ def normalize_pending(
                 """,
                 vals,
             )
+    apply_locations(conn, force=force)  # leave job_locations populated (specs/011)
     return len(rows)
