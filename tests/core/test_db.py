@@ -154,3 +154,17 @@ def test_job_locations_dedupes_null_state_rows():
     conn.execute("INSERT INTO job_locations (job_id, state, city) VALUES (1, NULL, NULL)")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO job_locations (job_id, state, city) VALUES (1, NULL, NULL)")
+
+
+def test_migrate_applies_lower_numbered_migration_merged_later(monkeypatch):
+    from jobhunter.core import db
+
+    real = db._load_migrations()
+    conn = db.connect(":memory:")
+    # Simulate a DB that already ran everything except the first migration's successor.
+    skipped = real[1]
+    monkeypatch.setattr(db, "_load_migrations", lambda: [m for m in real if m != skipped])
+    db.migrate(conn)
+    monkeypatch.setattr(db, "_load_migrations", lambda: real)
+    assert db.migrate(conn) == [skipped[0]]
+    assert db.migrate(conn) == []
