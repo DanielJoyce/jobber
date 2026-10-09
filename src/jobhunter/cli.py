@@ -111,10 +111,19 @@ def score(
         str | None, typer.Option("--collect", metavar="BATCH_ID", help="Collect a batch.")
     ] = None,
     limit: Annotated[int, typer.Option(help="Most job groups to submit.", min=1)] = 500,
+    deep: Annotated[
+        int | None,
+        typer.Option("--deep", metavar="N", min=1, help="Deep-pass the top N screened groups."),
+    ] = None,
+    deep_group: Annotated[
+        int | None,
+        typer.Option("--deep-group", metavar="GID", help="Deep-pass one job group."),
+    ] = None,
 ) -> None:
-    """Submit or collect LLM screen batches (specs/006 Stage 2)."""
-    if submit == (collect is not None):
-        typer.echo("pass exactly one of --submit or --collect BATCH_ID", err=True)
+    """Screen batches (specs/006 Stage 2) or the Opus deep pass (Stage 3)."""
+    modes = [submit, collect is not None, deep is not None, deep_group is not None]
+    if sum(modes) != 1:
+        typer.echo("pass exactly one of --submit, --collect, --deep or --deep-group", err=True)
         raise typer.Exit(2)
 
     from datetime import UTC, datetime
@@ -138,7 +147,35 @@ def score(
     now = datetime.now(UTC)
     scorer = settings.scoring.screen_scorer
     try:
-        if submit:
+        if deep is not None or deep_group is not None:
+            from jobhunter.scoring import deep as stage3
+
+            deep_scorer = settings.scoring.deep_scorer
+            gids = [deep_group] if deep_group is not None else None
+            if gids is None:
+                assert deep is not None
+                gids = stage3.shortlist(conn, profile, deep, scorer=deep_scorer)
+            for gid in gids:
+                try:
+                    res = stage3.deep_score(
+                        conn,
+                        client,
+                        profile,
+                        gid,
+                        now=now,
+                        scorer=deep_scorer,
+                        remaining_usd=lambda: screen.remaining_daily_budget(
+                            conn, settings.scoring.daily_cap_usd, now
+                        ),
+                    )
+                except anthropic.APIError as exc:
+                    typer.echo(f"group {gid}: API error: {exc}", err=True)
+                    continue
+                flag = " DISAGREES with screen" if res.disagreement else ""
+                typer.echo(f"group {gid}: {res.status}{flag} {res.detail}".rstrip())
+                if res.status == "capped":
+                    break
+        elif submit:
             batch_id = screen.submit_batch(
                 conn,
                 client,
