@@ -231,9 +231,30 @@ def mail_sync() -> None:
 
 
 @applylinks_app.command("unknown")
-def applylinks_unknown() -> None:
-    """List jobs whose apply link is unresolved."""
-    _stub()
+def applylinks_unknown(
+    top: Annotated[int, typer.Option(help="How many hosts to show.")] = 20,
+) -> None:
+    """List the most common apply-link destinations with no ATS rule yet."""
+    from jobhunter.config import load_settings, resolve_path
+    from jobhunter.core import db
+    from jobhunter.pipeline.applylink import unknown_hosts
+
+    path = resolve_path(load_settings().paths.db_path)
+    if not path.is_file():
+        typer.echo("no apply links resolved yet")
+        return
+    conn = db.connect(path)
+    try:
+        db.migrate(conn)
+        rows = unknown_hosts(conn, top=top)
+    finally:
+        conn.close()
+    if not rows:
+        typer.echo("no unknown apply-link hosts")
+        return
+    typer.echo(f"{'COUNT':>6}  HOST")
+    for host, n in rows:
+        typer.echo(f"{n:>6}  {host}")
 
 
 if __name__ == "__main__":
