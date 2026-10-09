@@ -26,8 +26,8 @@ def fixture(st: str, name: str) -> str:
     return (FIXTURES / st.lower() / name).read_text()
 
 
-def assert_enabled_class_b(st: str, tier: str) -> None:
-    src = registry_row(f"{st.lower()}-employer")
+def assert_enabled_class_b(st: str, tier: str, key: str | None = None) -> None:
+    src = registry_row(key or f"{st.lower()}-employer")
     assert src.class_ is SourceClass.B
     assert (src.family, src.tier.value, src.policy.value, src.state) == (
         "htmlconfig",
@@ -38,6 +38,7 @@ def assert_enabled_class_b(st: str, tier: str) -> None:
 
 
 def workday_site(st: str, tenant: str, site: str) -> Site:
+    """``st`` names the fixture directory (the state, or e.g. ``me_judicial``)."""
     search = fixture(st, "search.json")
     details = {}
     for n in (1, 2):
@@ -57,8 +58,10 @@ def workday_site(st: str, tenant: str, site: str) -> Site:
     return Site(route, robots=WORKDAY_ROBOTS.replace("SITE", site))
 
 
-def check_workday(st: str, tenant: str, site: str, conn, tmp_path) -> None:
-    key = f"{st.lower()}-employer"
+def check_workday(
+    st: str, tenant: str, site: str, conn, tmp_path, *, key: str | None = None
+) -> None:
+    key = key or f"{st.lower()}-employer"
     src = registry_row(key)
     s = workday_site(st, tenant, site)
     ctx = make_ctx(src, conn, s, tmp_path)
@@ -212,3 +215,66 @@ def check_jobs2web_paging(st: str, conn, tmp_path) -> None:
     capped = list(HtmlConfigAdapter().search(src_cap, Query(title="analyst"), SINCE, ctx2))
     assert [r.url.params["startrow"] for r in s2.requests] == ["0", "25", "50"]
     assert len(capped) == 75
+
+
+# JobAps (CT, MD): one server-rendered list page, bulletin pages under /<ST>/sup/.
+
+JOBAPS_IDS = {
+    "CT": ("260930-0912MP-001", "260930-0965FP-001", "0912MP", "0965FP"),
+    "MD": ("26-000960-0001", "26-004582-0001", "000960", "004582"),
+}
+
+
+def jobaps_site(st: str) -> Site:
+    search = fixture(st, "search.html")
+    _, _, r2_1, r2_2 = JOBAPS_IDS[st]
+    details = {r2_1: fixture(st, "detail_1.html"), r2_2: fixture(st, "detail_2.html")}
+    html = {"content-type": "text/html"}
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/{st}/":
+            return httpx.Response(200, text=search, headers=html)
+        if request.url.path == f"/{st}/sup/bulpreview.asp":
+            r2 = request.url.params.get("R2", "")
+            if r2 in details:
+                return httpx.Response(200, text=details[r2], headers=html)
+        return httpx.Response(404)
+
+    return Site(route, robots="User-agent: *\nAllow: /\n")
+
+
+def check_jobaps(st: str, conn, tmp_path, *, salary_in_list: bool) -> None:
+    key = f"{st.lower()}-employer"
+    src = registry_row(key)
+    first_id, second_id, _, _ = JOBAPS_IDS[st]
+    s = jobaps_site(st)
+    ctx = make_ctx(src, conn, s, tmp_path)
+    stubs = list(HtmlConfigAdapter().search(src, Query(title="analyst"), SINCE, ctx))
+
+    # the list takes no query: one GET of the whole page; CT's employees-only tables are skipped
+    (req,) = s.requests
+    assert req.method == "GET" and req.url.host == "www.jobapscloud.com"
+    assert req.url.path == f"/{st}/" and not req.url.params
+    assert len(stubs) == 5
+    first = stubs[0]
+    assert first.source_key == key
+    assert first.external_id == first_id
+    assert first.url.startswith(f"https://www.jobapscloud.com/{st}/sup/bulpreview.asp?")
+    assert first.title and first.agency_raw
+    assert first.closes_at is not None and first.closes_at.tzinfo is not None
+    assert first.locations[0].state == st
+    assert first.needs_resolve is True and first.apply_url is None
+    assert bool(first.salary_raw) is salary_in_list
+    assert len({st_.external_id for st_ in stubs}) == 5
+
+    detail = HtmlConfigAdapter().resolve(first, ctx)
+    assert detail.description_raw and "<" in detail.description_raw
+    assert detail.posted_at is not None and detail.posted_at.tzinfo is not None
+    assert detail.closes_at is not None and detail.closes_at > detail.posted_at
+    assert detail.salary_raw and "$" in detail.salary_raw
+    assert detail.agency_raw and detail.agency_raw.startswith("State of ")
+    assert detail.title and detail.needs_resolve is False
+    assert "@" not in detail.description_raw.replace("hr@example.gov", "")
+
+    other = HtmlConfigAdapter().resolve(stubs[1], ctx)
+    assert other.external_id == second_id and other.description_raw
