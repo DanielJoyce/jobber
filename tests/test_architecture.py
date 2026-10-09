@@ -12,7 +12,7 @@ GUARDED_PACKAGES = ["sources", "pipeline", "scoring", "mail"]
 FORBIDDEN = {"httpx", "playwright"}
 # API clients (not scrapers) that may use httpx: the OpenAI-compatible scorer talks to an LLM
 # endpoint the user configured. Keep this list explicit and tiny.
-ALLOWED = {"scoring/scorers.py"}
+ALLOWED = {"scoring/scorers.py", "scoring/decisions.py"}
 # jobhunter.mail talks to the user's own Gmail through Google's official client libraries.
 # It is an API client, not a scraper, so it is exempt from the FetchContext rule.
 ALLOWED_PREFIXES = ("mail/",)
@@ -63,5 +63,6 @@ def test_detector_catches_violations(tmp_path):
 
 
 def test_allowlist_is_only_scorers_and_actually_needed():
-    assert {"scoring/scorers.py"} == ALLOWED
+    assert {"scoring/scorers.py", "scoring/decisions.py"} == ALLOWED
     assert network_imports(SRC / "scoring" / "scorers.py")
+    assert network_imports(SRC / "scoring" / "decisions.py")

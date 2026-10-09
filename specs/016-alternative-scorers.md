@@ -191,6 +191,96 @@ a `y`; `--dry-run` prints the whole plan and runs nothing.
      the rest) only if measurement shows the small model can drop jobs without losing good
      ones. Measure the simple single-model option first; cascades add moving parts.
 
+## Jev decisions scorer
+
+`typesafe/jev-1.13` is not a chat model. It is a **decisions model**
+([docs.typesafe.ai/primitives](https://docs.typesafe.ai/primitives)) reached through
+`POST https://openrouter.ai/api/alpha/decisions` with `{model, state, questions}`. Each
+question is typed: `choice` (one option, with probabilities and confidence), `score` (a
+position along ordered levels) or `noul` (the probability of yes). There is no rationale and no
+quoted evidence. Observed 2026-10-09: about **$0.042 per million input tokens**, output free,
+so a packed request of 8 postings costs a small fraction of a cent.
+
+```bash
+jobhunter score --submit --scorer jev:typesafe/jev-1.13 --limit 200 --jobs-per-request 8
+jobhunter llm bench --scorer jev:typesafe/jev-1.13 --n 16
+```
+
+`jev:<slug>` and the generic `decisions:<slug>` build the scorer in
+`scoring/decisions.py`. It reuses `[scoring.openrouter]` (`OPENROUTER_API_KEY`, `X-Title`,
+`provider.data_collection`). Rows are written under prompt version `decisions-v1`.
+
+### State
+
+```json
+{"candidate": {"resume", "current_focus": {"since", "doing", "want_more_of"}, "done_with",
+               "want", "avoid", "dealbreakers", "context"},
+ "jobs": [{"id": "g123", "title", "employer", "location", "employment_type", "remote",
+           "description"}, ...]}
+```
+
+The candidate block holds the same fields as the Haiku screen's profile block
+(`scoring_inputs`): no salary floor, states, weights or thresholds, and no stated salary in
+the jobs. Pay and location fit stay in Python ([014](014-preferences-console.md)).
+
+### Question set (composite scoring: one focused question per factor)
+
+Ids are namespaced `<custom_id>.<question>`. Instructions point at the job as `` `jobs[i]` ``
+and at the candidate by path (`` `candidate.resume` ``, `` `candidate.current_focus` ``).
+
+| Id | Type | Asks |
+|---|---|---|
+| `candidate.level` | score, 5 levels | the candidate's level (once per request) |
+| `skills_raw` | score, 5 levels (006 skills anchors) | can the candidate do this, judged on the whole resume |
+| `skills_recent` | score, same levels | the same, judged only on `candidate.current_focus` (last ~3 years) |
+| `job_level` | score, 5 levels (junior, mid, senior, lead/staff, principal/exec) | the level the job requires |
+| `seniority_direction` | choice: below, match, above, unclear | job vs candidate level |
+| `domain` | score, 5 levels (006 domain anchors) | domain and kind of organisation |
+| `focus_overlap` | score, 4 levels | how much of the job is current-focus work |
+| `verdict` | choice: strong, possible, weak, mismatch, other | cross-check, kept in the report |
+| `done_with.<slug>` | noul per `current_focus.done_with` item | is it a substantial part of the job |
+| `avoid.<slug>` | noul per line of `narrative.avoid` and `dealbreakers_soft` | does the posting show this shape |
+| `requires.<slug>` | noul per `hard.requires_i_lack` credential | stated as a hard requirement |
+| `states.salary`, `states.location`, `states.remote_policy` | noul | does the posting state it |
+
+### Mapping to the dimensions JSON
+
+A score answer becomes a 0-1 position (sum of level times probability, over the top level),
+then 0-100. The five-level skills and domain scales put each level at 0, 25, 50, 75 and 100,
+which falls inside the matching 006 anchor band.
+
+- `skills.score` = `recency_weighted_skills` = `skills_recent`; `raw_skills` = `skills_raw`.
+  The gap drives bucket F as before, and also adds a `stale_match` flag.
+- `seniority.score` = `100 - 25 x |job_level - candidate.level|` in levels (one level off is
+  75, two is 50). `seniority_direction` is the choice; `unclear` falls back to the sign of the
+  level gap (more than half a level).
+- `domain.score` = `domain`; `current_focus_overlap` = `focus_overlap`.
+- `done_with_hits`: items with p >= 0.5 (plus a `done_with` flag). `shape_flags`: avoid slugs
+  with p >= 0.6. `blockers`: credentials with p >= 0.6. `missing_info`: a `states.*` answer
+  with p < 0.4.
+- `stale_skills` is always empty: one question per skill would be needed to name them.
+- `low_confidence` flag when the verdict confidence is below 0.4 or more than half of the
+  five dimension scores are.
+- `fit_score.verdict` is the verdict choice; when it is `other`, the most likely of the four
+  stored verdicts.
+
+Every row stores `evidence = []`, `evidence_unverified = 0`, `evidence_mode = 'none'` and the
+raw answers (probabilities and confidence per question) in `fit_score.decisions`. The detail
+page shows "Jev: fit strong (0.97, confidence 0.96)" and the yes/no probabilities in place of
+quotes; `eval` leaves these rows out of the `evidence_unverified` rate and reports the count.
+
+### Requests, cost and failure
+
+- Jobs per request: `--jobs-per-request` (default 8, at most 25), and a request also stops at
+  about 60,000 estimated input tokens (characters / 4). One oversized posting still gets a
+  request of its own.
+- The spend cap is checked before each request against its estimated cost.
+- `usage.cost` is split evenly over the request's jobs; the whole request goes to
+  `llm_spend` as one call. The served model (`typesafe/jev-1.13-20260917`) is stored per row.
+- A 400 lists zod issues; they are printed as `path: message` and the request's jobs stay
+  eligible. 401, 402 and 403 (for example the key's model guardrail) stop the run. A job with
+  any unanswered question is not written and stays eligible.
+
 ## Scoring through a Claude Max subscription
 
 Possible via a scorer that calls `claude -p` headlessly. It runs on the subscription instead

@@ -672,6 +672,10 @@ def scorer_from_string(
         return OpenRouterScorer(name, (scoring or Scoring()).openrouter, client=http_client)
     if provider == "local":
         return LocalScorer(name, (scoring or Scoring()).local, client=http_client)
+    if provider in ("jev", "decisions"):  # decisions-model scorers live in decisions.py
+        from jobhunter.scoring.decisions import decisions_scorer
+
+        return decisions_scorer(spec, (scoring or Scoring()).openrouter, client=http_client)
     raise ScorerError(f"unknown scorer provider {provider!r} in {spec!r}")
 
 
@@ -680,6 +684,10 @@ def privacy_notice(spec: str, scoring: Scoring) -> str | None:
     provider, _ = split_scorer(spec)
     if provider == "anthropic":
         return None
+    if provider in ("jev", "decisions"):  # decisions-model scorers live in decisions.py
+        from jobhunter.scoring.decisions import privacy_notice as decisions_notice
+
+        return decisions_notice(spec)
     if provider == "openrouter":
         collection = scoring.openrouter.provider.get(
             "data_collection", "unset (OpenRouter default)"

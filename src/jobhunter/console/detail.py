@@ -258,6 +258,11 @@ class Detail:
     shape_flags: list[str] = field(default_factory=list)
     tailoring_hints: list[str] = field(default_factory=list)
     evidence_unverified: bool = False
+    # 'none' for decisions-model scores (Jev): probabilities instead of evidence quotes.
+    evidence_mode: str = "quotes"
+    decisions_verdict: str | None = None
+    decisions_answers: list[tuple[str, str]] = field(default_factory=list)
+    served_model: str | None = None
     text: Highlighted = field(default_factory=Highlighted)
     siblings: list[dict[str, Any]] = field(default_factory=list)
     partial: bool = False
@@ -299,6 +304,29 @@ def did_you_apply(conn: sqlite3.Connection, group_id: int) -> bool:
         (group_id,),
     ).fetchone()[0]
     return ev is None or click > ev
+
+
+def _decisions_view(d: Detail, report: Any) -> None:
+    """Summary lines for a decisions-model score: the verdict and each yes/no answer."""
+    if not isinstance(report, dict):
+        return
+    verdict = report.get("verdict") or {}
+    probs = verdict.get("probabilities") or {}
+    choice = verdict.get("choice")
+    if isinstance(choice, str):
+        p = probs.get(choice)
+        conf = verdict.get("confidence")
+        parts = [f"{p:.2f}" if isinstance(p, int | float) else None]
+        if isinstance(conf, int | float):
+            parts.append(f"confidence {conf:.2f}")
+        detail = ", ".join(x for x in parts if x)
+        d.decisions_verdict = f"fit {choice}" + (f" ({detail})" if detail else "")
+    labels = report.get("labels") or {}
+    answers = report.get("answers") or {}
+    for qid, label in labels.items():
+        ans = answers.get(qid)
+        if isinstance(ans, dict) and isinstance(ans.get("noul"), int | float):
+            d.decisions_answers.append((str(label), f"{ans['noul']:.2f}"))
 
 
 def load_detail(
@@ -351,6 +379,11 @@ def load_detail(
         d.tailoring_hints = _strs(_json(fit["tailoring_hints"], []))
         d.evidence_unverified = bool(fit["evidence_unverified"])
         evidence = fit["evidence"]
+        keys = fit.keys()
+        d.served_model = fit["served_model"] if "served_model" in keys else None
+        if "evidence_mode" in keys and fit["evidence_mode"] == "none":
+            d.evidence_mode = "none"
+            _decisions_view(d, _json(fit["decisions"], {}))
     d.text = highlight(job["description_text"], evidence)
     sources = {r["key"]: r["name"] for r in conn.execute("SELECT key, name FROM source")}
     for m in group_members(conn, group_id):

@@ -151,9 +151,10 @@ def score(
         typer.Option(
             "--jobs-per-request",
             min=1,
-            max=16,
+            max=25,
             help="Judge this many jobs per request (openai-compat, openrouter, local scorers; "
-            "overrides scoring.<provider>.jobs_per_request). specs/016 Packed requests.",
+            "overrides scoring.<provider>.jobs_per_request; at most 16). Decisions scorers "
+            "(jev:/decisions:) default to 8, at most 25. specs/016 Packed requests.",
         ),
     ] = None,
 ) -> None:
@@ -193,6 +194,10 @@ def score(
         typer.echo(
             "--jobs-per-request needs an openai-compat, openrouter or local scorer", err=True
         )
+        raise typer.Exit(2)
+    decisions_scorer = scorer.split(":", 1)[0] in ("jev", "decisions")
+    if jobs_per_request is not None and jobs_per_request > 16 and not decisions_scorer:
+        typer.echo("--jobs-per-request is at most 16 for chat scorers", err=True)
         raise typer.Exit(2)
     screening = submit or collect is not None
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
@@ -848,7 +853,7 @@ def llm_bench(
         typer.Option(
             "--scorer",
             metavar="SPEC",
-            help="local:<model>, openrouter:<slug> or anthropic:<model>. "
+            help="local:<model>, openrouter:<slug>, jev:<slug> or anthropic:<model>. "
             "Default: scoring.screen_scorer.",
         ),
     ] = None,
@@ -861,8 +866,9 @@ def llm_bench(
         typer.Option(
             "--jobs-per-request",
             min=1,
-            max=16,
-            help="Pack this many jobs per request; reports seconds and cost per job too.",
+            max=25,
+            help="Pack this many jobs per request; reports seconds and cost per job too "
+            "(at most 16 for chat scorers, 25 for jev:/decisions:).",
         ),
     ] = None,
 ) -> None:
@@ -883,17 +889,28 @@ def llm_bench(
         raise typer.Exit(1) from exc
     if notice := privacy_notice(spec, settings.scoring):
         typer.echo(notice, err=True)
+    from jobhunter.scoring import decisions
+
+    is_decisions = isinstance(scorer, decisions.DecisionsScorer)
+    if jobs_per_request is not None and jobs_per_request > 16 and not is_decisions:
+        typer.echo("--jobs-per-request is at most 16 for chat scorers", err=True)
+        raise typer.Exit(2)
     conn = db.connect(settings.paths.db_path)
     db.migrate(conn)
     try:
-        report = run_bench(
-            conn,
-            scorer,
-            profile,
-            n=n,
-            night_hours=night_hours,
-            jobs_per_request=jobs_per_request,
-        )
+        if isinstance(scorer, decisions.DecisionsScorer):  # decisions.py: packed questions
+            if jobs_per_request is not None:
+                scorer.jobs_per_request = jobs_per_request
+            report = decisions.run_bench(conn, scorer, profile, n=n, night_hours=night_hours)
+        else:
+            report = run_bench(
+                conn,
+                scorer,
+                profile,
+                n=n,
+                night_hours=night_hours,
+                jobs_per_request=jobs_per_request,
+            )
     finally:
         conn.close()
     if report.attempted == 0:

@@ -396,3 +396,21 @@ def test_partial_banner_and_paste_description(client, conn):
 def test_paste_description_rejects_empty_and_unknown(client):
     assert client.post("/job/2/description", data={"text": "  "}).status_code == 422
     assert client.post("/job/999/description", data={"text": "x"}).status_code == 404
+
+
+def test_decisions_score_shows_probabilities_not_quotes(client, conn):
+    report = {
+        "verdict": {"choice": "strong", "probabilities": {"strong": 0.97}, "confidence": 0.96},
+        "answers": {"avoid.pure_windows": {"type": "noul", "noul": 0.12}},
+        "labels": {"avoid.pure_windows": "Pure Windows shops"},
+    }
+    conn.execute(
+        "UPDATE fit_score SET evidence_mode = 'none', evidence = '[]', evidence_unverified = 0, "
+        "served_model = 'typesafe/jev-1.13-20260917', decisions = ? WHERE job_group_id = 2",
+        (json.dumps(report),),
+    )
+    t = client.get("/job/2").text
+    assert "Jev: fit strong (0.97, confidence 0.96)" in t
+    assert "Decision probabilities" in t and "Pure Windows shops" in t and "0.12" in t
+    assert "typesafe/jev-1.13-20260917" in t
+    assert "unverified evidence" not in t
