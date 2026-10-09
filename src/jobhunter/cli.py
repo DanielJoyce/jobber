@@ -549,18 +549,30 @@ def sources_verify(
 
 
 @mail_app.command("auth")
-def mail_auth() -> None:
-    """Run the Gmail OAuth flow and store the refresh token in the OS keyring."""
+def mail_auth(
+    manual: Annotated[
+        bool,
+        typer.Option("--manual", help="No local server: paste the redirected URL back here."),
+    ] = False,
+    port: Annotated[
+        int | None,
+        typer.Option("--port", help="Loopback port (default: random; 8765 with --manual)."),
+    ] = None,
+    no_browser: Annotated[
+        bool, typer.Option("--no-browser", help="Do not try to open a browser; print the URL.")
+    ] = False,
+) -> None:
+    """Run the Gmail OAuth flow and store the refresh token (OS keyring, else a 0600 file)."""
     from jobhunter.config import load_settings
     from jobhunter.mail import auth
 
     settings = load_settings()
     try:
-        auth.authenticate(settings)
+        where = auth.authenticate(settings, manual=manual, port=port, open_browser=not no_browser)
     except auth.MailAuthError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    typer.echo("Gmail authorised; token stored in the OS keyring (service jobhunter, key gmail).")
+    typer.echo(f"Gmail authorised; token stored in the {where}.")
 
 
 @mail_app.command("setup")
@@ -605,7 +617,8 @@ def mail_status() -> None:
 
     settings = load_settings()
     has_token = auth.load_token() is not None
-    typer.echo(f"token in keyring: {'yes' if has_token else 'no'}")
+    where = auth.token_location() if has_token else None
+    typer.echo(f"token: {where or ('present' if has_token else 'no')}")
     if not has_token:
         typer.echo("run: jobhunter mail auth")
         raise typer.Exit(1)
