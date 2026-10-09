@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Annotated
 
 import typer
 
+from jobhunter.config import load_settings, resolve_path
+from jobhunter.core import db
+from jobhunter.pipeline import runner
 from jobhunter.sources.registry import enabled_sources, load_registry
 
 app = typer.Typer(
@@ -28,17 +32,74 @@ def _stub() -> None:
 
 @app.command()
 def run(
-    stage: Annotated[str | None, typer.Option(help="Run only this pipeline stage.")] = None,
-    state: Annotated[str | None, typer.Option(help="Restrict to one state/source.")] = None,
-    since: Annotated[str | None, typer.Option(help="Override the watermark.")] = None,
+    stage: Annotated[
+        list[str] | None,
+        typer.Option(help="Stage(s) to run: repeatable or comma list. Default: all."),
+    ] = None,
+    state: Annotated[
+        str | None, typer.Option(help="Comma list of state codes; US includes national rows.")
+    ] = None,
+    since: Annotated[str | None, typer.Option(help="Override the watermark (YYYY-MM-DD).")] = None,
     full: Annotated[bool, typer.Option("--full", help="Ignore watermarks.")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the plan only.")] = False,
+    max_resolve: Annotated[
+        int, typer.Option(help="Cap on detail-page fetches per run.")
+    ] = runner.DEFAULT_MAX_RESOLVE,
 ) -> None:
     """Run the ingest pipeline."""
+    try:
+        stages = runner.parse_stages(stage)
+        since_dt = datetime.fromisoformat(since).replace(tzinfo=UTC) if since else None
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    states = runner.parse_states(state)
+    settings = load_settings()
+    rows = load_registry()
+    loader = runner.default_profile_loader(settings)
+
     if dry_run:
-        typer.echo("Run plan: no sources enabled")
+        db_path = resolve_path(settings.paths.db_path)
+        conn = db.connect(db_path if db_path.is_file() else ":memory:")
+        try:
+            if not db_path.is_file():
+                db.migrate(conn)
+            text = runner.dry_run_plan(
+                conn,
+                rows,
+                profile=loader(),
+                stages=stages,
+                states=states,
+                since=since_dt,
+                full=full,
+            )
+        finally:
+            conn.close()
+        typer.echo(text)
         return
-    _stub()
+
+    db_path = resolve_path(settings.paths.db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = db.connect(db_path)
+    try:
+        db.migrate(conn)
+        report = runner.run_pipeline(
+            conn,
+            settings,
+            rows,
+            profile_loader=loader,
+            stages=stages,
+            states=states,
+            since=since_dt,
+            full=full,
+            max_resolve=max_resolve,
+        )
+    finally:
+        conn.close()
+    summary = runner.format_summary(report)
+    if summary:
+        typer.echo(summary)
+    raise typer.Exit(report.exit_code)
 
 
 @app.command()
