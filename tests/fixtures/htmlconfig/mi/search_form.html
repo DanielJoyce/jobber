@@ -1,0 +1,312 @@
+<html><body><form method="post" action="./job-search" id="JobSearch" role="form" class="input_form">
+<input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="VS" />
+<input type="hidden" name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="249F3D34" />
+        <input type="hidden" name="ctl00$ctl00$MainContent$MainContentSub$hdMiTalentViewType" id="MainContent_MainContentSub_hdMiTalentViewType" value="JOBSEEKERSEARCHJOB" />
+        <div class="row">
+            <div class="col-md-12">
+                <h1>JOB SEARCH</h1>
+            </div>
+            <div class="col-md-8"> 
+                <div class="well clearfix">
+                    <div class="row">
+                        <div class="col-md-12 col-sm-12">
+                            <h2>Enter Your Search Criteria</h2>
+                        </div>
+                        <div class="col-md-8 col-sm-8">
+                            <div class="form-group">
+                                <label class="control-label">Only show jobs posted in the past:</label>
+                                <select name="ctl00$ctl00$MainContent$MainContentSub$job_time_range" id="MainContent_MainContentSub_job_time_range" tabindex="200" aria-label="Show Only Jobs Posted in Past" class="form-control" title="A Time period must be selected">
+	<option value="1">1 Day</option>
+	<option value="7">1 Week</option>
+	<option value="14">2 Weeks</option>
+	<option selected="selected" value="30">1 Month</option>
+</select>
+                            </div>
+                        </div>
+                        <div class="col-md-4 col-sm-4 form-input-extra">
+                            <div class="form-group">
+                                <input type="submit" name="ctl00$ctl00$MainContent$MainContentSub$submitBtn2" value="Search" onclick="return Validate();" id="MainContent_MainContentSub_submitBtn2" tabindex="202" class="btn btn-default talent-solid-btn color-btn btn-right buttonspace" title="SEARCH" aria-label="Click to Search" Name="btnSubmit_Click" />
+                                <input type="submit" name="ctl00$ctl00$MainContent$MainContentSub$ClearBtnTop" value="Clear" id="MainContent_MainContentSub_ClearBtnTop" tabindex="201" class="cancel btn btn-default talent-solid-btn color-btn btn-right buttonspace" title="CLEAR" aria-label="Click to clear search" />
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-8 col-sm-8">
+                            <div class="form-group">
+                                <label id="job-keywords" class="control-label">Keywords</label>
+                                <input name="ctl00$ctl00$MainContent$MainContentSub$job_keywords" type="text" maxlength="100" id="MainContent_MainContentSub_job_keywords" tabindex="203" aria-labelledby="job-keywords" placeholder="Enter Keywords" aria-label="Enter Keywords" class="form-control" onblur="return ValidateForspecialChar(this)" OnKeyUp="disableMatchAllWords(this);" />
+                            </div>
+                        </div>
+                        <div class="col-md-4 col-sm-4 form-input-extra">
+                            <div class="form-group">
+                                <div>
+                                    <label class="checkbox-inline">
+                                        <span class="aspNetDisabled" aria-label="Checkbox to Match All Words"><input id="MainContent_MainContentSub_CheckAll" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$CheckAll" disabled="disabled" onclick="seachKeyCheckChange(this);" tabindex="204" /></span>
+                                        Match ALL words
+                                    </label>
+                                </div>
+                                <div>
+                                    <input name="ctl00$ctl00$MainContent$MainContentSub$txtAllWordWholeWord" type="hidden" id="MainContent_MainContentSub_txtAllWordWholeWord" />
+                                </div>
+                                <div>
+                                    <label class="checkbox-inline">
+                                        <span class="aspNetDisabled" aria-label="Checkbox to Match whole Word"><input id="MainContent_MainContentSub_CheckPhrase" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$CheckPhrase" disabled="disabled" onclick="applyPhraseToKeyboard(this);" tabindex="204" /></span>
+                                        Match Phrase
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label">Job Title</label>
+                        <input name="ctl00$ctl00$MainContent$MainContentSub$job_title" type="text" maxlength="150" id="MainContent_MainContentSub_job_title" tabindex="204" aria-label="Provide Job Title" placeholder="Enter Job Title" class="form-control tb3" autocomplete="off" onblur="return ValidateForspecialChar(this)" />
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label">Job Code Number</label>
+                        <input name="ctl00$ctl00$MainContent$MainContentSub$job_code_number" type="text" maxlength="10" id="MainContent_MainContentSub_job_code_number" tabindex="205" aria-label="Provide Job Code Number" placeholder="Enter Job Code Number" onkeypress="return checkIsItNumber(event);" onblur="return ValidateForspecialChar(this)" class="form-control" />
+                    </div>
+                    <div class="form-group well">
+                        <div class="row" tabindex="205" aria-label="Note: By checking the box for “Include Statewide Jobs” your search parameters will include statewide jobs in your search Results">
+                            <b>Note: </b>By checking the box for “Include Statewide Jobs” your search parameters will include statewide jobs in your search Results.
+                        </div>
+                    </div>
+                    <div class="form-group clearfix">
+                        <div class="row">
+                            <div class="col-md-4" style="height: 68px;">
+                                <label>City</label>
+                                <input name="ctl00$ctl00$MainContent$MainContentSub$job_city" type="text" maxlength="150" id="MainContent_MainContentSub_job_city" tabindex="206" onchange="return enableRadiusbyCityZIP();" aria-label=" Provide City" onblur="return ValidateForspecialChar(this)" placeholder="Enter City" class="form-control tb4" autocomplete="off" />
+                            </div>
+                            <div class="col-md-1" style="text-align: center;">
+                                <div class="job-search-or">or</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label>Zip/Postal Code</label>
+                                <input name="ctl00$ctl00$MainContent$MainContentSub$job_zip" type="text" maxlength="5" id="MainContent_MainContentSub_job_zip" tabindex="207" onkeypress="return checkIsItNumber(event);" onblur="return ValidateForspecialChar(this)" onchange="return enableRadiusbyCityZIP();" aria-label=" Provide Zip/Postal Code" placeholder="Enter Postal Code" class="form-control zipcode" />
+                            </div>
+                            <div class="col-md-4" style="padding-top: 35px;">
+                                <label class="checkbox-inline">
+                                    <span aria-label="Check to Search Statewide Jobs"><input id="MainContent_MainContentSub_IncludeStateWideJobs" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$IncludeStateWideJobs" onclick="" tabindex="208" /></span>
+                                    Include Statewide Jobs
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label">State/Province/Region</label>
+                        <input name="ctl00$ctl00$MainContent$MainContentSub$job_state" type="text" maxlength="150" id="MainContent_MainContentSub_job_state" tabindex="209" aria-label=" Provide Job State" placeholder="Enter State" class="form-control tb1" autocomplete="off" onblur="return ValidateForspecialChar(this)" />
+                    </div>
+                    <div class="form-group">
+                        <a id="searchradius" data-trigger="focus" data-placement="bottom" class="popover-help" tabindex="210"
+                            data-content="If you select an option in the radius field, the search will include jobs that are
+                                within the number of miles you select from the city or zip code you entered. The
+                                default to this field is 0 which means the search will only return postings that
+                                exactly match what you entered. An entry must be made in the city or zip code field
+                                for the radius search to work."
+                            data-html="true" role="button" data-original-title="Help for Radius" data-toggle="popover" aria-label="Get Help with Radius">
+                            <span style="left: 8px;" class="glyphicon glyphicon-question-sign pull-right"></span></a>
+                        <label id="Radius_from_Zipcode" class="control-label">Radius (from City or Zip/Postal Code)</label>
+                        <select name="ctl00$ctl00$MainContent$MainContentSub$job_radius" id="MainContent_MainContentSub_job_radius" tabindex="210" aria-labelledby="Radius_from_Zipcode" class="form-control" disabled="disabled">
+	<option selected="selected" value="0">-- Select a Radius --</option>
+	<option value="5">5 Miles</option>
+	<option value="10">10 Miles</option>
+	<option value="15">15 Miles</option>
+	<option value="25">25 Miles</option>
+	<option value="50">50 Miles</option>
+	<option value="100">100 Miles</option>
+</select>
+                    </div>
+                    <div class="form-group">
+                        <input type="hidden" name="ctl00$ctl00$MainContent$MainContentSub$script1" id="MainContent_MainContentSub_script1" />
+                        <div id="MainContent_MainContentSub_UpdatePanelComps">
+                                        <div id="clone_job_company_container">
+                                            <div class="well">
+                                                <div id="clone_job_company0" class="clone_job_company">
+                                                    <label class="control-label" title="Search by Organization Name">Search by Organization Name (search results will only auto generate employers with active postings at time of search)</label>
+                                                    <input name="ctl00$ctl00$MainContent$MainContentSub$RepeaterComps$ctl00$job_company" type="text" maxlength="255" id="MainContent_MainContentSub_RepeaterComps_job_company_0" class="form-control autoOrg" placeholder="Enter Organization" onblur="return ValidateForspecialChar(this)" autocomplete="off" TabIndex="210" aria-label="Enter Organization Name" />
+                                                    <div class="actions">
+                                                        <a id="MainContent_MainContentSub_RepeaterComps_LinkButtonAdd_0" class="form_add_link" TabIndex="210" href="javascript:__doPostBack(&#39;ctl00$ctl00$MainContent$MainContentSub$RepeaterComps$ctl00$LinkButtonAdd&#39;,&#39;&#39;)">
+                                                                    Add Employer Name</a>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+</div>
+                    </div>
+                    <div class="form-group">
+                        <label id="Education_Required" class="control-label">Education Required (select all that apply)</label>
+                        <div class="AspNet-CheckBoxList" id="MainContent_MainContentSub_chlEducationLevel">
+		<label class="AspNet-CheckBoxList-RepeatDirection-Vertical" class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlEducationLevel_0" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlEducationLevel$0" value="1" tabindex="215" />None</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlEducationLevel_1" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlEducationLevel$1" value="2" tabindex="215" />High School Diploma/Equivalency</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlEducationLevel_2" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlEducationLevel$2" value="3" tabindex="215" />Some College</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlEducationLevel_3" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlEducationLevel$3" value="4" tabindex="215" />Associates Degree</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlEducationLevel_4" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlEducationLevel$4" value="5" tabindex="215" />Bachelors Degree</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlEducationLevel_5" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlEducationLevel$5" value="6" tabindex="215" />Masters Degree or above</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlEducationLevel_6" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlEducationLevel$6" value="7" tabindex="215" />Industry Recognized Credential</label>
+</div>
+                    </div>
+<div class="well clearfix">
+    <div class="row">
+        <div class="form-group col-xs-12">
+            <label id="MainContent_MainContentSub_UcONetOccp_lblOccupationRelatedToSkills" class="control-label">O*Net Online Occupations</label>
+            <a id="MainContent_MainContentSub_UcONetOccp_onethelp" data-trigger="focus" data-placement="bottom" class="popover-help" tabindex="470" aria-label="Get Help with selecting ONET occupations" data-toggle="popover" data-html="true" role="button" data-content="&lt;p>To select an O*NET occupation that matches your skill set, select either Standard Occupations or Military Occupation.&amp;nbsp;&lt;/p>
+&lt;p>The default selection is Standard but can be changed to Military by clicking on the radio button in front of &amp;lsquo;Military Occupation&amp;rsquo;.&lt;/p>
+&lt;p>&lt;strong>Please Note:&lt;/strong> You can only select either Standard Occupation or Military Occupation during a single search.&lt;/p>
+&lt;p>&amp;nbsp;&lt;/p>
+&lt;p>&lt;strong>&lt;em>Steps to select O*NET occupation:&lt;/em>&lt;/strong>&lt;/p>
+&lt;ol>
+&lt;li>Enter O*NET code or text in search box&lt;/li>
+&lt;li>Click on an occupation from results list&lt;/li>
+&lt;li>Repeat steps 1 &amp;amp; 2 to select multiple occupations (selection limit is 5 occupations)&lt;/li>
+&lt;/ol>
+&lt;p>&lt;strong>&lt;em>&amp;nbsp;&lt;/em>&lt;/strong>&lt;/p>
+&lt;p>&lt;strong>&lt;em>Steps to delete an O*NET occupation:&lt;/em>&lt;/strong>&lt;/p>
+&lt;ol>
+&lt;li>Click on the X next to the occupation to remove an occupation.&lt;/li>
+&lt;/ol>
+&lt;p>To view the full list of O*NET online occupations, use the &lt;strong>O*NET Codes&lt;/strong>&amp;nbsp;link above your occupation selection(s)&lt;/p>" data-original-title="O*NET Occupation Help">
+                <span style="left: 8px;" class="glyphicon glyphicon-question-sign pull-right"></span></a>
+        </div>
+        <div class="form-group col-xs-12">
+            <div class="form-group col-xs-6">
+                <span class="radocc"><input id="MainContent_MainContentSub_UcONetOccp_radocc" type="radio" name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$Occupations" value="radocc" checked="checked" tabindex="471" /><label for="MainContent_MainContentSub_UcONetOccp_radocc">Standard Occupation</label></span>
+            </div>
+            <div class="form-group col-xs-6">
+                <span class="radmil"><input id="MainContent_MainContentSub_UcONetOccp_radmil" type="radio" name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$Occupations" value="radmil" tabindex="472" /><label for="MainContent_MainContentSub_UcONetOccp_radmil">Military Occupation</label></span>
+            </div>
+            <input name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$hdnOccupType" type="hidden" id="MainContent_MainContentSub_UcONetOccp_hdnOccupType" class="hdnOccupType" value="ONET" />
+            <input name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$hdnOccpLimit" type="hidden" id="MainContent_MainContentSub_UcONetOccp_hdnOccpLimit" class="hdnOccpLimit" value="5" />
+            <input name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$hdnPopOccList" type="hidden" id="MainContent_MainContentSub_UcONetOccp_hdnPopOccList" class="hdnPopOccList" value="No" />
+            <input name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$hdnJSUserId" type="hidden" id="MainContent_MainContentSub_UcONetOccp_hdnJSUserId" class="hdnJSUserId" />
+            <input name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$hdnPageType" type="hidden" id="MainContent_MainContentSub_UcONetOccp_hdnPageType" class="hdnPageType" value="JS" />
+            <input name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$hdnUserRoleName" type="hidden" id="MainContent_MainContentSub_UcONetOccp_hdnUserRoleName" class="hdnUserRoleName" />
+        </div>
+        <div class="form-group col-xs-12">
+            <label class="control-label">Search by Keyword or O*NET Code(XX-XXXX)</label>
+        </div>
+    </div>
+    <div id="occcontainer" class="col-md-12 col-sm-12">
+        <div class="row">
+            <div class="form-group col-xs-12">
+                <div class="form-group col-xs-6">
+                    <label for="txtOccupations" class="control-label occlabel-count"></label>
+                </div>
+                <div class="form-group col-xs-3">
+                    <a href="https://www.onetonline.org/" id="MainContent_MainContentSub_UcONetOccp_lnkONetCodes" aria-label="Learn more about ONET Codes" title="O*NET Codes" target="_blank" rel="noopener noreferrer nofollow" class="" tabindex="473">O*NET Codes</a>
+                </div>
+                <div class="form-group col-xs-3">
+                    <a href="https://www.onetonline.org/crosswalk/MOC/" id="MainContent_MainContentSub_UcONetOccp_lnkMilitaryCrosswalk" aria-label="Learn more about Military Crosswalk" title="Military Crosswalk" target="_blank" rel="noopener noreferrer nofollow" class="" tabindex="474">Military Crosswalk</a>
+                </div>
+                <input name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$txtOccupations" type="text" maxlength="200" id="txtOccupations" tabindex="475" class="form-control occcodes" onkeypress="return TrimSpacesInCommonJs(event)" aria-label="(0 of 5 selected)" title="Occupations" data-error="Please complete this field" />
+            </div>
+            <div id="occselections">
+                <ul id="MainContent_MainContentSub_UcONetOccp_OccpListControl" class="onet-moc-list"></ul>
+                <div id="occvalues">
+                </div>
+            </div>
+            <div id="occchecks" class="form-group col-xs-12">
+                <div id="MainContent_MainContentSub_UcONetOccp_Agr_Container" class="form-group col-xs-6 agr-container hidden">
+                    <span Class="onet-check AGR"><input id="MainContent_MainContentSub_UcONetOccp_Chk_AgriculturalOrders" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$Chk_AgriculturalOrders" onclick="return false;" tabindex="476" /></span>
+                    <label for="MainContent_MainContentSub_UcONetOccp_Chk_AgriculturalOrders" class="control-label">Agricultural Orders</label>
+                </div>
+                <div id="MainContent_MainContentSub_UcONetOccp_Isj_Container" class="form-group col-xs-6 isj-container hidden">
+                    <span Class="onet-check ISJ"><input id="MainContent_MainContentSub_UcONetOccp_Chk_InterstateJob" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$UcONetOccp$Chk_InterstateJob" tabindex="477" /></span>
+                    <label for="MainContent_MainContentSub_UcONetOccp_Chk_InterstateJob" class="control-label">Interstate Job</label>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+                    <div class="form-group">
+                        <label id="JobLevel_position" class="control-label">Job Level of the Position You are Looking For (select all that apply)</label>
+                        <div class="AspNet-CheckBoxList" id="MainContent_MainContentSub_chlPositionLevel">
+		<label class="AspNet-CheckBoxList-RepeatDirection-Vertical" class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlPositionLevel_0" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlPositionLevel$0" value="1" tabindex="480" />Internship</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlPositionLevel_1" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlPositionLevel$1" value="2" tabindex="480" />Entry Level</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlPositionLevel_2" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlPositionLevel$2" value="3" tabindex="480" />Experienced (Non-Manager)</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlPositionLevel_3" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlPositionLevel$3" value="4" tabindex="480" />Manager/Supervisor</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlPositionLevel_4" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlPositionLevel$4" value="6" tabindex="480" />Registered Apprenticeship</label>
+</div>
+                    </div>
+                    <input type="hidden" name="ctl00$ctl00$MainContent$MainContentSub$hfaccordion" id="MainContent_MainContentSub_hfaccordion" value="0" />
+                    <input type="hidden" name="ctl00$ctl00$MainContent$MainContentSub$hfFocus" id="MainContent_MainContentSub_hfFocus" />
+                    <div class="form-group clearfix" style="display:none">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <label class="control-label">Minimum Pay ($)</label>
+                                <input name="ctl00$ctl00$MainContent$MainContentSub$job_rate_amount" type="text" maxlength="10" id="MainContent_MainContentSub_job_rate_amount" tabindex="485" aria-label="Provide Minimum Pay" placeholder="Enter Minimum Pay" class="form-control" onkeypress="return isNumberKey(this, event)" onblur="checkForDecimalPlaces(this)" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="control-label">Pay Type</label>
+                                <select name="ctl00$ctl00$MainContent$MainContentSub$job_rate_time" id="MainContent_MainContentSub_job_rate_time" tabindex="490" aria-label="Select Pay Per Option" class="form-control">
+	<option value="Hourly">Hourly</option>
+	<option value="Salary">Salary</option>
+</select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <a id="MainContent_MainContentSub_full_job_characterisics_text" data-trigger="focus" data-placement="bottom" class="popover-help" tabindex="495" aria-label="Get Help with Job Characteristics" data-toggle="popover" data-html="true" role="button" data-content="&lt;strong>Start Up: &lt;/strong>A startup is an entrepreneurial-driven organization formed to search for a repeatable and scalable business model.&lt;/br>&lt;/br>&lt;strong>Michigan-Based International Talent: &lt;/strong>Degreed and/or skilled international talent currently available in Michigan and authorized to work in the U.S. immediately." data-original-title="Help for Job Characteristics">
+                            <span class="glyphicon glyphicon-question-sign pull-right"></span></a>
+                        <label class="label-help">Job Characteristics (check all that apply)</label>
+                        <div class="splitted_column">
+                            <div class="AspNet-CheckBoxList" id="MainContent_MainContentSub_chlCharacteristics">
+		<label class="AspNet-CheckBoxList-RepeatDirection-Vertical" class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_0" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$0" value="1" tabindex="500" />Full-time</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_1" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$1" value="2" tabindex="500" />Part-time</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_2" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$2" value="3" tabindex="500" />Seasonal</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_3" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$3" value="8" tabindex="500" />Veteran focus</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_4" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$4" value="21" tabindex="500" />People with disabilities</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_5" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$5" value="22" tabindex="500" />Older Worker</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_6" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$6" value="23" tabindex="500" />Returning Citizens (formerly in prison)</label>
+		<label class="AspNet-CheckBoxList-Item"><input id="MainContent_MainContentSub_chlCharacteristics_7" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$chlCharacteristics$7" value="25" tabindex="500" />Remote</label>
+</div>
+                        </div>
+                    </div>
+                    <div class="row">
+<div id="MainContent_MainContentSub_PayRange_UpdatePanel1">
+        <div id='PayRangeDiv'>
+            <div class="form-group col-md-6">
+            <label id="lblPayRangeType" class="label_required control-label labelPayRangeType">Pay Type</label>
+            <select name="ctl00$ctl00$MainContent$MainContentSub$PayRange$ddlPayRangeCategories" id="MainContent_MainContentSub_PayRange_ddlPayRangeCategories" title="Pay Range Types" class="form-control" aria-labelledby="lblPayRange" data-error="Pay Range is a required field." OnClientClick="return ShowHidelblPayRangeDisplay();">
+		<option selected="selected" value="0">-- Select Pay Type --</option>
+		<option value="1">Hourly</option>
+		<option value="2">Salary</option>
+	</select>
+                 <br/>
+            <label id="lblPayRange" class="label_required control-label labelPayRange">Pay Range</label>
+                 <br/>
+                            <label id="lblPayRangeDisplay" class="label_required control-label labelPayRangeDisplay">Display Pay Range in job posting?</label>
+            </div>
+        </div>
+        <br />
+</div>
+                    </div>
+                    <div class="form-group">
+                    </div>
+                    <div class="form-group">
+                        <label class="control-label">Exclusions (do not include the following)</label>
+                        <div class="AspNet-CheckBoxList">
+                            <label class="AspNet-CheckBoxList-Item" class="control-label">
+                                <span class="AspNet-CheckBoxList-Item" aria-label="Exclude Staffing Company/Recruiters"><input id="MainContent_MainContentSub_job_exclude1" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$job_exclude1" tabindex="515" /></span>Staffing
+                                        Company/Recruiters
+                            </label>
+                            <label class="AspNet-CheckBoxList-Item" class="control-label">
+                                <span aria-label="Exclude Jobs from other boards"><input id="MainContent_MainContentSub_job_exclude3" type="checkbox" name="ctl00$ctl00$MainContent$MainContentSub$job_exclude3" tabindex="520" /></span>Jobs from
+                                        other boards</label>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <input type="submit" name="ctl00$ctl00$MainContent$MainContentSub$btnSubmit" value="Search" onclick="return Validate();" id="MainContent_MainContentSub_btnSubmit" tabindex="530" class="btn btn-default talent-solid-btn color-btn btn-right buttonspace" aria-label="Click to Search" />
+                        <input type="submit" name="ctl00$ctl00$MainContent$MainContentSub$ClearBtnBtm" value="Clear" id="MainContent_MainContentSub_ClearBtnBtm" tabindex="525" class="cancel btn btn-default talent-solid-btn color-btn btn-right buttonspace" aria-label="Click to Clear search" />
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="row">
+                <div class="col-sm-12">
+<div class="feedback">
+<a id="MainContent_MainContentSub_Feedback1_hyp_Feedback" tabindex="800" title="Provide feedback about this page" aria-label="Click to Provide feedback about this page" role="link" href="Feedback/">+ Feedback about this page?</a>
+</div>
+                </div>
+            </div>
+        </div>
+</form></body></html>

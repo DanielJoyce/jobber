@@ -289,6 +289,16 @@ config:
 Dates go through `dateparser`, salary through the shared parser. Most of the 18 unclassified
 sources should land here or in a known family without a new Python file.
 
+**As built** (`sources/adapters/htmlconfig.py`, milestone M3). Beyond the sketch above the adapter
+also handles: a JSON variant (`list.format: json`, `rows` as a dotted path, fields as dotted paths
+or `template`/`re` specs, JSON POST bodies); WebForms boards (`search.form` GETs the page and POSTs
+its hidden state, `pagination.kind: postback` re-posts the result form with a `__doPostBack`
+target); `page`, `offset` and `next_link` paging; flat result lists (`row_siblings`); label/value
+detail tables (`{label: "Closing Date"}`); `date_formats` and `timezone` for date text; and
+`days_buckets` to round `posted_within_days` up to a select box's options. The module docstring is
+the reference for every key. Findings per board are in
+[010](010-source-inventory.md#htmlconfig-discovery-2026-10-09).
+
 ## Breakage detection
 
 A scraper that fails loudly is maintainable; one that fails quietly is worthless. Surfaced on

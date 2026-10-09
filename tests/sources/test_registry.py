@@ -10,15 +10,12 @@ from jobhunter.core.db import connect, migrate
 from jobhunter.core.models import Policy, SourceClass
 from jobhunter.sources.registry import enabled_sources, load_registry, sync_sources_table
 
-# specs/010 "Open set": 12 state/territory sources plus national NLx, and USAJOBS.
+# specs/010 "Open set" after live discovery (2026-10-09): UT, WI, LA, WV and OK turned out to be
+# gated (login, Incapsula challenge, or a disallowing host) and are `manual`, so they are not
+# enabled. MI, MP and WA have htmlconfig adapters.
 OPEN_SET_KEYS = {
     "mi-mitalent",
-    "ut-jobconnection",
-    "wi-jobcenterofwisconsin",
-    "la-louisianaworks",
-    "wv-workforcewv",
     "mp-marianaslabor",
-    "ok-employoklahoma",
     "wa-worksourcewa",
     "wy-hire",
     "ky-kyjobs",
@@ -51,9 +48,10 @@ def test_enabled_sources_are_exactly_the_open_set(rows):
     assert enabled == OPEN_SET_KEYS
 
 
-def test_no_vos_host_enabled_except_louisiana(rows):
+def test_no_vos_host_enabled(rows):
+    # Louisiana was the one VOS host without Disallow, but it sits behind an Incapsula challenge.
     vos_enabled = {r.key for r in rows if r.family == "vos" and r.policy is Policy.enabled}
-    assert vos_enabled == {"la-louisianaworks"}
+    assert vos_enabled == set()
 
 
 def test_all_joblink_rows_blocked(rows):
@@ -83,7 +81,7 @@ def test_wv_honours_crawl_delay_and_stale_entries_corrected(rows):
 
 def test_manual_rows_are_the_undeterminable_ones(rows):
     manual = {r.state for r in rows if r.policy is Policy.manual}
-    assert manual == {"DC", "NH", "MO", "OH", "CO", "NJ"}
+    assert manual == {"DC", "NH", "MO", "OH", "CO", "NJ", "UT", "WI", "LA", "WV", "OK"}
 
 
 def test_robots_checked_recorded(rows):

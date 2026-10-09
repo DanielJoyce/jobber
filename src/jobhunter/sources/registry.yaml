@@ -305,13 +305,13 @@
   class: "A"
   name: "Louisiana Works"
   family: "vos"
-  tier: "http"
+  tier: "manual"
   entry: "https://www.louisianaworks.net/hire/vosnet/Default.aspx"
   verified: "2026-10-09"
-  family_signals: ["/vosnet/ in entry URL"]
+  family_signals: ["/vosnet/ in entry URL", "Incapsula bot challenge on every path (2026-10-09)"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "robots.txt at host root returns 404 (HTML page)."}
-  policy: "enabled"
+  robots: {status: "absent", checked: "2026-10-09", note: "Manual: robots.txt is absent (404), but on re-probe every path (/, /hire/vosnet/Default.aspx, /robots.txt) returns an Imperva Incapsula JavaScript challenge page to a plain honest client. Passing it needs a browser fingerprint, which is a bot gate we do not defeat."}
+  policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -364,13 +364,46 @@
   state: "MI"
   class: "A"
   name: "Michigan's Talent Bank"
-  family: "unknown"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://www.mitalent.org/"
   verified: "2026-10-09"
-  family_signals: ["Orchard CMS front (meta generator)", "job search on jobs.mitalent.org/job-search (CareerEvent.aspx, SAML paths)"]
+  family_signals: ["Orchard CMS front (meta generator)", "job search on jobs.mitalent.org/job-search (ASP.NET WebForms, __VIEWSTATE, __doPostBack paging)", "anonymous detail pages /job-seeker/job-details/JobCode/<id>"]
+  config:
+    base_url: "https://jobs.mitalent.org"
+    timezone: "America/Detroit"
+    date_formats: ["%m/%d/%Y"]
+    search:
+      method: "POST"
+      days_buckets: [1, 7, 14, 30]
+      default_days: 30
+      form:
+        path: "/job-search"
+        selector: "form#JobSearch"
+        submit: {"ctl00$ctl00$MainContent$MainContentSub$submitBtn2": "Search"}
+      data:
+        "ctl00$ctl00$MainContent$MainContentSub$job_keywords": "{query}"
+        "ctl00$ctl00$MainContent$MainContentSub$job_time_range": "{posted_within_days}"
+    list:
+      rows: "div.result-title"
+      row_siblings: true
+      id: {sel: "a::attr(name)"}
+      title: "a::text"
+      url: "a::attr(href)"
+      employer: {sel: "span.search_results_employer::own", re: "^(.*?)\\s+-\\s"}
+      location: {sel: "span.search_results_employer::own", re: "-\\s+([^-]+?,\\s*[A-Z]{2}\\b[^-]*?)\\s*-\\s*Posted"}
+      posted_at: {sel: "span.search_results_employer::own", re: "Posted\\s+(\\S+)"}
+    detail:
+      title: "#MainContent_lblJobTitle::text"
+      description: "#MainContent_lblJobDescription::html"
+      employer: "#MainContent_lblEmpName::text"
+      location: "#MainContent_lblLocation::text"
+      closes_at: "#MainContent_lblExpirationDate::text"
+      posted_at: "#MainContent_hdPostedDate::attr(value)"
+      apply_url: "#MainContent_ApplyInfo a::attr(href)"
+  pagination: {kind: "postback", max_pages: 4, page_size: 25, form: "form#JobSearchResults", target: "ctl00$MainContent$pageTop{page}", argument: ""}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "www.mitalent.org/robots.txt serves the HTML home page (200)."}
+  robots: {status: "partial", checked: "2026-10-09", note: "Rechecked 2026-10-09: jobs.mitalent.org/robots.txt disallows only /Feedback/ and /bot-trap/ (plus named scraper bots); the sitemap index is advertised. Search, results paging and detail pages are all anonymous."}
   policy: "enabled"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -567,13 +600,37 @@
   state: "MP"
   class: "A"
   name: "Northern Mariana Islands"
-  family: "unknown"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://marianaslabor.net/jvapub_list.asp"
   verified: "2026-10-09"
-  family_signals: ["classic ASP (jvapub_list.asp)", "no vendor strings"]
+  family_signals: ["classic ASP (jvapub_list.asp)", "no vendor strings", "anonymous job vacancy announcement (JVA) list and jvapub_view.asp?jvaID=<id> detail pages"]
+  config:
+    timezone: "Pacific/Guam"
+    date_formats: ["%m/%d/%Y"]
+    search:
+      method: "GET"
+      path: "/jvapub_list.asp"
+      params: {sort: "1"}
+    list:
+      rows: "div#maintxt table tr"
+      title: "td:nth-child(3) a::text"
+      url: "td:nth-child(3) a::attr(href)"
+      id: {from: "url", re: "jvaID=(\\d+)"}
+      employer: "td:nth-child(1) a::text"
+      posted_at: "td:nth-child(4) a::text"
+      closes_at: "td:nth-child(5) a::text"
+      location: {const: "Northern Mariana Islands, MP"}
+    detail:
+      description: "div#maintxt table:nth-of-type(2)::html"
+      location: {label: "Island", template: "{value}, MP"}
+      salary_raw: {label: "Salary Range"}
+      closes_at: {label: "Closing Date"}
+      posted_at: {label: "Opening Date"}
+      employer: {label: "Employer"}
+  pagination: {kind: "none", order: "newest_first"}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "robots.txt is 404 (IIS)."}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots.txt is 404 (IIS). The active list is public and, on 2026-10-09, empty (There are no active JVAs at this time); the row layout was captured from the inactive list (jvapub_listinact.asp), which shares it."}
   policy: "enabled"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -598,13 +655,13 @@
   class: "A"
   name: "Oklahoma Job Link"
   family: "sfdc"
-  tier: "browser"
+  tier: "manual"
   entry: "https://www.employoklahoma.gov/"
   verified: "2026-10-09"
-  family_signals: ["Salesforce Experience Cloud community (SfdcApp redirect, \"default robots.txt for sfdc communities\")"]
+  family_signals: ["Salesforce Experience Cloud community (SfdcApp redirect, \"default robots.txt for sfdc communities\")", "guest access disabled: every /Participants/s/ page redirects to /Participants/s/login"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots.txt at the host root redirects to /Participants/robots.txt."}
-  policy: "enabled"
+  robots: {status: "partial", checked: "2026-10-09", note: "Manual: robots allows all, but the Participants community has no guest access. /Participants/s/, /s/job-search and others redirect to login (ec=302); its sitemap lists two info pages and no jobs."}
+  policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -718,13 +775,13 @@
   class: "A"
   name: "Utah's Job Connection"
   family: "unknown"
-  tier: "http"
+  tier: "manual"
   entry: "https://jobs.utah.gov/index.html"
   verified: "2026-10-09"
-  family_signals: ["static CMS (opencms paths)", "no vendor strings"]
+  family_signals: ["static CMS (opencms paths)", "job search is the UtahID-gated UWORKS app (/jsp/utjobs/)"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "None of the disallowed paths are job search or job detail (hotjobs, /jobseeker/ outside Webhelp)."}
-  policy: "enabled"
+  robots: {status: "partial", checked: "2026-10-09", note: "Manual: robots allows it, but the only job search (jobs.utah.gov/jsp/utjobs/seeker/search/top-jobs, linked from Hot Jobs) 302s to a UtahID login. No anonymous search or detail exists."}
+  policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -776,14 +833,46 @@
 - key: "wa-worksourcewa"
   state: "WA"
   class: "A"
-  name: "Washington"
-  family: "sfdc"
-  tier: "browser"
+  name: "WorkSource Washington"
+  family: "htmlconfig"
+  tier: "api"
   entry: "https://worksource.my.site.com/worksourcewa/"
   verified: "2026-10-09"
-  family_signals: ["worksourcewa.com redirects to worksource.my.site.com/worksourcewa/ (Salesforce community", "same default robots text as OK)"]
+  family_signals: ["worksourcewa.com redirects to worksource.my.site.com/worksourcewa/ (Salesforce LWR Experience Cloud site)", "public /job-search page calls Apex WswaJobSearchResultsController.initializeJobSearch as the guest user via /worksourcewa/webruntime/api/apex/execute"]
+  config:
+    base_url: "https://worksource.my.site.com"
+    search:
+      method: "POST"
+      path: "/worksourcewa/webruntime/api/apex/execute"
+      json:
+        namespace: ""
+        classname: "@udd/01pcs0000098deg"
+        method: "initializeJobSearch"
+        isContinuation: false
+        cacheable: false
+        params:
+          jobTitle: "{query}"
+          location: null
+          companyId: null
+          industryId: null
+          currentLatitude: null
+          currentLongitude: null
+          additionalFilters: null
+    list:
+      format: "json"
+      rows: "returnValue.jobs"
+      id: "recordId"
+      title: "jobTitle"
+      url: {template: "https://worksource.my.site.com/worksourcewa/job-search/job-details?jobId={recordId}"}
+      employer: "companyName"
+      location: "jobLocation"
+      posted_at: "postingDate"
+      closes_at: "closingDate"
+      salary_raw: {path: "amount", template: "${value} {payType}"}
+      description: "description"
+  pagination: {kind: "none", order: "newest_first"}
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "absent", checked: "2026-10-09", note: "worksourcewa.com/robots.txt is 404 (empty)"}
+  robots: {status: "partial", checked: "2026-10-09", note: "worksource.my.site.com/worksourcewa/robots.txt: Allow / except */secur/forgotpassword.jsp?*. No login: the guest user runs the search Apex that the public page itself calls. Returns the first 100 matches newest first with full descriptions; later pages (loadMoreJobs) need server-built SOQL echoed back, which this row does not do."}
   policy: "enabled"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
@@ -793,13 +882,13 @@
   class: "A"
   name: "WorkForce West Virginia"
   family: "wordpress"
-  tier: "http"
+  tier: "manual"
   entry: "https://workforcewv.org/individuals/"
   verified: "2026-10-09"
-  family_signals: ["wp-content, WordPress (Yoast block in robots)"]
+  family_signals: ["wp-content, WordPress (Yoast block in robots)", "job search is a separate .NET app at macc.workforcewv.org/jobs"]
   rate_limit: {rps: 0.1, concurrency: 1, jitter: true}
-  robots: {status: "open", checked: "2026-10-09", note: "Empty Disallow (allow all)."}
-  policy: "enabled"
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "Manual: workforcewv.org (WordPress info site, Crawl-delay 10) is open, but /job-seeker/find-a-job/browse-wv-jobs/ 301s to macc.workforcewv.org, whose robots.txt is User-agent * Disallow: /. The survey read the wrong host."}
+  policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -808,13 +897,13 @@
   class: "A"
   name: "Wisconsin Job Center"
   family: "unknown"
-  tier: "http"
+  tier: "manual"
   entry: "https://jobcenterofwisconsin.com/"
   verified: "2026-10-09"
-  family_signals: ["ASP.NET WebForms (__VIEWSTATE), Presentation/JobSeekers/JobSearch.aspx", "no vosnet/Geographic Solutions strings"]
+  family_signals: ["ASP.NET WebForms (__VIEWSTATE), Presentation/JobSeekers/JobSearch.aspx", "no vosnet/Geographic Solutions strings", "result list is public (JobOrderList.aspx?kwords=...), detail EnhancedJobs-det.aspx redirects to /Login.aspx"]
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "Only .axd resources disallowed"}
-  policy: "enabled"
+  robots: {status: "partial", checked: "2026-10-09", note: "Manual: robots allows it and the result list is anonymous (title, employer, city, date), but every job detail (EnhancedJobs-det.aspx?OrderNumber=) redirects to Login.aspx even with a session cookie. A list with no description or reachable posting cannot be scored."}
+  policy: "manual"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
