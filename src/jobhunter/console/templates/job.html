@@ -28,6 +28,8 @@
       <span class="badge">overall {{ d.overall }}</span>
       <span class="badge">verdict {{ d.verdict }}</span>
       {% if d.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
+      {% if d.partial %}<span class="flag partial" title="scored from an email alert summary; capped at bucket B">partial: open to confirm</span>{% endif %}
+      {% if d.pasted %}<span class="badge" title="description pasted by you">pasted description</span>{% endif %}
     </div>
     {% else %}
     <div class="muted">Not scored yet.</div>
@@ -63,7 +65,18 @@
 
   <section class="card">
     <h2>Description</h2>
-    {# TODO(Pass 2): partial-description banner with a "paste description" textarea. #}
+    {% if d.partial %}
+    <div class="banner partial-banner" role="note">
+      <p><strong>Partial description.</strong> This job came from an email alert and the full
+      posting could not be fetched (the site disallows automated access). Open the posting
+      (<kbd>o</kbd>) to read it; if it looks promising, paste the description here to re-score it in full.</p>
+      <form method="post" action="/job/{{ d.group_id }}/description" class="paste-form">
+        <label for="paste-text">Paste description</label>
+        <textarea id="paste-text" name="text" rows="8" required></textarea>
+        <button type="submit" class="act">Save and re-score</button>
+      </form>
+    </div>
+    {% endif %}
     {% for p in d.text.paragraphs %}<p class="desc">{{ p }}</p>{% else %}<p class="muted">No description text.</p>{% endfor %}
   </section>
 

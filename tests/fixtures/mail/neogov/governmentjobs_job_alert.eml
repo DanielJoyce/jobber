@@ -1,0 +1,33 @@
+From: GovernmentJobs <noreply@governmentjobs.com>
+To: you+jobs@example.com
+Subject: Job Alert: 2 new jobs matching "information technology"
+Date: Thu, 08 Oct 2026 04:00:00 -0700
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!-- SYNTHETIC FIXTURE: fictional agencies, styled after a NEOGOV job alert. -->
+<html><body>
+<table role="presentation" width="100%">
+  <tr><td><h1>New jobs matching your Job Alert</h1></td></tr>
+  <tr><td>
+    <table class="job-row"><tr><td>
+      <a href="https://www.governmentjobs.com/careers/examplecounty/jobs/4567890/gis-analyst?utm_source=jobalert&amp;utm_medium=email">GIS Analyst</a>
+      <p>Example County (Fictional)</p>
+      <p>Location: Salem, OR</p>
+      <p>Salary: $62,000.00 - $80,000.00 Annually</p>
+      <p>Closing: 10/31/2026 11:59 PM Pacific</p>
+    </td></tr></table>
+  </td></tr>
+  <tr><td>
+    <table class="job-row"><tr><td>
+      <a href="https://www.governmentjobs.com/careers/fictionalcity/jobs/4567999/systems-analyst-ii?utm_source=jobalert">Systems Analyst II</a>
+      <p>City of Fictionalville</p>
+      <p>Location: Eugene, OR</p>
+      <p>Salary: $38.10 - $49.25 Hourly</p>
+      <p>Closing: Continuous</p>
+    </td></tr></table>
+  </td></tr>
+  <tr><td><a href="https://www.governmentjobs.com/jobalerts/manage">Manage job alerts</a> | <a href="https://www.governmentjobs.com/unsubscribe?t=placeholder">Unsubscribe</a></td></tr>
+</table>
+</body></html>

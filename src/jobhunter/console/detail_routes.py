@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated, Any
+from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -100,6 +101,17 @@ def register(
         target = (link.final_url or link.start_url) if link else detail.posting_url(job)
         detail.log_click(conn, group_id, target, "redirected", current)
         return RedirectResponse(target, status_code=302)
+
+    @app.post("/job/{group_id}/description")
+    async def paste_description(request: Request, conn: Conn, group_id: int) -> Response:
+        """Pasted posting text for a partial job: store it and queue a re-score (specs/012)."""
+        require_job(conn, group_id)
+        form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+        text = (form.get("text") or [""])[-1]
+        if not text.strip():
+            raise HTTPException(422, "paste the posting's description text")
+        detail.paste_description(conn, group_id, text, now())
+        return RedirectResponse(f"/job/{group_id}", status_code=303)
 
     @app.post("/job/{group_id}/applied", response_class=HTMLResponse)
     def applied(request: Request, conn: Conn, group_id: int, choice: str) -> HTMLResponse:

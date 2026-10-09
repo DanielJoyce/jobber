@@ -25,7 +25,7 @@
     <div class="row-flags">
       {% for f in i.shape_flags %}<span class="flag" title="shape flag">&#9873; {{ f }}</span>{% endfor %}
       {% if i.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
-      {% if i.partial %}<span class="flag" title="description may be truncated">partial description</span>{% endif %}
+      {% if i.partial %}<span class="flag partial" title="scored from an email alert summary; capped at bucket B">partial: open to confirm</span>{% endif %}
     </div>
     {% endif %}
     <div class="row-detail" hidden>

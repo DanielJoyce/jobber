@@ -1,0 +1,19 @@
+From: PA CareerLink <noreply@pacareerlink.pa.gov>
+To: you+jobs@example.com
+Subject: Job Match Notification
+Date: Thu, 08 Oct 2026 06:45:00 -0400
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!-- SYNTHETIC FIXTURE: fictional employers. PA CareerLink is Disallow: / so its links are
+     never fetched; the job stays partial. -->
+<html><body>
+<p>The following jobs match your profile:</p>
+<table>
+  <tr><td><a href="https://www.pacareerlink.pa.gov/jponline/JobSearch/ViewJobDetails?JobID=9900112">Help Desk Technician</a></td>
+      <td>Keystone Fictional Hospital</td><td>Harrisburg, PA</td></tr>
+  <tr><td><a href="https://www.pacareerlink.pa.gov/jponline/JobSearch/ViewJobDetails?JobID=9900187">Systems Engineer</a></td>
+      <td>Example Allegheny Robotics</td><td>Pittsburgh</td></tr>
+</table>
+</body></html>

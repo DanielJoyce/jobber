@@ -1,0 +1,21 @@
+From: Careers Digest <digest@careers.example.org>
+To: you+jobs@example.com
+Subject: This week's openings
+Date: Wed, 07 Oct 2026 12:00:00 -0600
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!-- SYNTHETIC FIXTURE: an unrecognised sender; exercises the generic link parser. -->
+<html><body>
+<h2>Openings this week</h2>
+<div>
+  <p><a href="https://careers.example.org/jobs/12345-maintenance-planner">Maintenance Planner</a><br>
+  Example Valley Water Board &middot; Denver, CO</p>
+  <p><a href="https://careers.example.org/jobs/12377-it-support-lead">IT Support Lead</a><br>
+  Example Valley Water Board &middot; Remote</p>
+</div>
+<p><a href="https://careers.example.org/jobs">View all jobs</a> |
+   <a href="https://careers.example.org/preferences">Email preferences</a> |
+   <a href="https://careers.example.org/unsubscribe">Unsubscribe</a></p>
+</body></html>

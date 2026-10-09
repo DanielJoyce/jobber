@@ -80,6 +80,30 @@ def _normalize_row(row: sqlite3.Row, tz: str) -> dict[str, object]:
     }
 
 
+_UPDATE = """
+UPDATE job SET
+  description_text = :description_text, salary_min = :salary_min,
+  salary_max = :salary_max, salary_period = :salary_period,
+  salary_stated = :salary_stated, remote = :remote,
+  employment_type = :employment_type, employer = :employer,
+  posted_at = :posted_at, closes_at = :closes_at,
+  content_hash = :content_hash, parse_warnings = :parse_warnings,
+  stage = CASE WHEN stage IN ('listed', 'resolved') THEN 'normalized'
+               ELSE stage END
+WHERE id = :id
+"""
+
+
+def normalize_job(conn: sqlite3.Connection, job_id: int, tz: str = "UTC") -> None:
+    """Re-normalize one job in place (e.g. after a pasted description); stage is kept."""
+    row = conn.execute("SELECT * FROM job WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"no such job: {job_id}")
+    vals = _normalize_row(row, tz)
+    vals["id"] = job_id
+    conn.execute(_UPDATE, vals)
+
+
 def normalize_pending(
     conn: sqlite3.Connection,
     *,
@@ -106,20 +130,6 @@ def normalize_pending(
         for row in rows:
             vals = _normalize_row(row, tzs.get(row["source_key"], "UTC"))
             vals["id"] = row["id"]
-            conn.execute(
-                """
-                UPDATE job SET
-                  description_text = :description_text, salary_min = :salary_min,
-                  salary_max = :salary_max, salary_period = :salary_period,
-                  salary_stated = :salary_stated, remote = :remote,
-                  employment_type = :employment_type, employer = :employer,
-                  posted_at = :posted_at, closes_at = :closes_at,
-                  content_hash = :content_hash, parse_warnings = :parse_warnings,
-                  stage = CASE WHEN stage IN ('listed', 'resolved') THEN 'normalized'
-                               ELSE stage END
-                WHERE id = :id
-                """,
-                vals,
-            )
+            conn.execute(_UPDATE, vals)
     apply_locations(conn, force=force)  # leave job_locations populated (specs/011)
     return len(rows)

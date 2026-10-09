@@ -1,0 +1,25 @@
+From: National Labor Exchange <alerts@usnlx.com>
+To: you+jobs@example.com
+Subject: 2 new jobs for "data engineer"
+Date: Thu, 08 Oct 2026 08:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!-- SYNTHETIC FIXTURE: fictional employers, styled after an NLx job alert. -->
+<html><body>
+<p>Here are new jobs from the National Labor Exchange matching <b>data engineer</b>:</p>
+<ul>
+  <li>
+    <a href="https://usnlx.com/olympia-wa/data-engineer/0123456789ABCDEF0123456789ABCDEF/job/">Data Engineer</a><br>
+    Fictional Data Cooperative<br>
+    Olympia, WA
+  </li>
+  <li>
+    <a href="https://usnlx.com/boise-id/senior-data-engineer/FEDCBA9876543210FEDCBA9876543210/job/">Senior Data Engineer</a><br>
+    Example Mountain Logistics<br>
+    Boise, ID
+  </li>
+</ul>
+<p><a href="https://usnlx.com/jobs/">Browse all jobs</a> &middot; <a href="https://usnlx.com/alerts/unsubscribe?id=placeholder">Unsubscribe</a></p>
+</body></html>

@@ -370,3 +370,29 @@ def test_keyboard_script_served(client):
     assert "detail.js" in t and 'data-posting-url="https://example.com/1"' in t
     js = client.get("/static/detail.js").text
     assert "o:" in js and "A:" in js and "b:" in js
+
+
+# ─── partial descriptions (specs/012) ──────────────────────────────────────
+
+
+def test_partial_banner_and_paste_description(client, conn):
+    conn.execute("UPDATE job SET description_completeness = 'partial' WHERE id = 2")
+    page = client.get("/job/2").text
+    assert "partial: open to confirm" in page
+    assert 'action="/job/2/description"' in page and "<textarea" in page
+    assert "partial: open to confirm" not in client.get("/job/3").text
+
+    r = client.post("/job/2/description", data={"text": "Pasted <b>full</b> posting.\n\nMore."})
+    assert r.status_code == 303 and r.headers["location"] == "/job/2"
+    job = conn.execute("SELECT * FROM job WHERE id = 2").fetchone()
+    assert job["description_completeness"] == "pasted"
+    assert job["description_text"].startswith("Pasted <b>full</b> posting.")
+    rev = conn.execute("SELECT description_rev FROM job_group WHERE id = 2").fetchone()[0]
+    assert rev == 1
+    page = client.get("/job/2").text
+    assert "pasted description" in page and "partial: open to confirm" not in page
+
+
+def test_paste_description_rejects_empty_and_unknown(client):
+    assert client.post("/job/2/description", data={"text": "  "}).status_code == 422
+    assert client.post("/job/999/description", data={"text": "x"}).status_code == 404

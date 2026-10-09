@@ -1,0 +1,54 @@
+From: Employ Florida <noreply@employflorida.com>
+To: you+jobs@example.com
+Subject: Virtual Recruiter: 3 new jobs match your search "systems"
+Date: Thu, 08 Oct 2026 06:15:00 -0400
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!-- SYNTHETIC FIXTURE: fictional employers, built to resemble a VOS Virtual Recruiter alert.
+     Re-validate against a real alert (jobhunter mail sample) once subscriptions arrive. -->
+<html><body>
+<table width="600" cellpadding="0" cellspacing="0">
+  <tr><td><img src="https://www.employflorida.com/vosnet/images/logo.png" alt="Employ Florida"></td></tr>
+  <tr><td><h2>Your Virtual Recruiter found 3 new jobs</h2>
+    <p>Search: systems &middot; Within 50 miles of 32301 &middot; Posted in the last 1 day</p></td></tr>
+  <tr><td>
+    <table class="jobs" width="100%">
+      <tr class="job">
+        <td>
+          <a href="https://www.employflorida.com/vosnet/jobbanks/jobdetails.aspx?enc=QUJDMTIzNDU2Nzg5MA%3D%3D&amp;source=VR"><b>Systems Administrator II</b></a><br>
+          Employer: Gulfside Widget Cooperative<br>
+          Location: Tallahassee, FL<br>
+          Posted: 10/07/2026<br>
+          Job Order #: 11223344
+        </td>
+        <td><a href="https://www.employflorida.com/vosnet/jobbanks/jobdetails.aspx?enc=QUJDMTIzNDU2Nzg5MA%3D%3D&amp;source=VR">View Job</a></td>
+      </tr>
+      <tr class="job">
+        <td>
+          <a href="https://www.employflorida.com/vosnet/jobbanks/jobdetails.aspx?enc=WFlaOTg3NjU0MzIxMA%3D%3D&amp;source=VR"><b>Network Systems Analyst</b></a><br>
+          Employer: Panhandle Fictional Health District<br>
+          Location: Quincy, FL<br>
+          Salary: $52,000 - $64,000 per year<br>
+          Posted: 10/07/2026
+        </td>
+        <td><a href="https://www.employflorida.com/vosnet/jobbanks/jobdetails.aspx?enc=WFlaOTg3NjU0MzIxMA%3D%3D&amp;source=VR">View Job</a></td>
+      </tr>
+      <tr class="job">
+        <td>
+          <a href="https://www.employflorida.com/vosnet/jobbanks/jobdetails.aspx?enc=TE1OMTExMjIyMzMzNA%3D%3D&amp;source=VR"><b>Linux Systems Engineer</b></a><br>
+          Employer: Example Space Coast Labs Inc.<br>
+          Location: Tallahassee, FL<br>
+          Posted: 10/06/2026
+        </td>
+        <td><a href="https://www.employflorida.com/vosnet/jobbanks/jobdetails.aspx?enc=TE1OMTExMjIyMzMzNA%3D%3D&amp;source=VR">View Job</a></td>
+      </tr>
+    </table>
+  </td></tr>
+  <tr><td>
+    <p><a href="https://www.employflorida.com/vosnet/VirtualRecruiter/Manage.aspx">Manage your Virtual Recruiter</a> |
+       <a href="https://www.employflorida.com/vosnet/Unsubscribe.aspx?id=placeholder">Unsubscribe</a></p>
+  </td></tr>
+</table>
+</body></html>

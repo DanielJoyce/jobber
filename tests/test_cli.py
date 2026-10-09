@@ -30,11 +30,13 @@ def test_run_bad_stage():
     assert result.exit_code == 2
 
 
-def test_subcommand_stubs():
-    for args in (["mail", "sync"],):
-        result = runner.invoke(app, args)
-        assert result.exit_code == 0, args
-        assert "not implemented yet" in result.output
+def test_mail_sync_without_token_skips_cleanly(monkeypatch):
+    from jobhunter.mail import auth
+
+    monkeypatch.setattr(auth, "load_token", lambda: None)  # never the real keyring
+    result = runner.invoke(app, ["mail", "sync"])
+    assert result.exit_code == 0
+    assert "mail sync skipped: no Gmail token" in result.output
 
 
 def test_score_requires_one_mode():

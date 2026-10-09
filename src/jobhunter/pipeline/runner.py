@@ -40,6 +40,7 @@ from jobhunter.scoring.prefilter import run_prefilter
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile
 from jobhunter.sources.adapters.base import SourceAdapter
 from jobhunter.sources.adapters.htmlconfig import HtmlConfigAdapter
+from jobhunter.sources.adapters.mailalerts import MailAlertsAdapter
 from jobhunter.sources.adapters.nlx import NlxAdapter
 from jobhunter.sources.adapters.usajobs import UsajobsAdapter, queries_from_profile
 from jobhunter.sources.adapters.wyoming import WyomingAdapter
@@ -60,6 +61,7 @@ ADAPTERS: dict[str, Callable[[], SourceAdapter]] = {
     "nlx": NlxAdapter,
     "wyo": WyomingAdapter,
     "htmlconfig": HtmlConfigAdapter,
+    "mailalerts": MailAlertsAdapter,
 }
 
 CtxFactory = Callable[[SourceRow], AbstractContextManager[Any]]
@@ -217,6 +219,21 @@ def build_plan(
     return plan
 
 
+def mark_unavailable(
+    plan: Sequence[PlanEntry],
+    adapters: Mapping[str, Callable[[], SourceAdapter]],
+    settings: Settings,
+) -> None:
+    """Skip sources whose adapter says it cannot run (``unavailable(settings)``), e.g. the
+    email adapter before ``jobhunter mail auth`` has stored a Gmail token."""
+    for e in plan:
+        if e.skip_reason is not None:
+            continue
+        check = getattr(adapters.get(e.source.family), "unavailable", None)
+        if callable(check) and (why := check(settings)):
+            e.skip_reason = str(why)
+
+
 def format_plan(plan: Sequence[PlanEntry], stages: Sequence[str], profile_loaded: bool) -> str:
     lines = [f"Run plan: stages {', '.join(stages)}"]
     if not profile_loaded:
@@ -320,7 +337,8 @@ def _resolve_candidates(
         """
         SELECT * FROM job
         WHERE source_key = ? AND stage = 'listed' AND needs_resolve = 1
-          AND (description_raw IS NULL OR description_raw = '')
+          AND (description_raw IS NULL OR description_raw = ''
+               OR description_completeness = 'partial')
           AND (closes_at IS NULL OR closes_at > ?)
         ORDER BY posted_at DESC, id
         LIMIT ?
@@ -341,6 +359,8 @@ def _stub_from_row(row: sqlite3.Row) -> JobStub:
         salary_raw=row["salary_raw"],
         agency_raw=row["agency_raw"],
         apply_url=row["apply_url"],
+        description_raw=row["description_raw"] or None,
+        description_completeness=row["description_completeness"],
     )
 
 
@@ -482,6 +502,7 @@ def run_pipeline(
     sync_sources_table(conn, rows)
     selected = filter_sources(rows, states)
     report.plan = build_plan(conn, selected, adapters, profile, now, since=since, full=full)
+    mark_unavailable(report.plan, adapters, settings)
 
     if profile is None:
         for s in NEEDS_PROFILE:
