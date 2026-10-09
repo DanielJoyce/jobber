@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 import typer
@@ -41,9 +42,60 @@ def run(
 
 
 @app.command()
-def score() -> None:
-    """Submit or collect LLM scoring batches."""
-    _stub()
+def score(
+    submit: Annotated[
+        bool, typer.Option("--submit", help="Submit a screen batch for eligible job groups.")
+    ] = False,
+    collect: Annotated[
+        str | None, typer.Option("--collect", metavar="BATCH_ID", help="Collect a batch.")
+    ] = None,
+    limit: Annotated[int, typer.Option(help="Most job groups to submit.", min=1)] = 500,
+) -> None:
+    """Submit or collect LLM screen batches (specs/006 Stage 2)."""
+    if submit == (collect is not None):
+        typer.echo("pass exactly one of --submit or --collect BATCH_ID", err=True)
+        raise typer.Exit(2)
+
+    from datetime import UTC, datetime
+
+    import anthropic
+
+    from jobhunter.config import load_settings
+    from jobhunter.core import db
+    from jobhunter.scoring import screen
+    from jobhunter.scoring.profile import ProfileError, load_profile
+
+    settings = load_settings()
+    try:
+        profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
+    except ProfileError as exc:
+        typer.echo(f"profile error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    conn = db.connect(settings.paths.db_path)
+    db.migrate(conn)
+    client = anthropic.Anthropic()
+    now = datetime.now(UTC)
+    scorer = settings.scoring.screen_scorer
+    try:
+        if submit:
+            batch_id = screen.submit_batch(
+                conn,
+                client,
+                profile,
+                limit=limit,
+                now=now,
+                scorer=scorer,
+                remaining_usd=lambda: screen.remaining_daily_budget(
+                    conn, settings.scoring.daily_cap_usd, now
+                ),
+            )
+            typer.echo(f"submitted batch {batch_id}" if batch_id else "nothing to submit")
+        else:
+            assert collect is not None
+            result = screen.collect_batch(conn, client, collect, profile, now=now)
+            typer.echo(json.dumps(result.as_dict(), indent=2))
+    finally:
+        conn.close()
 
 
 @app.command()
