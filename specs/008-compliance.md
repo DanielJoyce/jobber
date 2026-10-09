@@ -42,57 +42,112 @@ problem is much larger and it lands squarely on the two biggest platform familie
 | `careers.georgia.gov` | `User-agent: *` with `Allow:` rules (Drupal default) — permissive |
 | `careers.wa.gov`, `www.jobapscloud.com` | Empty / absent |
 
-### Class A (the 54 job banks) — sampled
+### Class A (the 54 job banks) — all surveyed
 
-| Host | Family | `robots.txt` |
-|---|---|---|
-| `www.workintexas.com` | vos | **`Disallow: /`** (Twitterbot allowed on the landing page only) |
-| `www.caljobs.ca.gov` | vos | **`Disallow: /`** |
-| `www.employflorida.com` | vos | **`Disallow: /`** |
-| `www.ncworks.gov` | vos | **`Disallow: /`** |
-| `mwejobs.maryland.gov` | vos | **`Disallow: /`** |
-| `vawc.virginia.gov` | vos | **`Disallow: /`** |
-| `www.employnv.gov` | vos | **`Disallow: /`** |
-| `neworks.nebraska.gov` | vos | **`Disallow: /`** |
-| `www.cthires.com` | vos | **`Disallow: /`** |
-| `jobs.scworks.org` | vos | **`Disallow: /`** |
-| `www.hirenethawaii.com` | vos | **`Disallow: /`** |
-| `www.jobs4tn.gov` | vos | no disallow ✅ |
-| **all 7 JobLink hosts** | joblink | **`Disallow: /search/jobs`** + `/search/resumes` |
-| `www.pacareerlink.pa.gov` | ? | **`Disallow: /`** — with the inline comment `# keep them out` |
-| `jobquest.mass.gov` | ? | **`Disallow: /`** |
-| `montanaworks.gov` | nlx | no disallow ✅ |
-| `newyork.usnlx.com` | nlx | no disallow ✅ |
-| `kyjobs.usnlx.com` | nlx | only `/*feed/`, `/*feeds/` ✅ |
-| `hire.wyo.gov` | next | no disallow ✅ |
-| `ohiomeansjobs.ohio.gov` | ? | no disallow ✅ |
-| `careerforce.mn.gov` | ? | only `/core/`, `/profiles/` (Drupal admin) ✅ |
-| `jobcenterofwisconsin.com` | ? | only `/*.axd$` ✅ |
-| `worksourcewa.com` | ? | empty / absent ✅ |
+Every host in [010](010-source-inventory.md) plus `usnlx.com`, fetched once on 2026-10-09 with
+`User-Agent: jobber-research/0.1 (personal job search)`. Raw results:
+[`data/robots-survey-2026-10-09.json`](data/robots-survey-2026-10-09.json). "Search" and "Detail"
+say whether robots permits the job-search and job-detail paths for a generic crawler. A `200`
+HTML page served at `/robots.txt` (a soft 404 or an SPA shell) counts as absent.
 
-Three conclusions, none of them convenient:
+| Host | Family | `robots.txt` | Search | Detail |
+|---|---|---|---|---|
+| `alabamaworks.alabama.gov` (AL) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `alaskajobs.alaska.gov` (AK) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.azjobconnection.gov` (AZ) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `www.arjoblink.arkansas.gov` (AR) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `www.caljobs.ca.gov` (CA) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.connectingcolorado.com` (CO) | `?` | absent (404 or HTML page); search host `jobs.connectingcolorado.gov`: `/` (allowlist includes `/careerhub/explore/jobs`) | yes | ? |
+| `www.cthires.com` (CT) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `joblink.delaware.gov` (DE) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `www.dcnetworks.org` (DC) | `vos` | **403** to curl (WAF); not determinable | ? | ? |
+| `www.employflorida.com` (FL) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.worksourcegaportal.com` (GA) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.hireguam.com` (GU) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.hirenethawaii.com` (HI) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `idahoworks.gov` (ID) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `illinoisjoblink.illinois.gov` (IL) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `www.indianacareerconnect.com` (IN) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.iowaworks.gov` (IA) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.kansasworks.com` (KS) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `kyjobs.usnlx.com` (KY) | `nlx` | only `/*feed/`, `/*feeds/` | yes | yes |
+| `www.louisianaworks.net` (LA) | `vos` | absent (404 or HTML page) | yes | yes |
+| `joblink.maine.gov` (ME) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `mwejobs.maryland.gov` (MD) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `jobquest.mass.gov` (MA) | `?` | **`Disallow: /`** | **no** | **no** |
+| `www.mitalent.org` (MI) | `?` | absent (404 or HTML page); search host `jobs.mitalent.org`: `/Feedback/`, `/bot-trap/` | yes | yes |
+| `careerforce.mn.gov` (MN) | `?` | only `/core/`, `/profiles/`, `/admin/`, `/search/`, `/job-search`, `/job-search/`, `/occupations/`, `/explore/`, ... | **no** | ? |
+| `wings.mdes.ms.gov` (MS) | `?` | **`Disallow: /`** | **no** | **no** |
+| `jobs.mo.gov` (MO) | `?` | only `/core/`, `/profiles/`, `/admin/`, `/search/`, `/user/login/`, (plus index.php/ variants) | ? | ? |
+| `montanaworks.gov` (MT) | `nlx` | absent (404 or HTML page); search host `montana.usnlx.com`: `/*feed/`, `/*feeds/` | yes | yes |
+| `neworks.nebraska.gov` (NE) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.employnv.gov` (NV) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `nhworksjobmatch.nhes.nh.gov` (NH) | `vos` | **403** to curl (WAF); not determinable | ? | ? |
+| `nj.gov` (NJ) | `?` | only `/cgi-bin/homelandsecurity/`, `/cgi-bin/dobi/licenseesearch/`, `/cgi-bin/consumeraffairs/search/`, `/cgi-bin/state/`, `/Support/`, `/treasury/treasdocuments/`, `/highereducation/higheddocs/`, `/oag/secure-pdf/`; search host `jobsource.nj.gov`: absent | yes | ? |
+| `www.jobs.dws.nm.gov` (NM) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `newyork.usnlx.com` (NY) | `nlx` | absent (404 or HTML page); search host `myjobsny.usnlx.com`: `/*feed/`, `/*feeds/` | yes | yes |
+| `www.ncworks.gov` (NC) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.ndworkforceconnection.com` (ND) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `marianaslabor.net` (MP) | `?` | absent (404 or HTML page) | yes | yes |
+| `ohiomeansjobs.ohio.gov` (OH) | `?` | absent (404 or HTML page) | ? | ? |
+| `www.employoklahoma.gov` (OK) | `sfdc` | only `*/secur/forgotpassword.jsp?*` | yes | yes |
+| `secure.emp.state.or.us` (OR) | `?` | **`Disallow: /`** | **no** | **no** |
+| `www.pacareerlink.pa.gov` (PA) | `?` | **`Disallow: /`** - with the inline comment `# keep them out` | **no** | **no** |
+| `www.employri.org` (RI) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `jobs.scworks.org` (SC) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.southdakotaworks.org` (SD) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `www.jobs4tn.gov` (TN) | `vos` | **`Disallow: /`** (at `jobs4tnwfs.tn.gov`; entry host serves no robots) | **no** | **no** |
+| `www.workintexas.com` (TX) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `jobs.utah.gov` (UT) | `?` | only `/calendar`, `/_Admin`, `/_vti`, `/services/foodstamp`, `/infosource`, `/jobseeker/DislocatedWorker/Webhelp`, `/Infosource/eligibilitymanual`, `/edo/geninfo`, ... | yes | yes |
+| `www.vermontjoblink.com` (VT) | `joblink` | only `/search/jobs`, `/search/resumes` | **no** | yes |
+| `www.vidolviews.org` (VI) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `vawc.virginia.gov` (VA) | `vos` | **`Disallow: /`** | **no** | **no** |
+| `worksourcewa.com` (WA) | `sfdc` | absent (404 or HTML page); search host `worksource.my.site.com`: `*/secur/forgotpassword.jsp?*` | yes | yes |
+| `workforcewv.org` (WV) | `wordpress` | empty `Disallow:` (open), `Crawl-delay: 10` | yes | yes |
+| `jobcenterofwisconsin.com` (WI) | `?` | only `/*.axd$` | yes | yes |
+| `hire.wyo.gov` (WY) | `next/custom` | absent (404 or HTML page) | yes | yes |
+| `usnlx.com` (national) | `nlx` | only `/*feed/`, `/*feeds/` | yes | yes |
 
-1. **The VOS family is effectively closed.** 11 of 12 sampled VOS hosts serve `Disallow: /` —
-   that is ~23 of the 25 sources the highest-value adapter was meant to unlock.
-2. **The JobLink family disallows the exact endpoint we need.** All 7 hosts disallow
-   `/search/jobs` specifically. Not a blanket block — a surgical one aimed precisely at
-   programmatic job search. The intent is unambiguous.
-3. **The permissive sources are mostly *not* in the big families.** They are the one-off and
-   unclassified boards, so in robots-respecting mode the "one adapter, 25 sources" economics
-   that justified this architecture **does not apply**; the reachable sources each need their own
+Tallies over the 54 banks: **27 `Disallow: /`**, **15 partial**, **1 open**, **9 absent**,
+**2 undeterminable** (DC and NH: HTTP 403 to curl).
+
+Four things in the table are worth stating plainly:
+
+1. **The VOS family is closed, with one exception.** 22 of the 25 originally classified VOS
+   hosts serve the identical `Disallow: /` file (23 of 26 with NM, newly classified as VOS). DC
+   and NH return 403 and are presumed the same. **LA** has no `robots.txt` at all (404), so it
+   is the one VOS bank robots does not close.
+2. **The JobLink family is 8 hosts, not 7** (VT verified by bundle hash), and all 8 disallow
+   `/search/jobs` and `/search/resumes` - a surgical block of programmatic search. Detail
+   pages are not disallowed.
+3. **Redirects and delegated hosts matter.** TN's entry host `jobs4tn.gov` has no robots (it now
+   redirects to a `tn.gov` page); the live VOS host `jobs4tnwfs.tn.gov` is `Disallow: /`, so
+   the earlier "no disallow" for TN was wrong. CO, MI, NJ and WA delegate search to another host
+   whose robots differs from the entry host. MN, previously read as Drupal-admin-only, also
+   disallows `/job-search`, which is the search.
+4. **The permissive sources are mostly *not* in the big families.** They are the NLx boards
+   and the one-off boards, so in robots-respecting mode the "one adapter, 25 sources" economics
+   that justified this architecture **do not apply**; the reachable sources each need their own
    `htmlconfig` row instead.
 
 ### What is reachable, respecting robots
 
+The open set is the sources where both search and detail are permitted
+([010](010-source-inventory.md#open-set-2026-10-09) has entry URLs and caveats).
+
 | | Count |
 |---|---|
 | USAJOBS (sanctioned API — see note) | 1 |
-| Class A banks confirmed permissive | 8 |
-| Class A banks confirmed blocked | 14+ (≈23 once the VOS family is assumed) |
-| Class A banks not yet checked | ~22 |
+| National NLx (`usnlx.com`) | 1 |
+| Class A banks in the open set (KY, LA, MI, MP, MT, NY, OK, UT, WA, WV, WI, WY) | 12 |
+| Class A banks closed (`Disallow: /`) | 27 |
+| Class A banks with search disallowed (8 JobLink, MN) | 9 |
+| Class A banks not determinable (DC and NH 403; MO bot-challenge; OH 404 everywhere) | 4 |
+| Class A banks with a partial answer (CO: search allowed, detail unclear; NJ: info page, app on another host) | 2 |
 
-Realistically **~10–20 of 54 state banks plus federal** — not 55. The ~22 unchecked hosts will
-split, but since most are VOS or JobLink by family, the split is unlikely to favor us.
+Realistically **12 of 54 state banks plus national NLx plus federal** — about a fifth of the
+banks, not 55. Several of the 12 carry caveats (OK and WA are JS-rendered Salesforce communities,
+WV is an info site with a 10-second crawl delay), so the practically scrapable core is smaller.
 
 ### A note on `data.usajobs.gov`
 
