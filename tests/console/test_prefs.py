@@ -300,6 +300,26 @@ def test_revert(client, pdir, conn):
     assert client.post("/prefs/revert/9999").status_code == 404
 
 
+def test_revert_weights_works_while_resume_missing(client, pdir, conn):
+    client.get("/prefs")
+    form = form_for(pdir, **{"w.skills": "60", "w.seniority": "20", "w.domain": "20"})
+    form["w.comp"] = ["0"]
+    form["w.location"] = ["0"]
+    client.post("/prefs/save", data=form, follow_redirects=False)
+    change_id = conn.execute("SELECT max(id) FROM profile_change").fetchone()[0]
+    (pdir / "resume.md").unlink()  # the resume goes missing after the change
+
+    r = client.post(f"/prefs/revert/{change_id}", follow_redirects=False)
+
+    assert r.status_code == 303, r.text
+    assert r.headers["location"] == f"/prefs?reverted={change_id}"
+    w = load_profile(pdir, require_resume=False).soft.weights
+    assert (w.skills, w.seniority, w.domain, w.comp, w.location) == (0.3, 0.2, 0.2, 0.15, 0.15)
+    assert conn.execute("SELECT source FROM profile_change ORDER BY id DESC").fetchone()[0] == (
+        "revert"
+    )
+
+
 def test_validation_error_inline_and_file_untouched(client, pdir):
     before = prefs_text(pdir)
     r = client.post("/prefs/save", data=form_for(pdir, current_focus__since="2024-13"))
