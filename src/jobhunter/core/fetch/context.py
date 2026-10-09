@@ -287,6 +287,7 @@ class FetchContext:
                 fetched_at,
                 prior["bytes"],
                 from_cache=True,
+                content_type=headers.get("content-type") or prior["content_type"],
             )
             return self._from_prior(url, prior, headers, fetched_at), None
 
@@ -304,6 +305,7 @@ class FetchContext:
             fetched_at,
             len(body),
             from_cache=False,
+            content_type=headers.get("content-type"),
         )
         result = CachedResponse(
             url=url,
@@ -326,6 +328,8 @@ class FetchContext:
             merged.setdefault("etag", prior["etag"])
         if prior["last_modified"]:
             merged.setdefault("last-modified", prior["last_modified"])
+        if prior["content_type"]:
+            merged.setdefault("content-type", prior["content_type"])
         return CachedResponse(
             url=url,
             final_url=url,
@@ -379,6 +383,7 @@ class FetchContext:
                         None,
                         _now(),
                         len(body),
+                        content_type=response.headers.get("content-type"),
                     )
                     retry_after = _retry_after_seconds(response.headers.get("retry-after"))
             if attempt == attempts - 1:
@@ -472,7 +477,8 @@ class FetchContext:
 
     def _latest_ok(self, rhash: str) -> sqlite3.Row | None:
         row = self.conn.execute(
-            "SELECT content_hash, etag, last_modified, fetched_at, bytes FROM fetch_log "
+            "SELECT content_hash, etag, last_modified, content_type, fetched_at, bytes "
+            "FROM fetch_log "
             "WHERE request_hash = ? AND content_hash IS NOT NULL AND http_status IN (200, 304) "
             "ORDER BY fetched_at DESC, id DESC LIMIT 1",
             (rhash,),
@@ -494,12 +500,13 @@ class FetchContext:
         size: int | None,
         *,
         from_cache: bool = False,
+        content_type: str | None = None,
     ) -> None:
         with self._db_lock:
             self.conn.execute(
                 "INSERT INTO fetch_log (source_key, url, method, request_hash, content_hash, "
-                "http_status, etag, last_modified, fetched_at, bytes, from_cache) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "http_status, etag, last_modified, fetched_at, bytes, from_cache, content_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._log_key,
                     url,
@@ -512,6 +519,7 @@ class FetchContext:
                     fetched_at.isoformat(),
                     size,
                     int(from_cache),
+                    content_type,
                 ),
             )
 

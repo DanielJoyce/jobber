@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json as jsonlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.message import Message
@@ -12,6 +13,17 @@ from urllib.parse import urljoin
 
 if TYPE_CHECKING:
     from jobhunter.core.fetch.cache import ContentCache
+
+# <meta charset="x"> and <meta http-equiv="Content-Type" content="...; charset=x"> both match.
+_META_CHARSET = re.compile(rb"""<meta[^>]+?charset\s*=\s*["']?\s*([A-Za-z0-9_.:-]+)""", re.I)
+META_SNIFF_BYTES = 2048
+
+
+def _known_codec(name: str) -> str | None:
+    try:
+        return codecs.lookup(name.strip()).name
+    except LookupError:
+        return None
 
 
 def charset_from_content_type(content_type: str | None) -> str | None:
@@ -22,19 +34,26 @@ def charset_from_content_type(content_type: str | None) -> str | None:
     charset = msg.get_param("charset")
     if not isinstance(charset, str):
         return None
-    try:
-        return codecs.lookup(charset.strip()).name
-    except LookupError:
+    return _known_codec(charset)
+
+
+def charset_from_meta(body: bytes) -> str | None:
+    """The charset declared by a meta tag in the first 2 KB of an HTML body, if any."""
+    match = _META_CHARSET.search(body[:META_SNIFF_BYTES])
+    if match is None:
         return None
+    return _known_codec(match.group(1).decode("ascii"))
 
 
 @dataclass
 class CachedResponse:
     """A response whose body lives in the content cache.
 
-    ``from_cache`` is True when no body crossed the wire (ttl hit or 304). On a ttl hit
-    ``headers`` holds only what fetch_log keeps (etag/last-modified), so ``text`` falls back
-    to utf-8 unless the body is ASCII-compatible anyway.
+    ``from_cache`` is True when no body crossed the wire (ttl hit or 304). On those, ``headers``
+    holds what fetch_log kept (etag, last-modified, content-type), so the charset survives.
+
+    ``encoding``: the Content-Type charset, else a ``<meta>`` charset sniffed from the body,
+    else utf-8 (decoded with replacement).
     """
 
     url: str
@@ -55,7 +74,8 @@ class CachedResponse:
 
     @property
     def encoding(self) -> str:
-        return charset_from_content_type(self.headers.get("content-type")) or "utf-8"
+        declared = charset_from_content_type(self.headers.get("content-type"))
+        return declared or charset_from_meta(self.content) or "utf-8"
 
     @property
     def text(self) -> str:
@@ -70,6 +90,10 @@ class CachedResponse:
 
     @property
     def location(self) -> str | None:
-        """Absolute redirect target, if the response carried a Location header."""
+        """Redirect target, if the response carried a Location header.
+
+        Relative targets are made absolute. Non-http targets (mailto:, javascript:) and
+        malformed ones come back as the raw header value.
+        """
         loc = self.headers.get("location")
         return urljoin(self.final_url, loc) if loc else None

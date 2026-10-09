@@ -73,6 +73,12 @@ def test_all_tables_exist(conn):
     assert names >= EXPECTED_TABLES
 
 
+def test_fresh_migrate_includes_fetch_content_type(conn):
+    assert 3 in MIGRATIONS
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(fetch_log)")}
+    assert "content_type" in cols
+
+
 def test_migration_files_are_package_data():
     names = [e.name for e in resources.files(db.MIGRATIONS_PACKAGE).iterdir()]
     assert "0001_initial.sql" in names
