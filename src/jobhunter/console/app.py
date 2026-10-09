@@ -220,6 +220,10 @@ def create_app(
         rows = dash.state_stats(conn, get_profile(), metric_, range_, now())
         return JSONResponse(dash.map_payload(rows, metric_, range_))
 
+    @app.get("/api/dash/series")
+    def api_series(conn: Conn, range: str | None = None) -> JSONResponse:
+        return JSONResponse(dash.series(conn, get_profile(), dash.clamp_range(range), now()))
+
     @app.get("/dash/state-table", response_class=HTMLResponse)
     def state_table(
         request: Request,

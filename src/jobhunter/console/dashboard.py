@@ -388,18 +388,26 @@ def response_rate(apps: Sequence[AppFact], now: datetime, window_days: int) -> d
 # ─── per-state stats ────────────────────────────────────────────────────────
 
 
+NLX_KEY = "us-nlx"
+NLX_NAME = "National Labor Exchange (NLx)"
+
+
 @dataclass
 class Coverage:
     status: str = "none"
     sources: list[str] = field(default_factory=list)
     last_ok_at: str | None = None
+    via_nlx: bool = False
 
 
 def coverage(conn: sqlite3.Connection, now: datetime) -> dict[str, Coverage]:
     """Coverage status per state, plus REMOTE from the national (state-less) sources.
 
-    Only sources registered for a state count toward it; national aggregators (NLx, USAJOBS)
-    feed the REMOTE row so they don't paint every state "direct".
+    A state's own sources decide its status. National aggregators (NLx, USAJOBS) feed the
+    REMOTE row. One exception (010 "NLx coverage"): while the national ``us-nlx`` source is
+    enabled and ``ok``, NLx carries thousands of postings in robots-blocked states, so a state
+    with no working board of its own counts as collected directly, flagged ``via_nlx``.
+    A state's own broken or suspect source still wins, because that is a fault to surface.
     """
     rows = conn.execute(
         "SELECT s.key, s.state, s.name, s.family, s.policy, s.status, ss.last_ok_at "
@@ -426,6 +434,9 @@ def coverage(conn: sqlite3.Connection, now: datetime) -> dict[str, Coverage]:
             continue
         by_state[r["state"] or REMOTE].append(r)
 
+    nlx = next((r for r in rows if r["key"] == NLX_KEY), None)
+    nlx_ok = nlx is not None and nlx["policy"] == "enabled" and nlx["status"] == "ok"
+
     out: dict[str, Coverage] = {}
     for key in (*geo.US_SUBDIVISIONS, REMOTE):
         srcs = by_state.get(key, [])
@@ -441,6 +452,11 @@ def coverage(conn: sqlite3.Connection, now: datetime) -> dict[str, Coverage]:
         elif srcs and all(r["policy"] == "blocked" for r in srcs):
             stale = bool(mail_keys) and key not in recent_mail_states
             cov.status = "email_stale" if stale else "email"
+        if nlx_ok and key != REMOTE and cov.status in ("none", "email", "email_stale"):
+            cov.status = "direct"
+            cov.via_nlx = True
+            cov.sources = [*cov.sources, NLX_NAME]
+            cov.last_ok_at = max(filter(None, [cov.last_ok_at, nlx["last_ok_at"]]), default=None)
         out[key] = cov
     return out
 
@@ -525,7 +541,10 @@ def state_stats(
         r["col_adjusted"] = col_adjust(r["median_salary"], key)
         c = cov[key]
         icon, label = COVERAGE[c.status]
+        if c.via_nlx:
+            label = f"{label} via NLx"
         r.update(
+            via_nlx=c.via_nlx,
             coverage=c.status,
             coverage_icon=icon,
             coverage_label=label,
@@ -610,3 +629,148 @@ def sort_rows(
     missing = [r for r in by_name if value(r) is None]
     present.sort(key=value, reverse=desc)
     return present + missing
+
+
+# ─── chart series (013 "Charts") ────────────────────────────────────────────
+
+FUNNEL_DAYS = 30
+FUNNEL_STAGES: tuple[tuple[str, str], ...] = (
+    ("found", "Found"),
+    ("prefilter", "Passed prefilter"),
+    ("ab", "A + B"),
+    ("shortlisted", "Shortlisted"),
+    ("applied", "Applied"),
+    ("responded", "Responded"),
+    ("interviewed", "Interviewed"),
+    ("offer", "Offer"),
+)
+FUNNEL_ZOOM = 4  # the last four stages also get their own panel
+# Bucket-mix slots in fixed order: A, B, C+D+E folded, F. G is hidden by design.
+MIX_SLOTS: tuple[tuple[str, str, tuple[Bucket, ...]], ...] = (
+    ("a", "A", (Bucket.A,)),
+    ("b", "B", (Bucket.B,)),
+    ("other", "Other fits", (Bucket.C, Bucket.D, Bucket.E)),
+    ("f", "F stale", (Bucket.F,)),
+)
+STATUS_ORDER: tuple[str, ...] = (
+    "interested",
+    "preparing",
+    "applied",
+    "acknowledged",
+    "screening",
+    "interview",
+    "offer",
+    "rejected",
+    "withdrawn",
+    "no_response",
+    "closed",
+)
+MIN_POINTS = 3
+
+
+def _funnel(
+    conn: sqlite3.Connection, profile: Profile, now: datetime, apps: Sequence[AppFact]
+) -> list[dict[str, Any]]:
+    since = _since(now, FUNNEL_DAYS)
+    found, passed = conn.execute(
+        "WITH g AS (SELECT job_group_id AS gid FROM job WHERE job_group_id IS NOT NULL "
+        "GROUP BY job_group_id HAVING MIN(first_seen_at) >= ?) "
+        "SELECT COUNT(*), COALESCE(SUM(j.stage IN ('prefiltered', 'scored', 'triaged')), 0) "
+        "FROM g JOIN job_group jg ON jg.id = g.gid JOIN job j ON j.id = jg.canonical_job_id",
+        (since,),
+    ).fetchone()
+    ab = sum(1 for f in group_facts(conn, profile, since) if f.bucket in AB)
+    applied = [a for a in apps if a.applied_on and a.applied_on >= since]
+    liked = {
+        r[0]
+        for r in conn.execute(
+            "SELECT job_group_id FROM label WHERE label = 'interesting' AND labeled_at >= ?",
+            (since,),
+        )
+    }
+    shortlisted = liked | {a.group_id for a in applied}
+
+    def reached(app: AppFact, statuses: set[str]) -> bool:
+        return bool(({st for _, st in app.events} | {app.status}) & statuses)
+
+    counts = [
+        found,
+        passed,
+        ab,
+        len(shortlisted),
+        len(applied),
+        sum(a.responded for a in applied),
+        sum(reached(a, {"interview", "offer"}) for a in applied),
+        sum(reached(a, {"offer"}) for a in applied),
+    ]
+    out: list[dict[str, Any]] = []
+    for i, ((key, label), n) in enumerate(zip(FUNNEL_STAGES, counts, strict=True)):
+        prev = counts[i - 1] if i else 0
+        out.append(
+            {"key": key, "label": label, "count": n, "pct_prev": (n / prev) if prev else None}
+        )
+    return out
+
+
+def series(
+    conn: sqlite3.Connection, profile: Profile, range_days: int, now: datetime
+) -> dict[str, Any]:
+    """Data for the four dashboard charts. Each chart reports ``enough`` (>= 3 points)."""
+    days = _days(now, range_days)
+    weeks = max(4, math.ceil(range_days / 7))
+    week_ends = [_today(now) - timedelta(days=7 * w) for w in range(weeks - 1, -1, -1)]
+    first_day = min(days[0], (week_ends[0] - timedelta(days=6)).isoformat())
+    facts = [f for f in group_facts(conn, profile, first_day) if f.bucket is not None]
+
+    # New A+B per day, plus the mean of the last 7 days as a reference line.
+    daily = dict.fromkeys(days, 0)
+    for f in facts:
+        if f.bucket in AB and f.first_seen[:10] in daily:
+            daily[f.first_seen[:10]] += 1
+    line = [{"day": d, "count": daily[d]} for d in days]
+    last7 = [daily[d] for d in days[-7:]]
+    mean7 = sum(last7) / len(last7)
+
+    # Bucket mix per week (weeks end today and step back 7 days).
+    mix_weeks = []
+    for end in week_ends:
+        start = (end - timedelta(days=6)).isoformat()
+        stop = end.isoformat()
+        wk: dict[str, Any] = {"week": stop}
+        for slot, _, buckets in MIX_SLOTS:
+            wk[slot] = sum(
+                1 for f in facts if f.bucket in buckets and start <= f.first_seen[:10] <= stop
+            )
+        mix_weeks.append(wk)
+
+    funnel = _funnel(conn, profile, now, application_facts(conn))
+
+    by_status = dict(
+        conn.execute("SELECT status, COUNT(*) FROM application GROUP BY status").fetchall()
+    )
+    status = [{"status": s, "count": by_status.get(s, 0)} for s in STATUS_ORDER]
+
+    return {
+        "range": range_days,
+        "min_points": MIN_POINTS,
+        "line": {
+            "points": line,
+            "mean7": round(mean7, 3),
+            "enough": sum(1 for p in line if p["count"] > 0) >= MIN_POINTS,
+        },
+        "funnel": {
+            "days": FUNNEL_DAYS,
+            "stages": funnel,
+            "zoom_from": len(funnel) - FUNNEL_ZOOM,
+            "enough": sum(1 for s in funnel if s["count"] > 0) >= MIN_POINTS,
+        },
+        "mix": {
+            "slots": [{"key": k, "label": label} for k, label, _ in MIX_SLOTS],
+            "weeks": mix_weeks,
+            "enough": sum(1 for w in mix_weeks if any(w[k] for k, _, _ in MIX_SLOTS)) >= MIN_POINTS,
+        },
+        "status": {
+            "items": status,
+            "enough": sum(1 for s in status if s["count"] > 0) >= MIN_POINTS,
+        },
+    }

@@ -3,6 +3,7 @@
   <script src="{{ url_for('static', path='vendor/d3-7.9.0.min.js') }}" defer></script>
   <script src="{{ url_for('static', path='vendor/topojson-client-3.1.0.min.js') }}" defer></script>
   <script src="{{ url_for('static', path='dashboard.js') }}" defer></script>
+  <script src="{{ url_for('static', path='charts.js') }}" defer></script>
 {% endblock %}
 {% block main %}
 <div class="dash-head">
@@ -54,9 +55,28 @@
   <script type="application/json" id="state-names">{{ names | safe }}</script>
 </section>
 
-<section id="charts" class="panel charts-placeholder" aria-labelledby="charts-title">
+<section id="charts" class="panel" aria-labelledby="charts-title"
+         data-api="/api/dash/series">
   <h2 id="charts-title">Trends</h2>
-  <p class="muted">New A+B per day, funnel, bucket mix and applications by status arrive with the charts milestone.</p>
+  <div class="charts-grid">
+    <figure class="chart" id="chart-line" aria-labelledby="chart-line-title" style="margin:0">
+      <h3 id="chart-line-title">New A+B per day</h3>
+      <div class="body"></div>
+    </figure>
+    <figure class="chart" id="chart-funnel" aria-labelledby="chart-funnel-title" style="margin:0">
+      <h3 id="chart-funnel-title">Funnel, last 30 days</h3>
+      <div class="body"></div>
+    </figure>
+    <figure class="chart" id="chart-mix" aria-labelledby="chart-mix-title" style="margin:0">
+      <h3 id="chart-mix-title">Bucket mix per week</h3>
+      <div class="body"></div>
+    </figure>
+    <figure class="chart" id="chart-status" aria-labelledby="chart-status-title" style="margin:0">
+      <h3 id="chart-status-title">Applications by status</h3>
+      <div class="body"></div>
+    </figure>
+  </div>
+  <div id="chart-tooltip" class="chart-tip" role="tooltip" hidden></div>
 </section>
 
 <section class="panel" aria-labelledby="table-title">

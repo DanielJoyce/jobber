@@ -27,6 +27,16 @@
   --seq-650: #104281;
   --seq-700: #0d366b;
 
+  /* Ordinal ramp for the funnel: one hue, step 250 and up (specs/013 "Charts"). */
+  --ord-1: var(--seq-250);
+  --ord-2: var(--seq-300);
+  --ord-3: var(--seq-350);
+  --ord-4: var(--seq-400);
+  --ord-5: var(--seq-450);
+  --ord-6: var(--seq-500);
+  --ord-7: var(--seq-600);
+  --ord-8: var(--seq-700);
+
   --status-good: #0ca30c;
   --status-warning: #fab219;
   --status-serious: #ec835a;
@@ -49,6 +59,31 @@
     --series-2: #d95926;
     --series-3: #199e70;
     --series-4: #c98500;
+
+    /* Dark sequential ramp: low values recede toward the surface (>= 1.5:1), high values
+       are brightest. Same step names as the light ramp so consumers don't change. */
+    --seq-100: #243d63;
+    --seq-150: #264671;
+    --seq-200: #2a5184;
+    --seq-250: #2e5c97;
+    --seq-300: #3368aa;
+    --seq-350: #3774bd;
+    --seq-400: #3b7fd0;
+    --seq-450: #508ed8;
+    --seq-500: #659de0;
+    --seq-550: #7aace8;
+    --seq-600: #90bbef;
+    --seq-650: #a5caf7;
+    --seq-700: #bad9ff;
+
+    --ord-1: var(--seq-350);
+    --ord-2: var(--seq-400);
+    --ord-3: var(--seq-450);
+    --ord-4: var(--seq-500);
+    --ord-5: var(--seq-550);
+    --ord-6: var(--seq-600);
+    --ord-7: var(--seq-650);
+    --ord-8: var(--seq-700);
   }
 }
 
@@ -65,6 +100,31 @@
   --series-2: #d95926;
   --series-3: #199e70;
   --series-4: #c98500;
+
+  /* Dark sequential ramp: low values recede toward the surface (>= 1.5:1), high values
+     are brightest. Same step names as the light ramp so consumers don't change. */
+  --seq-100: #243d63;
+  --seq-150: #264671;
+  --seq-200: #2a5184;
+  --seq-250: #2e5c97;
+  --seq-300: #3368aa;
+  --seq-350: #3774bd;
+  --seq-400: #3b7fd0;
+  --seq-450: #508ed8;
+  --seq-500: #659de0;
+  --seq-550: #7aace8;
+  --seq-600: #90bbef;
+  --seq-650: #a5caf7;
+  --seq-700: #bad9ff;
+
+  --ord-1: var(--seq-350);
+  --ord-2: var(--seq-400);
+  --ord-3: var(--seq-450);
+  --ord-4: var(--seq-500);
+  --ord-5: var(--seq-550);
+  --ord-6: var(--seq-600);
+  --ord-7: var(--seq-650);
+  --ord-8: var(--seq-700);
 }
 
 * { box-sizing: border-box; }
@@ -179,7 +239,7 @@ h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .map-svg .labels { pointer-events: none; }
 .map-svg .lbl { font-size: 11px; font-weight: 600; }
 .map-svg .lbl-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.map-svg .status { font-size: 11px; stroke: var(--surface-1); stroke-width: 2px; paint-order: stroke; }
+.map-svg .status { font-size: 11px; stroke-width: 2px; paint-order: stroke; }  /* ink and halo set per fill in JS */
 .map-svg.no-status .status { display: none; }
 .map-svg .leader { stroke: var(--text-muted); stroke-width: 0.75; }
 .map-svg .leader-dot { fill: var(--text-muted); }
@@ -215,11 +275,51 @@ h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .table-wrap { overflow-x: auto; }
 .state-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .state-table caption { text-align: left; color: var(--text-muted); padding-bottom: 6px; }
-.state-table th, .state-table td { padding: 4px 8px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
+.state-table th, .state-table td { padding: 0 8px; height: 30px; line-height: 20px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.state-table thead th { height: auto; padding: 4px 8px; overflow: visible; }
 .state-table thead th { color: var(--text-secondary); font-weight: 600; }
 .state-table thead a { color: inherit; text-decoration: none; }
 .state-table thead th[aria-sort] a, .state-table thead th[data-metric-col] a { color: var(--text-primary); }
 .state-table tbody th { font-weight: 400; }
 .state-table tbody th a { color: var(--text-primary); }
 .state-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.state-table .sources { white-space: normal; color: var(--text-secondary); min-width: 160px; }
+.state-table .sources { color: var(--text-secondary); max-width: 220px; }
+.state-table .cov-cell { max-width: 230px; }
+
+/* ─── Dashboard charts (specs/013 "Charts") ───────────────────────────────── */
+
+.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+@media (max-width: 520px) { .charts-grid { grid-template-columns: 1fr; } }
+.chart { position: relative; min-width: 0; }
+.chart h3 { font-size: 0.875rem; margin: 0 0 4px; }
+.chart .sub { font-size: 0.75rem; color: var(--text-muted); margin: 0 0 4px; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .empty { color: var(--text-muted); margin: 24px 0; }
+.chart .grid line { stroke: var(--grid); stroke-width: 1; }
+.chart .axis path, .chart .axis line { stroke: var(--axis); }
+.chart .axis text, .chart text.tick { fill: var(--text-secondary); font-size: 11px; }
+.chart .axis .domain { stroke: var(--axis); }
+.chart .val { fill: var(--text-primary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .cat { fill: var(--text-primary); font-size: 12px; }
+.chart .pct { fill: var(--text-secondary); font-size: 11px; }
+.chart .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .mean { stroke: var(--text-secondary); stroke-width: 1; stroke-dasharray: 4 3; }
+.chart .mean-label { fill: var(--text-secondary); font-size: 11px; }
+.chart .cross { stroke: var(--text-muted); stroke-width: 1; }
+.chart .dot { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
+.chart .bar:hover, .chart .seg:hover { opacity: 0.8; }
+.chart .seg { stroke: var(--surface-1); stroke-width: 2; paint-order: stroke; }
+.chart .hit { fill: transparent; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 0; font-size: 0.8125rem; color: var(--text-primary); }
+.chart-tip {
+  position: absolute; z-index: 10; pointer-events: none;
+  background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--axis); border-radius: 6px;
+  padding: 6px 9px; font-size: 0.8125rem; white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.chart-tip .tip-row { display: flex; gap: 8px; justify-content: space-between; }
+.chart-tip .tip-row span:first-child { color: var(--text-secondary); }
+.chart-tip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.chart-tip b { font-variant-numeric: tabular-nums; }
+.chart .zoom-title { margin-top: 10px; }
