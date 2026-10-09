@@ -31,3 +31,6 @@ token*.json
 .vscode/
 *.swp
 .DS_Store
+
+# Agent worktrees
+.claude/worktrees/
