@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from test_scorers import chat_reply
+from test_scorers import chat_reply, request
 from test_screen import (
     add_group,
     conn,  # noqa: F401
@@ -65,7 +65,8 @@ def test_empty_model_rejected():
         scorer_from_string("local:")
 
 
-def test_zero_cost_one_at_a_time_long_timeout_no_key():
+def test_zero_cost_one_at_a_time_long_timeout_no_key(monkeypatch):
+    monkeypatch.delenv("LLAMA_API_KEY", raising=False)
     s = scorer_from_string("local:m")
     assert s.cost(object()) == 0.0
     assert s.config.max_concurrency == 1
@@ -79,8 +80,6 @@ def test_llama_cpp_asks_for_prompt_caching_ollama_does_not():
     def handler(req):
         seen.update(json.loads(req.content))
         return httpx.Response(200, json=chat_reply("{}"))
-
-    from test_scorers import request
 
     for runtime, expected in (("llama.cpp", True), ("ollama", False)):
         seen.clear()
@@ -103,6 +102,87 @@ def test_privacy_notice_warns_when_not_loopback():
     notice = privacy_notice("local:m", scoring)
     assert notice is not None and "NOT this machine" in notice
     assert "nothing leaves" not in notice
+
+
+# ─── API key ────────────────────────────────────────────────────────────────
+
+
+def capture_headers(seen: list[dict], status: int = 200) -> httpx.Client:
+    def handler(req):
+        seen.append({k.lower(): v for k, v in req.headers.items()})
+        if status == 200:
+            return httpx.Response(200, json=chat_reply("{}"))
+        return httpx.Response(status, json={"error": "Invalid API Key"})
+
+    return mock_client(handler)
+
+
+def test_bearer_header_sent_when_key_env_is_set(monkeypatch):
+    monkeypatch.setenv("LLAMA_API_KEY", "k-test-123")
+    seen: list[dict] = []
+    scorer_from_string("local:m", http_client=capture_headers(seen)).score_one(request())
+    assert seen[0]["authorization"] == "Bearer k-test-123"
+
+
+def test_no_authorization_header_when_key_env_is_absent(monkeypatch):
+    monkeypatch.delenv("LLAMA_API_KEY", raising=False)
+    seen: list[dict] = []
+    scorer_from_string("local:m", http_client=capture_headers(seen)).score_one(request())
+    assert "authorization" not in seen[0]
+
+
+def test_custom_key_env_name(monkeypatch):
+    monkeypatch.setenv("MY_LLAMA_KEY", "other")
+    monkeypatch.delenv("LLAMA_API_KEY", raising=False)
+    seen: list[dict] = []
+    scorer = scorer_from_string(
+        "local:m",
+        scoring=Scoring(local=Local(api_key_env="MY_LLAMA_KEY")),
+        http_client=capture_headers(seen),
+    )
+    scorer.score_one(request())
+    assert seen[0]["authorization"] == "Bearer other"
+
+
+def test_401_from_server_says_to_set_the_key(monkeypatch):
+    monkeypatch.delenv("LLAMA_API_KEY", raising=False)
+    scorer = scorer_from_string("local:m", http_client=capture_headers([], status=401))
+    result = scorer.score_one(request())
+    assert result.status == "errored"
+    assert "401" in result.detail
+    assert "set LLAMA_API_KEY" in result.detail
+
+
+def test_status_sends_key_and_reports_401(monkeypatch):
+    monkeypatch.setenv("LLAMA_API_KEY", "k-test-123")
+    seen: list[dict] = []
+    st = local_server_status(Local(), client=capture_headers(seen))
+    assert seen[0]["authorization"] == "Bearer k-test-123"
+    assert st.reachable and st.models == [] and not st.unauthorized
+
+    def denied(req):
+        return httpx.Response(401, json={"error": "nope"})
+
+    st = local_server_status(Local(), client=mock_client(denied))
+    assert st.unauthorized and st.reachable
+
+
+def test_status_cli_401_message(monkeypatch, tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("")
+    monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
+    from jobhunter.scoring import scorers
+
+    monkeypatch.setattr(
+        scorers,
+        "local_server_status",
+        lambda config, **k: scorers.ServerStatus(
+            "http://127.0.0.1:8080", True, [], "HTTP 401 Unauthorized", unauthorized=True
+        ),
+    )
+    res = CliRunner().invoke(app, ["llm", "status"])
+    assert res.exit_code == 1
+    assert "HTTP 401" in res.output and "set LLAMA_API_KEY" in res.output
 
 
 # ─── llm status ─────────────────────────────────────────────────────────────
@@ -285,14 +365,42 @@ def test_bench_cli_end_to_end_writes_no_rows(tmp_path, monkeypatch, profile):  #
 
 # ─── setup script ───────────────────────────────────────────────────────────
 
-TOOLS = ("awk", "grep", "df", "sed", "head", "tr", "cat", "dirname", "env")
+TOOLS = (
+    "awk",
+    "grep",
+    "df",
+    "sed",
+    "head",
+    "tr",
+    "cat",
+    "dirname",
+    "env",
+    "cut",
+    "tail",
+    "od",
+    "chmod",
+    "touch",
+    "python3",
+)
 
 
-def make_env(tmp_path: Path, present: set[str]) -> tuple[dict[str, str], Path]:
-    """A PATH holding only basic tools plus stubs. Installers log a call and fail."""
+CPU_ONLY = "Available devices:\n  BLAS: OpenBLAS (0 MiB, 0 MiB free)\n"
+CUDA = "Available devices:\n  CUDA0: NVIDIA GeForce GTX 1650 Ti (4096 MiB, 3800 MiB free)\n"
+
+
+def make_env(
+    tmp_path: Path, present: set[str], devices: str | None = None
+) -> tuple[dict[str, str], Path]:
+    """A PATH holding only basic tools plus stubs. Installers log a call and fail.
+
+    ``devices`` is what the llama-server stub prints for ``--list-devices``. That call only
+    reads, so it is not logged. None means no output and a failing exit, like a broken build.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "invoked.log"
+    devices_file = tmp_path / "devices.txt"
+    devices_file.write_text(devices or "")
     for tool in TOOLS:
         real = shutil.which(tool)
         assert real, tool
@@ -304,6 +412,13 @@ def make_env(tmp_path: Path, present: set[str]) -> tuple[dict[str, str], Path]:
                 stub.write_text(
                     f'#!/bin/bash\necho nvidia-smi >> "{log}"\n'
                     'echo "NVIDIA GeForce GTX 1650 Ti, 4096"\n'
+                )
+            elif name == "llama-server":
+                listing = f'  cat "{devices_file}"\n  exit 0\n' if devices else "  exit 1\n"
+                stub.write_text(
+                    '#!/bin/bash\nif [[ "$1" == "--list-devices" ]]; then\n'
+                    f"{listing}fi\n"
+                    f'echo "llama-server $@" >> "{log}"\nexit 1\n'
                 )
             else:
                 stub.write_text(f'#!/bin/bash\necho "{name} $@" >> "{log}"\nexit 1\n')
@@ -354,6 +469,94 @@ def test_script_dry_run_everything_present(tmp_path):
     assert "already installed; no install step" in out
     assert "--n-gpu-layers 99 --n-cpu-moe 99" in out
     assert "about 12-13 GB" in out and "RAM needed" in out
+    assert invoked(log) == []
+
+
+def serve_line(out: str) -> str:
+    return next(ln for ln in out.splitlines() if ln.startswith("llama-server -hf"))
+
+
+def test_script_cpu_only_build_plans_cpu_even_with_nvidia_gpu(tmp_path):
+    env, log = make_env(tmp_path, {"llama-server", "nvidia-smi"}, devices=CPU_ONLY)
+    res = run_script(env, "--dry-run", "--model", "gpt-oss-20b")
+    assert res.returncode == 0, res.stderr
+    out = res.stdout
+    assert "CPU-only build" in out
+    assert "this build is CPU-only; a CUDA or Vulkan build would use the GPU" in out
+    assert "-DGGML_CUDA=ON" in out and "-DGGML_VULKAN=ON" in out
+    line = serve_line(out)
+    assert "--n-gpu-layers" not in line and "--threads 6" in line
+    assert "--n-gpu-layers" not in out
+    assert invoked(log) == []
+
+
+@pytest.mark.parametrize(
+    ("model", "gpu"),
+    [
+        ("gpt-oss-20b", "--n-gpu-layers 99 --n-cpu-moe 99"),
+        ("granite-4.0-h-micro", "--n-gpu-layers 99"),
+    ],
+)
+def test_script_cuda_build_keeps_gpu_plan(tmp_path, model, gpu):
+    env, log = make_env(tmp_path, {"llama-server", "nvidia-smi"}, devices=CUDA)
+    res = run_script(env, "--dry-run", "--model", model)
+    assert res.returncode == 0, res.stderr
+    assert "GPU build" in res.stdout and "CPU-only" not in res.stdout
+    assert gpu in serve_line(res.stdout)
+    assert invoked(log) == []
+
+
+def test_script_serve_command_has_api_key_and_no_slots(tmp_path):
+    env, log = make_env(tmp_path, {"llama-server"}, devices=CUDA)
+    res = run_script(env, "--dry-run")
+    assert res.returncode == 0, res.stderr
+    line = serve_line(res.stdout)
+    assert '--api-key "$LLAMA_API_KEY"' in line
+    assert "--no-slots" in line
+    assert "CORS" in res.stdout and "Local server security" in res.stdout
+    assert invoked(log) == []
+
+
+def test_script_dry_run_never_prints_a_key_and_writes_no_env(tmp_path):
+    env, _ = make_env(tmp_path, {"llama-server"}, devices=CUDA)
+    res = run_script(env, "--dry-run")
+    assert res.returncode == 0, res.stderr
+    assert "A dry run writes nothing" in res.stdout
+    assert not (tmp_path / ".env").exists()
+
+
+def test_script_generates_stores_and_never_prints_the_key(tmp_path):
+    env, log = make_env(tmp_path, {"llama-server"}, devices=CUDA)
+    # key prompt: y; serve prompt: n
+    res = run_script(env, stdin="y\nn\n")
+    assert res.returncode == 0, res.stderr
+    env_file = tmp_path / ".env"
+    line = next(ln for ln in env_file.read_text().splitlines() if ln.startswith("LLAMA_API_KEY="))
+    key = line.split("=", 1)[1]
+    assert len(key) >= 32
+    assert (env_file.stat().st_mode & 0o777) == 0o600
+    assert key not in res.stdout and key not in res.stderr
+    assert "value not shown" in res.stdout
+    assert invoked(log) == []
+
+
+def test_script_declined_key_does_not_start_server(tmp_path):
+    env, log = make_env(tmp_path, {"llama-server"}, devices=CUDA)
+    res = run_script(env, stdin="n\n")
+    assert res.returncode == 0, res.stderr
+    assert not (tmp_path / ".env").exists()
+    assert "Not starting llama-server" in res.stdout
+    assert invoked(log) == []
+
+
+def test_script_reuses_key_already_in_env_file_without_printing_it(tmp_path):
+    (tmp_path / ".env").write_text("LLAMA_API_KEY=SECRET-KEY-VALUE-1234567890abcdef\n")
+    env, log = make_env(tmp_path, {"llama-server"}, devices=CUDA)
+    res = run_script(env, stdin="n\n")  # serve declined
+    assert res.returncode == 0, res.stderr
+    assert "LLAMA_API_KEY is set (value not shown)" in res.stdout
+    assert "SECRET-KEY" not in res.stdout and "SECRET-KEY" not in res.stderr
+    assert (tmp_path / ".env").read_text().count("LLAMA_API_KEY=") == 1
     assert invoked(log) == []
 
 

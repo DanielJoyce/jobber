@@ -340,8 +340,20 @@ class OpenAICompatScorer:
             resp.raise_for_status()
             data = resp.json()
         except (httpx.HTTPError, ValueError) as exc:
-            return ScoreResult(request.custom_id, status="errored", detail=str(exc))
+            detail = str(exc)
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 401:
+                detail = f"{detail}; {self._auth_hint()}"
+            return ScoreResult(request.custom_id, status="errored", detail=detail)
         return self._parse(request.custom_id, data)
+
+    def _auth_hint(self) -> str:
+        var = self.config.api_key_env
+        if var:
+            return (
+                f"the server rejected the key: check the environment variable {var} "
+                f"({self.config_section})"
+            )
+        return f"the server requires an API key ({self.config_section} has no api_key_env)"
 
     def _parse(self, custom_id: str, data: dict[str, Any]) -> ScoreResult:
         try:
@@ -571,6 +583,25 @@ class LocalScorer(OpenAICompatScorer):
     def cost(self, usage: Any, *, batch: bool = False) -> float:
         return 0.0
 
+    def _headers(self) -> dict[str, str]:
+        return local_headers(self.local)
+
+    def _auth_hint(self) -> str:
+        var = self.local.api_key_env or "api_key_env"
+        return (
+            f"llama-server requires an API key: set {var} in ~/.env or the environment "
+            "to the key the server was started with"
+        )
+
+
+def local_headers(config: Local) -> dict[str, str]:
+    """JSON headers, plus ``Authorization: Bearer`` when ``api_key_env`` is set in the env."""
+    headers = {"Content-Type": "application/json"}
+    var = config.api_key_env
+    if var and (key := os.environ.get(var)):
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
+
 
 @dataclass
 class ServerStatus:
@@ -578,6 +609,7 @@ class ServerStatus:
     reachable: bool
     models: list[str]
     detail: str = ""
+    unauthorized: bool = False  # the server answered 401: it wants a key this client lacks
 
 
 def local_server_status(config: Local, *, client: httpx.Client | None = None) -> ServerStatus:
@@ -585,19 +617,22 @@ def local_server_status(config: Local, *, client: httpx.Client | None = None) ->
     base = local_base_url(config).rstrip("/")
     root = base.removesuffix("/v1")
     http = client if client is not None else httpx.Client(timeout=5.0)
+    headers = local_headers(config)
     try:
         try:
-            resp = http.get(f"{root}/v1/models")
+            resp = http.get(f"{root}/v1/models", headers=headers)
             if resp.status_code == 200:
                 data = resp.json().get("data") or []
                 return ServerStatus(base, True, [str(m.get("id")) for m in data if m.get("id")])
+            if resp.status_code == 401:
+                return ServerStatus(base, True, [], "HTTP 401 Unauthorized", unauthorized=True)
             detail = f"/v1/models returned HTTP {resp.status_code}"
         except (httpx.TransportError, ValueError, AttributeError) as exc:
             if isinstance(exc, httpx.TransportError):
                 return ServerStatus(base, False, [], f"not reachable: {exc}")
             detail = f"/v1/models gave an unreadable reply ({exc})"
         try:
-            health = http.get(f"{root}/health")
+            health = http.get(f"{root}/health", headers=headers)
         except httpx.TransportError as exc:
             return ServerStatus(base, False, [], f"not reachable: {exc}")
         if health.status_code == 200:

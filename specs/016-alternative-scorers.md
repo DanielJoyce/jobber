@@ -132,6 +132,25 @@ constrained output**, so the `openai-compat` scorer being built
 
 Either is a new install on your machine, so it's your call. Nothing has been installed.
 
+### Local server security
+
+The resume and postings sit in the server's prompt cache and request log, and any web page open
+in the user's browser can reach `127.0.0.1:8080`. Three controls, in order of weight:
+
+- **API key.** `scripts/setup-local-llm.sh` generates one random 32-byte key once, stores it as
+  `LLAMA_API_KEY` in `~/.env` (mode 600) after a y/N, and never prints it. The server starts with
+  `--api-key "$LLAMA_API_KEY"`. The local scorer and `jobhunter llm status`/`bench` send
+  `Authorization: Bearer <key>` when `[scoring.local] api_key_env` (default `LLAMA_API_KEY`) is set
+  in the environment; with it unset they send no header, which Ollama and key-less servers need. A
+  401 gives a message that names the variable to set. Known gap: `--api-key` puts the key in the
+  process argument list, visible to other users on this machine; `--api-key-file` avoids that and
+  is the follow-up if this machine is ever shared.
+- **`--no-slots`.** `/slots` exposes cached prompts, which hold the resume. It is disabled.
+- **CORS, left at llama-server's default (`--cors-origins *`), on purpose.** A browser page on
+  another origin can send requests to the server, but it cannot read the answers without the key,
+  and no web page has the key. Restricting origins would not stop a non-browser client, and the key
+  is the control that matters. Verify the routes on your build with `llama-server --help`.
+
 ### Running a local model
 
 Nothing is installed until you say so. Every step below prints its exact command and waits for
