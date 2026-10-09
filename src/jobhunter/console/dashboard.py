@@ -1,0 +1,612 @@
+"""Today dashboard data layer (specs/013-dashboard.md): KPI tiles and per-state stats.
+
+Every number is computed from the 005 tables on request; nothing is cached. Buckets are
+recomputed from the latest stored fit score with ``scoring.buckets.compute_row`` so editing the
+profile re-sorts the dashboard for free. All functions take an explicit ``now`` so tests can
+pin the clock.
+
+Day boundaries are UTC calendar days, compared on the ISO date prefix of stored timestamps.
+"""
+
+from __future__ import annotations
+
+import math
+import sqlite3
+from collections import defaultdict
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
+from statistics import median
+from typing import Any
+
+from jobhunter.core import geo
+from jobhunter.core.models import Bucket, JobLocation
+from jobhunter.core.textnorm import annualize
+from jobhunter.pipeline.locations import REMOTE_SCOPES
+from jobhunter.scoring.buckets import compute_row
+from jobhunter.scoring.profile import Profile
+
+RANGES: tuple[int, ...] = (7, 30, 90)
+DEFAULT_RANGE = 7
+REMOTE = "REMOTE"
+RESPONSE_MIN_N = 5
+RESPONSE_WINDOW_DAYS = 30
+EMAIL_STALE_DAYS = 3
+
+AB = (Bucket.A, Bucket.B)
+IN_FLIGHT = ("applied", "acknowledged", "screening", "interview")
+# Statuses that count as an employer response. ``acknowledged`` is excluded: it is usually an
+# automated receipt, not a person reading the application.
+RESPONSE = ("screening", "interview", "offer", "rejected")
+TERMINAL = ("rejected", "withdrawn", "no_response", "closed")
+NOT_YET_APPLIED = ("interested", "preparing")
+
+# metric key -> (label, kind). kind drives break rounding and value formatting.
+METRICS: dict[str, tuple[str, str]] = {
+    "new_ab": ("New A+B", "count"),
+    "scored": ("All scored jobs", "count"),
+    "shortlisted": ("Shortlisted", "count"),
+    "applied": ("Applied", "count"),
+    "response_rate": ("Response rate", "rate"),
+    "median_salary": ("Median offered salary", "money"),
+    "col_adjusted": ("COL-adjusted salary", "money"),
+}
+DEFAULT_METRIC = "new_ab"
+
+# Coverage status (013 "Status layer"): code -> (icon, label). Order is severity for sorting.
+COVERAGE: dict[str, tuple[str, str]] = {
+    "critical": ("⚠", "source broken"),
+    "serious": ("⚠", "source suspect"),
+    "email_stale": ("✉?", "email, no alerts in 3 days"),
+    "email": ("✉", "email alerts only"),
+    "direct": ("●", "collected directly"),
+    "none": ("○", "not covered"),
+}
+MAIL_FAMILIES = ("mailalerts", "mail")
+
+# Sortable state-table columns; "state" sorts by name.
+SORT_KEYS: tuple[str, ...] = (
+    "state",
+    "new_ab",
+    "scored",
+    "shortlisted",
+    "applied",
+    "responses",
+    "response_rate",
+    "median_salary",
+    "col_adjusted",
+    "coverage",
+    "applications",
+    "last_ok_at",
+)
+
+
+def clamp_range(value: int | str | None) -> int:
+    """Coerce a ``range`` query value to one of 7, 30, 90."""
+    try:
+        days = int(value) if value is not None else DEFAULT_RANGE
+    except (TypeError, ValueError):
+        return DEFAULT_RANGE
+    return days if days in RANGES else DEFAULT_RANGE
+
+
+def clamp_metric(value: str | None) -> str:
+    return value if value in METRICS else DEFAULT_METRIC
+
+
+# ─── time helpers ───────────────────────────────────────────────────────────
+
+
+def _today(now: datetime) -> date:
+    return now.astimezone(UTC).date() if now.tzinfo else now.date()
+
+
+def _days(now: datetime, range_days: int) -> list[str]:
+    """ISO dates of the ``range_days`` days ending today, oldest first."""
+    today = _today(now)
+    return [(today - timedelta(days=i)).isoformat() for i in range(range_days - 1, -1, -1)]
+
+
+def _since(now: datetime, range_days: int) -> str:
+    return _days(now, range_days)[0]
+
+
+# ─── COL hook ───────────────────────────────────────────────────────────────
+
+# TODO(BEA RPP): load the Bureau of Economic Analysis Regional Price Parities (all items, by
+# state, annual) from a vendored data file such as specs/data/bea-rpp-<year>.json and return
+# the index (US = 100). Until then COL-adjusted salary is None everywhere.
+RPP: dict[str, float] = {}
+
+
+def rpp_index(usps: str) -> float | None:
+    """Regional Price Parity for a state (US = 100), or None when not loaded."""
+    return RPP.get(usps)
+
+
+def col_adjust(salary: float | None, usps: str) -> float | None:
+    rpp = rpp_index(usps)
+    if salary is None or not rpp:
+        return None
+    return salary / (rpp / 100.0)
+
+
+# ─── job groups ─────────────────────────────────────────────────────────────
+
+
+@dataclass
+class GroupFact:
+    group_id: int
+    job_id: int
+    first_seen: str
+    scored: bool
+    bucket: Bucket | None
+    states: set[str] = field(default_factory=set)
+    remote: bool = False
+    salary: float | None = None  # annualized midpoint of a stated salary
+
+
+_GROUPS_SQL = """
+WITH g AS (
+  SELECT job_group_id AS gid, MIN(first_seen_at) AS first_seen
+  FROM job WHERE job_group_id IS NOT NULL
+  GROUP BY job_group_id
+  HAVING MIN(first_seen_at) >= :since
+)
+SELECT g.gid, g.first_seen, j.id AS job_id, j.salary_min, j.salary_max, j.salary_period,
+       j.salary_stated, j.location_scope,
+       fs.id AS fs_id, fs.dimensions, fs.blockers
+FROM g
+JOIN job_group jg ON jg.id = g.gid
+JOIN job j ON j.id = jg.canonical_job_id
+LEFT JOIN fit_score fs ON fs.id = (
+  SELECT f2.id FROM fit_score f2 WHERE f2.job_group_id = g.gid
+  ORDER BY (f2.tier = 'deep') DESC, f2.created_at DESC, f2.id DESC LIMIT 1
+)
+ORDER BY g.gid
+"""
+
+
+def _locations(conn: sqlite3.Connection, job_ids: Iterable[int]) -> dict[int, list[JobLocation]]:
+    ids = list(job_ids)
+    out: dict[int, list[JobLocation]] = defaultdict(list)
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        rows = conn.execute(
+            "SELECT job_id, state, city, is_primary FROM job_locations "
+            f"WHERE job_id IN ({','.join('?' * len(chunk))}) ORDER BY is_primary DESC, id",
+            chunk,
+        ).fetchall()
+        for r in rows:
+            out[r["job_id"]].append(
+                JobLocation(state=r["state"], city=r["city"], is_primary=bool(r["is_primary"]))
+            )
+    return out
+
+
+def _salary(row: sqlite3.Row) -> float | None:
+    if not row["salary_stated"]:
+        return None
+    lo, hi = annualize(row["salary_min"], row["salary_max"], row["salary_period"])
+    vals = [v for v in (lo, hi) if v]
+    return sum(vals) / len(vals) if vals else None
+
+
+def group_facts(conn: sqlite3.Connection, profile: Profile, since: str) -> list[GroupFact]:
+    """Job groups first seen on or after ``since`` with their computed bucket and places."""
+    rows = conn.execute(_GROUPS_SQL, {"since": since}).fetchall()
+    locs = _locations(conn, (r["job_id"] for r in rows))
+    facts: list[GroupFact] = []
+    for r in rows:
+        job_locs = locs.get(r["job_id"], [])
+        bucket = None
+        if r["fs_id"] is not None:
+            bucket = compute_row(r, r, job_locs, profile).bucket
+        facts.append(
+            GroupFact(
+                group_id=r["gid"],
+                job_id=r["job_id"],
+                first_seen=r["first_seen"],
+                scored=r["fs_id"] is not None,
+                bucket=bucket,
+                states={loc.state for loc in job_locs if loc.state},
+                remote=r["location_scope"] in {s.value for s in REMOTE_SCOPES},
+                salary=_salary(r),
+            )
+        )
+    return facts
+
+
+def _group_places(
+    conn: sqlite3.Connection, group_ids: Iterable[int]
+) -> dict[int, tuple[set[str], bool]]:
+    """group id -> (states of its canonical job, is remote scope)."""
+    ids = sorted(set(group_ids))
+    if not ids:
+        return {}
+    remote_scopes = {s.value for s in REMOTE_SCOPES}
+    out: dict[int, tuple[set[str], bool]] = {}
+    job_of: dict[int, int] = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        rows = conn.execute(
+            "SELECT jg.id AS gid, j.id AS job_id, j.location_scope FROM job_group jg "
+            "JOIN job j ON j.id = jg.canonical_job_id "
+            f"WHERE jg.id IN ({','.join('?' * len(chunk))})",
+            chunk,
+        ).fetchall()
+        for r in rows:
+            out[r["gid"]] = (set(), r["location_scope"] in remote_scopes)
+            job_of[r["gid"]] = r["job_id"]
+    locs = _locations(conn, job_of.values())
+    for gid, job_id in job_of.items():
+        out[gid][0].update(loc.state for loc in locs.get(job_id, []) if loc.state)
+    return out
+
+
+# ─── applications ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class AppFact:
+    app_id: int
+    group_id: int
+    status: str
+    applied_on: str | None  # ISO date, None if never applied
+    responded: bool
+    next_action_at: str | None
+    events: list[tuple[str, str]]  # (at, status), oldest first
+
+
+def application_facts(conn: sqlite3.Connection) -> list[AppFact]:
+    events: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    for e in conn.execute(
+        "SELECT application_id, at, status FROM application_event ORDER BY at, id"
+    ):
+        events[e["application_id"]].append((e["at"], e["status"]))
+    out: list[AppFact] = []
+    for a in conn.execute("SELECT * FROM application ORDER BY id"):
+        evs = events.get(a["id"], [])
+        applied = a["applied_at"]
+        if applied is None:
+            applied = next((at for at, st in evs if st == "applied"), None)
+        if applied is None and a["status"] not in NOT_YET_APPLIED:
+            applied = a["created_at"]
+        statuses = {st for _, st in evs} | {a["status"]}
+        out.append(
+            AppFact(
+                app_id=a["id"],
+                group_id=a["job_group_id"],
+                status=evs[-1][1] if evs else a["status"],
+                applied_on=applied[:10] if applied else None,
+                responded=bool(statuses & set(RESPONSE)),
+                next_action_at=a["next_action_at"],
+                events=evs,
+            )
+        )
+    return out
+
+
+def _status_on(app: AppFact, day: str) -> str | None:
+    """Latest event status at or before the end of ``day``; current status if no events."""
+    if not app.events:
+        return app.status if (app.applied_on or "") <= day else None
+    current = None
+    for at, st in app.events:
+        if at[:10] <= day:
+            current = st
+    return current
+
+
+# ─── KPIs ───────────────────────────────────────────────────────────────────
+
+
+def kpis(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    range_days: int,
+    now: datetime,
+    weekly_cap_usd: float = 10.0,
+) -> dict[str, Any]:
+    """The five KPI tiles with their sparkline series (013 "KPI row")."""
+    days = _days(now, range_days)
+    today = days[-1]
+
+    # New A+B, this range and the one before it (for the delta).
+    prev_days = _days(now - timedelta(days=range_days), range_days)
+    facts = group_facts(conn, profile, prev_days[0])
+    ab_daily = dict.fromkeys(days, 0)
+    prev_ab = 0
+    for f in facts:
+        if f.bucket not in AB:
+            continue
+        day = f.first_seen[:10]
+        if day in ab_daily:
+            ab_daily[day] += 1
+        elif day < days[0]:
+            prev_ab += 1
+    new_ab = sum(ab_daily.values())
+
+    apps = application_facts(conn)
+    in_flight = sum(1 for a in apps if a.status in IN_FLIGHT)
+    in_flight_series = [sum(1 for a in apps if _status_on(a, d) in IN_FLIGHT) for d in days]
+
+    open_apps = [a for a in apps if a.status not in TERMINAL and a.next_action_at]
+    due = sum(1 for a in open_apps if (a.next_action_at or "")[:10] <= today)
+    overdue = sum(1 for a in open_apps if (a.next_action_at or "")[:10] < today)
+
+    resp = response_rate(apps, now, RESPONSE_WINDOW_DAYS)
+    weeks = max(4, math.ceil(range_days / 7))
+    resp_series: list[float | None] = []
+    for w in range(weeks - 1, -1, -1):
+        end = _today(now) - timedelta(days=7 * w)
+        start = end - timedelta(days=6)
+        cohort = [
+            a for a in apps if a.applied_on and start.isoformat() <= a.applied_on <= end.isoformat()
+        ]
+        resp_series.append(sum(a.responded for a in cohort) / len(cohort) if cohort else None)
+
+    spend_days = _days(now, max(range_days, 7))
+    spend_rows = dict(
+        conn.execute(
+            "SELECT day, SUM(cost_usd) FROM llm_spend WHERE day >= ? GROUP BY day",
+            (spend_days[0],),
+        ).fetchall()
+    )
+    week_spend = sum(spend_rows.get(d, 0.0) or 0.0 for d in spend_days[-7:])
+    spend_series = [round(spend_rows.get(d, 0.0) or 0.0, 4) for d in days]
+
+    return {
+        "range": range_days,
+        "days": days,
+        "new_ab": {
+            "value": new_ab,
+            "previous": prev_ab,
+            "delta": new_ab - prev_ab,
+            "series": [ab_daily[d] for d in days],
+        },
+        "in_flight": {"value": in_flight, "series": in_flight_series},
+        "followups": {"due": due, "overdue": overdue},
+        "response_rate": {**resp, "series": resp_series},
+        "llm_spend": {
+            "week_usd": round(week_spend, 2),
+            "cap_usd": weekly_cap_usd,
+            "over_cap": week_spend > weekly_cap_usd,
+            "series": spend_series,
+        },
+    }
+
+
+def response_rate(apps: Sequence[AppFact], now: datetime, window_days: int) -> dict[str, Any]:
+    since = _since(now, window_days)
+    cohort = [a for a in apps if a.applied_on and a.applied_on >= since]
+    n = len(cohort)
+    k = sum(a.responded for a in cohort)
+    return {"numerator": k, "denominator": n, "rate": (k / n) if n else None}
+
+
+# ─── per-state stats ────────────────────────────────────────────────────────
+
+
+@dataclass
+class Coverage:
+    status: str = "none"
+    sources: list[str] = field(default_factory=list)
+    last_ok_at: str | None = None
+
+
+def coverage(conn: sqlite3.Connection, now: datetime) -> dict[str, Coverage]:
+    """Coverage status per state, plus REMOTE from the national (state-less) sources.
+
+    Only sources registered for a state count toward it; national aggregators (NLx, USAJOBS)
+    feed the REMOTE row so they don't paint every state "direct".
+    """
+    rows = conn.execute(
+        "SELECT s.key, s.state, s.name, s.family, s.policy, s.status, ss.last_ok_at "
+        "FROM source s LEFT JOIN source_state ss ON ss.source_key = s.key "
+        "WHERE s.policy != 'disabled' ORDER BY s.name"
+    ).fetchall()
+    mail_keys = [r["key"] for r in rows if r["family"] in MAIL_FAMILIES]
+    recent_mail_states: set[str] = set()
+    if mail_keys:
+        since = (_today(now) - timedelta(days=EMAIL_STALE_DAYS)).isoformat()
+        recent_mail_states = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT l.state FROM job j JOIN job_locations l ON l.job_id = j.id "
+                f"WHERE j.source_key IN ({','.join('?' * len(mail_keys))}) "
+                "AND j.first_seen_at >= ? AND l.state IS NOT NULL",
+                [*mail_keys, since],
+            )
+        }
+
+    by_state: dict[str, list[sqlite3.Row]] = defaultdict(list)
+    for r in rows:
+        if r["family"] in MAIL_FAMILIES:
+            continue
+        by_state[r["state"] or REMOTE].append(r)
+
+    out: dict[str, Coverage] = {}
+    for key in (*geo.US_SUBDIVISIONS, REMOTE):
+        srcs = by_state.get(key, [])
+        enabled = [r for r in srcs if r["policy"] == "enabled"]
+        oks = [r["last_ok_at"] for r in srcs if r["last_ok_at"]]
+        cov = Coverage(sources=[r["name"] for r in srcs], last_ok_at=max(oks) if oks else None)
+        if any(r["status"] == "broken" for r in enabled):
+            cov.status = "critical"
+        elif any(r["status"] == "suspect" for r in enabled):
+            cov.status = "serious"
+        elif any(r["status"] == "ok" for r in enabled):
+            cov.status = "direct"
+        elif srcs and all(r["policy"] == "blocked" for r in srcs):
+            stale = bool(mail_keys) and key not in recent_mail_states
+            cov.status = "email_stale" if stale else "email"
+        out[key] = cov
+    return out
+
+
+def _empty_row(key: str) -> dict[str, Any]:
+    st = geo.by_usps(key)
+    return {
+        "state": key,
+        "name": st.name if st else "Remote (US)",
+        "kind": st.kind if st else "remote",
+        "fips": st.fips if st else None,
+        "new_ab": 0,
+        "scored": 0,
+        "shortlisted": 0,
+        "applied": 0,
+        "responses": 0,
+        "response_rate": None,
+        "median_salary": None,
+        "col_adjusted": None,
+        "applications": 0,
+    }
+
+
+def state_stats(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    metric: str,
+    range_days: int,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """One row per subdivision in ``geo.US_SUBDIVISIONS`` plus REMOTE, each with ``value``.
+
+    A job counts in every state it lists (011 display rules). A remote_us / nationwide /
+    negotiable job also counts once in REMOTE, never spread across states.
+    """
+    metric = clamp_metric(metric)
+    since = _since(now, range_days)
+    rows = {k: _empty_row(k) for k in (*geo.US_SUBDIVISIONS, REMOTE)}
+
+    def places(states: set[str], remote: bool) -> list[str]:
+        keys = [s for s in states if s in rows]
+        if remote:
+            keys.append(REMOTE)
+        return keys
+
+    salaries: dict[str, list[float]] = defaultdict(list)
+    for f in group_facts(conn, profile, since):
+        for key in places(f.states, f.remote):
+            r = rows[key]
+            r["scored"] += f.scored
+            if f.bucket in AB:
+                r["new_ab"] += 1
+                if f.salary is not None:
+                    salaries[key].append(f.salary)
+
+    shortlisted = [
+        r["job_group_id"]
+        for r in conn.execute(
+            "SELECT job_group_id FROM label WHERE label = 'interesting' AND labeled_at >= ?",
+            (since,),
+        )
+    ]
+    apps = application_facts(conn)
+    place_of = _group_places(conn, [*shortlisted, *(a.group_id for a in apps)])
+    for gid in shortlisted:
+        for key in places(*place_of.get(gid, (set(), False))):
+            rows[key]["shortlisted"] += 1
+    for a in apps:
+        keys = places(*place_of.get(a.group_id, (set(), False)))
+        for key in keys:
+            rows[key]["applications"] += 1
+            if a.applied_on and a.applied_on >= since:
+                rows[key]["applied"] += 1
+                rows[key]["responses"] += a.responded
+
+    cov = coverage(conn, now)
+    for key, r in rows.items():
+        if r["applied"] >= RESPONSE_MIN_N:
+            r["response_rate"] = r["responses"] / r["applied"]
+        if salaries.get(key):
+            r["median_salary"] = round(median(salaries[key]))
+        r["col_adjusted"] = col_adjust(r["median_salary"], key)
+        c = cov[key]
+        icon, label = COVERAGE[c.status]
+        r.update(
+            coverage=c.status,
+            coverage_icon=icon,
+            coverage_label=label,
+            sources=c.sources,
+            last_ok_at=c.last_ok_at,
+        )
+        r["value"] = r[metric]
+    return list(rows.values())
+
+
+# ─── class breaks ───────────────────────────────────────────────────────────
+
+
+def _quantile(sorted_vals: Sequence[float], p: float) -> float:
+    """Linear-interpolated quantile (same method as d3.quantile / R type 7)."""
+    if len(sorted_vals) == 1:
+        return float(sorted_vals[0])
+    pos = (len(sorted_vals) - 1) * p
+    lo = math.floor(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (pos - lo)
+
+
+def class_breaks(values: Iterable[float | None], kind: str, classes: int = 5) -> list[float]:
+    """Upper bounds of up to ``classes`` quantile classes over the positive values.
+
+    Zero is not part of the quantiles (it has its own lightest step) and None is "no data".
+    Duplicate bounds collapse, so few distinct values give fewer classes.
+    """
+    vals = sorted(float(v) for v in values if v is not None and v > 0)
+    if not vals:
+        return []
+    out: list[float] = []
+    for i in range(1, classes + 1):
+        q = _quantile(vals, i / classes)
+        if kind == "count":
+            q = float(math.ceil(q))
+        elif kind == "money":
+            q = float(round(q, -3)) or q
+        else:
+            q = round(q, 3)
+        if not out or q > out[-1]:
+            out.append(q)
+    return out
+
+
+def map_payload(rows: Sequence[dict[str, Any]], metric: str, range_days: int) -> dict[str, Any]:
+    metric = clamp_metric(metric)
+    label, kind = METRICS[metric]
+    breaks = class_breaks((r["value"] for r in rows if r["state"] != REMOTE), kind)
+    return {
+        "metric": metric,
+        "label": label,
+        "kind": kind,
+        "range": range_days,
+        "breaks": breaks,
+        "states": list(rows),
+    }
+
+
+# ─── table sort ─────────────────────────────────────────────────────────────
+
+_COVERAGE_ORDER = {code: i for i, code in enumerate(COVERAGE)}
+
+
+def sort_rows(
+    rows: Sequence[dict[str, Any]], sort: str | None, direction: str | None
+) -> list[dict[str, Any]]:
+    """Sort table rows by a column; None values always sort last. Ties break on name."""
+    key = sort if sort in SORT_KEYS else "new_ab"
+    desc = direction != "asc"
+    by_name = sorted(rows, key=lambda r: r["name"])
+    if key == "state":
+        return list(reversed(by_name)) if desc else by_name
+
+    def value(r: dict[str, Any]) -> Any:
+        if key == "coverage":
+            return -_COVERAGE_ORDER[r["coverage"]]  # desc = most severe first
+        return r[key]
+
+    present = [r for r in by_name if value(r) is not None]
+    missing = [r for r in by_name if value(r) is None]
+    present.sort(key=value, reverse=desc)
+    return present + missing
