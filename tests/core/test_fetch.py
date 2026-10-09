@@ -662,3 +662,14 @@ def test_meta_charset_sniffed_when_no_content_type_charset(make_ctx, server, met
 def test_no_charset_anywhere_falls_back_to_utf8_replacement(make_ctx, server):
     server.route(f"{HOST}/plain", httpx.Response(200, content=CP1252_PAGE))
     assert "caf�" in make_ctx().get(f"{HOST}/plain").text
+
+
+@pytest.mark.parametrize("location", ["mailto:jobs@example.com", "javascript:void(0)", "http://["])
+@pytest.mark.parametrize("follow", [False, True])
+def test_non_http_location_is_returned_not_raised(make_ctx, server, location, follow):
+    server.route(f"{HOST}/go", httpx.Response(302, headers={"Location": location}))
+    resp = make_ctx().get(f"{HOST}/go", follow_redirects=follow)
+    assert resp.status == 302
+    assert resp.is_redirect
+    assert resp.location == location
+    assert server.hits("/go") == 1  # never followed

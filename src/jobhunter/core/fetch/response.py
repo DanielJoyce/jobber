@@ -96,4 +96,9 @@ class CachedResponse:
         malformed ones come back as the raw header value.
         """
         loc = self.headers.get("location")
-        return urljoin(self.final_url, loc) if loc else None
+        if not loc:
+            return None
+        try:
+            return urljoin(self.final_url, loc)
+        except ValueError:  # e.g. "http://[" fails urlsplit
+            return loc
