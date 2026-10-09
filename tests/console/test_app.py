@@ -16,7 +16,7 @@ def client(tmp_path):
     return TestClient(create_app(Settings(), lambda: db.connect(path)))
 
 
-ROUTES = [p for p, _, _ in PAGES] + ["/job/abc123"]
+ROUTES = [p for p, _, _ in PAGES if p != "/inbox"] + ["/job/abc123"]  # /inbox: test_inbox.py
 
 
 @pytest.mark.parametrize("route", ROUTES)

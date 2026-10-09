@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from jobhunter.config import Settings
+from jobhunter.console import inbox_routes
 from jobhunter.core import db
 
 HERE = Path(__file__).parent
@@ -104,7 +105,9 @@ def create_app(settings: Settings, conn_factory: ConnFactory | None = None) -> F
         app.add_api_route(path, handler, methods=["GET"], response_class=HTMLResponse)
 
     for path, _, title in PAGES:
-        add_page(path, title)
+        if path != "/inbox":
+            add_page(path, title)
+    inbox_routes.register(app, templates, get_conn, NAV)
 
     @app.get("/job/{group_id}", response_class=HTMLResponse)
     def job(request: Request, group_id: str) -> HTMLResponse:

@@ -1,0 +1,43 @@
+<article class="row" id="row-{{ i.group_id }}" data-gid="{{ i.group_id }}" data-job="{{ i.job_id }}" data-url="{{ i.url }}" tabindex="-1">
+  <div class="row-score" title="overall {{ i.overall }}">{{ i.overall }}</div>
+  <div class="row-body">
+    <div class="row-head">
+      <a class="row-title" href="/job/{{ i.group_id }}">{{ i.title }}</a>
+      <span class="row-employer">{{ i.employer or "employer not stated" }}</span>
+      <span class="badge" title="source market">{{ i.source_badge }}</span>
+      <span class="row-loc">{{ i.location }}{% if "+" in i.location %} <span title="multiple locations">&#8853;</span>{% endif %}</span>
+    </div>
+    <div class="row-meta">
+      {% if i.salary_stated %}<span>{{ i.salary }}</span>{% else %}<span class="warn">salary not stated &#9888;</span>{% endif %}
+      {% if i.employment_type %}<span>{{ i.employment_type }}</span>{% endif %}
+      {% if i.remote %}<span>{{ i.remote }}</span>{% endif %}
+      {% if i.posted %}<span>posted {{ i.posted }}</span>{% endif %}
+      <span>{{ i.source_name }}</span>
+    </div>
+    <div class="row-dims">
+      <span title="recency-weighted; raw skills {{ i.raw_skills }}">recent-skills {{ i.recency_skills }}</span>
+      <span>senior {{ i.seniority }}</span>
+      <span>domain {{ i.domain }}</span>
+      <span>comp {{ i.comp if i.comp is not none else "n/a" }}</span>
+      <span>loc {{ i.location_fit }}</span>
+    </div>
+    {% if i.shape_flags or i.evidence_unverified or i.partial %}
+    <div class="row-flags">
+      {% for f in i.shape_flags %}<span class="flag" title="shape flag">&#9873; {{ f }}</span>{% endfor %}
+      {% if i.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
+      {% if i.partial %}<span class="flag" title="description may be truncated">partial description</span>{% endif %}
+    </div>
+    {% endif %}
+    <div class="row-detail" hidden>
+      <p>raw skills {{ i.raw_skills }} &middot; recency-weighted {{ i.recency_skills }}</p>
+      {% for name, text in i.why.items() %}<p><strong>{{ name }}</strong> {{ text }}</p>{% endfor %}
+      {% if i.blockers %}<p><strong>blockers</strong> {{ i.blockers | join("; ") }}</p>{% endif %}
+      {% if i.stale_skills %}<p><strong>stale skills</strong> {{ i.stale_skills | join(", ") }}</p>{% endif %}
+    </div>
+    <div class="row-actions">
+      <button type="button" class="act" hx-post="/inbox/{{ i.group_id }}/label?label=interesting" hx-target="#row-{{ i.group_id }}" hx-swap="outerHTML">shortlist (s)</button>
+      <button type="button" class="act" hx-post="/inbox/{{ i.group_id }}/label?label=not_interesting" hx-target="#row-{{ i.group_id }}" hx-swap="outerHTML">dismiss (x)</button>
+      <a class="act" href="{{ i.url }}" target="_blank" rel="noopener noreferrer">posting (o)</a>
+    </div>
+  </div>
+</article>
