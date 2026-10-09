@@ -133,15 +133,18 @@ CREATE INDEX job_group_ix ON job(job_group_id);
 CREATE INDEX job_chash    ON job(content_hash);
 
 CREATE TABLE job_locations (
-  job_id     INTEGER NOT NULL REFERENCES job(id),
-  state      TEXT,
+  id         INTEGER PRIMARY KEY,
+  job_id     INTEGER NOT NULL REFERENCES job(id) ON DELETE CASCADE,
+  state      TEXT,            -- 2-letter; NULL for remote/nationwide/overseas (see 011)
   city       TEXT,
   county     TEXT,
   lat        REAL,
   lon        REAL,
-  is_primary INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (job_id, state, city)
+  is_primary INTEGER NOT NULL DEFAULT 0
 );
+-- NULLs are distinct in a plain UNIQUE/PK, so dedupe on coalesced values instead.
+CREATE UNIQUE INDEX job_locations_uniq
+  ON job_locations(job_id, ifnull(state, ''), ifnull(city, ''));
 CREATE INDEX job_locations_state ON job_locations(state);
 
 CREATE VIRTUAL TABLE job_fts USING fts5(

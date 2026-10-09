@@ -131,3 +131,25 @@ def test_check_rejects_bad_status(conn):
             "INSERT INTO source(key, class, name, family, tier, entry, policy, status) "
             "VALUES ('k', 'A', 'n', 'f', 'http', 'e', 'enabled', 'bogus')"
         )
+
+
+def test_job_locations_dedupes_null_state_rows():
+    import sqlite3
+
+    import pytest
+
+    from jobhunter.core.db import connect, migrate
+
+    conn = connect(":memory:")
+    migrate(conn)
+    conn.execute(
+        "INSERT INTO source (key, class, name, family, tier, entry, policy) "
+        "VALUES ('s', 'C', 'S', 'usajobs', 'api', 'https://x.example', 'enabled')"
+    )
+    conn.execute(
+        "INSERT INTO job (source_key, external_id, url, title, first_seen_at, last_seen_at) "
+        "VALUES ('s', '1', 'https://x.example/1', 'T', '2026-10-09', '2026-10-09')"
+    )
+    conn.execute("INSERT INTO job_locations (job_id, state, city) VALUES (1, NULL, NULL)")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO job_locations (job_id, state, city) VALUES (1, NULL, NULL)")
