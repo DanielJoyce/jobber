@@ -12,7 +12,7 @@ import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -81,6 +81,23 @@ class OpenRouter(BaseModel):
     catalog_cache: Path = Path("data/openrouter_models.json")
 
 
+class Local(BaseModel):
+    """``screen_scorer = "local:<model>"``: a model served from this machine (specs/016).
+
+    ``runtime`` picks the default URL: llama.cpp's ``llama-server`` on 8080, Ollama's
+    OpenAI-compatible API on 11434. ``base_url`` overrides it. Local inference is CPU-bound,
+    so requests run one at a time and wait much longer than a cloud call.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: Literal["llama.cpp", "ollama"] = "llama.cpp"
+    base_url: str = ""  # empty: the runtime's loopback default
+    timeout_s: float = Field(default=900.0, gt=0)
+    max_concurrency: int = Field(default=1, ge=1)
+    json_schema: bool = True
+
+
 class Scoring(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -91,6 +108,7 @@ class Scoring(BaseModel):
     deep_shortlist: int = 40
     openai_compat: OpenAICompat = Field(default_factory=OpenAICompat)
     openrouter: OpenRouter = Field(default_factory=OpenRouter)
+    local: Local = Field(default_factory=Local)
 
 
 class Mail(BaseModel):

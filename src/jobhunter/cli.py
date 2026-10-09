@@ -23,7 +23,9 @@ schedule_app = typer.Typer(help="Nightly systemd --user timers.", no_args_is_hel
 app.add_typer(sources_app, name="sources")
 app.add_typer(mail_app, name="mail")
 app.add_typer(applylinks_app, name="applylinks")
+llm_app = typer.Typer(help="Local model server: status and benchmark.", no_args_is_help=True)
 app.add_typer(schedule_app, name="schedule")
+app.add_typer(llm_app, name="llm")
 
 NOT_IMPLEMENTED = "not implemented yet"
 
@@ -576,6 +578,76 @@ def schedule_uninstall() -> None:
     except schedule.ScheduleError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
+
+
+@llm_app.command("status")
+def llm_status() -> None:
+    """Is the local model server (scoring.local) reachable, and which models are loaded?"""
+    from jobhunter.config import load_settings
+    from jobhunter.scoring.scorers import local_server_status
+
+    cfg = load_settings().scoring.local
+    status = local_server_status(cfg)
+    typer.echo(f"runtime: {cfg.runtime}")
+    typer.echo(f"url: {status.url}")
+    if not status.reachable:
+        typer.echo(f"server: DOWN ({status.detail})")
+        typer.echo(
+            "start it with scripts/setup-local-llm.sh (prints the command; installs nothing)"
+        )
+        raise typer.Exit(1)
+    typer.echo("server: up" + (f" ({status.detail})" if status.detail else ""))
+    if status.models:
+        typer.echo("models:")
+        for m in status.models:
+            typer.echo(f"  {m}")
+    else:
+        typer.echo("models: none reported")
+
+
+@llm_app.command("bench")
+def llm_bench(
+    scorer_spec: Annotated[
+        str | None,
+        typer.Option(
+            "--scorer",
+            metavar="SPEC",
+            help="local:<model>, openrouter:<slug> or anthropic:<model>. "
+            "Default: scoring.screen_scorer.",
+        ),
+    ] = None,
+    n: Annotated[int, typer.Option("--n", min=1, help="How many job groups to score.")] = 10,
+    night_hours: Annotated[
+        float, typer.Option(help="Hours available overnight, for the jobs-per-night projection.")
+    ] = 8.0,
+) -> None:
+    """Time a scorer on N ingested jobs. Writes no fit_score rows (specs/016)."""
+    from jobhunter.config import load_settings
+    from jobhunter.core import db
+    from jobhunter.scoring.bench import run_bench
+    from jobhunter.scoring.profile import ProfileError, load_profile
+    from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
+
+    settings = load_settings()
+    spec = scorer_spec or settings.scoring.screen_scorer
+    try:
+        profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
+        scorer = scorer_from_string(spec, scoring=settings.scoring)
+    except (ProfileError, ScorerError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if notice := privacy_notice(spec, settings.scoring):
+        typer.echo(notice, err=True)
+    conn = db.connect(settings.paths.db_path)
+    db.migrate(conn)
+    try:
+        report = run_bench(conn, scorer, profile, n=n, night_hours=night_hours)
+    finally:
+        conn.close()
+    if report.attempted == 0:
+        typer.echo("no prefiltered job groups to score; run jobhunter run first", err=True)
+        raise typer.Exit(1)
+    typer.echo(report.format())
 
 
 if __name__ == "__main__":

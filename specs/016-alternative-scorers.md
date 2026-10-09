@@ -92,6 +92,29 @@ constrained output**, so the `openai-compat` scorer being built
 
 Either is a new install on your machine, so it's your call. Nothing has been installed.
 
+### Running a local model
+
+Nothing is installed until you say so. Every step below prints its exact command and waits for
+a `y`; `--dry-run` prints the whole plan and runs nothing.
+
+1. `scripts/setup-local-llm.sh --dry-run` detects `llama-server`, `ollama`, the GPU and its
+   VRAM, free RAM and AVX2, recommends a runtime and model for this machine (a 3B model fully on
+   the GPU, or a 20-26B MoE on the CPU when at least 16 GB of RAM is free), and prints download
+   sizes, disk and RAM needs and the `llama-server` command line (loopback only, `--ctx-size
+   8192`, `--threads 6`, `--cache-reuse 256`, `--jinja`, GPU layers sized for 4 GB). Drop
+   `--dry-run` to be asked before the install and before the model download.
+2. Set `screen_scorer = "local:<model>"` and `[scoring.local] runtime = "llama.cpp"` (or
+   `"ollama"`). The preset is `openai-compat` against `http://127.0.0.1:8080` (llama.cpp) or
+   `http://127.0.0.1:11434/v1` (Ollama): cost 0, one request at a time, a 15-minute timeout, and
+   a notice that the resume and postings stay on this machine.
+3. `jobhunter llm status` checks the server is up and lists loaded models.
+4. `jobhunter llm bench --scorer local:<model> --n 10` scores ingested jobs **without writing
+   `fit_score` rows** and reports seconds per job (first vs later, showing the prefix cache),
+   tokens/s when the server reports them, schema-valid rate, evidence-quote verification rate,
+   and jobs per night. Use `--scorer openrouter:<slug>` or `anthropic:<model>` for the same
+   measurement on a cloud scorer.
+5. Adopt it only if `jobhunter eval --compare` holds recall >= 0.90 (ground rule 1).
+
 ## Proposed rollout
 
 1. **OpenRouter support in the `openai-compat` scorer** (small): base URL

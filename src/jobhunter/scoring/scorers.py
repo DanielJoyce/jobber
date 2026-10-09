@@ -26,7 +26,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from jobhunter.config import OpenAICompat, OpenRouter, Scoring
+from jobhunter.config import Local, OpenAICompat, OpenRouter, Scoring
 
 logger = logging.getLogger(__name__)
 
@@ -515,6 +515,90 @@ class OpenRouterScorer(OpenAICompatScorer):
         ) / 1_000_000
 
 
+# ─── Local model (llama.cpp / Ollama) ───────────────────────────────────────
+
+LOCAL_DEFAULT_URLS = {
+    "llama.cpp": "http://127.0.0.1:8080",
+    "ollama": "http://127.0.0.1:11434/v1",
+}
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def local_base_url(config: Local) -> str:
+    """The configured URL, else the runtime's loopback default."""
+    return config.base_url or LOCAL_DEFAULT_URLS[config.runtime]
+
+
+def is_loopback(url: str) -> bool:
+    return (httpx.URL(url).host or "") in _LOOPBACK_HOSTS
+
+
+class LocalScorer(OpenAICompatScorer):
+    """The openai-compat preset for a model served on this machine (specs/016).
+
+    Zero cost, no API key, one request at a time (the CPU is the bottleneck) and a long
+    per-request timeout. For llama.cpp, ``cache_prompt`` asks the server to reuse the KV cache of
+    the rubric + profile prefix that every request shares.
+    """
+
+    def __init__(self, model: str, config: Local, *, client: httpx.Client | None = None) -> None:
+        compat = OpenAICompat(
+            base_url=local_base_url(config),
+            api_key_env="",
+            max_concurrency=config.max_concurrency,
+            json_schema=config.json_schema,
+        )
+        super().__init__(
+            model,
+            compat,
+            client=client if client is not None else httpx.Client(timeout=config.timeout_s),
+        )
+        self.name = f"local:{model}"
+        self.local = config
+        self.config_section = "scoring.local"
+        if config.runtime == "llama.cpp":
+            self.extra_body = {"cache_prompt": True}
+
+    def cost(self, usage: Any, *, batch: bool = False) -> float:
+        return 0.0
+
+
+@dataclass
+class ServerStatus:
+    url: str
+    reachable: bool
+    models: list[str]
+    detail: str = ""
+
+
+def local_server_status(config: Local, *, client: httpx.Client | None = None) -> ServerStatus:
+    """Is a local server answering? Lists models from ``/v1/models``, else tries ``/health``."""
+    base = local_base_url(config).rstrip("/")
+    root = base.removesuffix("/v1")
+    http = client if client is not None else httpx.Client(timeout=5.0)
+    try:
+        try:
+            resp = http.get(f"{root}/v1/models")
+            if resp.status_code == 200:
+                data = resp.json().get("data") or []
+                return ServerStatus(base, True, [str(m.get("id")) for m in data if m.get("id")])
+            detail = f"/v1/models returned HTTP {resp.status_code}"
+        except (httpx.TransportError, ValueError, AttributeError) as exc:
+            if isinstance(exc, httpx.TransportError):
+                return ServerStatus(base, False, [], f"not reachable: {exc}")
+            detail = f"/v1/models gave an unreadable reply ({exc})"
+        try:
+            health = http.get(f"{root}/health")
+        except httpx.TransportError as exc:
+            return ServerStatus(base, False, [], f"not reachable: {exc}")
+        if health.status_code == 200:
+            return ServerStatus(base, True, [], f"{detail}; /health ok")
+        return ServerStatus(base, False, [], f"{detail}; /health HTTP {health.status_code}")
+    finally:
+        if client is None:
+            http.close()
+
+
 # ─── Factory ────────────────────────────────────────────────────────────────
 
 
@@ -542,6 +626,8 @@ def scorer_from_string(
         return OpenAICompatScorer(name, config, client=http_client)
     if provider == "openrouter":
         return OpenRouterScorer(name, (scoring or Scoring()).openrouter, client=http_client)
+    if provider == "local":
+        return LocalScorer(name, (scoring or Scoring()).local, client=http_client)
     raise ScorerError(f"unknown scorer provider {provider!r} in {spec!r}")
 
 
@@ -558,6 +644,17 @@ def privacy_notice(spec: str, scoring: Scoring) -> str | None:
             f"notice: scorer {spec} sends your resume-derived profile and the job postings to "
             f"openrouter.ai and the model provider it routes to; provider data_collection is "
             f"{collection} (specs/008 personal data, specs/016)"
+        )
+    if provider == "local":
+        url = local_base_url(scoring.local)
+        if is_loopback(url):
+            return (
+                f"notice: scorer {spec} runs on this machine: your resume-derived profile and "
+                f"the job postings stay here (sent only to {url}, nothing leaves the computer)"
+            )
+        return (
+            f"notice: scorer {spec} is configured for {url}, which is NOT this machine; your "
+            f"resume-derived profile and the job postings go there (specs/008 personal data)"
         )
     target = scoring.openai_compat.base_url if provider == "openai-compat" else provider
     return (
