@@ -1,0 +1,73 @@
+# Synthetic example of profile/preferences.yaml (specs/006 "The profile spec").
+# Copy to profile/preferences.yaml (gitignored) and replace every placeholder.
+# Nothing here describes a real person. Never commit a real salary figure.
+
+# Optional. Relative paths resolve against this file's folder. A directory means
+# the single .md file inside it. Leave null to pass the resume path to the loader.
+resume_path: null
+
+# Titles used for matching and the console. Synthetic values.
+target_titles:
+  - Systems Engineer
+  - Platform Engineer
+
+# ─── HARD CONSTRAINTS ─── machine-checkable. Stage 1 may reject on these.
+hard:
+  home: {city: Placeholder City, state: CO}
+  states_allowed: [CO, NM, UT, WA]  # or the word all
+  states_excluded: []
+  relocation_ok: false
+  remote_ok: true
+  remote_only: false
+  max_commute_miles: 45
+  salary_floor: {amount: null, period: year}   # null = unset; set your own number
+  salary_target: null                          # {amount: <number>, period: year} when set
+  employment_types_excluded: [seasonal, temporary]
+  requires_i_lack: [active_security_clearance, cdl, rn_license]
+  max_travel_pct: 25
+  title_exclusions: ["intern", "volunteer", "student trainee"]
+  hide_unstated_salary: false
+
+# ─── SOFT PREFERENCES ─── weighted. Weights must sum to 1.0 (within 0.01).
+soft:
+  weights: {skills: 0.30, seniority: 0.20, domain: 0.20, comp: 0.15, location: 0.15}
+  state_ranking: [CO, UT, WA, NM]
+  remote_bonus: 5
+
+# ─── RECENCY ─── weighted above the resume as a whole (specs/006 "Bucket F").
+current_focus:
+  since: 2023-01
+  doing: |
+    Linux fleet operations at scale, container orchestration, infrastructure as code,
+    incident response, and internal tooling written in Go and Python.
+  want_more_of: [distributed systems, platform engineering, infrastructure as code]
+  done_with: [legacy desktop support, manual server provisioning]
+
+# ─── THE PART KEYWORDS CANNOT EXPRESS ─── free prose the model reads.
+narrative:
+  want: |
+    Systems I can reason about end to end. Small teams where I own a system
+    rather than a ticket queue. Mentoring is welcome.
+  avoid: |
+    Roles that are really 24/7 on-call rotations with an engineering title.
+    Heavy customer-facing or call-center components.
+  dealbreakers_soft: |
+    A posting that is mostly project management, however titled.
+  context: |
+    Placeholder background: about a decade of hands-on infrastructure work.
+    Comfortable being the most senior individual contributor on a team.
+
+# ─── SEARCH NET ─── source-side keyword queries (specs/006 Stage 0). Broad on purpose.
+queries:
+  - keywords: [linux administrator, systems engineer, platform engineer]
+    posted_within_days: 30
+    remote: hybrid
+  - title: Site Reliability Engineer
+    onet_soc: "15-1244.00"
+    remote: remote
+
+# ─── BUCKET THRESHOLDS ─── verdict cut-offs (specs/006 "Verdict thresholds").
+buckets:
+  strong: 78
+  possible: 60
+  weak: 40
