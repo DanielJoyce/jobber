@@ -61,17 +61,22 @@ def row_for_host(host: str, rows: Sequence[SourceRow]) -> SourceRow | None:
     (``mail.employflorida.com`` -> ``employflorida.com``); last, a single row that is a
     subdomain of the host (``illinois.gov`` -> ``illinoisjoblink.illinois.gov``), only when
     exactly one row qualifies. ``jobs.utah.gov`` is never matched by ``mail.utah.gov``.
+    A host shared by more than one row (a multi-tenant platform) matches none.
     """
     host = _bare(host)
     if not host:
         return None
     candidates = [(r, _row_host(r)) for r in rows if r.family != "mailalerts"]
+    # A host shared by several rows (governmentjobs.com hosts 13 states' NEOGOV boards)
+    # can't identify the state, so it matches nothing rather than an arbitrary row.
     exact = [r for r, rh in candidates if rh == host]
     if exact:
-        return exact[0]
+        return exact[0] if len(exact) == 1 else None
     parents = [(len(rh), r) for r, rh in candidates if rh and host.endswith("." + rh)]
     if parents:
-        return max(parents, key=lambda t: t[0])[1]
+        best = max(n for n, _ in parents)
+        top = [r for n, r in parents if n == best]
+        return top[0] if len(top) == 1 else None
     children = [r for r, rh in candidates if rh.endswith("." + host)]
     return children[0] if len(children) == 1 else None
 
