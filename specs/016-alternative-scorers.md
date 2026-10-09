@@ -51,6 +51,35 @@ How it fits here:
   it routes most jobs to a cheap model and still holds recall, that's real information. In
   particular it would tell us which cheap model to pin directly.
 
+### Packed requests
+
+Jev bills about $0.04 per request whatever its size, so judge several jobs per request:
+`jobs_per_request` under `[scoring.openrouter]`, `[scoring.openai_compat]` or `[scoring.local]`
+(default 1, hard cap 16), or `--jobs-per-request N` on `jobhunter score --submit` and
+`jobhunter llm bench`. With N = 8 the roughly 2,200 eligible jobs take about 275 requests
+(about $11 at $0.04, so lower N or the cap if the budget is $10; N = 10 is about $9).
+
+- **Request.** `system` is the unchanged rubric + profile text, so the cached prefix is
+  identical to single mode. One user message holds N postings, each between
+  `BEGIN POSTING <custom_id>` and `END POSTING <custom_id>` lines, with an instruction to judge
+  each independently from its own text only. The reply schema is
+  `{"judgments": [Screen + custom_id]}` with `minItems = maxItems = N` (strict JSON schema when
+  the server accepts it, else the usual instructed-JSON fallback). A pack is also split when its
+  estimated input (characters / 4) would pass `max_input_tokens_per_request` (default 40,000).
+- **Parsing.** Items are mapped by `custom_id` and each is validated against `Screen` on its
+  own. A missing, duplicated, unknown-id or invalid item leaves only that job eligible; the rest
+  are written. Evidence quotes are verified against that job's own posting text only, so a
+  quote copied from a neighbor fails and marks the score `evidence_unverified`.
+- **Cost.** The request's total cost (`usage.cost` when OpenRouter reports it) is split evenly
+  over the jobs in the pack for `fit_score.cost_usd`; `llm_spend` records the true total with
+  one call per request. The served model is stored on every row. The daily cap is checked
+  before each wave of requests against the mean cost per request measured so far (today, else
+  history), else `est_cost_per_request_usd` (default 0.04).
+- **Order.** Eligible jobs are packed in group-id order.
+- **Quality.** Packing can change scores: compare with `eval --compare` against one job per
+  request before trusting it. `llm bench --jobs-per-request N` reports seconds and cost per
+  job next to the per-request figures.
+
 ## Running locally on this machine
 
 Hardware: **Intel i7-10850H** (6 cores / 12 threads, AVX2, no AVX-512), **31 GB RAM** (about

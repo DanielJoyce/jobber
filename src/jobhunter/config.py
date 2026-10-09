@@ -56,6 +56,11 @@ class OpenAICompat(BaseModel):
     output_usd_per_mtok: float = Field(default=0.0, ge=0)
     max_concurrency: int = Field(default=2, ge=1)
     json_schema: bool = True  # try response_format json_schema first
+    # Packed requests (specs/016): judge this many jobs per request. 1 = one job per request.
+    jobs_per_request: int = Field(default=1, ge=1, le=16)
+    # A pack is split when its estimated input tokens (chars / 4) would exceed this.
+    max_input_tokens_per_request: int = Field(default=40_000, ge=1000)
+    est_cost_per_request_usd: float = Field(default=0.0, ge=0)  # 0: use 0.002 per job
 
 
 class OpenRouter(BaseModel):
@@ -78,6 +83,11 @@ class OpenRouter(BaseModel):
     )
     max_concurrency: int = Field(default=2, ge=1)
     json_schema: bool = True
+    # Packed requests (specs/016): judge this many jobs per request. 1 = one job per request.
+    jobs_per_request: int = Field(default=1, ge=1, le=16)
+    # A pack is split when its estimated input tokens (chars / 4) would exceed this.
+    max_input_tokens_per_request: int = Field(default=40_000, ge=1000)
+    est_cost_per_request_usd: float = Field(default=0.04, ge=0)  # spend-cap estimate
     catalog_cache: Path = Path("data/openrouter_models.json")
 
 
@@ -96,6 +106,10 @@ class Local(BaseModel):
     timeout_s: float = Field(default=900.0, gt=0)
     max_concurrency: int = Field(default=1, ge=1)
     json_schema: bool = True
+    # Packed requests (specs/016): judge this many jobs per request. 1 = one job per request.
+    jobs_per_request: int = Field(default=1, ge=1, le=16)
+    # A pack is split when its estimated input tokens (chars / 4) would exceed this.
+    max_input_tokens_per_request: int = Field(default=40_000, ge=1000)
 
 
 class Scoring(BaseModel):

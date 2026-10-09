@@ -291,3 +291,24 @@ def prompt_fingerprint_payload() -> str:
 
 def prompt_fingerprint() -> str:
     return hashlib.sha256(prompt_fingerprint_payload().encode("utf-8")).hexdigest()
+
+
+def packed_json_schema(n: int) -> dict[str, Any]:
+    """Schema for a packed reply: ``{"judgments": [Screen + custom_id] * n}`` (specs/016).
+
+    Built from ``SCREEN_SCHEMA`` so the per-job shape never drifts. ``minItems`` and
+    ``maxItems`` are both ``n``; providers that cannot enforce them are covered by the
+    per-item checks in ``screen.parse_packed``.
+    """
+    base = copy.deepcopy(SCREEN_SCHEMA)
+    defs = base.pop("$defs", {})
+    base.pop("title", None)
+    base["properties"] = {"custom_id": {"type": "string"}, **base["properties"]}
+    base["required"] = ["custom_id", *base["required"]]
+    return {
+        "type": "object",
+        "properties": {"judgments": {"type": "array", "items": base, "minItems": n, "maxItems": n}},
+        "required": ["judgments"],
+        "additionalProperties": False,
+        "$defs": defs,
+    }
