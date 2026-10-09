@@ -25,7 +25,7 @@ def test_run_not_implemented():
 
 
 def test_subcommand_stubs():
-    for args in (["score"], ["sources", "list"], ["mail", "sync"], ["applylinks", "unknown"]):
+    for args in (["score"], ["mail", "sync"], ["applylinks", "unknown"]):
         result = runner.invoke(app, args)
         assert result.exit_code == 0, args
         assert "not implemented yet" in result.output
