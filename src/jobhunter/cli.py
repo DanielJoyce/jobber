@@ -819,6 +819,13 @@ def llm_status() -> None:
     status = local_server_status(cfg)
     typer.echo(f"runtime: {cfg.runtime}")
     typer.echo(f"url: {status.url}")
+    if status.unauthorized:
+        typer.echo("server: up, but it rejected this client (HTTP 401 Unauthorized)")
+        typer.echo(
+            f"set {cfg.api_key_env or 'api_key_env'} in ~/.env or the environment to the key "
+            "the server was started with"
+        )
+        raise typer.Exit(1)
     if not status.reachable:
         typer.echo(f"server: DOWN ({status.detail})")
         typer.echo(

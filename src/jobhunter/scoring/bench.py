@@ -46,6 +46,7 @@ class BenchReport:
     requested: int
     seconds: list[float] = field(default_factory=list)  # one per request, in order
     errored: int = 0
+    first_error: str = ""  # the first scorer error detail, shown in the report
     schema_valid: int = 0
     evidence_total: int = 0
     evidence_verified: int = 0
@@ -151,6 +152,8 @@ class BenchReport:
                 f"projection: about {nights} jobs in a {self.night_hours:g}-hour night "
                 "at the steady-state speed"
             )
+        if self.first_error:
+            lines.append(f"first error: {self.first_error}")
         return "\n".join(lines)
 
 
@@ -183,6 +186,7 @@ def run_bench(
             report.seconds.append(elapsed)
             if result.status != "succeeded":
                 report.errored += 1
+                report.first_error = report.first_error or result.detail
                 continue
             report.cost_usd += scorer.cost(result.usage, batch=False)
             out_tokens = _usage_int(result.usage, "output_tokens")

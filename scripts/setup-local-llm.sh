@@ -4,6 +4,8 @@
 #
 # Nothing is installed or downloaded without a y/N answer to the exact command shown first.
 # --dry-run prints everything and runs nothing. The server is only ever bound to 127.0.0.1.
+# llama-server gets a random API key: generated once, stored as LLAMA_API_KEY in ~/.env after
+# a y/N, and never printed.
 #
 # Usage: scripts/setup-local-llm.sh [--runtime llama.cpp|ollama]
 #          [--model gpt-oss-20b|gemma-4-26b-a4b|granite-4.0-h-micro|lfm-2.5-2.6b]
@@ -15,7 +17,7 @@ model=""
 assume_yes=false
 dry_run=false
 
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +42,30 @@ have() { command -v "$1" >/dev/null 2>&1; }
 echo "== What is on this machine =="
 if have llama-server; then echo "llama-server: found ($(command -v llama-server))"; else echo "llama-server: not found"; fi
 if have ollama; then echo "ollama: found ($(command -v ollama))"; else echo "ollama: not found"; fi
+
+# What llama-server itself can run on. A Homebrew build is often CPU/BLAS only, and then the
+# GPU in nvidia-smi is not used at all. llama_gpu: yes = a GPU backend is listed, no = only
+# CPU/BLAS listed, unknown = no list (no llama-server, or it printed no devices).
+llama_gpu=unknown
+llama_devices=""
+if have llama-server; then
+  devices_out="$(llama-server --list-devices 2>/dev/null || true)"
+  llama_devices="$(echo "$devices_out" | sed -n 's/^  \([^:]*\): .*/\1/p' | tr '\n' ' ')"
+  llama_devices="${llama_devices% }"
+  if [[ -n "$llama_devices" ]]; then
+    llama_gpu=no
+    for dev in $llama_devices; do
+      case "$dev" in CUDA*|Vulkan*|ROCm*|HIP*|MTL*|Metal*|SYCL*|MUSA*|CANN*) llama_gpu=yes ;; esac
+    done
+    if [[ "$llama_gpu" == yes ]]; then
+      echo "llama-server backends: $llama_devices (GPU build)"
+    else
+      echo "llama-server backends: $llama_devices (CPU-only build)"
+    fi
+  else
+    echo "llama-server --list-devices printed no devices; the GPU check falls back to nvidia-smi"
+  fi
+fi
 
 vram_mib=0
 if have nvidia-smi; then
@@ -104,15 +130,28 @@ case "$model" in
     hf="LiquidAI/LFM2.5-2.6B-GGUF"; otag="lfm2.5:2.6b"; kind=small ;;
 esac
 
-if (( vram_mib == 0 )); then
-  gpu_flags="--n-gpu-layers 0"
+# The GPU plan needs a GPU the build can use. When llama-server lists its devices, that list
+# decides; otherwise nvidia-smi is the only evidence.
+if [[ "$llama_gpu" == unknown ]]; then
+  if (( vram_mib > 0 )); then gpu_present=yes; else gpu_present=no; fi
+else
+  gpu_present="$llama_gpu"
+fi
+
+cpu_build=no
+if [[ "$gpu_present" == no && "$llama_gpu" == no ]]; then
+  cpu_build=yes
+  gpu_flags=""  # a CPU-only build offloads nothing; no --n-gpu-layers at all
+  gpu_note="this llama-server build is CPU-only: everything runs on the CPU"
+elif [[ "$gpu_present" == no ]]; then
+  gpu_flags=" --n-gpu-layers 0"
   gpu_note="no GPU detected: everything runs on the CPU"
 elif [[ "$kind" == small ]]; then
-  gpu_flags="--n-gpu-layers 99"
-  gpu_note="all layers fit in ${vram_mib} MiB VRAM"
+  gpu_flags=" --n-gpu-layers 99"
+  gpu_note="all layers fit in the GPU${vram_mib:+ ($vram_mib MiB)}"
 else
   # 4 GB holds attention + KV cache but not the experts: keep expert tensors on the CPU.
-  gpu_flags="--n-gpu-layers 99 --n-cpu-moe 99"
+  gpu_flags=" --n-gpu-layers 99 --n-cpu-moe 99"
   gpu_note="attention and KV cache on the GPU, expert weights on the CPU; needs a recent llama.cpp, else use --n-gpu-layers 6 and tune"
 fi
 
@@ -120,6 +159,11 @@ echo
 echo "== Plan for $model on $runtime =="
 echo "Download size: $size. RAM needed while scoring: $need_ram. Placement: $where."
 echo "Disk: keep at least double the download size free (${disk_gib:-?} GiB free now)."
+if [[ "$cpu_build" == yes ]]; then
+  echo "Plan: CPU placement (threads 6); this build is CPU-only; a CUDA or Vulkan build would use the GPU."
+  echo "  Build options: cmake -B build -DGGML_CUDA=ON (NVIDIA) or -DGGML_VULKAN=ON (any GPU),"
+  echo "  then cmake --build build --config Release. Use that llama-server, then rerun this script."
+fi
 echo "Speed is a guess until measured: run 'jobhunter llm bench --scorer local:$model --n 10'."
 echo
 
@@ -140,6 +184,19 @@ confirm() {  # confirm "<what will happen>" "<command>"
 }
 
 run() { bash -c "$1"; }
+
+# The API key: 32 random bytes, hex-encoded. Printed nowhere; only written to the env file.
+key_file="${HOME:-.}/.env"
+gen_key() {
+  if have python3; then
+    python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+  elif have openssl; then
+    openssl rand -hex 32
+  else
+    echo "need python3 or openssl to generate a key" >&2
+    return 1
+  fi
+}
 
 if [[ "$runtime" == llama.cpp ]]; then
   install_cmd="brew install llama.cpp"
@@ -169,22 +226,75 @@ if [[ "$runtime" == ollama ]]; then
   echo "Ollama serves on 127.0.0.1:11434 by default. Do not set OLLAMA_HOST to 0.0.0.0."
 else
   url="http://127.0.0.1:8080"
-  serve_cmd="llama-server -hf $hf --host 127.0.0.1 --port 8080 --ctx-size 8192 $gpu_flags --threads 6 --parallel 1 --cache-reuse 256 --jinja"
+  serve_cmd="llama-server -hf $hf --host 127.0.0.1 --port 8080 --ctx-size 8192${gpu_flags} --threads 6 --parallel 1 --cache-reuse 256 --jinja --no-slots --api-key \"\$LLAMA_API_KEY\""
+
+  echo
+  echo "== API key for llama-server =="
+  key_ready=no
+  if [[ -z "${LLAMA_API_KEY:-}" && -r "$key_file" ]]; then
+    file_key="$(grep -m1 '^LLAMA_API_KEY=' "$key_file" | cut -d= -f2- | tr -d "\"'\r" || true)"
+    if [[ -n "$file_key" ]]; then export LLAMA_API_KEY="$file_key"; fi
+    file_key=""
+  fi
+  if [[ -n "${LLAMA_API_KEY:-}" ]]; then
+    echo "LLAMA_API_KEY is set (value not shown)."
+    key_ready=yes
+  elif $dry_run; then
+    echo "No LLAMA_API_KEY yet. A real run asks y/N, then generates one random 32-byte key and"
+    echo "stores it as LLAMA_API_KEY in $key_file (mode 600). A dry run writes nothing."
+  else
+    echo "No LLAMA_API_KEY yet. llama-server needs one: a random 32-byte key, stored as"
+    echo "LLAMA_API_KEY in $key_file (mode 600). It is never printed."
+    reply="y"
+    if ! $assume_yes; then
+      reply=""
+      printf "  Generate it and store it? [y/N] "
+      read -r reply || true
+      echo
+    fi
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+      LLAMA_API_KEY="$(gen_key)"
+      export LLAMA_API_KEY
+      (umask 077; touch "$key_file")
+      if [[ -s "$key_file" && "$(tail -c1 "$key_file" | od -An -c | tr -d ' ')" != '\n' ]]; then
+        echo >> "$key_file"
+      fi
+      printf 'LLAMA_API_KEY=%s\n' "$LLAMA_API_KEY" >> "$key_file"
+      chmod 600 "$key_file"
+      echo "  stored in $key_file (value not shown)."
+      key_ready=yes
+    else
+      echo "  not stored. llama-server is not started without a key: without one, any web page"
+      echo "  open in your browser could read its answers (see the CORS note below)."
+      echo "  To add one yourself, without this script printing it:"
+      echo "    echo \"LLAMA_API_KEY=\$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')\" >> $key_file"
+    fi
+  fi
+
   echo
   echo "== llama-server command (binds 127.0.0.1 only) =="
   echo "$serve_cmd"
   cat <<NOTES
   --ctx-size 8192    rubric + profile (~3k tokens) + posting (~2k) + reply fit
-  $gpu_flags    ($gpu_note)
+  GPU: $gpu_note
   --threads 6        the 6 physical cores of the i7-10850H
   --parallel 1       one slot, so the whole context belongs to one job
   --cache-reuse 256  reuse the KV cache for the shared rubric+profile prefix
   --jinja            use the model's own chat template
+  --no-slots         /slots would show cached prompts, which hold the resume: turned off
+  --api-key          the key from LLAMA_API_KEY; jobhunter sends it as a Bearer token
+  CORS               llama-server allows every origin by default. Kept, on purpose: a web page
+                     cannot read answers without the key, and no page has it. See specs/016,
+                     "Local server security".
   JSON schema: llama-server turns response_format json_schema into a grammar; no flag needed.
   The first start downloads the model ($size) into llama.cpp's cache.
 NOTES
-  if confirm "start llama-server now in the foreground (downloads $size on first start; Ctrl-C stops it)" "$serve_cmd"; then
-    run "$serve_cmd"
+  if [[ "$key_ready" == yes || "$dry_run" == true ]]; then
+    if confirm "start llama-server now in the foreground (downloads $size on first start; Ctrl-C stops it)" "$serve_cmd"; then
+      run "$serve_cmd"
+    fi
+  else
+    echo "Not starting llama-server: it needs LLAMA_API_KEY first (see above)."
   fi
 fi
 
@@ -196,6 +306,7 @@ screen_scorer = "local:$model"
 
 [scoring.local]
 runtime = "$runtime"      # base URL $url
+api_key_env = "LLAMA_API_KEY"  # the key is read from ~/.env or the environment
 TOML
 echo
 echo "Then: jobhunter llm status && jobhunter llm bench --scorer local:$model --n 10"

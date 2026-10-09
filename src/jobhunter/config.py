@@ -103,6 +103,9 @@ class Local(BaseModel):
 
     runtime: Literal["llama.cpp", "ollama"] = "llama.cpp"
     base_url: str = ""  # empty: the runtime's loopback default
+    # Env var holding the server's API key (set by scripts/setup-local-llm.sh in ~/.env). When
+    # it is unset, no Authorization header is sent: Ollama and key-less servers need none.
+    api_key_env: str = "LLAMA_API_KEY"
     timeout_s: float = Field(default=900.0, gt=0)
     max_concurrency: int = Field(default=1, ge=1)
     json_schema: bool = True
