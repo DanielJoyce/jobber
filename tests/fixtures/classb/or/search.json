@@ -1,0 +1,678 @@
+{
+ "total": 70,
+ "jobPostings": [
+  {
+   "title": "Analyst 2 (Legislative Analyst)",
+   "externalPath": "/job/Salem--Judicial--Chemeketa-St-Bldg/Analyst-2--Legislative-Analyst-_REQ-207420",
+   "locationsText": "Salem | Judicial | Chemeketa St Bldg",
+   "postedOn": "Posted Today",
+   "bulletFields": [
+    "Limited Duration (Fixed Term)",
+    "Salem | Judicial | Chemeketa St Bldg",
+    "REQ-207420",
+    "Research and Analysis",
+    "0",
+    "OSCA - CPI - Court Programs Division - Judicial"
+   ]
+  },
+  {
+   "title": "Policy Analyst (Operations & Policy Analyst 2)",
+   "externalPath": "/job/Salem--OPDC--Administrative-Services/Policy-Analyst--Operations---Policy-Analyst-2-_REQ-208157",
+   "locationsText": "Salem | OPDC | Administrative Services",
+   "postedOn": "Posted Today",
+   "remoteType": "Hybrid Work",
+   "bulletFields": [
+    "Permanent",
+    "Salem | OPDC | Administrative Services",
+    "REQ-208157",
+    "Operations and Policy Analyst - Public Defense Commission",
+    "1",
+    "Policy - OPDC"
+   ]
+  },
+  {
+   "title": "Business Analyst",
+   "externalPath": "/job/Salem--ODE--Public-Service-Building/Business-Analyst_REQ-207572",
+   "locationsText": "Salem | ODE | Public Service Building",
+   "postedOn": "Posted 8 Days Ago",
+   "bulletFields": [
+    "Permanent",
+    "Salem | ODE | Public Service Building",
+    "REQ-207572",
+    "Information Systems Specialist",
+    "0",
+    "Enterprise Services - ODE"
+   ]
+  },
+  {
+   "title": "Home Start Program Analyst (Program Analyst 3)",
+   "externalPath": "/job/Salem--DAS--General-Services-Building/Home-Start-Program-Analyst--Program-Analyst-3-_REQ-206866",
+   "locationsText": "Salem | DAS | General Services Building",
+   "postedOn": "Posted 17 Days Ago",
+   "remoteType": "Hybrid Work Optional",
+   "bulletFields": [
+    "Limited Duration (Fixed Term)",
+    "Salem | DAS | General Services Building",
+    "REQ-206866",
+    "Program Analyst",
+    "1",
+    "Real Estate Services - DAS"
+   ]
+  },
+  {
+   "title": "Incentives Analyst - Program Analyst 2 (Limited Duration)",
+   "externalPath": "/job/Salem--ODOE/Incentives-Analyst---Program-Analyst-2--Limited-Duration-_REQ-207987",
+   "locationsText": "Salem | ODOE",
+   "postedOn": "Posted 3 Days Ago",
+   "remoteType": "Hybrid Work",
+   "bulletFields": [
+    "Limited Duration (Fixed Term)",
+    "Salem | ODOE",
+    "REQ-207987",
+    "Program Analyst",
+    "1",
+    "Energy Development Services Division"
+   ]
+  }
+ ],
+ "facets": [
+  {
+   "facetParameter": "remoteType",
+   "descriptor": "Remote Type",
+   "values": [
+    {
+     "descriptor": "Hybrid Work",
+     "id": "b64942285e641000b6ef721f1ffb0001",
+     "count": 11
+    },
+    {
+     "descriptor": "Hybrid Work Optional",
+     "id": "b64942285e641000b6ef721f1ffb0002",
+     "count": 9
+    },
+    {
+     "descriptor": "Fully Remote or Hybrid Work Optional",
+     "id": "b64942285e641000b6ef718505300000",
+     "count": 3
+    }
+   ]
+  },
+  {
+   "facetParameter": "hiringCompany",
+   "descriptor": "Company",
+   "values": [
+    {
+     "descriptor": "Department of Corrections",
+     "id": "47688ccd4cac013da6a54b9ec223b531",
+     "count": 26
+    },
+    {
+     "descriptor": "Oregon Health Authority",
+     "id": "47688ccd4cac011d1849619ec2233332",
+     "count": 10
+    },
+    {
+     "descriptor": "Department of Transportation",
+     "id": "47688ccd4cac014f570a979ec2233d33",
+     "count": 4
+    },
+    {
+     "descriptor": "Department of Human Services",
+     "id": "47688ccd4cac018592ede79dc223bb2f",
+     "count": 3
+    },
+    {
+     "descriptor": "Oregon Housing and Community Services",
+     "id": "47688ccd4cac01336235c99ec2233934",
+     "count": 2
+    },
+    {
+     "descriptor": "Oregon Department of Education",
+     "id": "47688ccd4cac0173c5ff779ec2238732",
+     "count": 2
+    },
+    {
+     "descriptor": "Department of Energy",
+     "id": "47688ccd4cac016174fb4d9ec223c331",
+     "count": 2
+    },
+    {
+     "descriptor": "Oregon State Department of Police",
+     "id": "47688ccd4cac0177bddf449ec2238b31",
+     "count": 2
+    },
+    {
+     "descriptor": "Judicial Department",
+     "id": "47688ccd4cac010a8f40369ec2233731",
+     "count": 2
+    },
+    {
+     "descriptor": "Department of Administrative Services",
+     "id": "47688ccd4cac019eb2dfee9dc223cb2f",
+     "count": 2
+    },
+    {
+     "descriptor": "Legislative Policy & Research Committee",
+     "id": "47688ccd4cac01922543139ec2239d30",
+     "count": 2
+    },
+    {
+     "descriptor": "Department of Justice",
+     "id": "47688ccd4cac013c36600b9ec2237330",
+     "count": 2
+    },
+    {
+     "descriptor": "Oregon Business Development Department",
+     "id": "47688ccd4cac014f29cd039ec2234930",
+     "count": 2
+    },
+    {
+     "descriptor": "Oregon Public Defense Commission",
+     "id": "47688ccd4cac013a3df6579ec223fb31",
+     "count": 1
+    },
+    {
+     "descriptor": "State of Oregon Military Department",
+     "id": "47688ccd4cac01cb1a6f3d9ec2236131",
+     "count": 1
+    },
+    {
+     "descriptor": "Oregon Criminal Justice Commission",
+     "id": "47688ccd4cac017e8d323b9ec2235331",
+     "count": 1
+    },
+    {
+     "descriptor": "Secretary of State",
+     "id": "47688ccd4cac017a5035249ec223f130",
+     "count": 1
+    },
+    {
+     "descriptor": "Legislative Assembly",
+     "id": "47688ccd4cac01b0c5211e9ec223d530",
+     "count": 1
+    },
+    {
+     "descriptor": "Department of Revenue",
+     "id": "47688ccd4cac018076e81a9ec223c730",
+     "count": 1
+    },
+    {
+     "descriptor": "Oregon Department of Emergency Management",
+     "id": "5c10a658e04e10011f316f19bf970000",
+     "count": 1
+    },
+    {
+     "descriptor": "Construction Contractors Board",
+     "id": "47688ccd4cac01e63c90cb9ec2234734",
+     "count": 1
+    },
+    {
+     "descriptor": "Department of Consumer & Business Services",
+     "id": "47688ccd4cac01e3dae05e9ec2232532",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamilies",
+   "descriptor": "Job Family",
+   "values": [
+    {
+     "descriptor": "Operations & Policy Analyst",
+     "id": "47688ccd4cac017bfb8f6b58c3237335",
+     "count": 9
+    },
+    {
+     "descriptor": "Program Analyst",
+     "id": "47688ccd4cac01fad5046b58c3236f35",
+     "count": 6
+    },
+    {
+     "descriptor": "Information Systems Specialist",
+     "id": "47688ccd4cac01680f837958c323c935",
+     "count": 5
+    },
+    {
+     "descriptor": "Correctional Sergeant",
+     "id": "47688ccd4cac01a68892fe58c3230838",
+     "count": 5
+    },
+    {
+     "descriptor": "Compliance Specialist - Regulation, Enforcement and Investigation",
+     "id": "47688ccd4cac015ecfc0b158c323e036",
+     "count": 4
+    },
+    {
+     "descriptor": "Fiscal Analyst",
+     "id": "47688ccd4cac018208737258c3239d35",
+     "count": 3
+    },
+    {
+     "descriptor": "Correctional Corporal",
+     "id": "47688ccd4cac01df62e9fd58c3230638",
+     "count": 3
+    },
+    {
+     "descriptor": "Human Resource Analyst",
+     "id": "47688ccd4cac01166ce27458c323ad35",
+     "count": 2
+    },
+    {
+     "descriptor": "Physician Specialist",
+     "id": "47688ccd4cac018902260859c3233038",
+     "count": 2
+    },
+    {
+     "descriptor": "Behavioral Health Specialist",
+     "id": "47688ccd4cac01481aa5e758c323b837",
+     "count": 2
+    },
+    {
+     "descriptor": "Institution Registered Nurse",
+     "id": "47688ccd4cac01701f81cd58c3236637",
+     "count": 2
+    },
+    {
+     "descriptor": "Health Services Technician",
+     "id": "47688ccd4cac01d4f305cb58c3235a37",
+     "count": 2
+    },
+    {
+     "descriptor": "Office Specialist",
+     "id": "47688ccd4cac015c0bae5a58c3231d35",
+     "count": 2
+    },
+    {
+     "descriptor": "Criminal Justice/Emergency Communications Specialist",
+     "id": "47688ccd4cac0192d6e67858c323c535",
+     "count": 1
+    },
+    {
+     "descriptor": "Court Operations",
+     "id": "fa571c90a1c91002084dfbbb1acf0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Research and Analysis",
+     "id": "4f2150c536f7100208a655aa62a40000",
+     "count": 1
+    },
+    {
+     "descriptor": "Intern/Volunteer",
+     "id": "47688ccd4cac01420bd65858c3231535",
+     "count": 1
+    },
+    {
+     "descriptor": "Information Technology",
+     "id": "549a6337dec21000fcf7684814d40000",
+     "count": 1
+    },
+    {
+     "descriptor": "Behavioral Health (ODOC)",
+     "id": "63a6bd22a7901000fcf7556e83580000",
+     "count": 1
+    },
+    {
+     "descriptor": "Payroll Analyst",
+     "id": "36a1de8938f30100ce474744e8360000",
+     "count": 1
+    },
+    {
+     "descriptor": "Construction and Facility Maintenance",
+     "id": "771948deadde0101f742653df54b0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Legislature",
+     "id": "1437e82d52530103b3a675cef201741e",
+     "count": 1
+    },
+    {
+     "descriptor": "Operations and Policy Analyst - Public Defense Commission",
+     "id": "c0ea8234453c0106f9a241e5e243b87f",
+     "count": 1
+    },
+    {
+     "descriptor": "Utility And Energy Analyst",
+     "id": "47688ccd4cac01e2f17b6d58c3237f35",
+     "count": 1
+    },
+    {
+     "descriptor": "Loan Specialist",
+     "id": "47688ccd4cac01c4e9d36b58c3237535",
+     "count": 1
+    },
+    {
+     "descriptor": "Corrections Food Service Coordinator",
+     "id": "47688ccd4cac015850e33b59c323bc38",
+     "count": 1
+    },
+    {
+     "descriptor": "Medical Consultant",
+     "id": "47688ccd4cac01bb3fa40c59c3234438",
+     "count": 1
+    },
+    {
+     "descriptor": "Assistant Attorney General",
+     "id": "47688ccd4cac01307ce80359c3232038",
+     "count": 1
+    },
+    {
+     "descriptor": "Correctional Lieutenant",
+     "id": "47688ccd4cac0153793fff58c3230a38",
+     "count": 1
+    },
+    {
+     "descriptor": "Correctional Officer",
+     "id": "47688ccd4cac01357360fd58c3230438",
+     "count": 1
+    },
+    {
+     "descriptor": "Appraiser Analyst",
+     "id": "47688ccd4cac01741a046058c3234b35",
+     "count": 1
+    },
+    {
+     "descriptor": "Dental Assistant",
+     "id": "47688ccd4cac01791eafd858c3239837",
+     "count": 1
+    },
+    {
+     "descriptor": "Pharmacy Clerk & Technician",
+     "id": "47688ccd4cac01f59840d858c3239637",
+     "count": 1
+    },
+    {
+     "descriptor": "Administrative Specialist",
+     "id": "47688ccd4cac012df1e55a58c3231f35",
+     "count": 1
+    },
+    {
+     "descriptor": "Communications System Analyst",
+     "id": "47688ccd4cac01c27d2c7f58c323e935",
+     "count": 1
+    },
+    {
+     "descriptor": "Research and Policy Analysis - Legislative",
+     "id": "b2ba23d04b4010010707062614e70000",
+     "count": 1
+    },
+    {
+     "descriptor": "Administrative Services - Legislative",
+     "id": "cdd2a5fa8215100106b6d0bccd360000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "timeType",
+   "descriptor": "Time Type",
+   "values": [
+    {
+     "descriptor": "Full time",
+     "id": "672886620308013db587c64704207200",
+     "count": 67
+    }
+   ]
+  },
+  {
+   "facetParameter": "workerSubType",
+   "descriptor": "Worker Type",
+   "values": [
+    {
+     "descriptor": "Permanent",
+     "id": "7bf220b749a80132e0af8bd4ac21b715",
+     "count": 59
+    },
+    {
+     "descriptor": "Limited Duration (Fixed Term)",
+     "id": "7bf220b749a801f6b2588bd4ac21b415",
+     "count": 10
+    },
+    {
+     "descriptor": "Contractor",
+     "id": "7bf220b749a8013e1a0e39d4ac213f15",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "locationMainGroup",
+   "values": [
+    {
+     "facetParameter": "locations",
+     "descriptor": "Location",
+     "values": [
+      {
+       "descriptor": "Hermiston | OMD | Rees Training Center",
+       "id": "47688ccd4cac01a339a8e694c5233aff",
+       "count": 1
+      },
+      {
+       "descriptor": "Lakeview | ODOC | Warner Creek Correctional Facility",
+       "id": "47688ccd4cac01602d1edf9cc523b007",
+       "count": 1
+      },
+      {
+       "descriptor": "Madras | ODOC | Transport",
+       "id": "cb82c642cd4a1000cd46c67159f00000",
+       "count": 1
+      },
+      {
+       "descriptor": "Ontario | ODOC | Snake River Correctional Institution",
+       "id": "47688ccd4cac01b8aabce79bc523a206",
+       "count": 3
+      },
+      {
+       "descriptor": "Oregon State Capitol",
+       "id": "47688ccd4cac0177e9569ca1c523f00c",
+       "count": 3
+      },
+      {
+       "descriptor": "Pendleton | ODOC | Eastern Oregon Correctional Institution",
+       "id": "47688ccd4cac0194b60f1096c5239000",
+       "count": 1
+      },
+      {
+       "descriptor": "Portland | ODOC | Columbia River Correctional Institution",
+       "id": "47688ccd4cac017c818d6795c523d0ff",
+       "count": 1
+      },
+      {
+       "descriptor": "Portland | OHA | Oregon Street",
+       "id": "47688ccd4cac010290823993c5235afd",
+       "count": 2
+      },
+      {
+       "descriptor": "Salem | CJC | McGilchrist House",
+       "id": "47688ccd4cac01223ebd579ac523ec04",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | DAS | Executive Building",
+       "id": "47688ccd4cac01cf3aa56d96c523f600",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | DAS | General Services Building",
+       "id": "47688ccd4cac01d2821ab88cc52316f6",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | DHS | Lancaster Drive",
+       "id": "47688ccd4cac0141ffb9b58fc52370f9",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | DHS | Summer Street",
+       "id": "47688ccd4cac019cd3d86991c5235cfb",
+       "count": 2
+      },
+      {
+       "descriptor": "Salem | DOJ | Beardsley",
+       "id": "6b936004b84b10015ce68de85bfa0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | DOR | Revenue Building",
+       "id": "47688ccd4cac01600c97499bc523f405",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | Judicial | Chemeketa St Bldg",
+       "id": "47688ccd4cac01494ca6d694c52328ff",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | OBDD",
+       "id": "47688ccd4cac013e0534979fc523b00a",
+       "count": 2
+      },
+      {
+       "descriptor": "Salem | ODE | Public Service Building",
+       "id": "47688ccd4cac01f3286d1b9bc523c405",
+       "count": 2
+      },
+      {
+       "descriptor": "Salem | ODOC | Central Distribution Center",
+       "id": "47688ccd4cac0130c06d1995c52376ff",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | ODOC | CTRS Health Services",
+       "id": "47688ccd4cac0105d4cf4597c523ec01",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | ODOC | Oregon State Penitentiary",
+       "id": "47688ccd4cac019b517f1a8fc523c2f8",
+       "count": 6
+      },
+      {
+       "descriptor": "Salem | ODOC | Santiam Correctional Institution",
+       "id": "47688ccd4cac015f7d2abc9bc5237206",
+       "count": 3
+      },
+      {
+       "descriptor": "Salem | ODOE",
+       "id": "47688ccd4cac011eaf7bbd91c523bcfb",
+       "count": 2
+      },
+      {
+       "descriptor": "Salem | ODOT | Transportation Building",
+       "id": "47688ccd4cac0163f1257e9cc5234407",
+       "count": 3
+      },
+      {
+       "descriptor": "Salem | OHA | Fairview Industrial Drive 3990",
+       "id": "47688ccd4cac016b42a19890c5236cfa",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | OHA | Oregon State Hospital",
+       "id": "47688ccd4cac014b9648158fc523bcf8",
+       "count": 2
+      },
+      {
+       "descriptor": "Salem | OHA | Summer Street",
+       "id": "47688ccd4cac016c292b829fc523980a",
+       "count": 4
+      },
+      {
+       "descriptor": "Salem | OHCS | North Mall Office Building",
+       "id": "47688ccd4cac01c3b1f8479fc523560a",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | OHCS | Veterans Building",
+       "id": "82a591f120e50145ab84be1af4010155",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | OPDC | Administrative Services",
+       "id": "a4c9efc9f91801b8ad03e2d80a1f6e71",
+       "count": 1
+      },
+      {
+       "descriptor": "Salem | OSP | General Headquarters",
+       "id": "47688ccd4cac010c38afc296c5235601",
+       "count": 2
+      },
+      {
+       "descriptor": "Salem | SOS | Public Service Building",
+       "id": "47688ccd4cac019c606d4d9fc5235c0a",
+       "count": 1
+      },
+      {
+       "descriptor": "Statewide",
+       "id": "cdcae8cf3fbf01e044ad1c776135ae68",
+       "count": 1
+      },
+      {
+       "descriptor": "Umatilla | ODOC | Transport",
+       "id": "c09cfaf3aa3f1000cdbd74617f280000",
+       "count": 1
+      },
+      {
+       "descriptor": "Umatilla | ODOC | Two Rivers Correctional Institution",
+       "id": "47688ccd4cac013c7a9d9e9cc5236807",
+       "count": 1
+      },
+      {
+       "descriptor": "Wilsonville | ODOC | Coffee Creek Correctional Facility",
+       "id": "47688ccd4cac01aa4ff54c95c523b2ff",
+       "count": 5
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "facetParameter": "distance",
+   "descriptor": "Distance",
+   "values": [
+    {
+     "descriptor": "5 Miles",
+     "id": "805fb8ebdc0410154b2c498008f60000",
+     "count": 1
+    },
+    {
+     "descriptor": "10 Miles",
+     "id": "805fb8ebdc0410154b2c498008f60001",
+     "count": 1
+    },
+    {
+     "descriptor": "25 Miles",
+     "id": "805fb8ebdc0410154b2c498008f60002",
+     "count": 1
+    },
+    {
+     "descriptor": "50 Miles",
+     "id": "805fb8ebdc0410154b2c498008f60003",
+     "count": 1
+    },
+    {
+     "descriptor": "75 Miles",
+     "id": "805fb8ebdc0410154b2c498008f60004",
+     "count": 1
+    },
+    {
+     "descriptor": "100 Miles",
+     "id": "805fb8ebdc0410154b2c498008f60005",
+     "count": 1
+    },
+    {
+     "descriptor": "250 Miles",
+     "id": "805fb8ebdc0410154b2c498008f60006",
+     "count": 1
+    },
+    {
+     "descriptor": "Any Distance",
+     "id": "805fb8ebdc0410154b2c4a1b471f0000",
+     "count": 1
+    }
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

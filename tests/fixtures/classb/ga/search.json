@@ -1,0 +1,399 @@
+{
+ "total": 67,
+ "jobPostings": [
+  {
+   "title": "Collections Analyst",
+   "externalPath": "/job/Atlanta/Collections-Analyst_JR0000001257",
+   "locationsText": "Atlanta",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "JR0000001257"
+   ]
+  },
+  {
+   "title": "Attorney Analyst 1",
+   "externalPath": "/job/Atlanta/Attorney-Analyst-1_JR0000004802",
+   "locationsText": "Atlanta",
+   "postedOn": "Posted 22 Days Ago",
+   "bulletFields": [
+    "JR0000004802"
+   ]
+  },
+  {
+   "title": "Compliance Business Analyst",
+   "externalPath": "/job/Atlanta/Compliance-Business-Analyst_JR0000004868",
+   "locationsText": "Atlanta",
+   "postedOn": "Posted 24 Days Ago",
+   "bulletFields": [
+    "JR0000004868"
+   ]
+  },
+  {
+   "title": "Licensing Analyst 1",
+   "externalPath": "/job/Atlanta/Licensing-Analyst-1_JR0000005086",
+   "locationsText": "Atlanta",
+   "postedOn": "Posted 21 Days Ago",
+   "bulletFields": [
+    "JR0000005086"
+   ]
+  },
+  {
+   "title": "Agent Program Analyst",
+   "externalPath": "/job/Atlanta/Agent-Program-Analyst_JR0000005307",
+   "locationsText": "Atlanta",
+   "postedOn": "Posted 17 Days Ago",
+   "bulletFields": [
+    "JR0000005307"
+   ]
+  }
+ ],
+ "facets": [
+  {
+   "facetParameter": "hiringCompany",
+   "descriptor": "Agency",
+   "values": [
+    {
+     "descriptor": "Insurance Department of the State of Georgia",
+     "id": "3f907d8292e51000cddba6960bcb0000",
+     "count": 9
+    },
+    {
+     "descriptor": "Accounting Office, State",
+     "id": "3f907d8292e51000cddb8de6e50c0000",
+     "count": 8
+    },
+    {
+     "descriptor": "Behavioral Health and Developmental Disabilities, Department of",
+     "id": "3f907d8292e51000cddbc10cc6a80000",
+     "count": 5
+    },
+    {
+     "descriptor": "Secretary of State",
+     "id": "3f907d8292e51000cddbf3007cc50000",
+     "count": 4
+    },
+    {
+     "descriptor": "Law, Department of",
+     "id": "3f907d8292e51000cddbc37440120000",
+     "count": 4
+    },
+    {
+     "descriptor": "Public Health, Department of",
+     "id": "3f907d8292e51000cddba1c669ab0000",
+     "count": 4
+    },
+    {
+     "descriptor": "Human Services, Department of",
+     "id": "3f907d8292e51000cddbb8a1c1330000",
+     "count": 3
+    },
+    {
+     "descriptor": "Governor, Office of the",
+     "id": "3f907d8292e51000cddbb63a28c70000",
+     "count": 3
+    },
+    {
+     "descriptor": "Community Affairs, Department of",
+     "id": "3f907d8292e51000cddbaf0208eb0000",
+     "count": 3
+    },
+    {
+     "descriptor": "Administrative Services, Department of",
+     "id": "3f907d8292e51000cddb8c182e760000",
+     "count": 3
+    },
+    {
+     "descriptor": "Gwinnett Technical College",
+     "id": "3f907d8292e51000cddb6c225ce90000",
+     "count": 2
+    },
+    {
+     "descriptor": "Southern Crescent Technical College",
+     "id": "3f907d8292e51000cddb69ba63d90000",
+     "count": 2
+    },
+    {
+     "descriptor": "Technical College System of Georgia",
+     "id": "3f907d8292e51000cddbad345c560000",
+     "count": 2
+    },
+    {
+     "descriptor": "Financing and Investment Commission, Georgia State",
+     "id": "3f907d8292e51000cddb904fa66a0000",
+     "count": 2
+    },
+    {
+     "descriptor": "Agriculture, Department of",
+     "id": "3f907d8292e51000cddb890b3ab70000",
+     "count": 2
+    },
+    {
+     "descriptor": "General Assembly, Georgia",
+     "id": "3f907d8292e51000cddc153d16e30000",
+     "count": 1
+    },
+    {
+     "descriptor": "Teachers Retirement System of Georgia",
+     "id": "3f907d8292e51000cddbf56744850000",
+     "count": 1
+    },
+    {
+     "descriptor": "Student Finance Commission, Georgia",
+     "id": "3f907d8292e51000cddbee326ca30000",
+     "count": 1
+    },
+    {
+     "descriptor": "Augusta Technical College",
+     "id": "3f907d8292e51000cddb5c7c03ad0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Investigation, Georgia Bureau of",
+     "id": "3f907d8292e51000cddbe82b0c890000",
+     "count": 1
+    },
+    {
+     "descriptor": "Public Safety, Department of",
+     "id": "3f907d8292e51000cddbdfbe6b740000",
+     "count": 1
+    },
+    {
+     "descriptor": "Natural Resources, Department of",
+     "id": "3f907d8292e51000cddbdaedefa50000",
+     "count": 1
+    },
+    {
+     "descriptor": "Labor, Department of",
+     "id": "3f907d8292e51000cddbbf3e69460000",
+     "count": 1
+    },
+    {
+     "descriptor": "Employees' Retirement System of Georgia",
+     "id": "3f907d8292e51000cddb92b9685f0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Savannah Technical College",
+     "id": "3f907d8292e51000cddb79606d420000",
+     "count": 1
+    },
+    {
+     "descriptor": "Central Georgia Technical College",
+     "id": "3f907d8292e51000cddb7226e7580000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamily",
+   "descriptor": "Job Family",
+   "values": [
+    {
+     "descriptor": "General Support",
+     "id": "3f907d8292e51000d7a3335148c60000",
+     "count": 16
+    },
+    {
+     "descriptor": "Regulatory",
+     "id": "3f907d8292e51000d7a335b967650000",
+     "count": 13
+    },
+    {
+     "descriptor": "Financial",
+     "id": "3f907d8292e51000d7a3227bab4d0000",
+     "count": 9
+    },
+    {
+     "descriptor": "Information Technology",
+     "id": "3f907d8292e51000d7a32fb55fef0000",
+     "count": 9
+    },
+    {
+     "descriptor": "Education",
+     "id": "3f907d8292e51000d7a320150fa40000",
+     "count": 5
+    },
+    {
+     "descriptor": "Legal",
+     "id": "3f907d8292e51000d7a3321cc2310000",
+     "count": 5
+    },
+    {
+     "descriptor": "Applied Science",
+     "id": "3f907d8292e51000d7a31c7b172c0000",
+     "count": 2
+    },
+    {
+     "descriptor": "Intern",
+     "id": "3f907d8292e51000d7a327e3880c0000",
+     "count": 2
+    },
+    {
+     "descriptor": "General Title",
+     "id": "3f907d8292e51000d7a324492d7b0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Enterprise",
+     "id": "3f907d8292e51000d7a31ee1e54e0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Facilities",
+     "id": "3f907d8292e51000d7a31dae31ff0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Active Post Certified Law Enforcement (APCLE)",
+     "id": "3f907d8292e51000d7a336ed557d0000",
+     "count": 1
+    },
+    {
+     "descriptor": "Healthcare",
+     "id": "3f907d8292e51000d7a33485b3b40000",
+     "count": 1
+    },
+    {
+     "descriptor": "Law Enforcement",
+     "id": "3f907d8292e51000d7a32ae45df30000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "workerSubType",
+   "descriptor": "Job Type",
+   "values": [
+    {
+     "descriptor": "Regular",
+     "id": "3f907d8292e51001137c63bef7df0000",
+     "count": 61
+    },
+    {
+     "descriptor": "Temporary (Fixed Term)",
+     "id": "3f907d8292e51001137c6324fc890000",
+     "count": 5
+    },
+    {
+     "descriptor": "Permanent Labor",
+     "id": "3f907d8292e51001137c628b0f3b0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "timeType",
+   "descriptor": "Time Type",
+   "values": [
+    {
+     "descriptor": "Full time",
+     "id": "3f907d8292e5100066764f01105b0001",
+     "count": 61
+    },
+    {
+     "descriptor": "Part time",
+     "id": "3f907d8292e5100066764f01105b0000",
+     "count": 5
+    }
+   ]
+  },
+  {
+   "facetParameter": "locationMainGroup",
+   "values": [
+    {
+     "facetParameter": "locations",
+     "descriptor": "Location (Cities)",
+     "values": [
+      {
+       "descriptor": "402 Tifton Laboratory (GDA-1)",
+       "id": "c44e60342dd01001183465b56dfe0000",
+       "count": 1
+      },
+      {
+       "descriptor": "40500-AP_405-405 Department of Public Health",
+       "id": "24fa720ae05c10015ed7351474620000",
+       "count": 1
+      },
+      {
+       "descriptor": "Atlanta",
+       "id": "fb52ba10d64610016450481729640000",
+       "count": 30
+      },
+      {
+       "descriptor": "Augusta",
+       "id": "f87bcacb74fb1001644cd5392cab0000",
+       "count": 2
+      },
+      {
+       "descriptor": "Columbus",
+       "id": "b0f084cebdb910016474f69110280000",
+       "count": 1
+      },
+      {
+       "descriptor": "Cumming",
+       "id": "b0f084cebdb9100164757165e2d20000",
+       "count": 1
+      },
+      {
+       "descriptor": "Decatur",
+       "id": "4dd5326dccd51001648e29cd33610000",
+       "count": 1
+      },
+      {
+       "descriptor": "Tifton",
+       "id": "b0f084cebdb91001648244a0689d0000",
+       "count": 1
+      }
+     ]
+    },
+    {
+     "facetParameter": "locationHierarchy1",
+     "descriptor": "Location (Counties and State)",
+     "values": [
+      {
+       "descriptor": "DeKalb County",
+       "id": "327f9e8338ff1001620102231cf30000",
+       "count": 31
+      },
+      {
+       "descriptor": "Forsyth County",
+       "id": "327f9e8338ff100161fd867a44b90000",
+       "count": 1
+      },
+      {
+       "descriptor": "Georgia",
+       "id": "327f9e8338ff10016200f580af050000",
+       "count": 36
+      },
+      {
+       "descriptor": "Muscogee County",
+       "id": "327f9e8338ff100161fe0f2e4c020000",
+       "count": 1
+      },
+      {
+       "descriptor": "Public Health, Department of",
+       "id": "327f9e8338ff100161fe58b547ae0000",
+       "count": 1
+      },
+      {
+       "descriptor": "Richmond County",
+       "id": "327f9e8338ff100162001c13c1230000",
+       "count": 2
+      },
+      {
+       "descriptor": "State of Georgia",
+       "id": "327f9e8338ff100161fffd51f2770000",
+       "count": 1
+      },
+      {
+       "descriptor": "Tift County",
+       "id": "327f9e8338ff100161feabe917a00000",
+       "count": 1
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

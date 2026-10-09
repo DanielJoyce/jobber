@@ -1,0 +1,269 @@
+{
+ "total": 12,
+ "jobPostings": [
+  {
+   "title": "Budget Analyst",
+   "externalPath": "/job/Oklahoma-County/Budget-Analyst_JR66176",
+   "locationsText": "Oklahoma County",
+   "postedOn": "Posted 7 Days Ago",
+   "bulletFields": [
+    "JR66176"
+   ]
+  },
+  {
+   "title": "Financial Analyst III",
+   "externalPath": "/job/Oklahoma-County/Financial-Analyst-III_JR66101",
+   "locationsText": "Oklahoma County",
+   "postedOn": "Posted 8 Days Ago",
+   "bulletFields": [
+    "JR66101"
+   ]
+  },
+  {
+   "title": "Business Technology Manager",
+   "externalPath": "/job/Oklahoma-City---6001-N-Classen-Blvd/Business-Technology-Manager_JR62433",
+   "locationsText": "Oklahoma City - 6001 N Classen Blvd",
+   "postedOn": "Posted 8 Days Ago",
+   "bulletFields": [
+    "JR62433"
+   ]
+  },
+  {
+   "title": "Enterprise Application Manager",
+   "externalPath": "/job/Oklahoma-County/Enterprise-Application-Manager_JR66096",
+   "locationsText": "Oklahoma County",
+   "postedOn": "Posted 8 Days Ago",
+   "bulletFields": [
+    "JR66096"
+   ]
+  },
+  {
+   "title": "IIRS Operations Analyst",
+   "externalPath": "/job/Oklahoma-County/IIRS-Operations-Analyst_JR66076",
+   "locationsText": "Oklahoma County",
+   "postedOn": "Posted 9 Days Ago",
+   "bulletFields": [
+    "JR66076"
+   ]
+  }
+ ],
+ "facets": [
+  {
+   "facetParameter": "hiringCompany",
+   "descriptor": "Agency",
+   "values": [
+    {
+     "descriptor": "695 OKLAHOMA TAX COMMISSION",
+     "id": "7a8d2de4e0861000cc58f4bb508f0000",
+     "count": 3
+    },
+    {
+     "descriptor": "807 HEALTH CARE AUTHORITY",
+     "id": "7a8d2de4e0861000cc5902afecf80000",
+     "count": 2
+    },
+    {
+     "descriptor": "640 SERVICE OKLAHOMA",
+     "id": "e037100b69dd10016120fbb825ce0000",
+     "count": 2
+    },
+    {
+     "descriptor": "805 DEPARTMENT OF REHABILITATION SERVICES",
+     "id": "7a8d2de4e0861000cc5900dfd6bf0000",
+     "count": 1
+    },
+    {
+     "descriptor": "452 MENTAL HEALTH AND SUBSTANCE ABUSE SERV.",
+     "id": "7a8d2de4e0861000cc58e7f9335e0000",
+     "count": 1
+    },
+    {
+     "descriptor": "400 OFFICE OF JUVENILE AFFAIRS",
+     "id": "7a8d2de4e0861000cc58d0f9b5070000",
+     "count": 1
+    },
+    {
+     "descriptor": "290 EMPLOYMENT SECURITY COMMISSION",
+     "id": "7a8d2de4e0861000cc589cd9bbc20000",
+     "count": 1
+    },
+    {
+     "descriptor": "090 OFFICE OF MANAGEMENT AND ENTERPRISE SERV",
+     "id": "7a8d2de4e0861000cc587d62b1bd0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamily",
+   "descriptor": "Job Family",
+   "values": [
+    {
+     "descriptor": "X18-Behavioral Health Professional",
+     "id": "d1a910d5f4db10010a6c4d4748d20000",
+     "count": 2
+    },
+    {
+     "descriptor": "E49-Business Analyst",
+     "id": "7a8d2de4e0861000d0fdd7c40bdc0000",
+     "count": 2
+    },
+    {
+     "descriptor": "E46-Statistical Research Spec",
+     "id": "30f55b54da8f1000d00f3c4efe6d0000",
+     "count": 2
+    },
+    {
+     "descriptor": "B51-I.S. Applications Specialist",
+     "id": "7a8d2de4e0861000d1051c40cfe80000",
+     "count": 1
+    },
+    {
+     "descriptor": "B31-Information Systems Manager",
+     "id": "7a8d2de4e0861000d1055b179f100000",
+     "count": 1
+    },
+    {
+     "descriptor": "V11-Revenue Compliance Officer",
+     "id": "7a8d2de4e0861000d103d8f62d720000",
+     "count": 1
+    },
+    {
+     "descriptor": "E55-Customer Assistance Rep",
+     "id": "7a8d2de4e0861000d0fdbf0ccd0f0000",
+     "count": 1
+    },
+    {
+     "descriptor": "D22-Financial Programs Analyst",
+     "id": "e1742d8bd3ae100156adbc025e030000",
+     "count": 1
+    },
+    {
+     "descriptor": "D20-Budget Analyst",
+     "id": "7a8d2de4e0861000d0fd1635c89d0000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "Job_Profile",
+   "descriptor": "Job Profile",
+   "values": [
+    {
+     "descriptor": "X18D-EH - Behavioral Health Professional IV (EH)",
+     "id": "a1764c31ae641000c342c56ce4500000",
+     "count": 1
+    },
+    {
+     "descriptor": "X18B-EH - Behavioral Health Professional II (EH)",
+     "id": "c4b5f272505510020219fe207ebd0000",
+     "count": 1
+    },
+    {
+     "descriptor": "V11A-NS - Revenue Compliance Officer I (NS)",
+     "id": "7a8d2de4e0861000d16cac3e09cd0000",
+     "count": 1
+    },
+    {
+     "descriptor": "E55B-NH - Customer Assistance Representative II (NH)",
+     "id": "7a8d2de4e0861000d16b976f15210000",
+     "count": 1
+    },
+    {
+     "descriptor": "E49C-EH - Business Analyst III (EH)",
+     "id": "473dd3da650d1001f521416463160001",
+     "count": 1
+    },
+    {
+     "descriptor": "E49B-EH - Business Analyst II (EH)",
+     "id": "624371b814a6101fcd008f99e3e60000",
+     "count": 1
+    },
+    {
+     "descriptor": "E46D-ES - Statistical Research Specialist IV (ES)",
+     "id": "7a8d2de4e0861000d16596a508ce0000",
+     "count": 1
+    },
+    {
+     "descriptor": "E46C-ES - Statistical Research Specialist III (ES)",
+     "id": "7a8d2de4e0861000d16585b7f10a0000",
+     "count": 1
+    },
+    {
+     "descriptor": "D22C-NH - Financial Programs Analyst III (NH)",
+     "id": "e1742d8bd3ae1001589d818203f80000",
+     "count": 1
+    },
+    {
+     "descriptor": "D20C-ES - Budget Analyst III (ES)",
+     "id": "7a8d2de4e0861000d1767124c7cb0000",
+     "count": 1
+    },
+    {
+     "descriptor": "B51B-EH - Information Systems Applications Specialist II (EH)",
+     "id": "7a8d2de4e0861000d17a1fffc8eb0000",
+     "count": 1
+    },
+    {
+     "descriptor": "B31B-EH - Information Systems Manager II (EH)",
+     "id": "e3901972dbce1001082b7cae2a970000",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "facetParameter": "workerSubType",
+   "descriptor": "Job Type",
+   "values": [
+    {
+     "descriptor": "Regular",
+     "id": "30f55b54da8f1000c0a0adebf5ad0000",
+     "count": 12
+    }
+   ]
+  },
+  {
+   "facetParameter": "timeType",
+   "descriptor": "Time Type",
+   "values": [
+    {
+     "descriptor": "Full time",
+     "id": "e278635b18f41010afe9cba6e8770003",
+     "count": 12
+    }
+   ]
+  },
+  {
+   "facetParameter": "locationMainGroup",
+   "values": [
+    {
+     "facetParameter": "locations",
+     "descriptor": "Locations",
+     "values": [
+      {
+       "descriptor": "Oklahoma City - 6001 N Classen Blvd",
+       "id": "81e6f5398265100202198d9556280000",
+       "count": 1
+      },
+      {
+       "descriptor": "Oklahoma County",
+       "id": "7a8d2de4e0861000cbebc14ae6480000",
+       "count": 9
+      },
+      {
+       "descriptor": "Pottawatomie County",
+       "id": "7a8d2de4e0861000cbebc91f67f90000",
+       "count": 1
+      },
+      {
+       "descriptor": "Tulsa County",
+       "id": "7a8d2de4e0861000cbeb70d43d2d0000",
+       "count": 1
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

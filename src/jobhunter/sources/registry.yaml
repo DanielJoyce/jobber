@@ -981,4 +981,1001 @@
   robots: {status: "n/a", checked: "2026-10-09", note: "Gmail API; emailed links robots-checked per host"}
   policy: "enabled"
   queries: [{}]
+
+# ─── Class B: state-employer career sites (specs/010 "Class B", bug ca38b9b) ───
+# key = <st>-employer. policy: blocked = NEOGOV (governmentjobs.com disallows generic agents)
+# or a host whose robots.txt disallows us; manual = bot wall, login, unreadable robots, or open
+# by robots but not built (follow-ups in specs/010); enabled = built and tested (tests/sources/test_classb_<st>.py).
+# Full per-state evidence: specs/data/class-b-survey-2026-10-09.json.
+
+- key: "ak-employer"
+  state: "AK"
+  class: "B"
+  name: "Alaska state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/alaska"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/alaska, page title 'Workplace Alaska'"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts (spec 012)."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "al-employer"
+  state: "AL"
+  class: "B"
+  name: "Alabama state employer careers (custom)"
+  family: "custom"
+  tier: "http"
+  entry: "https://personnel.alabama.gov/CurrentJobs.aspx"
+  verified: "2026-10-09"
+  family_signals: ["ASP.NET WebForms list at personnel.alabama.gov/CurrentJobs (no ATS host linked)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "open", checked: "2026-10-09", note: "robots host personnel.alabama.gov: Robots allows all but /Services/. Static ASP.NET job-announcement page maintained by the State Personnel Department; not built (follow-up)."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ar-employer"
+  state: "AR"
+  class: "B"
+  name: "Arkansas state employer careers (successfactors)"
+  family: "successfactors"
+  tier: "http"
+  entry: "https://arcareers.arkansas.gov/"
+  verified: "2026-10-09"
+  family_signals: ["arcareers.arkansas.gov links career41.sapsf.com/career?company=stateofark; robots is the SuccessFactors career-site default"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host arcareers.arkansas.gov: Robots allows search and detail (disallows /applybutton/, /talentcommunity/, /services/ and similar). Same SuccessFactors jobs2web template as IL and IN is likely but unverified; follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "az-employer"
+  state: "AZ"
+  class: "B"
+  name: "Arizona state employer careers (clinch)"
+  family: "clinch"
+  tier: "http"
+  entry: "https://www.azstatejobs.gov/"
+  verified: "2026-10-09"
+  family_signals: ["state-of-arizona.career-pages.com link; Clinch Talent asset buckets; robots comment 'State of Arizona Robots Txt'; AWS WAF challenge.js on page"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.azstatejobs.gov: Robots allows search and detail (Crawl-delay 5; only candidate_details, /me/, /api/, block fragments disallowed). The page loads an AWS WAF challenge script and the Virginia twin on the same platform answered a second request with a 202 challenge, so it is treated as bot-gated until proven otherwise. Follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ca-employer"
+  state: "CA"
+  class: "B"
+  name: "California state employer careers (custom)"
+  family: "custom"
+  tier: "http"
+  entry: "https://calcareers.ca.gov/"
+  verified: "2026-10-09"
+  family_signals: ["calcareers.ca.gov ASP.NET site, Dynatrace RUM"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "open", checked: "2026-10-09", note: "robots host calcareers.ca.gov: Robots Disallow is commented out so it is not a directive (spec 008). Large custom app; not built (follow-up)."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "co-employer"
+  state: "CO"
+  class: "B"
+  name: "Colorado state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/colorado"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/colorado"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts (spec 012)."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ct-employer"
+  state: "CT"
+  class: "B"
+  name: "Connecticut state employer careers (jobaps)"
+  family: "jobaps"
+  tier: "http"
+  entry: "https://www.jobapscloud.com/CT/"
+  verified: "2026-10-09"
+  family_signals: ["jobapscloud.com/CT/ (classic JobAps)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host www.jobapscloud.com: jobapscloud.com robots.txt is 404 (no restrictions). Classic server-rendered JobAps bulletins; good follow-up candidate shared with MD."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "dc-employer"
+  state: "DC"
+  class: "B"
+  name: "District of Columbia state employer careers (peoplesoft)"
+  family: "peoplesoft"
+  tier: "browser"
+  entry: "https://careers.dc.gov/"
+  verified: "2026-10-09"
+  family_signals: ["careers.dc.gov meta-refreshes to /psp/erecruit/EMPLOYEE/HRMS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL (PeopleSoft HCM)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host careers.dc.gov: robots.txt is 404. PeopleSoft candidate gateway is stateful and script-driven; needs the browser tier. Follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "de-employer"
+  state: "DE"
+  class: "B"
+  name: "Delaware state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/delaware"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/delaware"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. The state's own statejobs.delaware.gov apply page points there. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "fl-employer"
+  state: "FL"
+  class: "B"
+  name: "Florida state employer careers (successfactors)"
+  family: "successfactors"
+  tier: "http"
+  entry: "https://jobs.myflorida.com/"
+  verified: "2026-10-09"
+  family_signals: ["jobs.myflorida.com 'People First' career site; SuccessFactors default robots"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host jobs.myflorida.com: Robots allows search and detail. Same jobs2web family as IL and IN; not built because of the 8-board cap (follow-up)."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ga-employer"
+  state: "GA"
+  class: "B"
+  name: "Georgia state employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://careers.georgia.gov/"
+  verified: "2026-10-09"
+  family_signals: ["careers.georgia.gov (Drupal) links georgia.wd5.myworkdayjobs.com/TGC; /wday/cxs/georgia/TGC/jobs answered 200 JSON"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host georgia.wd5.myworkdayjobs.com: Built (htmlconfig JSON, api tier). Workday robots allows /TGC/ and only disallows /refreshFacet/."}
+  policy: "enabled"
+  config:
+    base_url: "https://georgia.wd5.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/georgia/TGC/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://georgia.wd5.myworkdayjobs.com/wday/cxs/georgia/TGC{externalPath}"}
+      apply_url: {template: "https://georgia.wd5.myworkdayjobs.com/TGC{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "hi-employer"
+  state: "HI"
+  class: "B"
+  name: "Hawaii state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/hawaii"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/hawaii"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ia-employer"
+  state: "IA"
+  class: "B"
+  name: "Iowa state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/iowa"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/iowa; das.iowa.gov 'Search Job Openings' link"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "id-employer"
+  state: "ID"
+  class: "B"
+  name: "Idaho state employer careers (infor)"
+  family: "infor"
+  tier: "browser"
+  entry: "https://statecareers.idaho.gov/"
+  verified: "2026-10-09"
+  family_signals: ["statecareers.idaho.gov meta-refreshes to css-idaho-prd.tam.inforgov.com/hcm/Jobs (Infor HCM)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host statecareers.idaho.gov: robots.txt on the Infor host is 404. Infor CloudSuite job board is script-driven; not examined further. Follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "il-employer"
+  state: "IL"
+  class: "B"
+  name: "Illinois state employer careers (successfactors)"
+  family: "htmlconfig"
+  tier: "http"
+  entry: "https://illinois.jobs2web.com/"
+  verified: "2026-10-09"
+  family_signals: ["illinois.jobs2web.com (SuccessFactors/jobs2web); cms.illinois.gov links it"]
+  # platform: successfactors
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host illinois.jobs2web.com: Built (htmlconfig HTML). 15 results per page; paging parameter not verified, so one page per query."}
+  policy: "enabled"
+  config:
+    base_url: "https://illinois.jobs2web.com"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "li.job-tile"
+      id: {sel: "a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "a.jobTitle-link::text"
+      url: "a.jobTitle-link::attr(href)"
+      location: "div[id$='desktop-section-location-value']::text"
+      posted_at: "div[id$='desktop-section-date-value']::text"
+      employer: "div[id$='desktop-section-dept-value']::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "none", order: "newest_first"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "in-employer"
+  state: "IN"
+  class: "B"
+  name: "Indiana state employer careers (successfactors)"
+  family: "htmlconfig"
+  tier: "http"
+  entry: "https://workforindiana.in.gov/"
+  verified: "2026-10-09"
+  family_signals: ["workforindiana.in.gov (jobs2web RMK); linked from in.gov/spd"]
+  # platform: successfactors
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host workforindiana.in.gov: Built (htmlconfig HTML), table template; one page per query."}
+  policy: "enabled"
+  config:
+    base_url: "https://workforindiana.in.gov"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "tr.data-row"
+      id: {sel: "td.colTitle a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "td.colTitle a.jobTitle-link::text"
+      url: "td.colTitle a.jobTitle-link::attr(href)"
+      location: "td.colLocation span.jobLocation::text"
+      posted_at: "td.colDate span.jobDate::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "none", order: "newest_first"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ks-employer"
+  state: "KS"
+  class: "B"
+  name: "Kansas state employer careers (peoplesoft)"
+  family: "peoplesoft"
+  tier: "browser"
+  entry: "https://jobs.sok.ks.gov/"
+  verified: "2026-10-09"
+  family_signals: ["jobs.sok.ks.gov serves a PeopleSoft sign-on page (sokhrprdcg/signon.html)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host jobs.sok.ks.gov: robots.txt 404. The only anonymous page is a PeopleSoft logon link; no public search found. Login wall, so manual."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ky-employer"
+  state: "KY"
+  class: "B"
+  name: "Kentucky state employer careers (cornerstone)"
+  family: "cornerstone"
+  tier: "browser"
+  entry: "https://kypersonnelcabinet.csod.com/ux/ats/careersite/49/home?c=kypersonnelcabinet"
+  verified: "2026-10-09"
+  family_signals: ["kypersonnelcabinet.csod.com careersite/49 (Cornerstone OnDemand)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "open", checked: "2026-10-09", note: "robots host kypersonnelcabinet.csod.com: Robots: Crawl-delay 10 only. Cornerstone career sites are single-page apps behind a token API; follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "la-employer"
+  state: "LA"
+  class: "B"
+  name: "Louisiana state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://jobs.la.gov/"
+  verified: "2026-10-09"
+  family_signals: ["jobs.la.gov (state vanity site) sends applicants to NEOGOV; login.neogov.com"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. jobs.la.gov itself has an empty robots.txt, but the job search is on NEOGOV, so it stays blocked. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ma-employer"
+  state: "MA"
+  class: "B"
+  name: "Massachusetts state employer careers (unknown)"
+  family: "unknown"
+  tier: "http"
+  entry: "https://www.mass.gov/find-your-career-at-the-commonwealth"
+  verified: "2026-10-09"
+  family_signals: ["MassCareers; mass.gov answers 403 'Not allowed' to this client, so the platform could not be observed"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots host www.mass.gov: Bot wall on mass.gov. Not bypassed. Platform unconfirmed."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "md-employer"
+  state: "MD"
+  class: "B"
+  name: "Maryland state employer careers (jobaps)"
+  family: "jobaps"
+  tier: "http"
+  entry: "https://www.jobapscloud.com/MD/"
+  verified: "2026-10-09"
+  family_signals: ["jobapscloud.com/MD/ ; dbm.maryland.gov 'State Job Openings' links jobaps.com/MD"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host www.jobapscloud.com: jobapscloud.com robots.txt is 404. Classic JobAps; follow-up with CT."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "me-employer"
+  state: "ME"
+  class: "B"
+  name: "Maine state employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://maine.wd5.myworkdayjobs.com/Executive"
+  verified: "2026-10-09"
+  family_signals: ["maine.gov/bhr/state-jobs 'Open Jobs' links maine.wd5.myworkdayjobs.com/Executive; /wday/cxs/maine/Executive/jobs answered 200 JSON"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host maine.wd5.myworkdayjobs.com: Built (htmlconfig JSON). Executive branch site only; the same tenant also has Judicial and Legislature sites (follow-up)."}
+  policy: "enabled"
+  config:
+    base_url: "https://maine.wd5.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/maine/Executive/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://maine.wd5.myworkdayjobs.com/wday/cxs/maine/Executive{externalPath}"}
+      apply_url: {template: "https://maine.wd5.myworkdayjobs.com/Executive{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mi-employer"
+  state: "MI"
+  class: "B"
+  name: "Michigan state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/michigan"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/michigan"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mn-employer"
+  state: "MN"
+  class: "B"
+  name: "Minnesota state employer careers (unknown)"
+  family: "unknown"
+  tier: "http"
+  entry: "https://mn.gov/careers/"
+  verified: "2026-10-09"
+  family_signals: ["mn.gov/careers redirected this client to a Radware Bot Manager captcha (validate.perfdrive.com)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots host mn.gov (not read: captcha before robots): Bot wall. Not bypassed. Platform unconfirmed."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mo-employer"
+  state: "MO"
+  class: "B"
+  name: "Missouri state employer careers (hiretrue)"
+  family: "hiretrue"
+  tier: "http"
+  entry: "https://mocareers.mo.gov/"
+  verified: "2026-10-09"
+  family_signals: ["mocareers.mo.gov redirects to /hiretrue/mo/mocareers/index.html"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host mocareers.mo.gov: robots.txt is 404. Redirect stub only inspected; the board behind it was not examined. Follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ms-employer"
+  state: "MS"
+  class: "B"
+  name: "Mississippi state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/mississippi"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/mississippi; mspb.ms.gov 'Apply Now'"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "mt-employer"
+  state: "MT"
+  class: "B"
+  name: "Montana state employer careers (taleo)"
+  family: "taleo"
+  tier: "browser"
+  entry: "https://mtstatejobs.taleo.net/careersection/200/jobsearch.ftl?lang=en"
+  verified: "2026-10-09"
+  family_signals: ["doa.mt.gov links mtstatejobs.taleo.net/careersection/200/jobsearch.ftl"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host mtstatejobs.taleo.net: robots.txt on the Taleo host is 404. Taleo career sections are session and script driven; follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nc-employer"
+  state: "NC"
+  class: "B"
+  name: "North Carolina state employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://nc.wd108.myworkdayjobs.com/NC_Careers"
+  verified: "2026-10-09"
+  family_signals: ["oshr.nc.gov/work-nc links nc.wd108.myworkdayjobs.com/NC_Careers; /wday/cxs/nc/NC_Careers/jobs answered 200 JSON"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host nc.wd108.myworkdayjobs.com: Built (htmlconfig JSON)."}
+  policy: "enabled"
+  config:
+    base_url: "https://nc.wd108.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/nc/NC_Careers/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://nc.wd108.myworkdayjobs.com/wday/cxs/nc/NC_Careers{externalPath}"}
+      apply_url: {template: "https://nc.wd108.myworkdayjobs.com/NC_Careers{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nd-employer"
+  state: "ND"
+  class: "B"
+  name: "North Dakota state employer careers (peoplesoft)"
+  family: "peoplesoft"
+  tier: "browser"
+  entry: "https://www.cnd.nd.gov/psc/recruit/EMPLOYEE/HRMS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL?FOCUS=Applicant&SiteId=11000"
+  verified: "2026-10-09"
+  family_signals: ["omb.nd.gov Career Openings links www.cnd.nd.gov/psc/recruit (PeopleSoft)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.cnd.nd.gov: cnd.nd.gov robots.txt is User-agent * Disallow /. Policy blocked."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ne-employer"
+  state: "NE"
+  class: "B"
+  name: "Nebraska state employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://son.wd108.myworkdayjobs.com/NebraskaStateCareers"
+  verified: "2026-10-09"
+  family_signals: ["statejobs.nebraska.gov links son.wd108.myworkdayjobs.com/NebraskaStateCareers; /wday/cxs/son/NebraskaStateCareers/jobs answered 200 JSON"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host son.wd108.myworkdayjobs.com: Built (htmlconfig JSON)."}
+  policy: "enabled"
+  config:
+    base_url: "https://son.wd108.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/son/NebraskaStateCareers/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://son.wd108.myworkdayjobs.com/wday/cxs/son/NebraskaStateCareers{externalPath}"}
+      apply_url: {template: "https://son.wd108.myworkdayjobs.com/NebraskaStateCareers{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nh-employer"
+  state: "NH"
+  class: "B"
+  name: "New Hampshire state employer careers (unknown)"
+  family: "unknown"
+  tier: "http"
+  entry: "https://www.das.nh.gov/jobsearch/"
+  verified: "2026-10-09"
+  family_signals: ["das.nh.gov/jobsearch answered 403 'Access Denied' (Akamai) to this client"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.das.nh.gov: Bot wall. das.nh.gov robots.txt is Disallow all except named search engines. Not bypassed."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nj-employer"
+  state: "NJ"
+  class: "B"
+  name: "New Jersey state employer careers (custom)"
+  family: "custom"
+  tier: "http"
+  entry: "https://info.csc.nj.gov/jobannouncements/DefaultJobAnnouncement/JobList"
+  verified: "2026-10-09"
+  family_signals: ["info.csc.nj.gov/jobannouncements (linked from nj.gov/csc/jobs)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots host info.csc.nj.gov: info.csc.nj.gov answered 403 (robots.txt and pages) to this client. Not bypassed."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nm-employer"
+  state: "NM"
+  class: "B"
+  name: "New Mexico state employer careers (peoplesoft)"
+  family: "peoplesoft"
+  tier: "browser"
+  entry: "https://www.spo.state.nm.us/"
+  verified: "2026-10-09"
+  family_signals: ["spo.state.nm.us 'Apply now' links careers.share.nm.gov/psp/hprdcg/EMPLOYEE/HRMS (PeopleSoft)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.spo.state.nm.us: robots.txt on careers.share.nm.gov is 404. PeopleSoft gateway; browser tier follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "nv-employer"
+  state: "NV"
+  class: "B"
+  name: "Nevada state employer careers (custom)"
+  family: "custom"
+  tier: "http"
+  entry: "https://nvapps.state.nv.us/NEATS/Recruiting/ViewJobsHome.aep2"
+  verified: "2026-10-09"
+  family_signals: ["nvapps.state.nv.us/NEATS/Recruiting (NEATS); hr.nv.gov links it and governmentjobs.com/careers/nv"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host nvapps.state.nv.us: robots.txt 404. hr.nv.gov lists both NEATS and a NEOGOV page; NEATS is the one fetched. Follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ny-employer"
+  state: "NY"
+  class: "B"
+  name: "New York state employer careers (custom)"
+  family: "custom"
+  tier: "http"
+  entry: "https://statejobs.ny.gov/"
+  verified: "2026-10-09"
+  family_signals: ["statejobs.ny.gov (ASP site wrapping iframes)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host statejobs.ny.gov: robots.txt 404. Frame-based custom site; not examined further. Follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "oh-employer"
+  state: "OH"
+  class: "B"
+  name: "Ohio state employer careers (unknown)"
+  family: "unknown"
+  tier: "http"
+  entry: "https://careers.ohio.gov/"
+  verified: "2026-10-09"
+  family_signals: ["careers.ohio.gov returned a 404 page to this client on every path tried"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots host careers.ohio.gov: Not observable from here (web search says careers.ohio.gov is the portal). Not bypassed."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ok-employer"
+  state: "OK"
+  class: "B"
+  name: "Oklahoma state employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://okgov.wd1.myworkdayjobs.com/okgovjobs"
+  verified: "2026-10-09"
+  family_signals: ["oklahoma.gov/omes links okgov.wd1.myworkdayjobs.com/okgovjobs; /wday/cxs/okgov/okgovjobs/jobs answered 200 JSON"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host okgov.wd1.myworkdayjobs.com: Built (htmlconfig JSON)."}
+  policy: "enabled"
+  config:
+    base_url: "https://okgov.wd1.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/okgov/okgovjobs/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://okgov.wd1.myworkdayjobs.com/wday/cxs/okgov/okgovjobs{externalPath}"}
+      apply_url: {template: "https://okgov.wd1.myworkdayjobs.com/okgovjobs{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "or-employer"
+  state: "OR"
+  class: "B"
+  name: "Oregon state employer careers (workday)"
+  family: "htmlconfig"
+  tier: "api"
+  entry: "https://oregon.wd5.myworkdayjobs.com/SOR_External_Career_Site"
+  verified: "2026-10-09"
+  family_signals: ["oregon.gov/das/hr 'Find and Apply for Jobs' links oregon.wd5.myworkdayjobs.com/SOR_External_Career_Site; /wday/cxs/oregon/... answered 200 JSON"]
+  # platform: workday
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host oregon.wd5.myworkdayjobs.com: Built (htmlconfig JSON)."}
+  policy: "enabled"
+  config:
+    base_url: "https://oregon.wd5.myworkdayjobs.com"
+    search:
+      method: "POST"
+      path: "/wday/cxs/oregon/SOR_External_Career_Site/jobs"
+      headers: {Accept: "application/json"}
+      json:
+        appliedFacets: {}
+        limit: 20
+        searchText: "{query}"
+    list:
+      format: "json"
+      rows: "jobPostings"
+      id: "externalPath"
+      title: "title"
+      url: {template: "https://oregon.wd5.myworkdayjobs.com/wday/cxs/oregon/SOR_External_Career_Site{externalPath}"}
+      apply_url: {template: "https://oregon.wd5.myworkdayjobs.com/SOR_External_Career_Site{externalPath}"}
+      location: "locationsText"
+      posted_at: {path: "postedOn", re: "Posted (.*)"}
+    detail:
+      format: "json"
+      title: "jobPostingInfo.title"
+      description: "jobPostingInfo.jobDescription"
+      posted_at: "jobPostingInfo.startDate"
+      closes_at: "jobPostingInfo.endDate"
+      location: "jobPostingInfo.location"
+      employer: "hiringOrganization.name"
+      apply_url: "jobPostingInfo.externalUrl"
+  pagination: {kind: "offset", param: "offset", page_size: 20, max_pages: 5, order: "unknown"}
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "pa-employer"
+  state: "PA"
+  class: "B"
+  name: "Pennsylvania state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/pabureau"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/pabureau; pa.gov Open Jobs page"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ri-employer"
+  state: "RI"
+  class: "B"
+  name: "Rhode Island state employer careers (workday)"
+  family: "workday"
+  tier: "http"
+  entry: "https://ri.wd5.myworkdayjobs.com/RI"
+  verified: "2026-10-09"
+  family_signals: ["hr.ri.gov links ri.wd5.myworkdayjobs.com/RI"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host ri.wd5.myworkdayjobs.com: Workday tenant whose robots.txt is User-agent * Disallow /RI/ (the career site path); the JSON API answers but the tenant has opted its site out, so it stays blocked."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "sc-employer"
+  state: "SC"
+  class: "B"
+  name: "South Carolina state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/sc"
+  verified: "2026-10-09"
+  family_signals: ["careers.sc.gov 'Search Openings' links governmentjobs.com/careers/sc"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "sd-employer"
+  state: "SD"
+  class: "B"
+  name: "South Dakota state employer careers (hireclick)"
+  family: "hireclick"
+  tier: "http"
+  entry: "https://statesdgovt.hireclick.com/"
+  verified: "2026-10-09"
+  family_signals: ["statesdgovt.hireclick.com/jobboard (HireClick); bhr.sd.gov/workforus per state web pages"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "open", checked: "2026-10-09", note: "robots host statesdgovt.hireclick.com: Robots: Crawl-delay 10 for *, AI crawlers disallowed by name (our UA is not one). Open by robots; follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "tn-employer"
+  state: "TN"
+  class: "B"
+  name: "Tennessee state employer careers (oracle-apex)"
+  family: "oracle-apex"
+  tier: "http"
+  entry: "https://hub.edison.tn.gov/ords/r/tn_er/tn-careers-external/home"
+  verified: "2026-10-09"
+  family_signals: ["tn.gov/careers 'External Candidates' redirects to hub.edison.tn.gov/ords/r/tn_er/tn-careers-external (Oracle APEX)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots host hub.edison.tn.gov: robots.txt on the Edison host answered 401, so robots could not be read. Not bypassed."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "tx-employer"
+  state: "TX"
+  class: "B"
+  name: "Texas state employer careers (unknown)"
+  family: "unknown"
+  tier: "http"
+  entry: "https://hr.sao.texas.gov/"
+  verified: "2026-10-09"
+  family_signals: ["No statewide public portal found: agencies post through CAPPS Recruit (PeopleSoft) and WorkInTexas (class A); candidate host did not resolve"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "unknown", checked: "2026-10-09", note: "robots host None: Texas has no single 'work for the state' site. Follow-up: enumerate per-agency CAPPS Recruit pages."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "ut-employer"
+  state: "UT"
+  class: "B"
+  name: "Utah state employer careers (cornerstone)"
+  family: "cornerstone"
+  tier: "browser"
+  entry: "https://utdgohcm.csod.com/ux/ats/careersite/4/home?c=utdgohcm"
+  verified: "2026-10-09"
+  family_signals: ["dhrm.utah.gov links utdgohcm.csod.com careersite/4 (Cornerstone OnDemand)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "open", checked: "2026-10-09", note: "robots host utdgohcm.csod.com: Robots: Crawl-delay 10 only. Cornerstone SPA; follow-up with KY."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "va-employer"
+  state: "VA"
+  class: "B"
+  name: "Virginia state employer careers (clinch)"
+  family: "clinch"
+  tier: "http"
+  entry: "https://www.jobs.virginia.gov/"
+  verified: "2026-10-09"
+  family_signals: ["www.jobs.virginia.gov rec-marketing assets and va-careers.career-pages.com links; robots comment 'Commonwealth of VA Careers Robots Txt'"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host www.jobs.virginia.gov: Robots allows search and detail (Crawl-delay 5). First request returned the listing, the second a 202 AWS WAF challenge, so treated as bot-gated. The bare host jobs.virginia.gov also fails TLS verification (missing intermediate); use www. Follow-up."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "vt-employer"
+  state: "VT"
+  class: "B"
+  name: "Vermont state employer careers (successfactors)"
+  family: "successfactors"
+  tier: "http"
+  entry: "https://careers.vermont.gov/"
+  verified: "2026-10-09"
+  family_signals: ["careers.vermont.gov (SuccessFactors default robots)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host careers.vermont.gov: Robots allows search and detail. Same jobs2web family as IL and IN; not built because of the 8-board cap (follow-up)."}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wa-employer"
+  state: "WA"
+  class: "B"
+  name: "Washington state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://careers.wa.gov/"
+  verified: "2026-10-09"
+  family_signals: ["careers.wa.gov (state vanity site) sends searches to governmentjobs.com"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. careers.wa.gov has an empty robots.txt but the search is on NEOGOV, so it stays blocked. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wi-employer"
+  state: "WI"
+  class: "B"
+  name: "Wisconsin state employer careers (peoplesoft)"
+  family: "peoplesoft"
+  tier: "browser"
+  entry: "https://wisc.jobs/"
+  verified: "2026-10-09"
+  family_signals: ["wisc.jobs links wj.wi.gov/psc/.../HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL (PeopleSoft)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "absent", checked: "2026-10-09", note: "robots host wj.wi.gov: wj.wi.gov robots.txt is 404. PeopleSoft gateway; browser tier follow-up. (The class A WI Job Center is a separate row.)"}
+  policy: "manual"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wv-employer"
+  state: "WV"
+  class: "B"
+  name: "West Virginia state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/wv"
+  verified: "2026-10-09"
+  family_signals: ["personnel.wv.gov/empopp links governmentjobs.com/careers/wv"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
+  expect: {min_jobs_per_week: 0}
+
+- key: "wy-employer"
+  state: "WY"
+  class: "B"
+  name: "Wyoming state employer careers (neogov)"
+  family: "neogov"
+  tier: "http"
+  entry: "https://www.governmentjobs.com/careers/wyoming"
+  verified: "2026-10-09"
+  family_signals: ["governmentjobs.com/careers/wyoming"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "disallow_all", checked: "2026-10-09", note: "robots host www.governmentjobs.com: NEOGOV. Covered by email alerts."}
+  policy: "blocked"
+  queries: "from_profile"
   expect: {min_jobs_per_week: 0}
