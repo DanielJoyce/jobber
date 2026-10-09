@@ -3,7 +3,6 @@
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
 import sqlite3
 from collections.abc import Callable
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -12,13 +11,13 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.config import Settings
 from jobhunter.console import inbox
-from jobhunter.scoring.profile import Profile, ProfileError, load_profile
+from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
 
 def load_console_profile(settings: Settings) -> tuple[Profile | None, str | None]:
     """Load the profile per request; (None, message) when missing or invalid."""
     try:
-        return load_profile(Path(settings.paths.profile_dir)), None
+        return load_profile_for(settings), None
     except ProfileError as exc:
         return None, str(exc)
 
