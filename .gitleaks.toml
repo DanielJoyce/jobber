@@ -1,0 +1,33 @@
+# gitleaks config: the default ruleset plus personal-data rules for this repo.
+# The repository is public, so contact details must never be committed.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "personal-email"
+description = "Personal email address (use <you>@example.com placeholders instead)"
+regex = '''(?i)\b[a-z0-9._%+-]+@(gmail|yahoo|outlook|hotmail|icloud|proton|protonmail|aol)\.(com|me)\b'''
+keywords = ["gmail", "yahoo", "outlook", "hotmail", "icloud", "proton", "aol"]
+  [rules.allowlist]
+  # Placeholders like <you>+jobs@gmail.com in specs and examples are fine.
+  regexTarget = "line"
+  regexes = ['''<you>''']
+
+[[rules]]
+id = "us-phone-number"
+description = "US phone number"
+regex = '''\(\d{3}\)\s?\d{3}-\d{4}\b'''
+keywords = ["("]
+
+[[rules]]
+id = "usajobs-api-key"
+description = "USAJOBS API key assigned in code or config"
+regex = '''(?i)usajobs_api_key\s*[:=]\s*["']?[A-Za-z0-9+/=]{20,}'''
+keywords = ["usajobs_api_key"]
+
+[allowlist]
+description = "Vendored third-party assets and the robots survey contain no secrets"
+paths = [
+  '''src/jobhunter/console/static/vendor/''',
+  '''uv\.lock''',
+]

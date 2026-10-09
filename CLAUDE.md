@@ -34,6 +34,14 @@ All three must pass before you commit.
   `client.messages.batches`. Tests mock the client; never call the API in tests.
 - Keep changes scoped to your bug. Don't reformat or refactor unrelated files.
 
+## Git hooks
+
+Secret scanning runs on every commit (gitleaks, private-key detection, a guard against
+`resume/`, `profile/`, `data/`, `config.toml`). Set up once per clone with
+`scripts/setup-hooks.sh`. It explains and asks before downloading anything.
+**Never commit with `--no-verify`.** For a false positive, allowlist it in `.gitleaks.toml`
+with a comment saying why. CI rescans the full history on every push.
+
 ## Git workflow
 
 - Branch from latest `main`: `bug/<git-bug-short-id>-<key>`, e.g. `bug/6c55bec-scaffold`.
