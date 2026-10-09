@@ -10,6 +10,9 @@ import pytest
 SRC = Path(__file__).resolve().parents[1] / "src" / "jobhunter"
 GUARDED_PACKAGES = ["sources", "pipeline", "scoring"]
 FORBIDDEN = {"httpx", "playwright"}
+# API clients (not scrapers) that may use httpx: the OpenAI-compatible scorer talks to an LLM
+# endpoint the user configured. Keep this list explicit and tiny.
+ALLOWED = {"scoring/scorers.py"}
 
 
 def network_imports(path: Path, root: Path = SRC) -> list[str]:
@@ -39,6 +42,8 @@ def test_guarded_packages_exist():
 
 @pytest.mark.parametrize("path", guarded_modules(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_direct_network_imports(path):
+    if str(path.relative_to(SRC)) in ALLOWED:
+        pytest.skip("explicitly allowed API client")
     assert network_imports(path) == [], "use jobhunter.core.fetch.FetchContext instead"
 
 
@@ -51,3 +56,8 @@ def test_detector_catches_violations(tmp_path):
         "bad.py:1 httpx",
         "bad.py:2 playwright.sync_api",
     ]
+
+
+def test_allowlist_is_only_scorers_and_actually_needed():
+    assert {"scoring/scorers.py"} == ALLOWED
+    assert network_imports(SRC / "scoring" / "scorers.py")

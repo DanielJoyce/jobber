@@ -41,6 +41,23 @@ class Fetch(BaseModel):
     max_retries: int = 5
 
 
+class OpenAICompat(BaseModel):
+    """A generic OpenAI-compatible endpoint (``screen_scorer = "openai-compat:<model>"``).
+
+    The API key is read from the environment variable named by ``api_key_env``; an empty name
+    means no Authorization header (some local servers). Prices default to 0, meaning unknown.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str = "http://localhost:8000"
+    api_key_env: str = "OPENAI_COMPAT_API_KEY"
+    input_usd_per_mtok: float = Field(default=0.0, ge=0)
+    output_usd_per_mtok: float = Field(default=0.0, ge=0)
+    max_concurrency: int = Field(default=2, ge=1)
+    json_schema: bool = True  # try response_format json_schema first
+
+
 class Scoring(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -49,6 +66,7 @@ class Scoring(BaseModel):
     daily_cap_usd: float = 2.0
     weekly_cap_usd: float = 10.0
     deep_shortlist: int = 40
+    openai_compat: OpenAICompat = Field(default_factory=OpenAICompat)
 
 
 class Mail(BaseModel):
