@@ -7,6 +7,7 @@ trimmed to five postings and two details, with e-mail addresses and phone number
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -92,7 +93,20 @@ def check_workday(st: str, tenant: str, site: str, conn, tmp_path) -> None:
     assert s.paths()[-1].startswith("GET /wday/cxs/")
 
 
-JOB_IDS = {"IL": ("1436885300", "1433847600"), "IN": ("1434837000", "1438374900")}
+JOB_IDS = {
+    "IL": ("1436885300", "1433847600"),
+    "IN": ("1434837000", "1438374900"),
+    "AR": ("1438868400", "1436802800"),
+    "FL": ("1437723500", "1438638800"),
+    "VT": ("1433820300", "1436886000"),
+}
+AGENCY = {
+    "IL": "State of Illinois",
+    "IN": "State of Indiana",
+    "AR": "State of Arkansas",
+    "FL": "State of Florida",
+    "VT": "State of Vermont",
+}
 
 
 def jobs2web_site(st: str) -> Site:
@@ -141,7 +155,7 @@ def check_jobs2web(st: str, host: str, conn, tmp_path, *, employer_in_list: bool
     assert detail.title == first.title.strip() or detail.title
     assert detail.description_raw and "<" in detail.description_raw
     assert detail.closes_at is not None and detail.closes_at > detail.posted_at
-    assert detail.agency_raw == f"State of {'Illinois' if st == 'IL' else 'Indiana'}"
+    assert detail.agency_raw == AGENCY[st]
     assert detail.needs_resolve is False
     assert "@" not in detail.description_raw.replace("hr@example.gov", "")
 
@@ -149,3 +163,52 @@ def check_jobs2web(st: str, host: str, conn, tmp_path, *, employer_in_list: bool
     assert second.description_raw
     # the Apply button's /talentcommunity/ path is robots-disallowed and never requested
     assert not any("/talentcommunity/" in p for p in s.paths())
+
+
+TABLE_ROW = r'<tr class="data-row'
+ROW_START = {"IL": r'<li class="job-tile'}
+ROW_END = {"IL": "</ul>"}
+
+
+def padded_page(st: str, rows: int, bump: int) -> str:
+    """The saved search page repeated to ``rows`` rows, job ids shifted by ``bump`` (synthetic)."""
+    text = fixture(st, "search.html")
+    starts = [m.start() for m in re.finditer(ROW_START.get(st, TABLE_ROW), text)]
+    end = text.index(ROW_END.get(st, "</tbody>"), starts[-1])
+    segs = [text[a:b] for a, b in zip(starts, [*starts[1:], end], strict=True)]
+    out = []
+    for k in range(rows):
+        shift = bump + k // len(segs)
+        seg = segs[k % len(segs)]
+        out.append(re.sub(r"/(\d{10})/", lambda m, s=shift: f"/{int(m[1]) + s}/", seg))
+    return text[: starts[0]] + "".join(out) + text[end:]
+
+
+def check_jobs2web_paging(st: str, conn, tmp_path) -> None:
+    """startrow paging: 25 rows per page; a short page ends it; max_pages caps it."""
+    src = registry_row(f"{st.lower()}-employer")
+    assert src.pagination["kind"] == "offset" and src.pagination["param"] == "startrow"
+    pages = {"0": padded_page(st, 25, 1), "25": padded_page(st, 5, 1000)}
+    html = {"content-type": "text/html"}
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=pages[request.url.params["startrow"]], headers=html)
+
+    s = Site(route, robots="User-agent: *\nDisallow: /applybutton/\n")
+    ctx = make_ctx(src, conn, s, tmp_path)
+    stubs = list(HtmlConfigAdapter().search(src, Query(title="analyst"), SINCE, ctx))
+    assert [r.url.params["startrow"] for r in s.requests] == ["0", "25"]
+    assert len(stubs) == 30 and len({st_.external_id for st_ in stubs}) == 30
+
+    # always-full pages stop at max_pages
+    src_cap = src.model_copy(update={"pagination": {**src.pagination, "max_pages": 3}})
+    n = iter(range(100))
+
+    def endless(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=padded_page(st, 25, 10 * next(n) + 10), headers=html)
+
+    s2 = Site(endless, robots="User-agent: *\nDisallow: /applybutton/\n")
+    ctx2 = make_ctx(src_cap, conn, s2, tmp_path / "cap")
+    capped = list(HtmlConfigAdapter().search(src_cap, Query(title="analyst"), SINCE, ctx2))
+    assert [r.url.params["startrow"] for r in s2.requests] == ["0", "25", "50"]
+    assert len(capped) == 75

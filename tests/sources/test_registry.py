@@ -23,7 +23,7 @@ OPEN_SET_KEYS = {
     "ny-newyork",
     "us-nlx",
     "us-usajobs",
-    # class B: six Workday tenants (JSON API) and two SuccessFactors jobs2web sites (specs/010).
+    # class B: six Workday tenants (JSON API) and five SuccessFactors jobs2web sites (specs/010).
     "ga-employer",
     "me-employer",
     "nc-employer",
@@ -32,6 +32,9 @@ OPEN_SET_KEYS = {
     "or-employer",
     "il-employer",
     "in-employer",
+    "ar-employer",
+    "fl-employer",
+    "vt-employer",
 }
 
 
@@ -111,7 +114,7 @@ def test_class_b_neogov_is_always_blocked(rows):
 
 def test_class_b_enabled_rows_are_the_built_htmlconfig_ones(rows):
     enabled = {r.state for r in rows if r.class_ is SourceClass.B and r.policy is Policy.enabled}
-    assert enabled == {"GA", "ME", "NC", "NE", "OK", "OR", "IL", "IN"}
+    assert enabled == {"GA", "ME", "NC", "NE", "OK", "OR", "IL", "IN", "AR", "FL", "VT"}
     assert all(
         r.family == "htmlconfig" for r in rows if r.key.endswith("-employer") and r.state in enabled
     )

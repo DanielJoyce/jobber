@@ -1022,14 +1022,37 @@
   state: "AR"
   class: "B"
   name: "Arkansas state employer careers (successfactors)"
-  family: "successfactors"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://arcareers.arkansas.gov/"
   verified: "2026-10-09"
-  family_signals: ["arcareers.arkansas.gov links career41.sapsf.com/career?company=stateofark; robots is the SuccessFactors career-site default"]
+  family_signals: ["arcareers.arkansas.gov (jobs2web table template, same markup as IN)"]
+  # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host arcareers.arkansas.gov: Robots allows search and detail (disallows /applybutton/, /talentcommunity/, /services/ and similar). Same SuccessFactors jobs2web template as IL and IN is likely but unverified; follow-up."}
-  policy: "manual"
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host arcareers.arkansas.gov: Built (htmlconfig HTML), table template (the date sits in the title cell), 25 results per page, startrow paging, max 4 pages. Robots disallows /applybutton/, /talentcommunity/, /services/ and similar; none is requested."}
+  policy: "enabled"
+  config:
+    base_url: "https://arcareers.arkansas.gov"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "tr.data-row"
+      id: {sel: "td.colTitle a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "td.colTitle a.jobTitle-link::text"
+      url: "td.colTitle a.jobTitle-link::attr(href)"
+      location: "td.colLocation span.jobLocation::text"
+      posted_at: "td.colTitle span.jobDate::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1127,14 +1150,37 @@
   state: "FL"
   class: "B"
   name: "Florida state employer careers (successfactors)"
-  family: "successfactors"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://jobs.myflorida.com/"
   verified: "2026-10-09"
-  family_signals: ["jobs.myflorida.com 'People First' career site; SuccessFactors default robots"]
+  family_signals: ["jobs.myflorida.com (jobs2web table template, same markup as IN)"]
+  # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host jobs.myflorida.com: Robots allows search and detail. Same jobs2web family as IL and IN; not built because of the 8-board cap (follow-up)."}
-  policy: "manual"
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host jobs.myflorida.com: Built (htmlconfig HTML), table template, 25 results per page, startrow paging, max 4 pages. Robots disallows /applybutton/, /talentcommunity/, /services/ and similar; none is requested."}
+  policy: "enabled"
+  config:
+    base_url: "https://jobs.myflorida.com"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "tr.data-row"
+      id: {sel: "td.colTitle a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "td.colTitle a.jobTitle-link::text"
+      url: "td.colTitle a.jobTitle-link::attr(href)"
+      location: "td.colLocation span.jobLocation::text"
+      posted_at: "td.colDate span.jobDate::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1239,7 +1285,7 @@
   family_signals: ["illinois.jobs2web.com (SuccessFactors/jobs2web); cms.illinois.gov links it"]
   # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host illinois.jobs2web.com: Built (htmlconfig HTML). 15 results per page; paging parameter not verified, so one page per query."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host illinois.jobs2web.com: Built (htmlconfig HTML). Tile template, 25 results per page; /search/ pages with startrow=<offset> (verified 2026-10-09: startrow=25 returned rows 26-50, no overlap), max 4 pages (100 rows) per query."}
   policy: "enabled"
   config:
     base_url: "https://illinois.jobs2web.com"
@@ -1263,7 +1309,7 @@
       closes_at: "meta[itemprop='validThrough']::attr(content)"
       employer: "meta[itemprop='hiringOrganization']::attr(content)"
       location: "span.jobGeoLocation::text"
-  pagination: {kind: "none", order: "newest_first"}
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1278,7 +1324,7 @@
   family_signals: ["workforindiana.in.gov (jobs2web RMK); linked from in.gov/spd"]
   # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host workforindiana.in.gov: Built (htmlconfig HTML), table template; one page per query."}
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host workforindiana.in.gov: Built (htmlconfig HTML), table template, 25 results per page; pages with startrow=<offset> (the pager links use it, verified 2026-10-09), max 4 pages (100 rows) per query."}
   policy: "enabled"
   config:
     base_url: "https://workforindiana.in.gov"
@@ -1301,7 +1347,7 @@
       closes_at: "meta[itemprop='validThrough']::attr(content)"
       employer: "meta[itemprop='hiringOrganization']::attr(content)"
       location: "span.jobGeoLocation::text"
-  pagination: {kind: "none", order: "newest_first"}
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
@@ -1909,14 +1955,37 @@
   state: "VT"
   class: "B"
   name: "Vermont state employer careers (successfactors)"
-  family: "successfactors"
+  family: "htmlconfig"
   tier: "http"
   entry: "https://careers.vermont.gov/"
   verified: "2026-10-09"
-  family_signals: ["careers.vermont.gov (SuccessFactors default robots)"]
+  family_signals: ["careers.vermont.gov (jobs2web table template, same markup as IN)"]
+  # platform: successfactors
   rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
-  robots: {status: "partial", checked: "2026-10-09", note: "robots host careers.vermont.gov: Robots allows search and detail. Same jobs2web family as IL and IN; not built because of the 8-board cap (follow-up)."}
-  policy: "manual"
+  robots: {status: "partial", checked: "2026-10-09", note: "robots host careers.vermont.gov: Built (htmlconfig HTML), table template, 25 results per page, startrow paging, max 4 pages. Robots disallows /applybutton/, /talentcommunity/, /services/ and similar; none is requested."}
+  policy: "enabled"
+  config:
+    base_url: "https://careers.vermont.gov"
+    date_formats: ["%b %d, %Y", "%a %b %d %H:%M:%S UTC %Y"]
+    search:
+      method: "GET"
+      path: "/search/"
+      params: {q: "{query}", sortColumn: "referencedate", sortDirection: "desc"}
+    list:
+      rows: "tr.data-row"
+      id: {sel: "td.colTitle a.jobTitle-link::attr(href)", re: "/(\\d+)/?$"}
+      title: "td.colTitle a.jobTitle-link::text"
+      url: "td.colTitle a.jobTitle-link::attr(href)"
+      location: "td.colLocation span.jobLocation::text"
+      posted_at: "td.colDate span.jobDate::text"
+    detail:
+      title: "[itemprop='title']::text"
+      description: "span.jobdescription::html"
+      posted_at: "meta[itemprop='datePosted']::attr(content)"
+      closes_at: "meta[itemprop='validThrough']::attr(content)"
+      employer: "meta[itemprop='hiringOrganization']::attr(content)"
+      location: "span.jobGeoLocation::text"
+  pagination: {kind: "offset", param: "startrow", page_size: 25, max_pages: 4, order: "newest_first"}
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
 
