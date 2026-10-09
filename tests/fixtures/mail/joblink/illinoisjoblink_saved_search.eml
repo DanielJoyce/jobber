@@ -1,0 +1,44 @@
+From: Illinois JobLink <no-reply@illinoisjoblink.illinois.gov>
+To: you+jobs@example.com
+Subject: New jobs for your saved search "platform engineer"
+Date: Thu, 08 Oct 2026 05:30:00 -0500
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+3 new jobs match your saved search "platform engineer". View them in a browser.
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!-- SYNTHETIC FIXTURE: fictional employers, styled after an America's JobLink saved-search
+     alert. Re-validate against a real alert once subscriptions arrive. -->
+<html><body>
+<div class="header">America's JobLink &middot; Illinois JobLink</div>
+<p>3 new jobs match your saved search <b>platform engineer</b>.</p>
+<div class="job-card">
+  <h3><a href="https://illinoisjoblink.illinois.gov/jobs/7712345">Platform Engineer</a></h3>
+  <div>Prairie State Fictional Insurance Co.</div>
+  <div>Springfield, IL</div>
+  <p>Build and operate the container platform that runs our claims systems. Kubernetes, Terraform, and on-call rotation shared across a team of six.</p>
+</div>
+<div class="job-card">
+  <h3><a href="https://illinoisjoblink.illinois.gov/jobs/7712399">Senior Site Reliability Engineer</a></h3>
+  <div>Example Lakefront Transit Authority</div>
+  <div>Chicago, IL</div>
+  <p>Own reliability for rider-facing services; define SLOs, lead incident reviews, and automate toil away across a hybrid cloud estate.</p>
+</div>
+<div class="job-card">
+  <h3><a href="https://illinoisjoblink.illinois.gov/jobs/7712401">DevOps Engineer</a></h3>
+  <div>Fictional Corn Belt Analytics</div>
+  <div>Peoria, IL</div>
+</div>
+<p><a href="https://illinoisjoblink.illinois.gov/search/jobs?saved=placeholder">See all results</a> &middot;
+   <a href="https://illinoisjoblink.illinois.gov/account/alerts">Manage alerts</a></p>
+</body></html>
+
+--SYNTHBOUNDARY--
