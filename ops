@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791575808,"nonce":"4dadlgDVt38GhEDnwnHeAI/2GmI=","message":"Landed in PR #6 (db4996a). Text, salary, date, remote and employment-type parsing; stub upsert with immutable first_seen; watermarks; re-runnable normalize that never overwrites raw columns.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791575809,"nonce":"9wMc6D4ll8dmijNl6Nbpysjzq2E=","status":2}]}
