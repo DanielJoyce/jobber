@@ -7,6 +7,7 @@ config.toml
 
 # Runtime data: SQLite DB, raw HTTP cache, inbox drops
 data/
+!specs/data/
 
 # Python
 __pycache__/
