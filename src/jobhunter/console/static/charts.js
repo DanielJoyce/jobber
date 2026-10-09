@@ -268,7 +268,7 @@
     var labels = slots.map(function (s, i) {
       var seg = stack[i][weeks.length - 1];
       return { label: s.label, y: (y(seg[0]) + y(seg[1])) / 2 + 4, slot: i, has: lastW[s.key] > 0 };
-    });
+    }).filter(function (l) { return l.has; });  // no label for a series with no segment
     var minGap = 13;
     for (var pass = 0; pass < 3; pass++) {
       // Slots are bottom-up in value, so y decreases with index; enforce spacing upward.
