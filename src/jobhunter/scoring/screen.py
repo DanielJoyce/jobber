@@ -311,6 +311,7 @@ def _record_spend(
     input_tokens: int,
     output_tokens: int,
     cost: float,
+    tier: str = TIER,
 ) -> None:
     if calls == 0:
         return
@@ -321,7 +322,7 @@ def _record_spend(
         "input_tokens = coalesce(input_tokens, 0) + excluded.input_tokens, "
         "output_tokens = coalesce(output_tokens, 0) + excluded.output_tokens, "
         "cost_usd = cost_usd + excluded.cost_usd",
-        (to_iso(now)[:10], model, TIER, calls, input_tokens, output_tokens, cost),
+        (to_iso(now)[:10], model, tier, calls, input_tokens, output_tokens, cost),
     )
 
 
