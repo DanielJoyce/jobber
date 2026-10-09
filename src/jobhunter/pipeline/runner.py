@@ -38,6 +38,7 @@ from jobhunter.pipeline.normalize import normalize_pending
 from jobhunter.scoring.prefilter import run_prefilter
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile
 from jobhunter.sources.adapters.base import SourceAdapter
+from jobhunter.sources.adapters.nlx import NlxAdapter
 from jobhunter.sources.adapters.usajobs import UsajobsAdapter, queries_from_profile
 from jobhunter.sources.registry import sync_sources_table
 
@@ -53,6 +54,7 @@ FLUSH_EVERY = 100
 # Extension point: add a family -> adapter class here as adapters land (specs/003).
 ADAPTERS: dict[str, Callable[[], SourceAdapter]] = {
     "usajobs": UsajobsAdapter,
+    "nlx": NlxAdapter,
 }
 
 CtxFactory = Callable[[SourceRow], AbstractContextManager[Any]]
