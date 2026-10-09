@@ -25,7 +25,13 @@ def test_run_not_implemented():
 
 
 def test_subcommand_stubs():
-    for args in (["score"], ["mail", "sync"], ["applylinks", "unknown"]):
+    for args in (["mail", "sync"], ["applylinks", "unknown"]):
         result = runner.invoke(app, args)
         assert result.exit_code == 0, args
         assert "not implemented yet" in result.output
+
+
+def test_score_requires_one_mode():
+    result = runner.invoke(app, ["score"])
+    assert result.exit_code == 2
+    assert "--submit" in result.output
