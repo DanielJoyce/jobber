@@ -1,23 +1,36 @@
-# Copy to ~/.config/jobhunter/config.toml. Placeholders only; never commit real values.
+# Copy to ~/.config/jobhunter/config.toml (or point $JOBHUNTER_CONFIG at your copy).
+# Every value below is the built-in default; uncomment only what you want to change.
+# Placeholders only; never commit real values.
 # Secrets: ANTHROPIC_API_KEY comes from the environment, never from this file.
 
-# [paths]
+[paths]
+# Relative paths resolve against the directory you run jobhunter from.
 # data_dir = "data"
+# cache_dir = "data/cache"
+# db_path = "data/jobhunter.db"
 # profile_dir = "profile"
+# resume_path = "resume"          # a directory or a single file
 
-# [fetch]
+[fetch]
 # respect_robots = true
+# default_rps = 0.2
+# global_concurrency = 8
 # user_agent_contact = "<you>@example.com"
-# default_rps = 0.5
-# default_concurrency = 1
+# timeout_s = 20.0
+# max_retries = 5
 
-# [scoring]
-# screen_scorer = "claude-haiku-4-5"
-# deep_scorer = "claude-opus-5"
+[scoring]
+# screen_scorer = "anthropic:claude-haiku-4-5"
+# deep_scorer = "anthropic:claude-opus-5"
+# daily_cap_usd = 2.0
+# weekly_cap_usd = 10.0
+# deep_shortlist = 40
 
-# [mail]
+[mail]
 # alerts_address = "<you>+jobs@gmail.com"
+# label = "jobhunter/alerts"
+# fallback_sender_domains = []    # e.g. ["example-jobs.com"]
 
-# [spend]
-# monthly_cap_usd = 0
-# per_run_cap_usd = 0
+[console]
+# host = "127.0.0.1"
+# port = 8808
