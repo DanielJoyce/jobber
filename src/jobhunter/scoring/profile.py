@@ -417,11 +417,19 @@ def _read_resume(path: Path) -> str:
 
 
 def load_profile_for(settings: Settings) -> Profile:
-    """Load the user's profile exactly as every entry point should: the configured
-    profile directory and the configured resume path (``paths.resume_path``)."""
-    return load_profile(
-        resolve_path(settings.paths.profile_dir), resolve_path(settings.paths.resume_path)
-    )
+    """Load the user's profile the same way at every entry point.
+
+    The profile's own ``resume_path`` wins; the configured ``paths.resume_path`` is only
+    the fallback when preferences.yaml doesn't name a resume. (Preferring the configured
+    default made tests with their own temporary profiles silently read the real resume.)
+    """
+    profile_dir = resolve_path(settings.paths.profile_dir)
+    try:
+        return load_profile(profile_dir)
+    except ProfileError as exc:
+        if exc.field != "resume_path" or "no resume" not in str(exc):
+            raise
+    return load_profile(profile_dir, resolve_path(settings.paths.resume_path))
 
 
 def load_profile(profile_dir: Path, resume_path: Path | None = None) -> Profile:
