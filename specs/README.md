@@ -25,6 +25,7 @@ Status: **design, awaiting your approval.** No implementation code written yet.
 | [013](013-dashboard.md) | **Today dashboard** | KPI tiles, US map with AK/HI, per-state stats and coverage, charts |
 | [014](014-preferences-console.md) | **Preferences console** | Edit salary, states, weights, queries; live preview; free vs paid changes |
 | [015](015-apply-links.md) | **Apply links** | Button straight to the employer's application, redirects resolved |
+| [016](016-alternative-scorers.md) | Alternative scorers | OpenRouter, Jev Router, local models on this hardware, rollout by measurement |
 
 ## Headline decisions
 
