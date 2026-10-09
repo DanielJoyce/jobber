@@ -280,6 +280,10 @@ class OpenAICompatScorer:
         self.extra_headers: dict[str, str] = {}
         self.extra_body: dict[str, Any] = {}
         self.config_section = "scoring.openai_compat"
+        # Packed requests (specs/016); the CLI may override jobs_per_request.
+        self.jobs_per_request = config.jobs_per_request
+        self.max_input_tokens = config.max_input_tokens_per_request
+        self.est_cost_per_request_usd = config.est_cost_per_request_usd
 
     @property
     def url(self) -> str:
@@ -426,6 +430,9 @@ class OpenRouterScorer(OpenAICompatScorer):
             api_key_env=config.api_key_env,
             max_concurrency=config.max_concurrency,
             json_schema=config.json_schema,
+            jobs_per_request=config.jobs_per_request,
+            max_input_tokens_per_request=config.max_input_tokens_per_request,
+            est_cost_per_request_usd=config.est_cost_per_request_usd,
         )
         super().__init__(model, compat, client=client, env=env)
         self.name = f"openrouter:{model}"
@@ -547,6 +554,8 @@ class LocalScorer(OpenAICompatScorer):
             api_key_env="",
             max_concurrency=config.max_concurrency,
             json_schema=config.json_schema,
+            jobs_per_request=config.jobs_per_request,
+            max_input_tokens_per_request=config.max_input_tokens_per_request,
         )
         super().__init__(
             model,

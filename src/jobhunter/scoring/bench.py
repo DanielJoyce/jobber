@@ -21,9 +21,13 @@ from jobhunter.scoring.screen import (
     _posting_haystack,
     _row,
     _summary_for,
+    build_packed_request,
     build_score_request,
     evidence_checks,
+    pack_items,
+    parse_packed,
     parse_result,
+    posting_text,
 )
 
 _GROUPS = """
@@ -49,10 +53,24 @@ class BenchReport:
     timed_output_seconds: float = 0.0  # seconds of requests that reported output tokens
     cost_usd: float = 0.0
     night_hours: float = 8.0
+    jobs_per_request: int = 1
+    jobs_sent: int = 0  # packed mode: jobs across all requests
+
+    @property
+    def packed(self) -> bool:
+        return self.jobs_per_request > 1
 
     @property
     def attempted(self) -> int:
-        return len(self.seconds)
+        return self.jobs_sent if self.packed else len(self.seconds)
+
+    @property
+    def seconds_per_job(self) -> float | None:
+        return sum(self.seconds) / self.jobs_sent if self.jobs_sent else None
+
+    @property
+    def cost_per_job(self) -> float | None:
+        return self.cost_usd / self.jobs_sent if self.jobs_sent else None
 
     @property
     def first_s(self) -> float | None:
@@ -80,6 +98,8 @@ class BenchReport:
     @property
     def jobs_per_night(self) -> int | None:
         per_job = self.subsequent_s if self.subsequent_s is not None else self.first_s
+        if self.packed and self.seconds_per_job:
+            per_job = self.seconds_per_job
         if not per_job or per_job <= 0:
             return None
         return int(self.night_hours * 3600 / per_job)
@@ -103,8 +123,26 @@ class BenchReport:
             f"evidence quotes verified: {self.evidence_verified}/{self.evidence_total} "
             f"({pct(self.evidence_rate)})",
         ]
+        if self.packed:
+            lines[1] = (
+                f"jobs scored: {self.attempted} of {self.requested} requested in "
+                f"{len(self.seconds)} packed requests of up to {self.jobs_per_request} "
+                f"({self.errored} jobs errored); nothing was written to the database"
+            )
+            lines[2] = f"first request: {f(self.first_s, '.1f', ' s')} (cold prefix cache)"
+            lines[3] = f"later requests: {f(self.subsequent_s, '.1f', ' s')} each"
+            mean_req = sum(self.seconds) / len(self.seconds) if self.seconds else None
+            lines.append(
+                f"per job: {f(self.seconds_per_job, '.1f', ' s')} "
+                f"(per request: {f(mean_req, '.1f', ' s')})"
+            )
         if self.cost_usd:
             lines.append(f"cost: ${self.cost_usd:.4f}")
+            if self.packed:
+                lines.append(
+                    f"cost per job: ${self.cost_per_job or 0:.4f} (per request: "
+                    f"${self.cost_usd / max(len(self.seconds), 1):.4f})"
+                )
         nights = self.jobs_per_night
         if nights is None:
             lines.append("projection: not enough data")
@@ -124,12 +162,16 @@ def run_bench(
     n: int,
     night_hours: float = 8.0,
     clock: Callable[[], float] = time.monotonic,
+    jobs_per_request: int | None = None,
 ) -> BenchReport:
     """Score up to ``n`` prefiltered groups, one at a time, writing nothing."""
     conn.execute("PRAGMA query_only = ON")
     try:
         groups = conn.execute(_GROUPS, (profile.filter_version, n)).fetchall()
         report = BenchReport(scorer=scorer.name, requested=n, night_hours=night_hours)
+        per_request = jobs_per_request or int(getattr(scorer, "jobs_per_request", 1) or 1)
+        if per_request > 1:
+            return _run_packed(conn, scorer, profile, groups, report, per_request, clock)
         for g in groups:
             job: dict[str, Any] = _row(g)
             request = build_score_request(
@@ -158,3 +200,46 @@ def run_bench(
         return report
     finally:
         conn.execute("PRAGMA query_only = OFF")
+
+
+def _run_packed(
+    conn: sqlite3.Connection,
+    scorer: FitScorer,
+    profile: Profile,
+    groups: list[sqlite3.Row],
+    report: BenchReport,
+    per_request: int,
+    clock: Callable[[], float],
+) -> BenchReport:
+    """Packed variant: one request per pack; per-job figures are derived from the totals."""
+    report.jobs_per_request = per_request
+    by_id = {f"g{g['group_id']}": g for g in groups}
+    texts = [(f"g{g['group_id']}", posting_text(_row(g), _summary_for(conn, g))) for g in groups]
+    packs = pack_items(
+        texts,
+        profile,
+        jobs_per_request=per_request,
+        max_input_tokens=int(getattr(scorer, "max_input_tokens", 40_000)),
+    )
+    for pack in packs:
+        ids = [cid for cid, _ in pack]
+        report.jobs_sent += len(ids)
+        start = clock()
+        result = scorer.score_one(build_packed_request(pack, profile))
+        elapsed = clock() - start
+        report.seconds.append(elapsed)
+        if result.status != "succeeded":
+            report.errored += len(ids)
+            continue
+        report.cost_usd += scorer.cost(result.usage, batch=False)
+        out_tokens = _usage_int(result.usage, "output_tokens")
+        if out_tokens:
+            report.output_tokens += out_tokens
+            report.timed_output_seconds += elapsed
+        parsed = parse_packed(result, ids)
+        for cid, screen in parsed.screens.items():
+            report.schema_valid += 1
+            checks = evidence_checks(screen, _posting_haystack(_row(by_id[cid])))
+            report.evidence_total += len(checks)
+            report.evidence_verified += sum(checks)
+    return report

@@ -49,6 +49,9 @@
 # provider = { require_parameters = true, data_collection = "deny" }
 # max_concurrency = 2
 # catalog_cache = "data/openrouter_models.json"
+# jobs_per_request = 8                         # packed requests (specs/016); 1 = one job each, max 16
+# max_input_tokens_per_request = 40000        # split a pack above this estimated input size
+# est_cost_per_request_usd = 0.04             # spend-cap estimate until a mean is measured
 
 # Only used when screen_scorer = "local:<model>" (specs/016): a model on this machine behind
 # llama.cpp's llama-server or Ollama. Nothing leaves the computer. Set up with

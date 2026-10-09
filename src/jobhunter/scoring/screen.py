@@ -17,7 +17,7 @@ import math
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -28,13 +28,19 @@ from jobhunter.core.models import LocationScope, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
 from jobhunter.pipeline.locations import load_locations, location_summary
 from jobhunter.scoring.profile import Profile, scoring_inputs
-from jobhunter.scoring.rubric import PROMPT_VERSION, RUBRIC_TEXT, SCREEN_SCHEMA
+from jobhunter.scoring.rubric import (
+    PROMPT_VERSION,
+    RUBRIC_TEXT,
+    SCREEN_SCHEMA,
+    packed_json_schema,
+)
 from jobhunter.scoring.scorers import (  # noqa: F401  (pricing/cost helpers re-exported)
     PRICING_PER_MTOK,
     AnthropicScorer,
     FitScorer,
     ScoreRequest,
     ScoreResult,
+    Usage,
     _usage_int,
     anthropic_params,
     compute_cost,
@@ -702,9 +708,13 @@ class SyncResult:
     errored: int = 0
     unverified: int = 0
     cost_usd: float = 0.0
+    requests: int = 0  # packed mode only: requests sent (omitted from as_dict otherwise)
 
     def as_dict(self) -> dict[str, Any]:
-        return dict(self.__dict__)
+        d = dict(self.__dict__)
+        if not self.requests:
+            del d["requests"]
+        return d
 
 
 def score_sync(
@@ -723,6 +733,10 @@ def score_sync(
     groups stay eligible for the next run.
     """
     out = SyncResult()
+    if int(getattr(scorer, "jobs_per_request", 1) or 1) > 1:
+        return _score_sync_packed(
+            conn, scorer, profile, limit=limit, now=now, remaining_usd=remaining_usd
+        )
     if remaining_usd is not None:
         affordable = math.floor(max(remaining_usd(), 0.0) / ESTIMATED_COST_PER_REQUEST_USD)
         if affordable < limit:
@@ -779,4 +793,295 @@ def score_sync(
                 out.written += 1
                 out.unverified += int(unverified)
         _record_spend(conn, key.model, now, calls, tokens_in, tokens_out, out.cost_usd)
+    return out
+
+
+# ─── Packed requests (specs/016 "Packed requests") ──────────────────────────
+
+MAX_JOBS_PER_REQUEST = 16
+CHARS_PER_TOKEN = 4  # rough input-size estimate for the pack cap
+
+
+def packed_instruction(ids: Sequence[str]) -> str:
+    return (
+        f"# Packed request: {len(ids)} job postings\n\n"
+        f"Below are {len(ids)} job postings, each between a BEGIN POSTING <id> line and an "
+        'END POSTING <id> line. Return one JSON object {"judgments": [...]} holding exactly '
+        "one judgment per posting, in any order. Each judgment is the usual screen output plus "
+        "a `custom_id` field set to that posting's <id>, copied exactly. Judge each posting "
+        "independently, using only that posting's own text: nothing from another posting may "
+        "inform a score, a flag or a quote, and every evidence quote must be copied verbatim "
+        "from the posting it is attached to. Do not merge, skip or repeat postings.\n"
+        f"Ids: {', '.join(ids)}\n"
+    )
+
+
+def packed_posting_text(items: Sequence[tuple[str, str]]) -> str:
+    """The single user message: an instruction, then each posting tagged with its custom_id."""
+    parts = [packed_instruction([cid for cid, _ in items])]
+    for cid, text in items:
+        parts.append(
+            f"\n===== BEGIN POSTING {cid} =====\n{text.rstrip()}\n===== END POSTING {cid} =====\n"
+        )
+    return "".join(parts)
+
+
+def pack_id(ids: Sequence[str]) -> str:
+    return "pack:" + "+".join(ids)
+
+
+def build_packed_request(
+    items: Sequence[tuple[str, str]],
+    profile: Profile,
+    *,
+    max_tokens: int = MAX_TOKENS,
+) -> ScoreRequest:
+    """One request for several postings. ``items`` is ``[(custom_id, posting_text), ...]``.
+
+    ``system`` and ``profile`` are exactly the single-mode text, so the cached prefix is the
+    same; only the user message and the response schema differ.
+    """
+    ids = [cid for cid, _ in items]
+    return ScoreRequest(
+        custom_id=pack_id(ids),
+        system=RUBRIC_TEXT,
+        profile=scoring_inputs(profile),
+        posting=packed_posting_text(items),
+        schema=packed_json_schema(len(items)),
+        max_tokens=max_tokens * len(items),
+    )
+
+
+def estimated_input_tokens(request: ScoreRequest) -> int:
+    return (len(request.system) + len(request.profile) + len(request.posting)) // CHARS_PER_TOKEN
+
+
+def pack_items(
+    texts: Sequence[tuple[str, str]],
+    profile: Profile,
+    *,
+    jobs_per_request: int,
+    max_input_tokens: int,
+) -> list[list[tuple[str, str]]]:
+    """Greedy FIFO packs of at most ``jobs_per_request`` postings whose estimated input
+    tokens stay under ``max_input_tokens``. A posting too big for any pack goes alone."""
+    jobs_per_request = max(1, min(jobs_per_request, MAX_JOBS_PER_REQUEST))
+    fixed = (len(RUBRIC_TEXT) + len(scoring_inputs(profile)) + 1500) // CHARS_PER_TOKEN
+    packs: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    used = fixed
+    for cid, text in texts:
+        cost = (len(text) + 100) // CHARS_PER_TOKEN
+        if current and (len(current) >= jobs_per_request or used + cost > max_input_tokens):
+            packs.append(current)
+            current, used = [], fixed
+        current.append((cid, text))
+        used += cost
+    if current:
+        packs.append(current)
+    return packs
+
+
+@dataclass
+class PackedParse:
+    screens: dict[str, Screen] = field(default_factory=dict)
+    problems: dict[str, str] = field(default_factory=dict)  # custom_id -> why it is not usable
+    unknown: list[str] = field(default_factory=list)  # ids in the reply we never sent
+
+
+def parse_packed(result: ScoreResult, ids: Sequence[str]) -> PackedParse:
+    """Map a packed reply's judgments to jobs by ``custom_id``; validate each independently.
+
+    A missing, duplicated or invalid item, or an id we did not send, leaves just that job
+    without a screen (it stays eligible); the other items are kept. A reply that is unusable
+    as a whole marks every id as a problem.
+    """
+    out = PackedParse()
+    wanted = list(ids)
+
+    def fail_all(why: str) -> PackedParse:
+        out.problems = {cid: why for cid in wanted}
+        return out
+
+    if result.stop_reason in ("max_tokens", "refusal"):
+        return fail_all(f"stop_reason {result.stop_reason}")
+    if result.text is None:
+        return fail_all("response has no text block")
+    try:
+        data = json.loads(result.text)
+        items = data["judgments"]
+        if not isinstance(items, list):
+            raise TypeError("judgments is not a list")
+    except (ValueError, KeyError, TypeError) as exc:
+        return fail_all(f"output is not a judgments object: {exc}")
+    counts: dict[str, int] = {}
+    for item in items:
+        cid = item.get("custom_id") if isinstance(item, dict) else None
+        if isinstance(cid, str):
+            counts[cid] = counts.get(cid, 0) + 1
+    valid: dict[str, Screen] = {}
+    for item in items:
+        cid = item.get("custom_id") if isinstance(item, dict) else None
+        if not isinstance(cid, str) or cid not in wanted:
+            out.unknown.append(str(cid))
+            continue
+        if counts[cid] > 1:
+            continue
+        body = {k: v for k, v in item.items() if k != "custom_id"}
+        try:
+            valid[cid] = Screen.model_validate(body)
+        except ValidationError as exc:
+            out.problems[cid] = f"output does not match Screen: {exc.error_count()} errors"
+    for cid in wanted:
+        if cid in valid:
+            out.screens[cid] = valid[cid]
+        elif cid not in out.problems:
+            dup = counts.get(cid, 0)
+            out.problems[cid] = f"duplicated in reply ({dup}x)" if dup > 1 else "missing from reply"
+    return out
+
+
+def estimated_request_cost(
+    conn: sqlite3.Connection, scorer: Any, now: datetime, n_jobs: int
+) -> float:
+    """Spend-cap estimate for one packed request.
+
+    A scorer with a configured ``est_cost_per_request_usd`` (OpenRouter: $0.04) uses the mean
+    cost per request measured in ``llm_spend`` (today, else all history), else that default.
+    Any other scorer keeps the batch-era ``ESTIMATED_COST_PER_REQUEST_USD`` per job.
+    """
+    default = float(getattr(scorer, "est_cost_per_request_usd", 0.0) or 0.0)
+    if default <= 0:
+        return ESTIMATED_COST_PER_REQUEST_USD * n_jobs
+    for day_clause, args in (("AND day = ?", (to_iso(now)[:10],)), ("", ())):
+        row = conn.execute(
+            "SELECT sum(cost_usd), sum(calls) FROM llm_spend "
+            f"WHERE model = ? AND tier = ? AND calls > 0 {day_clause}",
+            (scorer.name, TIER, *args),
+        ).fetchone()
+        if row[0] and row[1] and row[0] > 0:
+            return float(row[0]) / float(row[1])
+    return default
+
+
+def _share(usage: Any, n: int) -> Usage:
+    """One job's slice of a packed request's token counts."""
+    return Usage(
+        input_tokens=_usage_int(usage, "input_tokens") // n,
+        output_tokens=_usage_int(usage, "output_tokens") // n,
+        cache_creation_input_tokens=_usage_int(usage, "cache_creation_input_tokens") // n,
+        cache_read_input_tokens=_usage_int(usage, "cache_read_input_tokens") // n,
+    )
+
+
+def _score_sync_packed(
+    conn: sqlite3.Connection,
+    scorer: FitScorer,
+    profile: Profile,
+    *,
+    limit: int,
+    now: datetime,
+    remaining_usd: Callable[[], float] | None,
+) -> SyncResult:
+    """``score_sync`` with several jobs per request.
+
+    Eligible groups are ordered by group id (FIFO) and cut into packs. Packs go out in waves
+    of ``max_concurrency``; before each wave the spend cap must cover the estimated cost of
+    every request in it. Each request's total cost is split evenly over its jobs for the
+    ``fit_score`` rows; ``llm_spend`` gets the true total with one call per request.
+    """
+    out = SyncResult()
+    groups = sorted(
+        eligible_groups(conn, profile, scorer=scorer.name, limit=max(limit, 0)),
+        key=lambda g: g["group_id"],
+    )
+    if not groups:
+        return out
+    by_id = {f"g{g['group_id']}": g for g in groups}
+    texts = [(f"g{g['group_id']}", posting_text(_row(g), _summary_for(conn, g))) for g in groups]
+    packs = pack_items(
+        texts,
+        profile,
+        jobs_per_request=int(getattr(scorer, "jobs_per_request", 1)),
+        max_input_tokens=int(getattr(scorer, "max_input_tokens", 40_000)),
+    )
+    workers = max(1, int(getattr(getattr(scorer, "config", None), "max_concurrency", 1)))
+    key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
+    pos = 0
+    while pos < len(packs):
+        wave = packs[pos : pos + workers]
+        if remaining_usd is not None:
+            remaining = max(remaining_usd(), 0.0)
+            affordable = 0
+            for pack in wave:
+                est = estimated_request_cost(conn, scorer, now, len(pack))
+                if remaining < est:
+                    break
+                remaining -= est
+                affordable += 1
+            if affordable < len(wave):
+                logger.warning(
+                    "spend cap: screening stopped before %d packed requests",
+                    len(packs) - pos - affordable,
+                )
+                wave = wave[:affordable]
+            if not wave:
+                break
+        pos += len(wave)
+        requests = [build_packed_request(pack, profile) for pack in wave]
+        results = scorer.submit(requests)
+        if isinstance(results, str):
+            raise ValueError(f"scorer {scorer.name} batches; use submit_batch")
+        by_pack = {r.custom_id: r for r in results}
+        out.requests += len(wave)
+        with _txn(conn):
+            for pack, request in zip(wave, requests, strict=True):
+                ids = [cid for cid, _ in pack]
+                out.submitted += len(ids)
+                res = by_pack.get(request.custom_id)
+                if res is None or res.status != "succeeded":
+                    out.errored += len(ids)
+                    detail = res.detail if res else "no result"
+                    logger.warning("%s %s: %s", scorer.name, request.custom_id, detail)
+                    continue
+                cost = scorer.cost(res.usage, batch=False)
+                out.cost_usd += cost
+                parsed = parse_packed(res, ids)
+                for cid in parsed.unknown:
+                    logger.warning("%s %s: unknown id %r", scorer.name, request.custom_id, cid)
+                share = _share(res.usage, len(ids))
+                for cid in ids:
+                    g = by_id[cid]
+                    judged = parsed.screens.get(cid)
+                    if judged is None:
+                        out.invalid += 1
+                        logger.warning("%s %s: %s", scorer.name, cid, parsed.problems[cid])
+                        continue
+                    row_id, unverified = _write_fit_score(
+                        conn,
+                        g["group_id"],
+                        judged,
+                        _row(g),
+                        share,
+                        cost / len(ids),
+                        key,
+                        None,
+                        now,
+                        res.model,
+                        g["input_rev"],
+                    )
+                    if row_id is None:
+                        out.duplicate += 1
+                    else:
+                        out.written += 1
+                        out.unverified += int(unverified)
+                _record_spend(
+                    conn,
+                    key.model,
+                    now,
+                    1,
+                    _all_input_tokens(res.usage),
+                    _usage_int(res.usage, "output_tokens"),
+                    cost,
+                )
     return out

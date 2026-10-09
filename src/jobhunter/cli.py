@@ -146,6 +146,16 @@ def score(
             "openrouter:openai/gpt-oss-120b (for comparing scorers on the same jobs).",
         ),
     ] = None,
+    jobs_per_request: Annotated[
+        int | None,
+        typer.Option(
+            "--jobs-per-request",
+            min=1,
+            max=16,
+            help="Judge this many jobs per request (openai-compat, openrouter, local scorers; "
+            "overrides scoring.<provider>.jobs_per_request). specs/016 Packed requests.",
+        ),
+    ] = None,
 ) -> None:
     """Screen batches (specs/006 Stage 2) or the Opus deep pass (Stage 3)."""
     modes = [submit, collect is not None, collect_pending, deep is not None, deep_group is not None]
@@ -175,7 +185,15 @@ def score(
     if scorer_override is not None and not (submit or collect is not None):
         typer.echo("--scorer applies to --submit and --collect only", err=True)
         raise typer.Exit(2)
+    if jobs_per_request is not None and not submit:
+        typer.echo("--jobs-per-request applies to --submit only", err=True)
+        raise typer.Exit(2)
     scorer = scorer_override or settings.scoring.screen_scorer
+    if jobs_per_request is not None and scorer.startswith("anthropic:"):
+        typer.echo(
+            "--jobs-per-request needs an openai-compat, openrouter or local scorer", err=True
+        )
+        raise typer.Exit(2)
     screening = submit or collect is not None
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
         typer.echo(notice, err=True)
@@ -215,9 +233,12 @@ def score(
                     break
         elif submit and client is None:
             try:
+                sync_scorer = scorer_from_string(scorer, scoring=settings.scoring)
+                if jobs_per_request is not None:
+                    sync_scorer.jobs_per_request = jobs_per_request  # type: ignore[attr-defined]
                 sync = screen.score_sync(
                     conn,
-                    scorer_from_string(scorer, scoring=settings.scoring),
+                    sync_scorer,
                     profile,
                     limit=limit,
                     now=now,
@@ -828,6 +849,15 @@ def llm_bench(
     night_hours: Annotated[
         float, typer.Option(help="Hours available overnight, for the jobs-per-night projection.")
     ] = 8.0,
+    jobs_per_request: Annotated[
+        int | None,
+        typer.Option(
+            "--jobs-per-request",
+            min=1,
+            max=16,
+            help="Pack this many jobs per request; reports seconds and cost per job too.",
+        ),
+    ] = None,
 ) -> None:
     """Time a scorer on N ingested jobs. Writes no fit_score rows (specs/016)."""
     from jobhunter.config import load_settings
@@ -849,7 +879,14 @@ def llm_bench(
     conn = db.connect(settings.paths.db_path)
     db.migrate(conn)
     try:
-        report = run_bench(conn, scorer, profile, n=n, night_hours=night_hours)
+        report = run_bench(
+            conn,
+            scorer,
+            profile,
+            n=n,
+            night_hours=night_hours,
+            jobs_per_request=jobs_per_request,
+        )
     finally:
         conn.close()
     if report.attempted == 0:
