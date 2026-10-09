@@ -18,8 +18,9 @@ from jobhunter.console.inbox import _json, _strs, salary_text, set_label
 from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline.applylink import get_apply_link
 from jobhunter.pipeline.ats_rules import host_of
-from jobhunter.pipeline.dedupe import group_members
+from jobhunter.pipeline.dedupe import _refresh_group, group_members
 from jobhunter.pipeline.locations import load_locations, location_summary
+from jobhunter.pipeline.normalize import normalize_job
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile
 
@@ -260,6 +261,7 @@ class Detail:
     text: Highlighted = field(default_factory=Highlighted)
     siblings: list[dict[str, Any]] = field(default_factory=list)
     partial: bool = False
+    pasted: bool = False
     button: ApplyButton | None = None
     prompt: bool = False
 
@@ -320,6 +322,7 @@ def load_detail(
         salary_stated=bool(job["salary_stated"]),
         source_name=job["source_name"],
         partial=job["description_completeness"] == "partial",
+        pasted=job["description_completeness"] == "pasted",
     )
     fit = conn.execute(_FIT_SQL, (group_id,)).fetchone()
     evidence: Any = []
@@ -349,7 +352,6 @@ def load_detail(
         d.evidence_unverified = bool(fit["evidence_unverified"])
         evidence = fit["evidence"]
     d.text = highlight(job["description_text"], evidence)
-    # TODO(Pass 2): partial-description banner with a "paste description" textarea.
     sources = {r["key"]: r["name"] for r in conn.execute("SELECT key, name FROM source")}
     for m in group_members(conn, group_id):
         if m["id"] == job["id"]:
@@ -402,6 +404,52 @@ def log_click(
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+
+
+MAX_PASTE_CHARS = 100_000
+
+
+def pasted_html(text: str) -> str:
+    """Plain pasted text as escaped HTML paragraphs, so normalize keeps its structure."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text.replace("\r\n", "\n")) if p.strip()]
+    return "".join(
+        "<p>" + "<br>".join(str(escape(line)) for line in p.splitlines()) + "</p>" for p in paras
+    )
+
+
+def paste_description(conn: sqlite3.Connection, group_id: int, text: str, now: datetime) -> int:
+    """Store a pasted description on the group's canonical job and queue a re-score.
+
+    Sets ``description_completeness = 'pasted'`` (lifting the partial cap), re-normalizes the
+    job, and bumps ``job_group.description_rev`` so the screen stage scores the group again.
+    Earlier scores are kept; the newest one is shown (specs/012 "Your click finishes the job").
+    Returns the job id.
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("empty description")
+    job = group_job(conn, group_id)
+    if job is None:
+        raise KeyError(f"no such job group: {group_id}")
+    html = pasted_html(text[:MAX_PASTE_CHARS])
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "UPDATE job SET description_raw = ?, description_completeness = 'pasted', "
+            "needs_resolve = 0, last_seen_at = ? WHERE id = ?",
+            (html, _iso(now), job["id"]),
+        )
+        normalize_job(conn, job["id"])
+        conn.execute(
+            "UPDATE job_group SET description_rev = description_rev + 1 WHERE id = ?",
+            (group_id,),
+        )
+        _refresh_group(conn, group_id)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return job["id"]
 
 
 def answer_prompt(conn: sqlite3.Connection, group_id: int, choice: str, now: datetime) -> None:

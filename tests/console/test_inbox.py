@@ -254,7 +254,7 @@ def test_inbox_page_markup(client):
     t = r.text
     assert "A &middot; BULLSEYE" in t and "apply, minimal tailoring" in t
     assert "Bullseye" in t and "&#9873; on_call_heavy" in t
-    assert "salary not stated" in t and "partial description" in t
+    assert "salary not stated" in t and "partial: open to confirm" in t
     assert "unverified evidence" in t
     assert "recent-skills 90" in t
     assert "2 jobs matched on skills you last used 7+ years ago" in t
