@@ -432,15 +432,20 @@ def load_profile_for(settings: Settings) -> Profile:
     return load_profile(profile_dir, resolve_path(settings.paths.resume_path))
 
 
-def load_profile(profile_dir: Path, resume_path: Path | None = None) -> Profile:
+def load_profile(
+    profile_dir: Path, resume_path: Path | None = None, *, require_resume: bool = True
+) -> Profile:
     """Load ``preferences.yaml`` from ``profile_dir`` and the resume text.
 
     The resume is ``resume_path`` if given, else the YAML's ``resume_path`` (relative to
     ``profile_dir``). A directory means the single ``.md`` file inside it.
     Unknown top-level keys are ignored and recorded in ``Profile.load_warnings``.
+    With ``require_resume=False`` a missing resume is not an error (``resume_text`` is empty).
     """
     profile_dir = Path(profile_dir).expanduser()
-    return _load_file(profile_dir, profile_dir / PREFERENCES_FILE, resume_path)
+    return _load_file(
+        profile_dir, profile_dir / PREFERENCES_FILE, resume_path, require_resume=require_resume
+    )
 
 
 def _load_file(

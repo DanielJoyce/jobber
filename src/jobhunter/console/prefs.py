@@ -29,6 +29,7 @@ from jobhunter.scoring import buckets as bk
 from jobhunter.scoring.prefilter import _CREDENTIAL_PATTERNS, evaluate
 from jobhunter.scoring.profile import (
     Profile,
+    ProfileError,
     ProfileQuery,
     ProfileValidationError,
     load_profile,
@@ -471,8 +472,17 @@ def revert_change(
     path = row["field_path"]
     if path == RESUME_PATH:
         raise ValueError("resume edits are reverted by editing the resume file")
-    profile = load_profile(profile_dir)
-    detect_file_edits(conn, profile, now)
+    try:
+        profile = load_profile(profile_dir)
+    except ProfileError:
+        # The resume is missing or unreadable. Non-resume fields can still be reverted, as
+        # the /prefs page allows, so load the same lenient way. Hand edits are only logged
+        # when the full profile loads, as on the page.
+        profile = load_profile(profile_dir, require_resume=False)
+        require_resume = False
+    else:
+        detect_file_edits(conn, profile, now)
+        require_resume = True
     old_value = json.loads(row["old_value"]) if row["old_value"] is not None else None
     current = get_path(profile_data(profile), path)
     if current == old_value:
@@ -484,6 +494,7 @@ def revert_change(
         expected_mtime_ns=preferences_mtime_ns(profile_dir),
         source="revert",
         now=now,
+        require_resume=require_resume,
     )
 
 
