@@ -58,6 +58,29 @@ class OpenAICompat(BaseModel):
     json_schema: bool = True  # try response_format json_schema first
 
 
+class OpenRouter(BaseModel):
+    """``screen_scorer = "openrouter:<model-slug>"``: the openai-compat scorer preset (specs/016).
+
+    The resume goes in every request, so providers that retain prompts are excluded by default
+    (``provider.data_collection = "deny"``) and structured output is enforced
+    (``require_parameters``). Cost comes from the response when OpenRouter reports it, else from
+    the public model catalog cached at ``catalog_cache`` (refreshed at most daily).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str = "https://openrouter.ai/api/v1"
+    api_key_env: str = "OPENROUTER_API_KEY"
+    title: str = "jobhunter"  # X-Title
+    referer: str = ""  # HTTP-Referer; omitted when empty
+    provider: dict[str, Any] = Field(
+        default_factory=lambda: {"require_parameters": True, "data_collection": "deny"}
+    )
+    max_concurrency: int = Field(default=2, ge=1)
+    json_schema: bool = True
+    catalog_cache: Path = Path("data/openrouter_models.json")
+
+
 class Scoring(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -67,6 +90,7 @@ class Scoring(BaseModel):
     weekly_cap_usd: float = 10.0
     deep_shortlist: int = 40
     openai_compat: OpenAICompat = Field(default_factory=OpenAICompat)
+    openrouter: OpenRouter = Field(default_factory=OpenRouter)
 
 
 class Mail(BaseModel):

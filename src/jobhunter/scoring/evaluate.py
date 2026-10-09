@@ -39,6 +39,9 @@ DIMENSIONS = (
 _AB = (Bucket.A, Bucket.B)
 
 
+UNRECORDED = "(unrecorded)"
+
+
 @dataclass
 class Item:
     group_id: int
@@ -50,6 +53,7 @@ class Item:
     claim: str | None
     cost_usd: float | None
     d_fallback: bool
+    served_model: str | None = None
 
 
 @dataclass
@@ -78,6 +82,7 @@ class EvalReport:
     d_fallback: dict[str, int]
     profile_changes: list[dict[str, Any]]
     cost_per_1000: float | None = None
+    served_models: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -228,6 +233,7 @@ def _build_items(
                 claim=claim,
                 cost_usd=row["cost_usd"],
                 d_fallback=_is_d_fallback(fit, dims, th),
+                served_model=row["served_model"],
             )
         )
     return items
@@ -325,6 +331,15 @@ def _profile_changes(conn: sqlite3.Connection, stamps: Sequence[str]) -> list[di
     return [dict(r) for r in rows]
 
 
+def _served_mix(items: Sequence[Item]) -> dict[str, int]:
+    """Count of scored items per model that actually served them (routers vary by request)."""
+    mix: dict[str, int] = {}
+    for i in items:
+        name = i.served_model or UNRECORDED
+        mix[name] = mix.get(name, 0) + 1
+    return dict(sorted(mix.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
 def _summarize(
     conn: sqlite3.Connection,
     items: Sequence[Item],
@@ -409,6 +424,7 @@ def _summarize(
         },
         profile_changes=_profile_changes(conn, [labels[i.group_id][1] for i in items]),
         cost_per_1000=round(sum(costs) / len(costs) * 1000, 4) if costs else None,
+        served_models=_served_mix(items),
         notes=notes,
     )
 
@@ -523,7 +539,8 @@ def format_report(r: EvalReport) -> str:
             ],
         ],
     )
-    out += ["", "Metrics"]
+    mix = ", ".join(f"{m} x{n}" for m, n in r.served_models.items())
+    out += ["", f"Served models: {mix or '-'}", "", "Metrics"]
     out += _table(["metric", "value"], [[k, _pct(val)] for k, val in r.metrics.items()])
     d = r.distribution
     out += [
@@ -612,6 +629,10 @@ def format_compare(c: CompareReport) -> str:
     )
     out += _table(["metric", *cols], rows)
     changes = c.variants[0].profile_changes
+    out += ["", "Served models (count per variant)"]
+    for col, r in zip(cols, c.variants, strict=True):
+        mix = ", ".join(f"{m} x{n}" for m, n in r.served_models.items()) or "-"
+        out.append(f"  {col}: {mix}")
     out += ["", f"Profile changes in label window: {len(changes)}"]
     for ch in changes:
         out.append(f"  {ch['at']}  {ch['field_path']}  ({ch['source']})")

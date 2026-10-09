@@ -230,6 +230,7 @@ def _write_fit_score(
     key: _Key,
     batch_id: str | None,
     now: datetime,
+    served_model: str = "",
 ) -> tuple[int | None, bool]:
     """Insert one fit_score row; returns (row id or None if it already existed, unverified)."""
     checks = evidence_checks(screen, _posting_haystack(job))
@@ -254,8 +255,8 @@ def _write_fit_score(
         "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
         "verdict, overall, dimensions, evidence, blockers, missing_info, tailoring_hints, "
         "shape_flags, evidence_unverified, input_tokens, output_tokens, cache_read_tokens, "
-        "cost_usd, batch_id, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "cost_usd, batch_id, created_at, served_model) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (job_group_id, tier, prompt_version, scoring_version, model) DO NOTHING",
         (
             group_id,
@@ -277,6 +278,7 @@ def _write_fit_score(
             cost,
             batch_id,
             to_iso(now),
+            served_model or None,
         ),
     )
     if cur.rowcount == 0:
@@ -556,7 +558,7 @@ def collect_batch(
                 outcomes[custom_id] = "invalid"
                 continue
             row_id, unverified = _write_fit_score(
-                conn, group_id, screen, _row(job), usage, cost, key, batch_id, now
+                conn, group_id, screen, _row(job), usage, cost, key, batch_id, now, entry.model
             )
             outcomes[custom_id] = "succeeded"
             if row_id is None:
@@ -628,7 +630,9 @@ def score_with(
     scorer_name = scorer.name
     key = _Key(scorer_name, PROMPT_VERSION, profile.scoring_version)
     with _txn(conn):
-        row_id, _ = _write_fit_score(conn, group_id, screen, _row(job), usage, cost, key, None, now)
+        row_id, _ = _write_fit_score(
+            conn, group_id, screen, _row(job), usage, cost, key, None, now, result.model
+        )
         _record_spend(
             conn,
             scorer_name,
@@ -709,7 +713,7 @@ def score_sync(
                 out.invalid += 1
                 continue
             row_id, unverified = _write_fit_score(
-                conn, g["group_id"], screen, _row(g), res.usage, cost, key, None, now
+                conn, g["group_id"], screen, _row(g), res.usage, cost, key, None, now, res.model
             )
             if row_id is None:
                 out.duplicate += 1
