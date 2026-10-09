@@ -82,6 +82,8 @@ def test_family_is_registered_and_row_is_enabled():
     src = registry_row(KEY)
     assert src.family == "htmlconfig"
     assert src.policy.value == "enabled"
+    # The WebForms search takes ~11 s live (2026-10-09); the 20 s global default timed out.
+    assert src.timeout_s == 60
 
 
 def test_search_posts_the_form_with_hidden_state_and_query(conn, tmp_path):
