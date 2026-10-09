@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='pages.css') }}">
+<div class="pg">
+  <h1>Search</h1>
+  <form class="pg-form" method="get" action="/search" role="search">
+    <label>Query (title, employer, description)<input type="search" name="q" value="{{ q }}" autofocus></label>
+    <label>State<input name="state" value="{{ state }}" size="3" maxlength="2"></label>
+    <label>Source class
+      <select name="source_class"><option value="">any</option>
+      {% for c, n in (("A", "A state"), ("B", "B employer"), ("C", "C federal")) %}<option value="{{ c }}"{% if source_class == c %} selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select></label>
+    <label>Bucket from
+      <select name="bucket_from"><option value="">-</option>{% for b in buckets %}<option{% if bucket_from == b %} selected{% endif %}>{{ b }}</option>{% endfor %}</select></label>
+    <label>Bucket to
+      <select name="bucket_to"><option value="">-</option>{% for b in buckets %}<option{% if bucket_to == b %} selected{% endif %}>{{ b }}</option>{% endfor %}</select></label>
+    <label>Salary floor (annual)<input name="salary_floor" value="{{ salary_floor }}" size="8" inputmode="numeric"></label>
+    <label>Posted after<input type="date" name="posted_after" value="{{ posted_after }}"></label>
+    <button type="submit">Search</button>
+  </form>
+
+  {% if result.error %}
+  <div class="callout" role="alert">{{ result.error }} Try plain words, for example <code>network engineer</code>.</div>
+  {% elif result.searched %}
+  <p class="muted">{{ result.hits | length }} result{{ "" if result.hits | length == 1 else "s" }}, best match first. Dismissed jobs are included.{% if result.capped %} Only the first 200 matches were examined.{% endif %}</p>
+  <div class="table-wrap">
+  <table class="pg-table" id="search-results">
+    <thead><tr><th>Title</th><th>Employer</th><th>Location</th><th>Salary</th><th>Posted</th><th>Bucket</th><th>Source</th></tr></thead>
+    <tbody>
+    {% for h in result.hits %}
+    <tr>
+      <td>{% if h.group_id %}<a href="/job/{{ h.group_id }}">{{ h.title }}</a>{% else %}{{ h.title }}{% endif %}
+        {% if h.dismissed %}<span class="tag">dismissed</span>{% endif %}</td>
+      <td>{{ h.employer }}</td><td>{{ h.location }}</td><td>{{ h.salary }}</td>
+      <td>{{ h.posted or "-" }}</td><td>{{ h.bucket or "unscored" }}</td><td>{{ h.source_name }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Searches every job ever ingested, including dismissed ones.</p>
+  {% endif %}
+</div>
+{% endblock %}

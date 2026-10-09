@@ -18,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.config import Settings
 from jobhunter.console import dashboard as dash
-from jobhunter.console import detail_routes, inbox_routes, tracking_routes
+from jobhunter.console import detail_routes, inbox_routes, pages_routes, tracking_routes
 from jobhunter.core import db, geo
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile
 
@@ -150,11 +150,9 @@ def create_app(
 
         app.add_api_route(path, handler, methods=["GET"], response_class=HTMLResponse)
 
-    for path, _, title in PAGES:
-        if path not in ("/", "/inbox", "/pipeline", "/followups"):
-            add_page(path, title)
     inbox_routes.register(app, templates, get_conn, NAV)
     tracking_routes.register(app, templates, get_conn, NAV, now)
+    pages_routes.register(app, templates, get_conn, NAV, now)
 
     def table_context(
         conn: sqlite3.Connection, range_: int, metric: str, sort: str | None, dir_: str | None
@@ -238,5 +236,13 @@ def create_app(
         return templates.TemplateResponse(request, "_state_table.html", ctx)
 
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
+
+    # Placeholders last, only for nav pages no module has claimed yet. New pages need no
+    # edit here (this list used to conflict on every parallel console branch).
+    claimed = {getattr(r, "path", None) for r in app.routes}
+    app.state.placeholder_paths = [p for p, _, _ in PAGES if p not in claimed]
+    for path, _, title in PAGES:
+        if path not in claimed:
+            add_page(path, title)
 
     return app
