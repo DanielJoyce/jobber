@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791575453,"nonce":"2Sylk5Vd6UWhlPaquJttRRzkiKI=","message":"Landed in PR #4 (5531a58). Migration runner, full schema from specs 005/011/012/014/015, FTS5 with sync triggers, CHECK constraints, NULL-safe job_locations uniqueness.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791575453,"nonce":"IJjJHhdKGNPvDa94e+B9U3rQeGQ=","status":2}]}
