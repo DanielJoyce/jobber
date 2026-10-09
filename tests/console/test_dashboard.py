@@ -21,6 +21,7 @@ PROFILE = Profile()
 DIMS_A = {"skills": 95, "seniority": 95, "domain": 95}
 DIMS_B = {"skills": 70, "seniority": 70, "domain": 70}
 DIMS_G = {"skills": 20, "seniority": 50, "domain": 50}
+DIMS_D = {"skills": 40, "seniority": 10, "domain": 80}  # bucket D (lateral)
 
 
 def ts(day: str) -> str:
@@ -427,3 +428,67 @@ def test_state_table_coverage_icon_and_text(client):
     assert "collected directly" in html
     assert "co-src board" in html
     assert "n=1" in html  # WA: too few applications to rate
+
+
+# ─── NLx coverage (010 "NLx coverage") ─────────────────────────────────────
+
+
+def test_coverage_via_nlx_when_national_source_ok(conn):
+    add_source(conn, "us-nlx", None, family="nlx", last_ok=ts("2026-10-09"))
+    s = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW))
+    assert s["TX"]["coverage"] == "direct" and s["TX"]["via_nlx"] is True
+    assert s["TX"]["coverage_label"] == "collected directly via NLx"
+    assert "National Labor Exchange (NLx)" in s["TX"]["sources"]
+    assert s["MT"]["coverage"] == "direct" and s["MT"]["via_nlx"] is True  # no board at all
+    assert s["CO"]["via_nlx"] is False and s["CO"]["coverage_label"] == "collected directly"
+    assert s["WA"]["coverage"] == "serious"  # a state's own fault still shows
+    assert s["NY"]["coverage"] == "critical"
+
+
+def test_coverage_nlx_not_ok_changes_nothing(conn):
+    add_source(conn, "us-nlx", None, family="nlx", status="broken")
+    s = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW))
+    assert s["TX"]["coverage"] == "email" and s["TX"]["via_nlx"] is False
+    assert s["MT"]["coverage"] == "none"
+
+
+def test_state_table_says_via_nlx(tmp_path):
+    path = tmp_path / "n.db"
+    c = db.connect(path)
+    db.migrate(c)
+    seed(c)
+    add_source(c, "us-nlx", None, family="nlx", last_ok=ts("2026-10-09"))
+    c.commit()
+    c.close()
+    app = create_app(Settings(), lambda: db.connect(path), lambda: PROFILE, lambda: NOW)
+    html = TestClient(app).get("/dash/state-table").text
+    assert "collected directly via NLx" in html
+
+
+# ─── tokens ────────────────────────────────────────────────────────────────
+
+
+def _luminance(hex_color: str) -> float:
+    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_dark_sequential_ramp_tokens(client):
+    css = client.get("/static/app.css").text
+    start = css.index("@media (prefers-color-scheme: dark)")
+    forced_at = css.index(':root[data-theme="dark"]')
+    scopes = (css[start:forced_at], css[forced_at : css.index("* { box-sizing")])
+    for scope in scopes:
+        ramp = dict(re.findall(r"--seq-(\d+): (#[0-9a-f]{6});", scope))
+        assert {"100", "350", "700"} <= set(ramp)
+        surface = "#1a1a19"
+        assert _contrast(ramp["100"], surface) >= 1.5
+        lum = [_luminance(ramp[k]) for k in sorted(ramp, key=int)]
+        assert lum == sorted(lum)  # dark ramp climbs: low recedes, high is brightest
+        assert _contrast(ramp["700"], surface) > 8

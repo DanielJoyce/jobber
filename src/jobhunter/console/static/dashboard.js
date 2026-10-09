@@ -67,9 +67,35 @@
     return token(stepFor(cls, data.breaks.length));
   }
 
+  // WCAG relative luminance and contrast, so label ink works on every fill in both themes.
+  function luminance(color) {
+    var c = d3.rgb(color);
+    function ch(v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+    return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
+  }
+
+  function contrast(a, b) {
+    var la = luminance(a), lb = luminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  // --text-primary, or its inverse (the opposite extreme), whichever reads better on the fill.
   function inkOn(fill) {
-    var c = d3.hsl(fill);
-    return c && c.l > 0.55 ? "#0b0b0b" : "#ffffff";
+    var primary = token("--text-primary");
+    var inverse = luminance(primary) > 0.5 ? "#0b0b0b" : "#ffffff";
+    return contrast(primary, fill) >= contrast(inverse, fill) ? primary : inverse;
+  }
+
+  var STATUS_INK = {
+    direct: "--status-good", email: "--text-secondary", email_stale: "--status-warning",
+    serious: "--status-serious", critical: "--status-critical", none: "--text-muted"
+  };
+
+  // The semantic status color when it holds 3:1 on the fill, else the label ink. The icon
+  // shape and the tooltip/table text carry the meaning either way.
+  function statusInk(coverage, fill, ink) {
+    var c = token(STATUS_INK[coverage] || "--text-muted");
+    return contrast(c, fill) >= 3 ? c : ink;
   }
 
   // ─── geometry ──────────────────────────────────────────────────────────────
@@ -136,9 +162,10 @@
     return node;
   }
 
-  function text(parent, x, y, str, cls, fill) {
+  function text(parent, x, y, str, cls, fill, halo) {
     var t = el("text", { x: x, y: y, "class": cls, "text-anchor": "middle" }, parent);
     if (fill) t.setAttribute("fill", fill);
+    if (halo) t.setAttribute("stroke", halo);
     t.textContent = str;
     return t;
   }
@@ -149,8 +176,8 @@
 
   function ariaLabel(row) {
     if (!row) return "";
-    var cov = COVERAGE[row.coverage] || COVERAGE.none;
-    return row.name + ": " + data.label + " " + fmt(row.value, data.kind) + ", " + cov[1] +
+    return row.name + ": " + data.label + " " + fmt(row.value, data.kind) + ", " +
+      (row.coverage_label || (COVERAGE[row.coverage] || COVERAGE.none)[1]) +
       (row.applications ? ", " + row.applications + " applications" : "");
   }
 
@@ -194,16 +221,17 @@
       if (!c.label || !row) return;
       var ink = inkOn(fill);
       var cov = COVERAGE[row.coverage] || COVERAGE.none;
+      var sink = statusInk(row.coverage, fill, ink);
       if (c.remote) {
         text(gLabels, c.lx, c.ly - 6, "Remote (US)", "lbl", ink);
         text(gLabels, c.lx, c.ly + 18, fmt(row.value, data.kind), "lbl-value", ink);
-        text(gLabels, c.lx, c.ly + 40, cov[0], "status cov-" + row.coverage);
+        text(gLabels, c.lx, c.ly + 40, cov[0], "status", sink, fill);
       } else if (c.callout) {
         text(gLabels, c.lx, c.ly + 5, c.usps, "lbl", ink);
-        text(gLabels, c.x + 58, c.ly + 5, cov[0], "status cov-" + row.coverage);
+        text(gLabels, c.x + 58, c.ly + 5, cov[0], "status", sink, fill);
       } else {
         text(gLabels, c.lx, c.ly, c.usps, "lbl", ink);
-        text(gLabels, c.lx, c.ly + 15, cov[0], "status cov-" + row.coverage);
+        text(gLabels, c.lx, c.ly + 15, cov[0], "status", sink, fill);
       }
       if (showBadge && row.applications > 0) {
         var bx = c.callout ? c.x + c.w - 14 : c.remote ? c.x + c.w - 14 : c.lx + 15;
@@ -296,21 +324,23 @@
       ? (row.applied ? "n = " + row.applied + ", too few to rate" : "no applications")
       : fmt(row.response_rate, "rate") + " (" + row.responses + "/" + row.applied + ")";
     var cov = COVERAGE[row.coverage] || COVERAGE.none;
-    return [
-      [data.label, fmt(row.value, data.kind)],
-      ["New A+B", row.new_ab],
-      ["Scored", row.scored],
-      ["Shortlisted", row.shortlisted],
-      ["Applied", row.applied],
-      ["Responses", row.responses],
-      ["Response rate", rr],
-      ["Median salary", fmt(row.median_salary, "money")],
-      ["COL-adjusted", fmt(row.col_adjusted, "money")],
-      ["Coverage", cov[0] + " " + cov[1]],
+    var lines = [
+      ["new_ab", "New A+B", row.new_ab],
+      ["scored", "Scored", row.scored],
+      ["shortlisted", "Shortlisted", row.shortlisted],
+      ["applied", "Applied", row.applied],
+      ["responses", "Responses", row.responses],
+      ["response_rate", "Response rate", rr],
+      ["median_salary", "Median salary", fmt(row.median_salary, "money")],
+      ["col_adjusted", "COL-adjusted", fmt(row.col_adjusted, "money")]
+    ].filter(function (l) { return l[0] !== data.metric; })  // the metric leads the list
+      .map(function (l) { return [l[1], l[2]]; });
+    return [[data.label, fmt(row.value, data.kind)]].concat(lines, [
+      ["Coverage", cov[0] + " " + (row.coverage_label || cov[1])],
       ["Sources", row.sources.length ? row.sources.join(", ") : "none"],
       ["Last collected", row.last_ok_at ? row.last_ok_at.slice(0, 10) : "never"],
       ["Applications", row.applications]
-    ];
+    ]);
   }
 
   function showTip(usps, x, y) {

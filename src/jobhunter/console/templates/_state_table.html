@@ -36,7 +36,7 @@
   <tbody>
     {% for r in rows %}
     <tr data-state="{{ r.state }}">
-      <th scope="row"><a href="/inbox?state={{ r.state }}">{{ r.name }}</a> <span class="muted">{{ r.state if r.state != "REMOTE" else "" }}</span></th>
+      <th scope="row" title="{{ r.name }}"><a href="/inbox?state={{ r.state }}">{{ r.name }}</a> <span class="muted">{{ r.state if r.state != "REMOTE" else "" }}</span></th>
       <td class="num">{{ r.new_ab }}</td>
       <td class="num">{{ r.scored }}</td>
       <td class="num">{{ r.shortlisted }}</td>
@@ -45,10 +45,10 @@
       <td class="num">{% if r.response_rate is none and r.applied %}<span class="muted" title="n = {{ r.applied }}, too few to rate">n={{ r.applied }}</span>{% else %}{{ fmt(r.response_rate, "rate") }}{% endif %}</td>
       <td class="num">{{ fmt(r.median_salary, "money") }}</td>
       <td class="num">{{ fmt(r.col_adjusted, "money") }}</td>
-      <td><span class="cov cov-{{ r.coverage }}" aria-hidden="true">{{ r.coverage_icon }}</span> {{ r.coverage_label }}</td>
+      <td class="cov-cell" title="{{ r.coverage_label }}"><span class="cov cov-{{ r.coverage }}" aria-hidden="true">{{ r.coverage_icon }}</span> {{ r.coverage_label }}</td>
       <td class="num">{{ r.applications }}</td>
       <td>{{ r.last_ok_at[:10] if r.last_ok_at else "" }}</td>
-      <td class="sources">{{ r.sources | join(", ") }}</td>
+      <td class="sources" title="{{ r.sources | join(', ') }}">{{ r.sources | join(", ") }}</td>
     </tr>
     {% endfor %}
   </tbody>
