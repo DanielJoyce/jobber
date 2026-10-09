@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -636,9 +637,83 @@ def mail_match(
 
 
 @mail_app.command("sync")
-def mail_sync() -> None:
-    """Ingest job-alert emails."""
-    _stub()
+def mail_sync(
+    limit: Annotated[int, typer.Option(help="Most alert messages to read this run.")] = 200,
+) -> None:
+    """Ingest job-alert emails: list, resolve (robots permitting), normalize, dedupe."""
+    from jobhunter.config import load_settings
+    from jobhunter.mail import auth, sync
+    from jobhunter.sources.adapters.mailalerts import SOURCE_KEY, MailAlertsAdapter
+
+    settings = load_settings()
+    why = MailAlertsAdapter.unavailable(settings)
+    if why:
+        typer.echo(f"mail sync skipped: {why}")
+        return
+    rows = load_registry()
+    row = next((r for r in rows if r.key == SOURCE_KEY), None)
+    if row is None or row.policy.value != "enabled":
+        typer.echo(f"mail sync skipped: source {SOURCE_KEY} is not enabled in the registry")
+        return
+    adapter = MailAlertsAdapter(rows=rows, limit=limit)
+    db_path = resolve_path(settings.paths.db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = db.connect(db_path)
+    try:
+        db.migrate(conn)
+        report = runner.run_pipeline(
+            conn,
+            settings,
+            [row],
+            adapters={row.family: lambda: adapter},
+            profile_loader=lambda: None,
+            stages=["list", "resolve", "normalize", "dedupe"],
+        )
+    except (auth.MailAuthError, sync.MailSyncError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        conn.close()
+    st = adapter.stats
+    fams = ", ".join(f"{k} {v}" for k, v in sorted(st.families.items())) or "none"
+    typer.echo(
+        f"messages {st.messages} ({fams}); entries {st.entries}: "
+        f"{st.new} new, {st.sightings} sightings of jobs already held in full"
+    )
+    summary = runner.format_summary(report)
+    if summary:
+        typer.echo(summary)
+    raise typer.Exit(report.exit_code)
+
+
+@mail_app.command("sample")
+def mail_sample(
+    save: Annotated[Path, typer.Option("--save", help="Directory for the .eml copies.")],
+    n: Annotated[int, typer.Option("-n", "--count", help="How many messages.")] = 10,
+) -> None:
+    """Save the newest labelled alerts as scrubbed .eml files, to re-validate the parsers.
+
+    Your address (mail.alerts_address, the mailbox address, and every To/Cc address) is
+    replaced with a placeholder and routing headers are dropped. Review before committing.
+    """
+    from jobhunter.config import load_settings
+    from jobhunter.mail import auth, sync
+
+    settings = load_settings()
+    try:
+        service = auth.build_service(settings)
+        me = service.users().getProfile(userId="me").execute().get("emailAddress", "")
+        addresses = [a for a in (settings.mail.alerts_address, me) if a and "<" not in a]
+        saved = sync.save_samples(service, settings.mail.label, save, n, addresses)
+    except (auth.MailAuthError, sync.MailSyncError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    for path in saved:
+        typer.echo(f"saved {path}")
+    typer.echo(
+        f"{len(saved)} message(s) saved. Review them, then copy into "
+        "tests/fixtures/mail/<family>/ and add parser tests."
+    )
 
 
 @applylinks_app.command("unknown")

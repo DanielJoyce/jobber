@@ -964,3 +964,21 @@
   policy: "enabled"
   queries: "from_profile"
   expect: {min_jobs_per_week: 0}
+
+# Email job alerts (specs/012): reads the Gmail alerts label through the Gmail API, not a web
+# host. Each alert entry becomes a partial job; detail pages are fetched only where robots
+# allows (JobLink yes; VOS, PA, MA never). Skipped by the runner until `jobhunter mail auth`.
+- key: "us-mailalerts"
+  state: null
+  class: "A"
+  name: "Email job alerts"
+  family: "mailalerts"
+  tier: "feed"
+  entry: "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+  verified: "2026-10-09"
+  family_signals: ["Gmail label jobhunter/alerts (mail.label)"]
+  rate_limit: {rps: 0.2, concurrency: 1, jitter: true}
+  robots: {status: "n/a", checked: "2026-10-09", note: "Gmail API; emailed links robots-checked per host"}
+  policy: "enabled"
+  queries: [{}]
+  expect: {min_jobs_per_week: 0}

@@ -32,9 +32,9 @@ def rows():
 
 
 def test_packaged_registry_loads(rows):
-    # 54 state/territory job banks + national NLx (state null) + USAJOBS (class C).
-    assert len(rows) == 56
-    assert sum(r.class_ is SourceClass.A and r.state is None for r in rows) == 1
+    # 54 state/territory job banks + national NLx and email alerts (state null) + USAJOBS.
+    assert len(rows) == 57
+    assert sum(r.class_ is SourceClass.A and r.state is None for r in rows) == 2
     assert sum(r.class_ is SourceClass.C for r in rows) == 1
 
 
@@ -45,7 +45,7 @@ def test_keys_unique(rows):
 
 def test_enabled_sources_are_exactly_the_open_set(rows):
     enabled = {r.key for r in enabled_sources(rows)}
-    assert enabled == OPEN_SET_KEYS
+    assert enabled == OPEN_SET_KEYS | {"us-mailalerts"}  # email alerts read Gmail, not a site
 
 
 def test_no_vos_host_enabled(rows):
@@ -124,9 +124,9 @@ def test_loader_rejects_duplicate_keys(tmp_path):
 def test_sync_upserts_idempotently_and_keeps_run_status(rows):
     conn = connect(":memory:")
     migrate(conn)
-    assert sync_sources_table(conn, rows) == 56
-    assert sync_sources_table(conn, rows) == 56
-    assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 56
+    assert sync_sources_table(conn, rows) == 57
+    assert sync_sources_table(conn, rows) == 57
+    assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 57
 
     ny = conn.execute("SELECT policy, status, robots_checked FROM source WHERE key='ny-newyork'")
     row = ny.fetchone()
