@@ -11,7 +11,7 @@ import typer
 from jobhunter.config import load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
-from jobhunter.sources.registry import enabled_sources, load_registry
+from jobhunter.sources.registry import enabled_sources, load_registry, sync_sources_table
 
 app = typer.Typer(
     help="jobhunter: sweep job banks, score fit, track applications.", no_args_is_help=True
@@ -367,9 +367,43 @@ def sources_list(
 
 
 @sources_app.command("verify")
-def sources_verify() -> None:
-    """Verify source URLs and adapters."""
-    _stub()
+def sources_verify(
+    state: Annotated[
+        str | None, typer.Option(help="Comma list of state codes; US includes national rows.")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
+) -> None:
+    """Probe every registry entry and diff against recorded values (specs/003 breakage detection).
+
+    Meant to run weekly (a timer will schedule it). Fetches each entry URL and robots.txt through
+    FetchContext (robots and rate limits apply, so it is slow by design), checks family signals,
+    the robots.txt hash, and the shared JobLink bundle hash. Writes the source table's robots and
+    verified columns, never registry.yaml. Exits 1 when any source drifted, broke or was blocked.
+    """
+    from jobhunter.sources import verify as vf
+
+    settings = load_settings()
+    conn = db.connect(resolve_path(settings.paths.db_path))
+    db.migrate(conn)
+    rows = load_registry()
+    try:
+        sync_sources_table(conn, rows)
+        report = vf.verify_all(
+            conn,
+            rows,
+            now=datetime.now(UTC),
+            states=runner.parse_states(state),
+            settings=settings,
+            on_result=None if as_json else lambda r: typer.echo(vf.format_row(r)),
+        )
+    finally:
+        conn.close()
+    if as_json:
+        typer.echo(report.to_json())
+    else:
+        typer.echo(vf.format_summary(report))
+    if not report.clean:
+        raise typer.Exit(1)
 
 
 @mail_app.command("auth")
