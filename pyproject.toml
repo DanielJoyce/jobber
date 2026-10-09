@@ -42,6 +42,7 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py313"
 src = ["src", "tests"]
+extend-exclude = ["specs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

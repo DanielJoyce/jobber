@@ -56,7 +56,7 @@ Per source, call `adapter.list_jobs(...)`. Produces `JobStub`:
 ```python
 class JobStub(BaseModel):
     source_key: str
-    external_id: str  # the board's own ID. The natural key.
+    external_id: str          # the board's own ID. The natural key.
     title: str
     url: HttpUrl
     posted_at: datetime | None
@@ -64,7 +64,7 @@ class JobStub(BaseModel):
     location_raw: str | None = None
     salary_raw: str | None = None
     agency_raw: str | None = None
-    description_raw: str | None = None  # rarely populated at list time
+    description_raw: str | None = None   # rarely populated at list time
     needs_resolve: bool = True
 ```
 

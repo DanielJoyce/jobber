@@ -127,23 +127,23 @@ class Dimension(BaseModel):
     score: int = Field(ge=0, le=100)
     why: str = Field(max_length=300)
 
-
 class Evidence(BaseModel):
     claim: str
-    quote: str  # MUST be verbatim from the posting — validated, see below
-
+    quote: str          # MUST be verbatim from the posting — validated, see below
 
 class Screen(BaseModel):
     verdict: Literal["strong", "possible", "weak", "mismatch"]
     overall: int = Field(ge=0, le=100)
-    dimensions: dict[Literal["skills", "seniority", "domain"], Dimension]
+    dimensions: dict[
+        Literal["skills", "seniority", "domain"], Dimension
+    ]
     # comp and location are NOT model output. They are computed in Python from
     # parsed salary and job_locations against the current filter settings, so
     # editing a salary floor or state ranking never requires re-scoring.
     evidence: list[Evidence] = Field(min_length=1, max_length=6)
-    blockers: list[str]  # stated requirements you do not meet
-    missing_info: list[str]  # what the posting failed to say
-    shape_flags: list[str]  # matches against narrative.avoid, e.g. "on_call_heavy"
+    blockers: list[str]        # stated requirements you do not meet
+    missing_info: list[str]    # what the posting failed to say
+    shape_flags: list[str]     # matches against narrative.avoid, e.g. "on_call_heavy"
     tailoring_hints: list[str]
 ```
 
@@ -282,11 +282,11 @@ the full description can, and it feeds both bucket F and a `stale_match` shape f
 Added to the Stage 2 schema:
 
 ```python
-raw_skills: int  # keyword-equivalent match, any era
-recency_weighted_skills: int  # recency-weighted — the one that drives buckets
-stale_skills: list[str]  # matched only on experience > 7 years old
-current_focus_overlap: int  # 0-100 against current_focus.doing
-done_with_hits: list[str]  # matched against done_with
+raw_skills: int                      # keyword-equivalent match, any era
+recency_weighted_skills: int         # recency-weighted — the one that drives buckets
+stale_skills: list[str]              # matched only on experience > 7 years old
+current_focus_overlap: int           # 0-100 against current_focus.doing
+done_with_hits: list[str]            # matched against done_with
 ```
 
 `overall` uses `recency_weighted_skills`, never `raw_skills`. `raw_skills` is kept and displayed
@@ -319,8 +319,7 @@ Yes — the decision model is behind an interface, and swapping it changes one c
 
 ```python
 class FitScorer(Protocol):
-    name: str  # recorded in fit_score.model
-
+    name: str                      # recorded in fit_score.model
     def score_batch(self, items: list[ScoreRequest]) -> list[Screen]: ...
     def supports_batching(self) -> bool: ...
 ```
