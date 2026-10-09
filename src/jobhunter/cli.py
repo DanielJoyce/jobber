@@ -253,9 +253,59 @@ def console(
 
 
 @app.command(name="eval")
-def eval_() -> None:
-    """Measure scorer quality against hand labels."""
-    _stub()
+def eval_(
+    prompt_version: Annotated[
+        str | None, typer.Option("--prompt-version", help="Default: newest scored.")
+    ] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    tier: Annotated[str, typer.Option("--tier", help="screen or deep.")] = "screen",
+    compare: Annotated[
+        str | None,
+        typer.Option("--compare", help="Variants: prompt_version[@model], two or more."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
+    more: Annotated[list[str] | None, typer.Argument(hidden=True)] = None,
+) -> None:
+    """Measure scorer quality against hand labels (specs/006 Calibration).
+
+    `eval --compare A B [C...]` compares prompt_version[@model] variants on the same labels.
+    """
+    from jobhunter.scoring import evaluate as ev
+    from jobhunter.scoring.profile import ProfileError, load_profile
+
+    if tier not in ("screen", "deep"):
+        typer.echo("--tier must be screen or deep", err=True)
+        raise typer.Exit(2)
+    specs = [compare, *(more or [])] if compare is not None else []
+    if compare is not None and len(specs) < 2:
+        typer.echo("--compare needs at least two variants", err=True)
+        raise typer.Exit(2)
+    if compare is None and more:
+        typer.echo("unexpected arguments; use --compare A B", err=True)
+        raise typer.Exit(2)
+    settings = load_settings()
+    try:
+        profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
+    except ProfileError as exc:
+        typer.echo(f"profile error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    conn = db.connect(settings.paths.db_path)
+    db.migrate(conn)
+    try:
+        if compare is not None:
+            try:
+                keys = [ev.parse_variant(s) for s in specs]
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(2) from exc
+            result: ev.EvalReport | ev.CompareReport = ev.compare(conn, profile, keys, tier=tier)
+        else:
+            result = ev.evaluate(
+                conn, profile, prompt_version=prompt_version, model=model, tier=tier
+            )
+    finally:
+        conn.close()
+    typer.echo(result.to_json() if as_json else result.to_text())
 
 
 @sources_app.command("list")
