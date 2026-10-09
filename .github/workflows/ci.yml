@@ -17,6 +17,26 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pytest -q
 
+  e2e:
+    # Browser tests for the console (keyboard + HTMX flows). Excluded from the default
+    # pytest run by the e2e marker.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -m e2e -q
+      - name: Upload screenshots and traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: tests/e2e/artifacts/
+          if-no-files-found: ignore
+
   secrets:
     # Full-history secret and personal-data scan with the same config as the
     # pre-commit hook. Catches anything committed with --no-verify.
