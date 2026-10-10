@@ -111,3 +111,41 @@ def test_sanity_bounds_reject():
 
 def test_ambiguous_no_period_small_number_rejected():
     assert ex("Pay range $40 - $60") is None
+
+
+# Shapes still missed after the first backfill on real postings.
+@pytest.mark.parametrize(
+    ("text", "lo", "hi", "period"),
+    [
+        (
+            "Pay Range Minimum: $129,100.00 Pay Range Maximum: $214,500.00 Base pay is",
+            129100,
+            214500,
+            "year",
+        ),
+        (
+            "Anticipated salary range: $94,900 - $135,600 Bonus eligible: No Benefits",
+            94900,
+            135600,
+            "year",
+        ),
+        (
+            "certifications, etc. $156,600 - $215,400 per year This job is eligible for a bonus",
+            156600,
+            215400,
+            "year",
+        ),
+        ("Compensation $193,461.00 / Yearly Hours Per Week 40", 193461, 193461, "year"),
+        ("Compensation $7.25 / hourly Hours Per Week 40", 7.25, 7.25, "hour"),
+    ],
+)
+def test_second_pass_positives(text, lo, hi, period):
+    got = ex(text)
+    assert got is not None and (got.min, got.max, got.period) == (lo, hi, period)
+
+
+@pytest.mark.parametrize(
+    "text", ["Earn a $5,000 sign-on bonus", "a salary range and a $5,000 bonus"]
+)
+def test_bonus_still_rejected(text):
+    assert ex(text) is None

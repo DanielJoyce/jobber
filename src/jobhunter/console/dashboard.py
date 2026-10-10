@@ -799,7 +799,7 @@ _OUTCOME_NODE = {
 # (id, label, column, kind, href). kind picks the color: flow, win, loss, bad.
 _SANKEY_NODES: tuple[tuple[str, str, int, str, str | None], ...] = (
     ("fetched", "Fetched", 0, "flow", None),
-    ("elsewhere", "Applied elsewhere", 0, "flow", "/tracking"),
+    ("elsewhere", "Applied elsewhere", 0, "flow", "/pipeline"),
     ("prefiltered_out", "Prefiltered out", 1, "loss", None),
     ("awaiting_prefilter", "Awaiting prefilter", 1, "loss", None),
     ("passed", "Passed prefilter", 1, "flow", None),
@@ -810,15 +810,15 @@ _SANKEY_NODES: tuple[tuple[str, str, int, str, str | None], ...] = (
     ),
     ("untriaged", "Untriaged", 3, "loss", "/inbox"),
     ("dismissed", "Dismissed", 3, "loss", None),
-    ("shortlisted", "Shortlisted", 3, "flow", "/tracking"),
-    ("not_applied", "Not applied yet", 4, "loss", "/tracking"),
-    ("applied", "Applied", 4, "flow", "/tracking"),
-    ("awaiting", "Awaiting response", 5, "loss", "/tracking"),
-    ("interview", "Screening / interview", 5, "win", "/tracking"),
-    ("offer", "Offer", 5, "win", "/tracking"),
-    ("rejected", "Rejected", 5, "bad", "/tracking"),
-    ("closed", "Withdrawn / closed", 5, "loss", "/tracking"),
-    ("no_response", "No response", 5, "loss", "/tracking"),
+    ("shortlisted", "Shortlisted", 3, "flow", "/pipeline"),
+    ("not_applied", "Not applied yet", 4, "loss", "/pipeline"),
+    ("applied", "Applied", 4, "flow", "/pipeline"),
+    ("awaiting", "Awaiting response", 5, "loss", "/pipeline"),
+    ("interview", "Screening / interview", 5, "win", "/pipeline"),
+    ("offer", "Offer", 5, "win", "/pipeline"),
+    ("rejected", "Rejected", 5, "bad", "/rejections"),
+    ("closed", "Withdrawn / closed", 5, "loss", "/pipeline"),
+    ("no_response", "No response", 5, "loss", "/pipeline"),
 )
 _SANKEY_ORDER = {n[0]: i for i, n in enumerate(_SANKEY_NODES)}
 

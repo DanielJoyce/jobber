@@ -105,3 +105,12 @@ def test_pages_are_never_cached_but_static_files_are(client):
     # Back must re-fetch /inbox, or rows triaged since look untriaged again.
     assert client.get("/inbox").headers["cache-control"] == "no-store"
     assert "no-store" not in client.get(static_url("app.css")).headers.get("cache-control", "")
+
+
+def test_every_sankey_link_resolves(client):
+    # The Sankey once linked to /tracking, a page that never existed (404 on click).
+    from jobhunter.console.dashboard import _SANKEY_NODES
+
+    for _id, _label, _col, _kind, href in _SANKEY_NODES:
+        if href:
+            assert client.get(href.replace("{b}", "A")).status_code == 200, href
