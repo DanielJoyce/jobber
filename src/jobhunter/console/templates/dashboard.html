@@ -79,6 +79,20 @@
   <div id="chart-tooltip" class="chart-tip" role="tooltip" hidden></div>
 </section>
 
+<section id="outcomes" class="panel" aria-labelledby="outcomes-title">
+  <h2 id="outcomes-title">Outcomes</h2>
+  <figure class="chart" id="chart-sankey" aria-labelledby="outcomes-title" style="margin:0">
+    <p class="sub">Every job group (duplicates folded) from fetch to outcome. Click a node to open its list.</p>
+    <div class="body"></div>
+    <div class="chart-tip" role="tooltip" hidden></div>
+    <details class="sankey-table">
+      <summary>Show as table</summary>
+      <div class="table-wrap"></div>
+    </details>
+  </figure>
+  <script type="application/json" id="sankey-data">{{ sankey | safe }}</script>
+</section>
+
 <section class="panel" aria-labelledby="table-title">
   <h2 id="table-title">States</h2>
   <div id="state-table" class="table-wrap" hx-disinherit="*"

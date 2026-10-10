@@ -162,6 +162,35 @@ themes from the same ramps, each validated against its own surface.
 Deliberately absent: pie and donut charts, gauges, dual-axis charts, and a per-state line chart
 of all states at once (unreadable past a handful; the map and table answer that question).
 
+### Outcomes Sankey
+
+A Sankey under the trend charts answers "where did everything go?" in one picture, which the
+funnel cannot: the funnel only shows the happy path, while the Sankey also shows where jobs
+leave it (prefiltered out, dismissed, rejected). It counts **job groups** (duplicates folded),
+all time, from `dashboard.sankey()`, embedded in the page as one JSON payload
+(`nodes`, `links`, `total`).
+
+- Path: Fetched -> Prefiltered out / Awaiting prefilter / Passed -> Not yet scored or bucket A-G
+  -> Untriaged / Dismissed / Shortlisted -> Not applied yet / Applied -> Awaiting response,
+  Screening / interview, Offer, Rejected, Withdrawn / closed, No response. Triage comes from the
+  `label` table, outcomes from `application.status` (latest event wins). A group with an
+  application counts as Shortlisted.
+- **Applied elsewhere** is a second left-hand source: applications accepted from a mail
+  proposal for a job the pipeline never saw (their group's job is on the `email-manual`
+  source). It feeds Applied directly.
+- Each group takes one path, so flow is conserved (a node's in equals its out); tested. Zero
+  nodes are hidden. `sankey(..., extra_rejected=...)` lets a later change move groups known to
+  be rejected from other evidence (employer rejection emails) onto the Rejected node.
+- All seven buckets are shown rather than merged, so every node links to an exact list
+  (`/inbox?bucket=X`, `/tracking`).
+- Layout is a small deterministic routine in `charts.js` (one column per stage, heights
+  proportional to value, cubic-bezier bands), not d3-sankey: it avoids a pinned vendor file and
+  lets us place direct labels and keep a 3px floor for single-group nodes. Nodes are colored by
+  meaning (flow, win, loss, rejected), always with a direct label; links take the target's
+  color. Below 560px wide it is drawn as two stacked diagrams (fetch to triage, shortlisted to
+  outcome) because six labeled columns do not fit a phone. A "Show as table" disclosure lists
+  every link with its percent of the source node.
+
 ## Implementation
 
 - Vendored static assets, no build step, no CDN: `d3` (geo path plus scales), `topojson-client`,
