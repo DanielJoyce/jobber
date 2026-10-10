@@ -1,19 +1,20 @@
 # 017 — Assisted apply: targeted resume, cover letter, resume-first fill
 
-Status: **design, revision 2 (your direction of 2026-10-09), awaiting your approval.** Bug
-`7fa29db`, milestone M9. No code yet. What changed from revision 1 and why is at the end
-([Revision 2](#revision-2-user-direction)).
+Status: **design, revision 3, awaiting your approval.** Bug `7fa29db`. Proposed as a new
+milestone M10 ([Deviations](#deviations-from-earlier-specs)). No code yet. Revisions 2 and 3
+and why are at the end ([History](#history)).
 
 You asked: *"Is there any way to automate the application part of the process? Filling out web
 forms?"* Then you added that most sites now parse an uploaded resume and fill themselves, that
-your existing fill helpers already skip salary and EEO questions, and that targeted resume and
-cover letter tools would help too. So this spec is mostly about the **documents**, with form
-help as a later, smaller step:
+your existing fill helpers already handle forms and skip salary and EEO questions, and that
+targeted resume and cover letter tools would help too. So this spec is mostly about the
+**documents** and the questions your helpers cannot answer, with form help as a later, smaller
+step:
 
 | Phase | What you get | Works on |
 |---|---|---|
-| **1. Packet** | For any posting (a jobhunter job, a pasted URL, or pasted text): a **targeted resume** built only from facts in your resume, with the source line shown beside every line; a **cover letter**; drafts for custom questions; a small **answer bank**; copy panels and checklists; export | Every posting, with no browser automation at all |
-| **2. Resume-first fill** (gated) | In a dedicated Chrome profile, Claude in Chrome uploads your resume, lets the site autofill from it, reads what is filled and what is empty, fills only the gaps it can match, lists what the parser got wrong, and **stops before Submit** | Public no-account ATS forms (Ashby, Greenhouse, Lever, Workable) first. Built only if the [gate](#phase-2-gate) passes |
+| **1. Packet** | For any posting (a jobhunter job, a pasted URL, or pasted text): a **targeted resume** built only from facts in your resume, with the source line shown beside every line; a **cover letter**; checked drafts for custom questions; saved custom answers you can reuse; checklists; export | Every posting, with no browser automation at all |
+| **2. Resume-first fill** (gated) | In a dedicated Chrome profile, the helper snapshots the form, you attach your resume, the site fills itself, and jobhunter's own code says what the parser filled, what differs from your resume, and which custom questions have drafts. It **stops before Submit** | Public no-account ATS forms (Ashby, Greenhouse, Lever, Workable) first. Built only if the [gate](#phase-2-gate) passes |
 
 **jobhunter never submits an application**, in any phase, behind any flag. You read the form and
 press Submit. The confirmation email or the existing "Did you apply?" prompt then moves the job
@@ -29,28 +30,30 @@ Lever, Workable and Workday. Two consequences:
 
 1. **A packet must start from a pasted posting**, not only from an ingested job
    ([New packet](#new-packet-from-a-url-or-text)).
-2. **Form filling waits for evidence** that you apply on fillable forms often enough to be worth
-   it, and that the resume parse leaves enough work behind.
+2. **Form filling waits for evidence** that the resume parse plus your fill helpers leave enough
+   work behind to be worth it.
 
 ## Goals
 
 1. **Better applications in less time.** A targeted resume and a cover letter in a few minutes
    of review instead of 20-40 minutes of rewriting.
-2. **Tailor without inventing.** The variant and the letter only select, reorder and rephrase
-   facts in your resume, plus employer facts quoted from the posting or written by you. A
-   deterministic checker flags mechanical fabrication; every generated line shows the resume line
-   it cites so you can judge the rest ([no-fabrication rule](#no-fabrication-rule)).
-3. **Enter repeated answers once**, for the non-sensitive questions forms keep asking.
-4. **Close the loop** without updating the pipeline by hand.
+2. **Tailor without inventing.** The variant, the letter and the drafts only select, reorder and
+   rephrase facts in your resume, plus employer facts quoted from the posting or written by you.
+   A deterministic checker flags mechanical fabrication; every generated line shows the line it
+   cites so you can judge the rest ([no-fabrication rule](#no-fabrication-rule)).
+3. **Help with the remainder** your helpers and the resume parse leave: custom questions, and
+   checking the parsed work history.
+4. **Close the loop** without updating the pipeline by hand, whichever way the application is
+   recorded.
 
 ## Non-goals
 
 | Not doing | Why |
 |---|---|
 | **Submitting an application. Ever.** | See below |
-| **Storing or filling salary, EEO or self-identification answers** (gender, race, ethnicity, veteran, disability, orientation), citizenship, street address, pronouns | You answer these by hand; your other fill helpers skip them too. Not storing them removes the need for an encrypted store, a passphrase and redaction plumbing |
-| Social Security number, date of birth, ID numbers, passwords, security questions, payment details, criminal history, references' contacts | Never stored, never filled, always yours |
-| Ticking consent, certification, signature or "information is true" boxes | Your legal attestations, not data entry |
+| **Storing, drafting or filling anything on the [never-store list](#never-store-list)** (salary, EEO and self-ID, citizenship, address, pronouns, DOB, SSN, consent, certification, signature) | You answer these by hand; your fill helpers skip them too. Enforced in code at every write, draft and fill, not only stated here |
+| A second store for contact details, links, work authorization and availability (the revision 2 answer bank) | Your fill helpers already fill these. Deferred unless you ask ([open question 1](#open-questions)) |
+| Passwords, security questions, payment details, criminal history, references' contacts | Never stored, never filled, always yours |
 | Solving, bypassing or "humanizing" past a CAPTCHA, email code or bot check | [008](008-compliance.md#what-we-will-not-build). A challenge means stop and hand back |
 | Creating ATS accounts, logging in, storing credentials | [008](008-compliance.md#what-we-will-not-build) |
 | Batch, queued or scheduled filling | One job, one tab, one review. A mass-apply bot is not a personal assistant |
@@ -63,6 +66,27 @@ automated submission as spam (Ashby's "Application Spam Protection"; Greenhouse'
 reCAPTCHA). And [001](001-goals-and-scope.md#non-goals) and
 [008](008-compliance.md#what-we-will-not-build) already rule it out.
 
+### Never-store list
+
+Data in `apply/labels.py` (`NEVER_STORE`), matched against the normalized question label (and,
+in phase 2, the field `name`/`id`) **before anything else** at every entry point:
+
+| Category | Label patterns (examples; the table grows like `ats_rules.py`) |
+|---|---|
+| Pay | salary, compensation, pay expectation, desired pay, rate, current pay |
+| EEO and self-ID | gender, sex, race, ethnicity, hispanic, veteran, disability, sexual orientation, transgender |
+| Identity | citizenship, citizen, national origin, street address, address line, pronouns, date of birth, birthdate, age (except a yes/no "18 or older"), SSN, social security |
+| Attestation | consent, certify, certification, attest, signature, sign, acknowledge, "information is true", agree to the terms |
+
+| Entry point | On a match |
+|---|---|
+| **Save as answer** on a custom question | Refused: "This one is yours; jobhunter doesn't store it" |
+| Any `packet_answer` write (one function, `apply/answers.py::save_answer`, the only writer) | Raises; nothing written |
+| **Question draft** | No generation, no spend; the page says "This one is yours" |
+| Phase 2 `fill-classify` | Action `yours`, evaluated before every other row ([precedence](#what-the-helper-does)) |
+
+A false positive only means you answer by hand. One test per entry point.
+
 ## Phase 1: packets
 
 ### Flow
@@ -70,14 +94,14 @@ reCAPTCHA). And [001](001-goals-and-scope.md#non-goals) and
 ```
  Inbox / Detail / New packet        Packet page                              You
  ───────────────────────────        ───────────                              ───
- [p] Prepare, or [n] paste a  ──►   Generate (≈ $0.11)  resume v1, cover v1
-     URL or posting text            source line beside every line
-                                    checker flags 2 lines → you edit → v2
+ [p] Prepare, or [n] paste a  ──►   Generate (≈ $0.15-0.25) resume, cover v1
+     URL or posting text            cited line beside every line
+                                    checker flags 2 lines → you fix → v2
                                     [Mark ready] → export PDF / text
-                                    copy panels + checklist ───────────────► upload resume first,
-                                    [Open application] (via /apply/{id}) ──► let the site fill,
-                                                                             fix gaps from panels,
-                                                                             press Submit
+                                    drafts + checklist ────────────────────► attach resume,
+                                    [Open application] (via /apply/{id}) ──► let the site and
+                                                                             your helper fill,
+                                                                             paste drafts, Submit
  Pipeline: applied ◄── "Did you apply?" on return, or mail proposal ◄───────── confirmation email
 ```
 
@@ -86,15 +110,15 @@ reCAPTCHA). And [001](001-goals-and-scope.md#non-goals) and
 | 1 | **Prepare** (`p` in the inbox, or the button next to **Apply** on `/job/{id}`), or **New packet** (`n`) | `application` at `preparing`, `application_packet`; for a pasted posting also a `paste-manual` group |
 | 2 | **Generate** resume variant and, if wanted, cover letter. Estimate shown first; nothing spent until you click | `packet_document` v1, `llm_spend` tier `packet` |
 | 3 | **Review and edit** beside the base resume, cited line beside each generated line | new `packet_document` versions |
-| 4 | **Mark ready.** Blocked while any **unsupported** line is neither edited nor confirmed | `status = 'ready'`, exports rendered |
-| 5 | **Open application** through the existing `/apply/{id}` redirect, so 015's click log and "Did you apply?" prompt work unchanged | `apply_click` |
-| 6 | You upload the resume, let the site fill, finish from the copy panels, and submit | nothing |
-| 7 | "Did you apply?" *Yes*, or an accepted mail proposal | `application_event` `applied`, attachments |
+| 4 | **Mark ready.** Enabled only when the **current version's** `check_report` has no unconfirmed item | `status = 'ready'`, exports rendered |
+| 5 | **Open application** through the existing `/apply/{id}` redirect, so 015's click log and "Did you apply?" prompt work. Hidden when no URL was given | `apply_click` |
+| 6 | You attach the resume, let the site and your helper fill, paste drafts, and submit | nothing |
+| 7 | The application reaches `applied` by any path: "Did you apply?" *Yes*, an accepted mail proposal, or a manual event | `application_event` `applied`; `tracking.add_event` attaches the packet ([Closing the loop](#closing-the-loop)) |
 
 ### New packet from a URL or text
 
 **New packet** on the inbox toolbar (`n`), route `GET/POST /apply/new`. It is the standalone
-entry to the resume and cover letter tools: no ingest, no score, no autofill needed.
+entry to the resume and cover letter tools: no ingest, no score, no fill needed.
 
 | Field | Required | Notes |
 |---|---|---|
@@ -108,31 +132,50 @@ Greenhouse yes for the direct board URL, never `/embed/`; `jobs.ashbyhq.com` **n
 loads from `/api/`, which robots disallows), so paste; anything else per its robots.txt, and on
 refusal or an empty page you paste.
 
-It writes, like `proposals.py` does for `email-manual` groups: a `job_group` with source
-**`paste-manual`** (the dashboard's manual-source handling includes it), one `job` row holding
-the description (same path as `detail.paste_description`), and an `apply_link` when a URL was
-given. If the URL, or `employer_norm` + normalized title, matches an existing group, that group
-is offered instead. **Score it** is offered, never automatic. **Prepare** on a group with no
-description (today's 18 `email-manual` ones) asks for the posting text first.
+It writes, through a new helper `apply/paste.py::insert_pasted_posting` (not
+`detail.paste_description`, which bumps `description_rev` to queue a re-score):
+
+- a `job_group` with source **`paste-manual`** and one `job` row holding the description, at
+  stage **`normalized`**, so the nightly prefilter and screen never pick it up;
+- `job.url` = the URL given, or a synthetic `paste:<packet_id>` that is never shown or opened
+  (Open application is hidden and `/apply/{id}` returns 404 for it);
+- an `apply_link` when a URL was given.
+
+If the URL, or `employer_norm` + normalized title, matches an existing group, that group is
+offered instead. **Prepare** on a group with no description (today's 18 `email-manual` ones)
+asks for the posting text first.
+
+**Score this group now** (button on the packet page; `jobhunter score --group <id>`) is the only
+way a pasted posting is scored. It shows the Stage 2 estimate, and on confirm writes a
+`prefilter_result` with `passed = 1` and reason `user-requested` at the current
+`filter_version`, moves the job to `prefiltered`, and runs screen with `only = {group}` against
+the scoring caps. Over the cap it is refused and nothing is written. Your request bypasses
+prefilter rules (state, salary floor) because you chose this posting.
+
+**Dashboard.** `paste-manual` is **not** added to the `email-manual` equality in
+`dashboard.py` (which drops groups without an application and labels the rest "elsewhere"). It
+gets its own Sankey source node, **Pasted**, and once scored flows through the buckets like an
+ingested group; unscored pasted groups appear only in the pipeline.
 
 ### Targeted resume
 
 | | |
 |---|---|
 | Model | `claude-opus-5`, configurable as `[apply] model`. A handful per week; wording quality is the point |
-| API | Official `anthropic` SDK, synchronous `messages.create` (you are waiting), structured output via `output_config` |
-| Caching | System prompt + numbered resume as the cached prefix |
+| API | Official `anthropic` SDK, `messages.stream` (long structured output; you watch it arrive), structured output via `output_config`, adaptive thinking, **effort `medium`** (`[apply] effort`) |
+| Caching | System prompt + numbered resume as the cached prefix. The 5-minute TTL usually expires while you review, so regenerate is costed uncached |
 | Prompt version | `apply-v1`, stored on every `packet_document` |
-| Spend cap | Checked against the caps ([006](006-fit-scoring.md#cost)) before the call; refused, not truncated, when over |
+| Spend cap | Its own **`[apply] daily_cap_usd`** (default `$1.00`), checked before the call; refused, not truncated, when over. Packet spend neither counts against nor is blocked by `scoring.daily_cap_usd` / `weekly_cap_usd`: `screen.remaining_daily_budget` and `weekly_remaining` exclude tier `packet`. Both show on `/costs` |
 
-**Sent:** your base resume as numbered lines (`L1`...`Ln`) with the contact header replaced by
-placeholders (put back locally from the base resume after generation); `current_focus`,
-`done_with` and `narrative.want`; the posting's title, employer and text; when the job is scored,
-the verified evidence quotes, `tailoring_hints` and Stage 3 `requirement_gaps`
-([006](006-fit-scoring.md)); for a cover letter or "Why us?" draft, your employer notes.
+**Sent:** your base resume as numbered lines (`L1`...`Ln`), header included, exactly as Stage 2
+already sends it ([008](008-compliance.md#personal-data)); `current_focus`, `done_with` and
+`narrative.want`; the posting's title, employer and text; when the job is scored, the verified
+evidence quotes, `tailoring_hints` and Stage 3 `requirement_gaps` ([006](006-fit-scoring.md));
+for a cover letter or "Why us?" draft, your employer notes; for a behavioral draft, your story
+facts.
 
-**Never sent:** the answer bank, salary preferences, filters and weights, other jobs, application
-history, email content.
+**Never sent:** saved answers (`packet_answer` values other than notes and story facts), salary
+preferences, filters and weights, other jobs, application history, email content.
 
 The model returns structure, not prose, so every line can be checked:
 
@@ -146,51 +189,66 @@ The model returns structure, not prose, so every line can be checked:
    "omitted":  ["L18", "L19"],
    "change_notes": ["Moved the migration bullet first: the posting asks for ..."]},
  "cover_letter": {"paragraphs": [
-   {"text": "...", "resume_sources": ["L14"], "posting_quotes": ["verbatim posting text"],
-    "uses_employer_notes": true}]}}
+   {"text": "...", "resume_sources": ["L14"], "posting_quotes": ["verbatim posting text"]}]}}
 ```
 
 <a id="no-fabrication-rule"></a>**No-fabrication rule: only facts in the resume, the posting, or
-your notes.** `apply/factcheck.py` runs on every generated and every edited version:
+your notes.** `apply/factcheck.py` runs on every version, generated or edited, and writes its
+`check_report`:
 
 | Check | Fails when |
 |---|---|
-| Citation | a bullet, summary, skill or paragraph cites no resume line, or a line that does not exist |
+| Citation | a bullet, summary, skill or paragraph cites no source line, or a line that does not exist. Sources are resume lines `L*`, employer-note lines `N*` and story-fact lines `S*` |
 | Structure | an entry's employer, title or dates differ from the cited line (after whitespace and case normalization) |
 | Numbers | a number, percentage, dollar amount, year or "N+" is not in the cited lines |
 | Skills | a skill or technology is not anywhere in the resume (token match, small synonym table such as `k8s` = `Kubernetes`) |
 | Credentials | *certified*, *licensed*, *clearance*, *degree*, *PhD*, *MBA* and similar without the same term in a cited line |
 | **Claim strength** | the output uses a word from a claim class that no cited line uses. Classes, as data in `apply/claims.py`: **leadership** (*led, managed, owned, headed, directed, supervised, spearheaded, drove*), **scope** (*architected, designed the, founded, built the team, company-wide*), **team size** (*team of N*, *N engineers*, *N reports*), **superlative** (*expert, best, first, sole, top, world-class*). "Contributed to the migration" (L14) rewritten as "led the migration" fails |
-| **Employer claims** | a letter or draft sentence about the employer ("your team", "your mission") that is neither a passing posting quote nor supported by your employer notes |
+| **Employer claims** | a letter or draft sentence containing *you*, *your* or the employer's name (normalized tokens of `employer_norm`) that does not contain a posting quote passing the check below. Flagged for confirmation even when it came from your notes; the model's own say-so is never trusted |
 | Posting quotes | a quote fails the existing verbatim check (`quote_found`, [006](006-fit-scoring.md)) |
 
-**Every generated line shows its cited resume lines** beside it, not only failures. The checker
-catches mechanical inventions; it cannot tell whether "improved deploy reliability" fairly
-restates L14. That judgment is yours, and the evidence is in front of you for every line.
-Failures are badged **unsupported**; **Mark ready** stays disabled until each is edited away or
-you click **This is true, keep it** (recorded in `check_report`). Your own edits may add facts;
-the checker still runs on them so a mistyped date shows.
+**Every generated line shows its cited lines** beside it, not only failures. The checker catches
+mechanical inventions; it cannot tell whether "improved deploy reliability" fairly restates L14.
+That judgment is yours, and the evidence is in front of you for every line. Failures are badged
+**unsupported**; **This is true, keep it** confirms one and is recorded in `check_report`.
+**Mark ready is gated on the current version's `check_report` alone**: enabled only when every
+item is passing or confirmed. Editing a line never clears its badge; the checker re-runs on the
+edited text.
 
 **Advisory entailment pass** (`[apply] entailment_check`, default off): `claude-haiku-4-5` says
 per line whether the cited lines support it (`yes` / `partly` / `no`). Advisory only: it never
 clears an **unsupported** badge. About $0.003 per packet.
 
-**Editing.** The variant sits beside the base resume as a line diff, with `omitted` lines
-restorable in one click and the model's `change_notes`. Editing is a markdown textarea; **Save**
-writes a new version (`origin = 'edited'`); nothing is overwritten. **Regenerate** takes an
-optional one-line instruction ("shorter", "lead with the security work"). **Use base resume**
-is always there and costs nothing.
+**Editing** is structured, so citations survive. The variant sits beside the base resume, with
+`omitted` lines restorable in one click and the model's `change_notes`. Each summary, bullet,
+skill and paragraph is its own edit box that keeps its `sources`; moving an item keeps them.
+A new item needs a picked source line or **This is true**. A confirmation carries forward to the
+next version only for an item whose text is unchanged. **Save** writes a new version
+(`origin = 'edited'`); nothing is overwritten. **Regenerate** takes an optional one-line
+instruction ("shorter", "lead with the security work"). **Use base resume** is always there and
+costs nothing.
 
 ### Cover letter and question drafts
 
 Optional per packet. Before generating, the packet page asks for one to three lines of
-**employer notes** in your words (why this employer, any history). Blank is fine; the letter
-then says nothing about the employer beyond posting quotes. Same generator, same checker,
-including the employer-claims check, same editor and versions.
+**employer notes** in your words (why this employer, any history), numbered `N1`-`N3`. Blank is
+fine; the letter then says nothing about the employer beyond posting quotes. Same generator,
+same checker, same editor and versions.
 
-**Question drafts:** paste a custom question ("Why are you interested in Acme?", "Describe a
-time you...") and get a checked draft (`kind = 'question_draft'`). Numeric experience questions
-("Years of Terraform") show the resume evidence, not a computed number.
+**Question drafts:** paste a custom question and get a checked draft (`kind =
+'question_draft'`). The question is first checked against the [never-store
+list](#never-store-list); a match gets "This one is yours" and no draft.
+
+| Question kind (patterns in `apply/labels.py`) | What happens |
+|---|---|
+| **Behavioral** ("Describe a time...", "Tell us about a situation...", "Give an example...") | You write one to three lines of the story's facts first (`S1`-`S3`). The draft only structures what you wrote and what the resume says; any sentence without an `S*` or `L*` source is **unsupported**. No facts, no draft |
+| **Why us / why this role** | Uses employer notes and posting quotes; employer-claims check applies |
+| **Numeric experience** ("Years of Terraform") | Shows the resume evidence lines, not a computed number |
+| Anything else | Drafted from resume lines, checked as above |
+
+**Save as answer** keeps a draft or your own text on the packet (`packet_answer`, source
+`user` or `draft`). Saved answers are reusable: the same normalized question on a later packet
+offers your earlier answers to copy. That is the "enter it once" store, without a second file.
 
 ### Export
 
@@ -201,96 +259,62 @@ time you...") and get a checked draft (`kind = 'question_draft'`). Numeric exper
 | **Markdown** | Download, for your own editing |
 | `.docx` | [Open question](#open-questions). Some ATS parsers read `.docx` more reliably than PDF, which matters more now that filling leans on the parse |
 
-Files go to `<data dir>/packets/<packet_id>/` (`<data dir>` is `$XDG_DATA_HOME/jobhunter`,
-[002](002-architecture.md#where-files-live), bug `e7da19f`), named for employers as
-`<First>-<Last>-Resume.pdf` and `-Cover-Letter.pdf`.
+Files go to `<data dir>/packets/<packet_id>/`, named for employers as
+`<First>-<Last>-Resume.pdf` and `-Cover-Letter.pdf`. `<data dir>` is today's gitignored,
+repo-relative `data/` ([002](002-architecture.md#configuration)); it becomes
+`$XDG_DATA_HOME/jobhunter` if bug `e7da19f` lands first. 017 depends on nothing else from
+`e7da19f` and resolves the path through the same config setting either way.
 
-### Answer bank
+### Checklists
 
-A small file you edit on a new **Application answers** section of `/prefs`, or by hand. A
-[014](014-preferences-console.md#the-design-change-free-settings-vs-paid-settings) *free*
-section: no model reads it, so saving costs nothing and changes no version hash.
-
-| Key | Example (placeholder) | Notes |
-|---|---|---|
-| `name.legal_first`, `.legal_last`, `.preferred` | `Alex`, `Example` | Lever has one full-name field |
-| `email`, `phone` | `<you>@example.com`, `+1-555-0100` | |
-| `location.city`, `.state`, `.country` | `Denver`, `CO`, `US` | City level only |
-| `links.linkedin`, `.github`, `.portfolio`, `.other[]` | `https://www.linkedin.com/in/<you>` | Resume parsers often miss these |
-| `work_auth.us_authorized`, `.sponsorship_now`, `.sponsorship_future` | `true`, `false`, `false` | Yes/no questions only |
-| `work_auth.clearance` | `none` | Only if it is on your resume |
-| `availability.notice_weeks`, `.earliest_start` | `2` | |
-| `relocation.willing`, `remote.preference`, `travel.max_percent` | `depends`, `any`, `25` | |
-| `age_18_plus`, `heard_about` | `true`, `Company careers site` | |
-
-Per-job overrides and saved answers to custom questions live in `packet_answer`. "Save as
-answer" on a custom question adds it to `answers.yaml` under `custom:` with its label, so the
-next form's copy panel shows it.
-
-**Storage.** `<data dir>/profile/answers.yaml`, beside `preferences.yaml`, outside the repo;
-round-trip `ruamel.yaml`, atomic write, mode `0600`, dated backup on each console save as with
-preferences. No change log in SQLite: the values do not affect scoring and the file is yours to
-diff.
-
-**Kept away from models and agents:**
-
-- `AnswerBank` (`apply/answers.py`) is not part of `Profile.scoring_inputs` and is not passed
-  to the generator.
-- A checked-in `.claude/settings.json` denies `Read`, `Edit` and `Write` on
-  `**/profile/answers.yaml` and `Bash` commands naming `answers.yaml`, so dev agents in this repo
-  do not read it by accident. Bash rules match prefixes and can be got around; with salary and
-  EEO out of the file, accidental reads are the risk worth covering. A test asserts the rules
-  are present.
-- **Sentinel test:** Stage 2, Stage 3, the decisions scorer and the packet generator run against
-  a mocked client with a sentinel `answers.yaml`; no sentinel value may appear in any captured
-  request body or log record.
-
-### Copy panels and checklists
-
-The packet page lists the answers in groups (Contact, Links, Work authorization, Availability,
-Documents, Custom questions) with a copy button each, plus the exported files. A per-board
-checklist follows the resume-first order:
+The packet page shows the exported files, the drafts and saved answers with a copy button
+each, and a per-board checklist in resume-first order:
 
 | Board | Checklist |
 |---|---|
-| **Any ATS** (default) | Upload the resume first and let the site fill; check the parsed work history and contact fields against your resume; fill gaps from the panels; answer custom questions (drafts available); salary, EEO, consent and signatures are yours; review; submit |
+| **Any ATS** (default) | Attach the resume first (or use the site's "Autofill from resume" box) and let the site and your fill helper fill; check the parsed work history against your resume; answer custom questions (drafts available); salary, EEO, consent and signatures are yours; review; submit. **Do not re-upload the file after correcting fields: most ATSs re-parse and overwrite your corrections** |
 | **USAJOBS** | Sign in via login.gov; build or pick the resume in USAJOBS and check the announcement's rules (page limit, month/year dates, hours per week); attach listed documents; questionnaire. For each self-assessment question the panel shows **the resume lines that may be relevant, nothing else**, never a level |
 | **Workday** (`*.myworkdayjobs.com`) | Sign in to the employer account (your password manager); upload; **check the parsed history** (Workday often splits or merges jobs); then My Information, Application Questions; disclosures yourself; review |
-| **NEOGOV** (`governmentjobs.com`) | Profile fields from the panels; supplemental question drafts (checked like letters) |
+| **NEOGOV** (`governmentjobs.com`) | Profile fields; supplemental question drafts (checked like letters) |
 
 ### Cost
 
-Opus 5 at $5 / $25 per million input / output tokens (`scoring/scorers.py`).
+Opus 5 at $5 / $25 per million input / output tokens (`scoring/scorers.py`); thinking tokens bill
+as output.
 
-| Item | Input | Output | Cost |
+| Item | Input | Output (incl. thinking, effort medium) | Cost |
 |---|---:|---:|---:|
-| Resume variant + cover letter | ~9,000 | ~2,500 | **≈ $0.11** |
-| Regenerate (prefix cached) | ~9,000 (~3,500 cached) | ~2,500 | ≈ $0.10 |
-| One question draft | ~5,000 (mostly cached) | ~200 | ≈ $0.01-0.03 |
-| **Typical packet** (generate, regenerate, two drafts) | | | **≈ $0.25** |
+| Resume variant + cover letter | ~9,000 | ~4,000-7,000 | **≈ $0.15-0.22** |
+| Regenerate (cache usually expired) | ~9,000 | ~4,000-7,000 | ≈ $0.15-0.22 |
+| One question draft | ~5,000 | ~600-1,000 | ≈ $0.04-0.05 |
+| **Typical packet** (generate, regenerate, two drafts) | | | **≈ $0.40-0.55** |
 
-Five packets a week is about **$1.25/week**, small against the ~$28/month in
-[README](README.md). Once there is history, the estimate before **Generate** uses measured cost
-from `llm_spend`. Scoring a pasted posting is the normal Stage 2 cost, shown separately.
+Five packets a week is about **$2-3/week**, under the default `[apply] daily_cap_usd`. These are
+estimates: phase 1b replaces them with `count_tokens` on your real resume and a real posting
+before the estimate is shown, and once there is history the estimate before **Generate** uses
+measured cost from `llm_spend`. Scoring a pasted posting is the normal Stage 2 cost, shown
+separately and charged to the scoring caps.
 
 ### Data model
 
-One migration, numbered next free at implementation time (highest today `0025`):
+One migration, numbered next free at implementation time (highest on `main` today `0028`):
 `NNNN_application_packet.sql`.
 
 ```sql
 CREATE TABLE application_packet (
   id               INTEGER PRIMARY KEY,
-  application_id   INTEGER NOT NULL UNIQUE REFERENCES application(id),
-  job_group_id     INTEGER NOT NULL REFERENCES job_group(id),
+  application_id   INTEGER NOT NULL REFERENCES application(id),  -- group via application
   status           TEXT NOT NULL DEFAULT 'draft'
-                   CHECK (status IN ('draft', 'ready', 'submitted', 'abandoned')),
+                   CHECK (status IN ('draft', 'ready', 'abandoned')),
   resume_doc_id    INTEGER REFERENCES packet_document(id),   -- the version to send
   cover_doc_id     INTEGER REFERENCES packet_document(id),   -- NULL = no cover letter
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   ready_at         TEXT
 );
+-- One live packet per application; abandoned ones are kept as history.
+CREATE UNIQUE INDEX application_packet_live
+  ON application_packet(application_id) WHERE status != 'abandoned';
 
 CREATE TABLE packet_document (
   id               INTEGER PRIMARY KEY,
@@ -300,8 +324,8 @@ CREATE TABLE packet_document (
   question_key     TEXT NOT NULL DEFAULT '',   -- question_draft: normalized label
   origin           TEXT NOT NULL CHECK (origin IN ('generated', 'edited', 'base')),
   parent_id        INTEGER REFERENCES packet_document(id),
-  body_md          TEXT NOT NULL,              -- contact header as placeholders
-  sources          TEXT,                       -- JSON: per line, cited resume line ids
+  doc_json         TEXT NOT NULL,              -- the structure above, sources per item
+  body_md          TEXT NOT NULL,              -- rendered from doc_json
   check_report     TEXT NOT NULL,              -- JSON: unsupported items, your confirmations
   rendered_path    TEXT,                       -- <data dir>/packets/<packet_id>/resume-v3.pdf
   model            TEXT,
@@ -316,19 +340,32 @@ CREATE TABLE packet_document (
 CREATE TABLE packet_answer (
   id               INTEGER PRIMARY KEY,
   packet_id        INTEGER NOT NULL REFERENCES application_packet(id),
-  field_key        TEXT NOT NULL,     -- bank key, 'q:<normalized label>', or 'notes:employer'
+  field_key        TEXT NOT NULL,     -- 'q:<normalized label>', 'notes:employer', 'story:<q>'
   label            TEXT,
   value            TEXT,
-  source           TEXT NOT NULL CHECK (source IN ('bank', 'override', 'draft', 'user')),
+  source           TEXT NOT NULL CHECK (source IN ('draft', 'user')),
   UNIQUE (packet_id, field_key)
 );
 ```
 
-Fits existing tables: on *applied*, `application.resume_version` gets
-`packet:<id>/resume/v<n>`, `cover_letter_path` the rendered letter, and `attachment` rows point
-at the rendered files (outside the tracked tree, as `tracking.validate_attachment_path`
-requires), so `/pipeline/{id}` shows what was sent. `llm_spend` gets `tier = 'packet'`, its own
-line on `/costs`. No new `application_event.source`.
+"Submitted" is not a stored status: a packet counts as sent when its application has reached
+`applied` or later. `llm_spend` gets `tier = 'packet'`, its own line on `/costs`. No new
+`application_event.source`.
+
+### Merges and undo
+
+Packets hang off `application`, never `job_group`, so `dedupe_url._absorb` and
+`dedupe_xstate.merge_cross_state` need no change for them. The changes are where applications
+are deleted:
+
+| Code | Change |
+|---|---|
+| `dedupe_url._merge_application` | Before `DELETE FROM application` for the losing row: re-point its `application_packet` rows to the winner. If the winner already has a live packet, the loser's becomes `abandoned` (kept, with its documents and answers, under the winning application). `packet_document`, `packet_answer` and `fill_session` follow through `packet_id` |
+| `inbox.py` shortlist undo | `application_packet` joins the `others` keep check, so an application with a packet is never deleted |
+
+Tests: URL merge and cross-state merge with a packet on the absorbed side, on the winning side,
+and on both (winner's stays live, loser's `abandoned`, no FK error, daily run completes);
+shortlist undo keeps an application that has a packet.
 
 ## Phase 2 gate
 
@@ -336,55 +373,76 @@ Phase 2 is built only when both hold:
 
 1. **Use.** After 4 weeks of phase 1, `jobhunter apply stats` shows at least **8 packets marked
    ready** for postings on the four public ATSs ([open question](#open-questions) on the
-   threshold), and you say the remainder after the resume parse still costs real time. Per-ATS
-   support is built in order of count.
-2. **Spike** (2a below) answers: can Claude Code drive Claude in Chrome in a dedicated profile
-   from where it runs; do the restricted launch flags and site rules hold; does the guard's
-   dialog block the extension. If the dialog does not block it, phase 2 does not ship.
+   threshold), and you say the remainder after the resume parse and your fill helpers still
+   costs real time. Per-ATS support is built in order of count.
+2. **Spike** (2a below) answers, per ATS: can Claude Code drive Claude in Chrome in a dedicated
+   profile from where it runs; do the restricted launch flags and site rules hold; does the
+   guard's dialog block the extension; **can the extension attach a local PDF to the file field
+   and the parse box without a native file chooser**; are element refs stable from a page read
+   to a form input; does the hook see the key name and element ref in tool input. If the dialog
+   does not block the extension, phase 2 does not ship. If attaching fails, you attach (the
+   default below anyway).
 
-If the gate fails, the copy panels and checklists remain the answer.
+If the gate fails, the drafts and checklists remain the answer.
 
 ## Phase 2: resume-first fill
 
 ### What the helper does
 
 `jobhunter apply session <job_id>` launches the `/apply-fill` skill in a restricted Claude Code
-session ([isolation](#isolation)). The skill:
+session ([isolation](#isolation)). The sorting is done by jobhunter's code, not the model: the
+agent reads the form and passes the field list to `fill-classify`, which is what the tests
+cover.
 
-1. Runs `jobhunter apply fill-start <job_id>`, which refuses unless the packet is `ready`, the
-   posting is not `expired`, no other fill session is open, and today's count is under the cap
-   (10, hard cap 25). It prints the packet JSON (answers, drafts, resume path) and a session id.
+1. `jobhunter apply fill-start <job_id>` refuses unless the packet is `ready`, the posting is not
+   `expired`, no other fill session is open, and today's count is under the cap (10, hard cap
+   25). It prints a session id, the ATS, and the resume and letter file paths. **No answers or
+   drafts.**
 2. Opens `http://127.0.0.1:8808/apply/{group_id}` in a new tab, so the existing redirect logs
-   the click and "Did you apply?" works unchanged. Login wall, account wall or challenge:
-   stop, outcome `challenge`.
+   the click. Login wall, account wall or challenge: stop, outcome `challenge`.
 3. Checks the guard banner is showing ([below](#the-stop-before-submit)). No banner, no filling.
-4. **Uploads the resume first** (the packet's chosen export) unless one is already attached,
-   and waits for the site's own autofill to settle.
-5. **Reads the form** and sorts every field:
+4. **Snapshot before:** reads every field (ref, id, name, label, type, value) and sends the list
+   to `fill-classify <session_id> --before` on stdin.
+5. **Attach.** Asks you in chat to attach the resume, using the control `ats_forms.py` names for
+   this ATS (`parse_control`, for example Ashby's "Autofill from resume" box, or the
+   `attachment_field` when one control does both), then say *done*. If the spike showed
+   attaching works and you allow it, the helper attaches instead.
+6. **Settle:** re-reads the form until no value has changed for 3 seconds, timeout 30 seconds
+   (on timeout it reports `parse did not settle` and continues).
+7. **Snapshot after**, sent to `fill-classify <session_id> --after`, which diffs the two and
+   returns an action per field, first matching row wins:
 
-| State after the parse | What the helper does |
-|---|---|
-| Filled, matches resume or bank | Nothing |
-| Filled, differs (split job, wrong phone, mangled title) | **Listed** with both values. Not overwritten |
-| Empty, and a bank or packet value matches by known field name or an unambiguous label | Filled, then read back |
-| Empty free-text question | Listed; the packet's draft, if any, is shown for you to paste or approve |
-| Empty, unknown or ambiguous | Listed |
-| Salary, EEO and self-ID, citizenship, address, pronouns, consent, certification, signature, any never-stored item | Not touched; listed as **yours** |
+| # | Field | Action |
+|---|---|---|
+| 1 | Label, name or id matches the [never-store list](#never-store-list) (includes consent, certification, signature) | `yours`: not touched, listed |
+| 2 | Non-empty **before** attaching (ATS draft, returning-candidate prefill, your typing, an earlier helper run, your fill helper) | `keep`: never touched, not compared |
+| 3 | Filled by the parse, matches the packet resume's entries | `ok` |
+| 4 | Filled by the parse, differs (split job, wrong phone, mangled title) | `differs`: listed with both values, not overwritten |
+| 5 | Empty free-text question with a saved answer or draft on this packet, matched by known field name or an unambiguous label | `paste`: shown for you to paste or approve |
+| 6 | Empty, anything else | `listed` |
 
-6. **Stops.** Never clicks Submit, Apply, Send, Finish or a last-page Next; never presses Enter
-   in a text field. Scrolls to the top.
-7. Runs `jobhunter apply fill-report <session_id>` with the list (keys, labels and states, no
-   values) and prints the same list in chat:
+   Row 3's comparison uses the packet resume's structured entries (`doc_json`). For **Use base
+   resume**, the base resume is parsed once into entries by `apply/resume_parse.py` (cached by
+   resume hash); if it cannot parse, rows 3-4 report `not compared`.
+8. **Stops.** Never clicks Submit, Apply, Send, Finish or a last-page Next; never presses Enter.
+   Scrolls to the top.
+9. `jobhunter apply fill-report <session_id>` stores the classified list (keys, labels, actions,
+   no values) and prints it in chat:
 
 ```
-Resume parsed: 11 fields filled, 2 differ, 3 filled by jobhunter
+Resume parsed: 11 fields filled, 2 differ, 4 kept as they were
 Differ (check):  Phone  "5550100" vs "+1-555-0100" · Job 2 title split into two entries
 Yours (4):       ? "Why Acme?" (draft ready) · Salary · EEO block · Consent checkbox
 ```
 
-Field names and label synonyms are data in `apply/ats_forms.py` and `apply/labels.py`, recorded
-from fixtures at phase 2 capture and grown like `ats_rules.py`. Anything matched only by the
-agent's own reading of a label is listed with a suggested value, never filled.
+Revision 3 has no "fill from a bank" row: your fill helpers cover contact, links and work
+authorization. If you install your helper in the `jobhunter-apply` profile, run it after the
+parse settles and before step 7; its fills then show as `keep` on a re-run. The helper itself
+fills nothing in revision 3 except, with your approval in chat, pasting a draft into its field.
+
+Field names, label synonyms, `parse_control` and `attachment_field` are data in
+`apply/ats_forms.py` and `apply/labels.py`, recorded at phase 2 capture and grown like
+`ats_rules.py`.
 
 Page content is untrusted: text on the page or in the posting that asks the agent to submit,
 change answers, read files or visit another site is reported, not followed. The tool allowlist
@@ -393,15 +451,14 @@ is what makes that hold when the model gets it wrong.
 ### Isolation
 
 The session mixes a browser, untrusted page text and a coding agent, so it gets as little reach
-as possible. What is kept is configuration and one small hook; what revision 1 had beyond that
-is cut ([Revision 2](#revision-2-user-direction)).
+as possible.
 
 | Kept | Why |
 |---|---|
-| **Dedicated Chrome profile `jobhunter-apply`**, signed in to nothing (no Google account, no Gmail). Claude in Chrome and the guard userscript are installed only there | The extension shares the profile's logins. Your everyday profile is untouched |
+| **Dedicated Chrome profile `jobhunter-apply`**, signed in to nothing (no Google account, no Gmail). Claude in Chrome and the guard userscript are installed only there; your fill helper only if you add it | The extension shares the profile's logins. Your everyday profile is untouched |
 | **Restricted launch:** `claude --chrome --permission-mode dontAsk --strict-mcp-config --settings .claude/apply/settings.json "/apply-fill <job_id>"` (flags confirmed in the spike) | `dontAsk` denies anything not allowed, so auto mode's classifier approves nothing; `--strict-mcp-config` loads no Playwright MCP server |
-| **Allowlist** in `.claude/apply/settings.json` (checked in): Claude in Chrome navigate, read/find, form input, click/type, file upload, screenshot; **not** the JavaScript tool, console or network readers. `Bash(jobhunter apply fill-start:*)`, `Bash(jobhunter apply fill-report:*)`, `Read(<data dir>/packets/**)`. Site rules deny the extension everywhere except the allowed ATS hosts and `127.0.0.1:8808` | In auto mode the extension skips its own site check unless permission rules deny sites, so the rules are the site control |
-| **PreToolUse hook** `scripts/hooks/apply_guard.py`, in the apply settings only: denies tools off the list, navigation to other hosts, clicks whose target text matches the submit patterns, and any call in `bypassPermissions`. Fails closed | Catches a loosened rule or a mistaken labelled click |
+| **Allowlist** in `.claude/apply/settings.json` (checked in): Claude in Chrome navigate, read/find, form input, click, screenshot, and file upload only if the spike passed; **not** the JavaScript tool, console or network readers. `Bash(jobhunter apply fill-start:*)`, `fill-classify`, `fill-report`; `Read(<data dir>/packets/**)`. Site rules deny the extension everywhere except the allowed ATS hosts and `127.0.0.1:8808` | In auto mode the extension skips its own site check unless permission rules deny sites, so the rules are the site control |
+| **PreToolUse hook** `scripts/hooks/apply_guard.py`, in the apply settings only. Denies: tools off the list; navigation to other hosts; **key actions for Enter, Return and NumpadEnter**; form input or a ref click on any element ref that `fill-classify` marked `yours` (it writes the session's ref→action map to `<data dir>/packets/<id>/session-<sid>.json`); form input on a ref marked anything but `paste`; any call in `bypassPermissions`. Fails closed | It sees only tool input, so it checks refs and keys, never on-page text. A coordinate click carries neither and passes; the guard dialog and you cover that |
 | **Limits:** one open session, packet must be `ready`, daily cap, no batch/queue/schedule command | One job, one tab, one review |
 
 `fill-start` also refuses unless `JOBHUNTER_APPLY_SESSION=1`, which the launcher sets. That is a
@@ -410,14 +467,15 @@ outside these protections, and the skill says to use the launcher.
 
 ### The stop before Submit
 
-Best effort, in layers; you are the last one.
+Best effort, in layers. The guard dialog and you are the layers that hold when the model gets it
+wrong.
 
 | Layer | Stops | Gap |
 |---|---|---|
 | **Guard userscript** `jobhunter-guard.user.js`, apply profile only, the allowed ATS hosts, `@run-at document-start`. Capture-phase listeners on `window` for `submit` events (covers Enter), clicks on submit-type controls (`button` without a type or `type=submit`, `input[type=submit\|image]`) and on any `button`/`[role=button]` whose text, `value` or `aria-label` matches submit / apply / send / finish (en, es, fr, de, pt). Each calls `confirm("Submit this application? jobhunter listed N fields for you.")` synchronously; Cancel stops the event. Shows a "jobhunter: review, then submit" banner when installed | An unlabelled icon button that submits by `fetch` |
-| **Tool allowlist and hook** (above): no JavaScript, no dialog tool, labelled submit clicks denied | A coordinate click carries no target text; the guard's dialog covers that, and the spike confirms the dialog blocks the extension |
+| **You** press Submit and answer the guard's dialog | |
+| **Hook** (above): Enter keys, refs marked `yours`, form input outside `paste` | Coordinate clicks |
 | **Skill rules** and the required `stopped_before_submit` outcome | Depends on the model |
-| **You** press Submit (and answer the guard's dialog) | |
 
 Event listeners work from a userscript manager's isolated world as well as the page world, so
 the guard needs no prototype wrapping, no world-specific install and no self-test.
@@ -427,7 +485,7 @@ the guard needs no prototype wrapping, no world-specific install and no self-tes
 Never solved, bypassed or avoided; no simulated mouse or typing cadence. A reCAPTCHA, hCaptcha,
 email or SMS code, "verify you are human" page or login wall ends the session (`challenge`) and
 the tab is yours. If confirmations from one ATS stop arriving after helped applications, set
-`[apply.ats.<name>] fill = false` and use the copy panels for it.
+`[apply.ats.<name>] fill = false` and use the checklist for it.
 
 ### Phase 2 data
 
@@ -441,7 +499,7 @@ CREATE TABLE fill_session (
   started_at   TEXT NOT NULL,
   finished_at  TEXT,
   outcome      TEXT CHECK (outcome IN ('stopped_before_submit', 'challenge', 'aborted', 'error')),
-  report       TEXT              -- JSON: keys, labels, states. Never values
+  report       TEXT              -- JSON: keys, labels, actions. Never values
 );
 ```
 
@@ -449,28 +507,36 @@ CREATE TABLE fill_session (
 
 The packet page's **Open application** and the helper both go through `/apply/{id}`, so the
 existing "Did you apply?" prompt ([015](015-apply-links.md#fresh-at-click-time)) appears on
-return. *Yes* writes `applied`, sets `resume_version` and `cover_letter_path`, attaches the
-rendered files and marks the packet `submitted`. Otherwise the existing mail match proposes the
-confirmation as today. A packet `ready` for 7 days with no application event shows on
-`/followups` as "ready, not applied?".
+return; the mail match proposes the confirmation as today.
+
+The packet is attached in **`tracking.add_event`**, so every path behaves the same (the prompt,
+an accepted mail proposal, which recorded 18 of your 20 applications, and a manual event): when
+the event is `applied` and the application has a `ready` packet, it sets
+`application.resume_version` to `packet:<id>/resume/v<n>` and `cover_letter_path` to the
+rendered letter, and adds `attachment` rows for the rendered files (outside the tracked tree, as
+`tracking.validate_attachment_path` requires), so `/pipeline/{id}` shows what was sent.
+`answer_prompt` and the proposal accept path need no packet code of their own.
+
+A packet `ready` for 7 days whose application has **no `applied` event** shows on `/followups`
+as "ready, not applied?".
 
 ## Security and privacy
 
 - **Console.** Still loopback; new `POST` routes inherit the console's same-origin middleware
   (`same_origin_writes`). No route sends `Access-Control-Allow-*`.
 - **No credentials** stored or seen. You sign in; the helper stops at login pages.
-- **Nothing personal in the repo.** `answers.yaml`, packets and exports live under
-  `<data dir>`; fixtures are captured logged out and linted ([Testing](#testing)).
+- **Nothing personal in the repo.** Packets, saved answers and exports live under `<data dir>`
+  and the database; fixtures are captured logged out and linted ([Testing](#testing)).
 - **Logs** record ids, keys, labels, outcomes and costs, never answer values or document bodies.
 
-| Data | Anthropic API (generation) | Claude in Chrome (phase 2) | Dev agents in the repo | The employer |
-|---|---|---|---|---|
-| Resume text | yes, contact header replaced | yes (upload, page contents) | as today | yes |
-| Posting, fit evidence | yes | page contents | as today | — |
-| Answer bank (name, email, links, work authorization) | **never** | yes, the values it fills | no (deny rule) | yes |
-| Employer notes | yes (letter, drafts) | no | no | in the letter |
-| Salary, EEO, self-ID, citizenship, address | not stored | not stored | not stored | when you type them |
-| OpenRouter, Jev, a local scorer | never | | | |
+| Data | Anthropic API (generation) | Claude in Chrome (phase 2) | The employer |
+|---|---|---|---|
+| Resume text, header included | yes, as Stage 2 already sends it | yes: the attached file if the helper attaches it, and the parsed values in page reads and screenshots | yes |
+| Posting, fit evidence | yes | page contents | — |
+| Saved answers and drafts | drafts are generated there; saved answers are never sent back | only the one you approve pasting (`fill-start` prints none) | when pasted |
+| Employer notes, story facts | yes (letter, drafts) | no | in the letter or answer |
+| Never-store list | not stored | not stored; may appear in screenshots if the form shows them | when you type them |
+| OpenRouter, Jev, a local scorer | never | | |
 
 ## Compliance
 
@@ -494,27 +560,33 @@ Recorded on `7fa29db`; each needs your approval and an amendment:
 | Spec | Today | Proposed | Why |
 |---|---|---|---|
 | [001](001-goals-and-scope.md#non-goals) | "Resume generation: ... It does not write your resume." | "No resume written from scratch. Tailored variants of your own resume, limited by the no-fabrication checker and your review (017), are in scope." | You asked for it; the checker and line-by-line evidence address the fabrication risk the non-goal guarded |
-| [001](001-goals-and-scope.md#non-goals) | "Private-sector job boards (Indeed, LinkedIn, Greenhouse): ..." | "No *ingest* from private-sector boards. 017 may fetch one posting you paste and, after its gate, help fill one form you chose in your own browser, never submitting." | That non-goal is about crawling for jobs; 017 crawls nothing |
-| [015](015-apply-links.md) | "It never fills it in or submits it" | "The Apply button never fills or submits. Filling is a separate packet action (017, phase 2), and nothing in jobhunter submits." | The button keeps its behavior |
+| [001](001-goals-and-scope.md#non-goals) | "Private-sector job boards (Indeed, LinkedIn, Greenhouse): ..." | "No *ingest* from private-sector boards. 017 may fetch one posting you paste and, after its gate, help with one form you chose in your own browser, never submitting." | That non-goal is about crawling for jobs; 017 crawls nothing |
+| [015](015-apply-links.md) | "It never fills it in or submits it" | "The Apply button never fills or submits. Form help is a separate packet action (017, phase 2), and nothing in jobhunter submits." | The button keeps its behavior |
+| [009](009-roadmap.md#m9--remainder-and-ops) | M9 "Remainder and ops", 0.5-1.5 agent-days; the whole roadmap 5.75-11 d | New **M10 Assisted apply** after M9: phase 1 ≈ 4.5-5.5 d, phase 2 ≈ 3.5-5 d after its gate | 017 alone is about the size of the original roadmap; folding it into M9 would hide that |
+| [008](008-compliance.md#personal-data) | Personal data "never leave the machine except as LLM request bodies" | "...except as LLM request bodies, and, in a 017 phase 2 session you start, the form contents, parsed values and screenshots Claude in Chrome reads" | Phase 2 sends page reads and screenshots through the extension, which is not a jobhunter LLM request |
 
 ## Failure modes
 
 | Failure | Behavior |
 |---|---|
 | Generator returns invalid JSON or times out | Nothing saved; retry; error on the page |
-| Generator invents or inflates a fact | Badged by factcheck; Mark ready blocked until edited or confirmed |
+| Generator invents or inflates a fact | Badged by factcheck; Mark ready blocked until fixed or confirmed |
 | Overstatement the lexicon misses | Not detected; the cited line beside every line, and the optional entailment pass |
-| Over the spend cap | Generate disabled; **Use base resume** still works |
+| Over `[apply] daily_cap_usd` | Generate disabled; **Use base resume** still works; scoring unaffected |
+| A question on the never-store list | No draft, no save, no fill: "This one is yours" |
+| Behavioral question without story facts | No draft until you write them |
 | Pasted posting duplicates a job | Existing group offered |
+| Nightly merge absorbs a group or application with a packet | Packet re-pointed or `abandoned` under the winner; merge completes |
 | Fetch refused by robots or page empty | Paste the text |
 | Playwright missing | HTML for print-to-PDF |
 | Already applied to this employer and title | Warning before Generate |
 | *Phase 2:* guard banner missing | No filling |
-| *Phase 2:* parse filled something wrongly | Listed, not overwritten |
+| *Phase 2:* parse filled something wrongly | `differs`, listed, not overwritten |
+| *Phase 2:* parse does not settle in 30 s | Reported; classified as is |
 | *Phase 2:* ATS changed its form | Fewer known-name matches; more fields listed; fixture refresh bug |
 | *Phase 2:* file rejected, extension disconnected | Session stops (`error` / `aborted`); tab left as is |
 | *Phase 2:* challenge or login wall | `challenge`; tab is yours |
-| *Phase 2:* prompt injection on the page | Reported, not followed; no JS, two commands, reads only packets, allowed hosts only, submit needs you |
+| *Phase 2:* prompt injection on the page | Reported, not followed; no JS, three commands, reads only packets, allowed hosts only, submit needs you |
 
 ## Testing
 
@@ -523,19 +595,23 @@ mocked.
 
 | Area | How |
 |---|---|
-| Generator | Canned JSON from a mocked client; request body has placeholders for the contact header and no sentinel answer values |
-| Factcheck | Table tests: new employer, changed date, invented number, unlisted skill, invented certification, "contributed" → "led", added team size, added "expert", employer claim without notes or quote, bad posting quote, confirmed line |
-| Privacy | Sentinel `answers.yaml` across Stage 2, Stage 3, the decisions scorer and the generator: no value in any request body or log; `.claude/settings.json` deny rules present |
-| Answer bank | Load, validate, round-trip save keeps comments, mode `0600`, backup written |
-| Routes | `TestClient`: `/apply/new` URL-only, text-only, dedup, robots refusal (mocked `FetchContext`); cross-site POSTs refused |
+| Generator | Canned JSON from a mocked client; streaming; effort and thinking set; the request body contains no saved `packet_answer` values |
+| Factcheck | Table tests: new employer, changed date, invented number, unlisted skill, invented certification, "contributed" → "led", added team size, added "expert", employer sentence without a quote (with and without notes), bad posting quote, behavioral sentence without `S*`/`L*`, confirmed line |
+| Editor | Sources and confirmations carry forward for unchanged items; an edited item is re-checked and keeps its badge if it still fails; a new item without a source blocks Mark ready |
+| Never-store | One test per entry point: Save as answer, `save_answer`, question draft (no client call), `fill-classify` row 1 beats every other row |
+| Spend | Packet spend ignored by `remaining_daily_budget` / `weekly_remaining`; `[apply] daily_cap_usd` refuses before the call |
+| Paste | `/apply/new` URL-only, text-only, dedup, robots refusal (mocked `FetchContext`); job at `normalized` and skipped by a daily run; `description_rev` unchanged; Score this group now records the pass and scores one group; Open application hidden without a URL; Pasted Sankey node; cross-site POSTs refused |
+| Merges | As in [Merges and undo](#merges-and-undo) |
+| Loop | `add_event('applied')` attaches the packet from the prompt, the proposal accept path and a manual event; followups rule |
 | Export | HTML render golden file; PDF when the `browser` extra is present (`e2e`) |
-| *Phase 2:* fixtures | `tests/fixtures/ats_forms/<ats>/`: rendered DOM of public, empty forms, plus small hand-written pages that mimic a resume-parse prefill, a React-controlled input and a `fetch` submit from a labelled `type=button`. Reader and classifier tested against them |
+| *Phase 2:* classifier | `fill-classify` on before/after field-list JSON recorded from fixtures and the spike: prefilled kept, parser-filled compared, never-store first, base-resume entries, settle timeout |
+| *Phase 2:* fixtures | `tests/fixtures/ats_forms/<ats>/`: rendered DOM of public, empty forms, plus small hand-written pages that mimic a resume-parse prefill, a returning-candidate prefill, a React-controlled input and a `fetch` submit from a labelled `type=button` |
 | *Phase 2:* fixture lint | Fails on emails other than `@example.com`, phone numbers, long tokens in attributes, `<script>` in captured fixtures, hidden inputs |
 | *Phase 2:* guard | `e2e` Playwright on the fixtures: dialog on a submit-type button, a labelled `type=button`, a localized label and Enter in a text field; Cancel blocks |
-| *Phase 2:* session config and hook | Parse `.claude/apply/settings.json`: no JavaScript tool, no `mcp__playwright__*`, two Bash commands, reads only packets. Hook unit tests on recorded tool inputs, fail-closed |
+| *Phase 2:* session config and hook | Parse `.claude/apply/settings.json`: no JavaScript tool, no `mcp__playwright__*`, three Bash commands, reads only packets. Hook unit tests on recorded tool inputs: Enter/Return denied, form input on a `yours` ref denied, off-host navigation denied, fail-closed |
 
 **Phase 2 acceptance per ATS: one supervised live dry run** on a posting you mean to apply to:
-check every field, the upload and the guard dialog (Cancel), then submit it yourself or close the
+check every field, the attach and the guard dialog (Cancel), then submit it yourself or close the
 tab. **Fixture capture** happens once, by hand, in a fresh profile with no ATS sessions or
 extensions, direct board URLs only (Greenhouse `/embed/` and Ashby `/api/` are disallowed),
 saved before any typing and stripped of scripts, hidden inputs and tokens.
@@ -546,79 +622,84 @@ Agent-effort estimates, in the style of [009](009-roadmap.md):
 
 | Phase | Work | Effort |
 |---|---|---|
-| **1a** | Packet table migration, Prepare (`p`, detail button), **New packet** from URL or text (`paste-manual`, dedup, robots-aware fetch), packet page | **1-1.5 d** |
-| **1b** | Generator (Opus 5, structured output, caching, spend cap, estimate), factcheck with claim strength and employer claims, cited-line editor, versions, cover letter, employer notes, question drafts, optional entailment pass, `/costs` line | **2-2.5 d** |
+| **1a** | Packet migration, merge and undo handling, Prepare (`p`, detail button), **New packet** (`paste-manual` at `normalized`, dedup, robots-aware fetch), Score this group now, Pasted Sankey node, packet page | **1-1.5 d** |
+| **1b** | Generator (Opus 5, streaming, effort, caching, own cap, measured estimate), factcheck with claim strength and employer claims, structured cited-line editor, versions, cover letter, employer notes, question drafts with story facts, optional entailment pass, `/costs` line | **2-2.5 d** |
 | **1c** | Export (PDF, text, markdown; `.docx` if chosen +0.5 d) | **0.5 d** |
-| **1d** | Answer bank (model, YAML, `/prefs` section), deny rules, sentinel test, copy panels and checklists (any ATS, USAJOBS, Workday, NEOGOV) | **1 d** |
-| **1e** | Loop: Open application via `/apply/{id}`, attachments on *applied*, `/followups` item, `apply stats` | **0.5 d** |
+| **1d** | Never-store table and its enforcement, saved answers with reuse, checklists, loop in `add_event`, `/followups` item, `apply stats` | **0.5-1 d** |
 | | *Gate: 4 weeks of use, plus the spike* | |
-| **2a** | **Spike**: Claude Code driving Claude in Chrome in a dedicated profile from host or container; launch flags and site rules; guard dialog blocks the extension | **0.5-1 d** |
-| **2b** | Fixture capture and lint, form reader and field classifier, field names and label synonyms | **1-1.5 d** |
+| **2a** | **Spike**: Claude Code driving Claude in Chrome in a dedicated profile; launch flags and site rules; guard dialog blocks the extension; PDF attach per ATS; ref stability; hook inputs | **0.5-1 d** |
+| **2b** | Fixture capture and lint, `fill-classify`, base resume parse, `ats_forms.py` controls and label synonyms | **1-1.5 d** |
 | **2c** | Apply launch and settings, `/apply-fill` skill, `fill-start`/`fill-report`, hook, `fill_session`, report view | **1-1.5 d** |
 | **2d** | Guard userscript and its e2e tests; supervised dry run per ATS | **0.5-1 d** |
-| | **Total** | **≈ 8-11 d** (phase 1 ≈ 5-6 d) |
+| | **Total** | **≈ 8-10.5 d** (phase 1 ≈ 4.5-5.5 d) |
 
-Phase 1 is useful on its own and ships first. Revision 1 was ≈ 11-15.5 d.
+Phase 1 is useful on its own and ships first.
 
 ## Decisions recorded on 7fa29db
 
-- **Salary, EEO and self-ID, citizenship, address and pronouns are never stored or filled.**
-  Reason: your direction; your fill helpers skip them, and dropping them removes the encrypted
-  store, passphrase, keyring, `cryptography` dependency and redaction plumbing.
-- **`answers.yaml` in `<data dir>/profile/`, mode `0600`, with a checked-in deny rule and a
-  sentinel test.** Reason: what is left is non-sensitive; accidental agent reads and leaks to
-  models are the remaining risks.
-- **Targeted resume, cover letter and New packet are phase 1 and standalone.** Reason: your
-  direction; they help on every posting, with or without filling.
-- **Resume-first fill: upload, let the site fill, then fill gaps and list differences.**
-  Reason: your direction; most ATSs parse the resume, so jobhunter only needs the remainder and
-  must not overwrite what the parse did without showing you.
-- **Fill guard scaled down** to a dedicated profile, a restricted launch with an allowlist and
-  one hook, an event-listener guard script, skill rules and you. Reason: the agent has no
-  JavaScript or dialog tool, so its only routes to a submit are clicks and Enter, which those
-  cover; the rest of revision 1's machinery mostly served sensitive local fills.
-- **Open application and the helper go through `/apply/{id}`.** Reason: the existing click log
-  and "Did you apply?" prompt then work unchanged.
-- Carried from revision 1: Opus 5 synchronous for generation; claim-strength and employer-claims
-  checks with the cited line beside every line; `paste-manual` source; USAJOBS shows evidence
-  lines only; deviations from 001 and 015 proposed for approval.
+- **Never-store list as data, checked first at every write, draft and fill.** Reason: stating
+  the rule in Non-goals did not stop Save as answer, `packet_answer` or drafts from storing it.
+- **No answer bank in phase 1; saved custom answers live on packets and are reusable.** Reason:
+  your fill helpers cover contact, links and work authorization.
+- **Packets hang off `application`; merges re-point or abandon them.** Reason: a `job_group`
+  reference would break the nightly merges as the `rejection` FK did (#78).
+- **Pasted postings sit at `normalized` and are scored only on request.** Reason: the nightly run
+  must not score them, and the normal path cannot score one that fails a prefilter rule.
+- **Own `[apply] daily_cap_usd`.** Reason: packet spend and scoring spend must not block each
+  other mid-application or mid-plan.
+- **Structured editor; Mark ready gated on the current version's check alone.** Reason:
+  citations must survive edits, and an edit must not clear a failing line.
+- **Phase 2: snapshot, you attach, settle, snapshot, classify in code.** Reason: only a before
+  snapshot separates parser output from your edits, and the code that runs must be the code
+  tested.
+- **Resume sent as Stage 2 sends it; no header placeholders, deny rule or sentinel test.**
+  Reason: the resume header already goes to every scorer, so hiding it here protected nothing.
+- **Packet attached in `tracking.add_event`.** Reason: the mail path records most of your
+  applications.
+- Carried: salary, EEO and self-ID never stored or filled; New packet standalone; Opus 5 for
+  generation; claim-strength and employer-claims checks with the cited line beside every line;
+  `paste-manual` source; USAJOBS evidence lines only; Open application and the helper through
+  `/apply/{id}`; the scaled-down fill guard.
 
 ## Open questions
 
-1. **Export format.** PDF only, or also `.docx` (some parsers read it better)? Any visual
+1. **Answer bank.** Your fill helpers already cover contact, links and work authorization.
+   Should jobhunter skip the answer bank for good? (Default: skip.)
+2. **Your helper in the apply profile.** Will you install your fill helper in the
+   `jobhunter-apply` profile, so phase 2 only lists differences and offers drafts?
+3. **Export format.** PDF only, or also `.docx` (some parsers read it better)? Any visual
    template the variant should match?
-2. **Cover letters.** Only when you ask, or drafted with every packet?
-3. **Entailment pass.** On by default (about $0.003 per packet)?
-4. **Phase 2 gate.** 8 ready packets in 4 weeks to the four ATSs: right threshold?
-5. **Phase 2 hosts.** Start with the four public ATSs only, or also help on Workday and NEOGOV
+4. **Cover letters.** Only when you ask, or drafted with every packet?
+5. **Entailment pass.** On by default (about $0.003 per packet)?
+6. **`[apply] daily_cap_usd`.** Is $1.00 a day right?
+7. **Phase 2 gate.** 8 ready packets in 4 weeks to the four ATSs: right threshold?
+8. **Phase 2 hosts.** Start with the four public ATSs only, or also help on Workday and NEOGOV
    pages after you sign in yourself?
-6. **Phase 2 setup.** Will you create a `jobhunter-apply` Chrome profile with Claude in Chrome
+9. **Phase 2 setup.** Will you create a `jobhunter-apply` Chrome profile with Claude in Chrome
    and a userscript manager? Should Claude Code run on the host or in the dev container?
-7. **Sharing with the browser agent.** OK that your resume, the answers it fills and screenshots
-   of the form go to Anthropic through Claude in Chrome?
-8. **Amend 001 and 015** as in [Deviations](#deviations-from-earlier-specs)?
+10. **Sharing with the browser agent.** OK that page contents, parsed values and screenshots of
+    the form go to Anthropic through Claude in Chrome?
+11. **Amend 001, 008, 009 and 015** as in [Deviations](#deviations-from-earlier-specs)?
 
-## Revision 2: user direction
+## History
+
+### Revision 2: user direction
 
 On 2026-10-09 you said: *"The other fill helper tools I use don't enter salary or eeo questions
 so not a problem."* *"Most websites now take a resume and fill themselves from it. So the
 checker may be more of: if resume, add that first, see what fills, then help with remainder if
-needed."* *"Targeted resume tools and cover letter tools may be helpful too."*
+needed."* *"Targeted resume tools and cover letter tools may be helpful too."* Revision 2
+removed the sensitive store (keyring, passphrase, redaction), the userscript filler and token
+handoff, the page-world guard and the repo-wide hook; made phase 1 the documents; and made
+phase 2 resume-first. Revision 1 was ≈ 11-15.5 d.
 
-| Revision 1 had | Revision 2 | Why |
-|---|---|---|
-| Sensitive answers (salary, EEO, citizenship, address, pronouns) in the keyring or an encrypted file, passphrase unlock, `Sensitive[T]`, redacted change log, `answers_hash` rules | **Removed.** Never stored, never filled | You answer them by hand |
-| Autofill driving the whole form, then reading back | Resume first; fill only gaps; list differences | Sites already fill from the resume |
-| Phases: packet, copy-ready, autofill | Phase 1 documents, answer bank and copy panels; phase 2 resume-first fill | Documents are useful everywhere |
-| Userscript filler (mode C), token handoff and token routes | **Removed**; copy panels are the no-LLM path | Its main job was filling sensitive fields locally |
-| Page-world guard with `fetch`/XHR/beacon wrappers, endpoint allowlists, self-test, isolated-world and real-manager tests | Event-listener guard | The agent cannot run JS or accept dialogs; you are the last layer |
-| Repo-wide hook blocking Playwright and ATS navigation during fills | **Removed** | Playwright MCP drives its own Chromium, not the apply profile; the launch is where the controls live |
-| Per-employer cap, minimum gap, token limits | One session at a time, daily cap, no batch | Proportionate to one person |
-| `did_you_apply()` extension and mail candidate-set boost | Go through `/apply/{id}` | Existing prompt and matching work unchanged |
-| Effort ≈ 11-15.5 d | ≈ 8-11 d | |
+### Revision 3: review round 2
 
-**Review round 1** (adversarial, 2026-10-09) raised nine critiques. Kept from it: New packet from
-a pasted posting with robots-aware fetch, the claim-strength and employer-claims checks with the
-cited line beside every line, USAJOBS evidence lines only, the usage gate, a dedicated profile
-and restricted launch, fixture capture hygiene and lint, and the recorded deviations. Its
-critiques of the sensitive store, mode B/C and the token handoff no longer apply.
+An adversarial review (2026-10-09) raised ten critiques, all taken; each change is listed under
+[Decisions](#decisions-recorded-on-7fa29db). In short: the never-store list is enforced in code;
+packets survive nightly merges; phase 2 classifies in tested code from a before and after
+snapshot, and you attach the resume; edits keep citations; the answer bank is deferred; pasted
+postings are scored only on request; packets have their own spend cap and a higher estimate; the
+placeholder, deny-rule and sentinel plumbing is gone; the loop covers the mail path; and the
+deviations now include 008 and 009. The branch was updated from `main` by a merge, not a rebase,
+because it is pushed fast-forward only.

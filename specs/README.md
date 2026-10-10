@@ -26,7 +26,7 @@ Status: **design, awaiting your approval.** No implementation code written yet.
 | [014](014-preferences-console.md) | **Preferences console** | Edit salary, states, weights, queries; live preview; free vs paid changes |
 | [015](015-apply-links.md) | **Apply links** | Button straight to the employer's application, redirects resolved |
 | [016](016-alternative-scorers.md) | Alternative scorers | OpenRouter, Jev Router, local models on this hardware, rollout by measurement |
-| [017](017-assisted-apply.md) | **Assisted apply** | Targeted resume and cover letter from your own facts for any posting, small answer bank, copy panels; later, resume-first form help that stops before Submit |
+| [017](017-assisted-apply.md) | **Assisted apply** | Targeted resume, cover letter and checked custom-question drafts from your own facts for any posting; later, resume-first form help that stops before Submit |
 
 ## Headline decisions
 
