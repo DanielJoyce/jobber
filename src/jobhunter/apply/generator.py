@@ -35,7 +35,15 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from jobhunter.apply import answers, cli_runner, documents, factcheck, labels, runner_state
+from jobhunter.apply import (
+    answers,
+    cli_runner,
+    documents,
+    factcheck,
+    inflight,
+    labels,
+    runner_state,
+)
 from jobhunter.apply.schemas import OUTPUT_MODELS, json_schema
 from jobhunter.config import Settings
 from jobhunter.core import db
@@ -520,8 +528,15 @@ def _run_cli(
     now: datetime,
     estimate_usd: float,
     environ: Mapping[str, str] | None,
+    allow_overage: bool,
+    max_budget_usd: str = cli_runner.MAX_BUDGET_USD,
 ) -> tuple[Call, bool]:
-    """One CLI call; returns (call, paid). Turns the runner off on an init or auth failure."""
+    """One CLI call; returns (call, paid). Turns the runner off on an init or auth failure.
+
+    ``allow_overage``: may this call continue if the stream reports paid extra usage? True
+    for a run the user confirmed as paid, and for the first call of a click while no hold was
+    set (the spec accepts that one call, under the cap). Otherwise the child is killed. Every
+    overage report sets the hold; only the user's Clear removes it."""
     data_dir = settings.paths.data_dir
     binary = cli_runner.find_binary()
     if binary is None:
@@ -540,8 +555,8 @@ def _run_cli(
         raise GenerateFailed(f.reason, offer_api=True) from f
 
     def on_overage() -> bool:
-        runner_state.set_overage(data_dir, True, now)
-        return remaining_cap(conn, settings, now) >= estimate_usd
+        runner_state.set_overage(data_dir, now)
+        return allow_overage and remaining_cap(conn, settings, now) >= estimate_usd
 
     try:
         res = cli_runner.run(
@@ -554,17 +569,33 @@ def _run_cli(
             effort=effort,
             on_overage=on_overage,
             environ=environ,
+            max_budget_usd=max_budget_usd,
         )
     except cli_runner.CliFailure as f:
         if f.turn_off:
             off(f.reason)
         if f.result is not None:
             _log_spend(conn, _cli_call(f.result, model), now, paid=f.result.overage)
+        elif f.overage:
+            # Killed or timed out after the stream reported paid extra usage: the request was
+            # already being served, so it is charged. Log the best figure we have.
+            part = f.partial or cli_runner.CliResult()
+            call = Call(
+                data=None,
+                model=part.model or model,
+                runner="cli",
+                input_tokens=part.all_input_tokens,
+                output_tokens=part.output_tokens,
+                cost_usd=estimate_usd,
+            )
+            _log_spend(conn, call, now, paid=True)
+        elif f.started:
+            # Past the init check: the request may have used subscription quota. Count it.
+            part = f.partial or cli_runner.CliResult()
+            _log_spend(conn, _cli_call(part, model), now, paid=False)
         raise GenerateFailed(f.reason, offer_api=True) from f
     call = _cli_call(res, model)
     _log_spend(conn, call, now, paid=res.overage)
-    if not res.overage and runner_state.load(data_dir).overage:
-        runner_state.set_overage(data_dir, False, now)
     try:
         call.data = OUTPUT_MODELS[req.kind].model_validate(res.structured)
     except ValidationError as exc:
@@ -688,7 +719,8 @@ def write_version(
     at = now.astimezone(UTC).isoformat()
     with db.transaction(conn):
         parent = current_doc_id(conn, packet_id, kind, question_key)
-        carried = list(_report_of(conn, parent).get("confirmed") or [])
+        parent_report = _report_of(conn, parent)
+        carried = list(parent_report.get("confirmed") or [])
         report = factcheck.check(
             doc,
             posting=posting,
@@ -697,6 +729,20 @@ def write_version(
             entail=entail,
             entailment=entailment,
         )
+        if entail is None:
+            # An edit keeps the advisory verdicts of lines whose text and sources are unchanged.
+            old = {
+                (i.get("ckey"), tuple(i.get("sources") or [])): i.get("entail")
+                for i in parent_report.get("items") or []
+                if i.get("entail")
+            }
+            for item in report["items"]:
+                item["entail"] = old.get((item["ckey"], tuple(item["sources"])))
+            if old and parent_report.get("entailment"):
+                report["entailment"] = {
+                    **parent_report["entailment"],
+                    "carried": "verdicts kept for unchanged lines",
+                }
         version = (
             conn.execute(
                 "SELECT coalesce(max(version), 0) FROM packet_document "
@@ -780,9 +826,14 @@ def _entail(
     now: datetime,
     environ: Mapping[str, str] | None,
     client_factory: Callable[[], Any] | None,
+    paid_confirmed: bool = False,
 ) -> tuple[dict[str, str], dict[str, Any], float]:
     """Advisory verdicts per item key, the report's ``entailment`` block, and the CLI's
-    API-equivalent figure. Never raises: a failure is recorded and generation stands."""
+    API-equivalent figure. Never raises: a failure is recorded and generation stands.
+
+    On the CLI it runs on paid extra usage only when the click confirmed paid usage: if the
+    hold is set (the main call may just have set it) it is skipped, and if the Haiku call
+    itself reports paid usage it is stopped."""
     if not settings.apply.entailment_check:
         return {}, {"status": "off"}, 0.0
     built = _entail_request(doc)
@@ -790,20 +841,28 @@ def _entail(
         return {}, {"status": "skipped", "detail": "no cited lines"}, 0.0
     req, items = built
     try:
+        capped = {"status": "skipped", "detail": "the [apply] daily cap is reached"}
         if runner == "api":
-            if remaining_cap(conn, settings, now) < ENTAILMENT_ESTIMATE_USD:
-                return {}, {"status": "skipped", "detail": "the [apply] daily cap is reached"}, 0.0
-            call = _run_api(
-                conn,
-                settings,
-                req,
-                model=settings.apply.api_entailment_model,
-                effort=None,
-                now=now,
-                client_factory=client_factory,
-            )
+            with inflight.spend_section(settings.paths.data_dir):
+                if remaining_cap(conn, settings, now) < ENTAILMENT_ESTIMATE_USD:
+                    return {}, capped, 0.0
+                call = _run_api(
+                    conn,
+                    settings,
+                    req,
+                    model=settings.apply.api_entailment_model,
+                    effort=None,
+                    now=now,
+                    client_factory=client_factory,
+                )
             equiv = 0.0
         else:
+            held = runner_state.load(settings.paths.data_dir).overage
+            if held and not paid_confirmed:
+                detail = "your subscription is on paid extra usage and this run was not confirmed"
+                return {}, {"status": "skipped", "detail": detail}, 0.0
+            if held and remaining_cap(conn, settings, now) < ENTAILMENT_ESTIMATE_USD:
+                return {}, capped, 0.0
             call, _paid = _run_cli(
                 conn,
                 settings,
@@ -813,6 +872,7 @@ def _entail(
                 now=now,
                 estimate_usd=ENTAILMENT_ESTIMATE_USD,
                 environ=environ,
+                allow_overage=paid_confirmed,
             )
             equiv = call.equiv_usd
     except (GenerateFailed, ApplyRefused) as exc:
@@ -888,36 +948,86 @@ def generate(
         raise ApplyRefused("make the resume version first (generate it or use the base resume)")
     req = build_request(conn, ctx, kind, question=question, instruction=instruction)
     est = estimate(conn, settings, kind, req.chars)
-    _preflight(
-        conn,
-        settings,
-        runner,
-        now=now,
-        estimate_usd=est.usd,
-        confirm_paid=confirm_paid,
-        environ=environ,
-    )
+    try:
+        with inflight.claim(settings.paths.data_dir, f"{packet_id}-{kind}-{qkey}"):
+            return _generate_locked(
+                conn,
+                settings,
+                ctx,
+                req,
+                est,
+                packet_id=packet_id,
+                kind=kind,
+                qkey=qkey,
+                runner=runner,
+                now=now,
+                confirm_paid=confirm_paid,
+                client_factory=client_factory,
+                environ=environ,
+            )
+    except inflight.Busy as exc:
+        raise ApplyRefused(str(exc)) from exc
+
+
+def _budget(left: float) -> str:
+    """``--max-budget-usd`` for a confirmed paid CLI run: never more than the cap left."""
+    return f"{max(min(1.0, left), 0.01):.2f}"
+
+
+def _generate_locked(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    ctx: Context,
+    req: Request,
+    est: Estimate,
+    *,
+    packet_id: int,
+    kind: str,
+    qkey: str,
+    runner: str,
+    now: datetime,
+    confirm_paid: bool,
+    client_factory: Callable[[], Any] | None,
+    environ: Mapping[str, str] | None,
+) -> Outcome:
+    data_dir = settings.paths.data_dir
+    pre = dict(now=now, estimate_usd=est.usd, confirm_paid=confirm_paid, environ=environ)
+    paid_confirmed = False
     if runner == "api":
-        call = _run_api(
-            conn,
-            settings,
-            req,
-            model=settings.apply.api_model,
-            effort=settings.apply.effort,
-            now=now,
-            client_factory=client_factory,
-        )
+        # Cap check, call and logged spend are one section, so two runs cannot both pass.
+        with inflight.spend_section(data_dir):
+            _preflight(conn, settings, runner, **pre)
+            call = _run_api(
+                conn,
+                settings,
+                req,
+                model=settings.apply.api_model,
+                effort=settings.apply.effort,
+                now=now,
+                client_factory=client_factory,
+            )
     else:
-        call, _paid = _run_cli(
-            conn,
-            settings,
-            req,
+        _preflight(conn, settings, runner, **pre)
+        paid_confirmed = confirm_paid and runner_state.load(data_dir).overage
+        cli_args = dict(
             model=settings.apply.cli_model,
             effort=settings.apply.effort,
             now=now,
             estimate_usd=est.usd,
             environ=environ,
+            allow_overage=True,
         )
+        if paid_confirmed:
+            with inflight.spend_section(data_dir):
+                _preflight(conn, settings, runner, **pre)  # the cap again, inside the section
+                left = remaining_cap(conn, settings, now)
+                call, _paid = _run_cli(
+                    conn, settings, req, max_budget_usd=_budget(left), **cli_args
+                )
+        else:
+            # No hold was set: the spec accepts this one call if it turns out to be on paid
+            # extra usage (under the cap); it sets the hold for every later call.
+            call, _paid = _run_cli(conn, settings, req, **cli_args)
     payload = call.data.model_dump(mode="json")
     body_key = {"resume": "resume", "cover_letter": "cover_letter", "question_draft": "draft"}[kind]
     doc: dict[str, Any] = {
@@ -931,7 +1041,14 @@ def generate(
         doc["question"] = req.question
         doc["qkind"] = req.qkind
     verdicts, meta, entail_equiv = _entail(
-        conn, settings, doc, runner, now=now, environ=environ, client_factory=client_factory
+        conn,
+        settings,
+        doc,
+        runner,
+        now=now,
+        environ=environ,
+        client_factory=client_factory,
+        paid_confirmed=paid_confirmed,
     )
     doc_id, version, report = write_version(
         conn,

@@ -271,7 +271,10 @@ def test_overage_is_charged_to_the_apply_cap_and_holds_further_cli_calls(
     fake_claude.set([claude_stream(RESUME_OUT), claude_stream(ENTAIL_OUT)])
     out2 = gen(env, confirm_paid=True)
     assert out2.version == 2
-    assert not runner_state.load(env.settings.paths.data_dir).overage  # cleared by a free call
+    # A call within the plan never clears the hold; only the user's Clear does.
+    assert runner_state.load(env.settings.paths.data_dir).overage
+    runner_state.clear_overage(env.settings.paths.data_dir)
+    assert not runner_state.load(env.settings.paths.data_dir).overage
 
 
 def test_overage_with_the_cap_reached_kills_the_call(env, fake_claude, claude_stream):
@@ -480,3 +483,99 @@ def test_story_facts_on_the_never_store_list_are_refused(env):
         ).fetchone()[0]
         == 0
     )
+
+
+# ─── review round: the paid-usage hold, kills, in-flight guard ──────────────
+
+
+def test_a_free_entailment_never_clears_the_hold_set_by_a_paid_main_call(
+    env, fake_claude, claude_stream
+):
+    # Opus is on paid extra usage, Haiku is still within the plan.
+    fake_claude.set([claude_stream(RESUME_OUT, overage=True), claude_stream(ENTAIL_OUT)])
+    out = gen(env)
+    assert out.entailment == "skipped"  # not run: the hold is set and nobody confirmed
+    assert len(fake_claude.calls()) == 1
+    assert runner_state.load(env.settings.paths.data_dir).overage
+    with pytest.raises(generator.ApplyRefused) as exc:
+        gen(env)
+    assert exc.value.needs_paid_confirm
+
+
+def test_entailment_reporting_overage_without_a_paid_click_is_stopped_and_logged(
+    env, fake_claude, claude_stream
+):
+    entail = claude_stream(ENTAIL_OUT, overage=True, model="claude-haiku-4-5")
+    entail["steps"][2:2] = [{"sleep": 3}, {"touch": "entail_went_on"}]
+    fake_claude.set([claude_stream(RESUME_OUT), entail])
+    out = gen(env)
+    assert out.entailment == "failed"
+    assert not fake_claude.reached("entail_went_on")
+    assert runner_state.load(env.settings.paths.data_dir).overage
+    rows = spend(env)
+    # The stopped call was already being served on paid usage: charged at the estimate.
+    assert rows[("packet", "claude-haiku-4-5")] == (1, pytest.approx(0.003))
+
+
+def test_confirmed_paid_run_is_refused_before_any_call_when_the_cap_is_reached(
+    env, fake_claude, claude_stream
+):
+    runner_state.set_overage(env.settings.paths.data_dir)
+    env.conn.execute(
+        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 5, 0, 0, 0.99)"
+    )
+    fake_claude.set([claude_stream(RESUME_OUT)])
+    with pytest.raises(generator.ApplyRefused, match="daily cap"):
+        gen(env, confirm_paid=True)
+    assert fake_claude.calls(auth=None) == []
+
+
+def test_confirmed_paid_run_caps_the_cli_budget_at_what_is_left(env, fake_claude, claude_stream):
+    runner_state.set_overage(env.settings.paths.data_dir)
+    env.conn.execute(
+        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 5, 0, 0, 0.70)"
+    )
+    fake_claude.set([claude_stream(RESUME_OUT, overage=True), claude_stream({"lines": []})])
+    gen(env, confirm_paid=True)
+    argv = fake_claude.calls()[0]["argv"]
+    assert argv[argv.index("--max-budget-usd") + 1] == "0.30"
+
+
+def test_entailment_on_the_api_respects_the_apply_cap(env, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
+    env.conn.execute(
+        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 5, 0, 0, 0.999)"
+    )
+    doc = {"kind": "resume", **RESUME_OUT, "context": {"lines": {"L4": "x", "L6": "y", "L7": "z"}}}
+    verdicts, meta, _ = generator._entail(
+        env.conn, env.settings, doc, "api", now=NOW, environ=None, client_factory=no_sdk
+    )
+    assert verdicts == {} and meta["status"] == "skipped"
+
+
+def test_a_second_generate_of_the_same_document_is_refused_while_one_runs(env, fake_claude):
+    from jobhunter.apply import inflight
+
+    with (
+        inflight.claim(env.settings.paths.data_dir, f"{env.pid}-resume-"),
+        pytest.raises(generator.ApplyRefused, match="already running"),
+    ):
+        gen(env)
+    assert fake_claude.calls(auth=None) == []
+
+
+def test_turn_back_on_keeps_the_hold_and_clear_removes_it(env):
+    d = env.settings.paths.data_dir
+    runner_state.set_overage(d)
+    runner_state.turn_off(d, "auth check failed")
+    state = runner_state.turn_on(d)
+    assert not state.off and state.overage
+    assert runner_state.clear_overage(d).overage is False
+
+
+def test_a_corrupt_state_file_reads_as_off_and_held(env):
+    d = env.settings.paths.data_dir
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "apply-runner.json").write_text("{not json")
+    state = runner_state.load(d)
+    assert state.off and state.overage

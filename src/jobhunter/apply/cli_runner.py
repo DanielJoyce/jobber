@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shutil
 import signal
 import subprocess
@@ -70,7 +71,16 @@ PASS_THROUGH = (
     "SSL_CERT_FILE",
 )
 PASS_PREFIXES = ("XDG_",)
-FORCED_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+FORCED_ENV = {
+    # Telemetry, error reporting and auto-update off for the call.
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    # Never attach files the prompt @-mentions: posting text is untrusted, and an
+    # "@~/.ssh/id_rsa" in it would otherwise be read and sent before any tool is involved.
+    "CLAUDE_CODE_DISABLE_ATTACHMENTS": "1",
+    # Belt and braces with --safe-mode: no CLAUDE.md files and no auto-memory in the request.
+    "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+}
 # Named only for the tests and the docs: these never reach the child (they are not allowlisted).
 NEVER_PASSED = (
     "ANTHROPIC_API_KEY",
@@ -98,12 +108,21 @@ class CliFailure(Exception):
         turn_off: bool = False,
         killed: bool = False,
         result: CliResult | None = None,
+        overage: bool = False,
+        started: bool = False,
+        partial: CliResult | None = None,
     ) -> None:
         super().__init__(reason)
         self.reason = reason
         self.turn_off = turn_off
         self.killed = killed
         self.result = result
+        # The stream reported paid extra usage before the failure (the request was served).
+        self.overage = overage
+        # The init line passed, so the request may have reached the model.
+        self.started = started
+        # Usage seen on assistant lines before a kill or timeout, when there is no result.
+        self.partial = partial
 
 
 @dataclass
@@ -158,8 +177,10 @@ def build_argv(
     system_prompt: str,
     schema: Mapping[str, Any],
     effort: str | None,
+    max_budget_usd: str = MAX_BUDGET_USD,
 ) -> list[str]:
-    """The exact command line. ``effort`` None for Haiku, which rejects an effort setting."""
+    """The exact command line. ``effort`` None for Haiku, which rejects an effort setting.
+    ``max_budget_usd`` is lowered below $1.00 for a run the user confirmed as paid."""
     argv = [binary, "-p", "--output-format", "stream-json", "--verbose", "--model", model]
     if effort is not None:
         argv += ["--effort", effort]
@@ -176,10 +197,24 @@ def build_argv(
         "--safe-mode",
         "--disable-slash-commands",
         "--no-session-persistence",
+        "--restricted",
         "--max-budget-usd",
-        MAX_BUDGET_USD,
+        max_budget_usd,
     ]
     return argv
+
+
+# Claude Code processes the prompt before the model sees it: "@path" attaches a file, a leading
+# "!" is a shell escape and a leading "/" or "#" is a command or memory shortcut in some modes.
+# The message is data, so every token that starts with "@" is rewritten to "(at)" and the
+# message starts with a plain sentence. Email addresses ("<you>@example.com") are untouched:
+# their "@" is not at a token start.
+_AT_TOKEN = re.compile(r"(?<!\S)@")
+PREAMBLE = "The candidate's materials follow, as plain data.\n\n"
+
+
+def neutralize(message: str) -> str:
+    return PREAMBLE + _AT_TOKEN.sub("(at)", message)
 
 
 def work_dir(cache_dir: Path) -> Path:
@@ -331,12 +366,15 @@ def run(
     on_overage: Callable[[], bool],
     timeout: float = TIMEOUT_S,
     environ: Mapping[str, str] | None = None,
+    max_budget_usd: str = MAX_BUDGET_USD,
 ) -> CliResult:
     """Run one call and return its result. Raises :class:`CliFailure` on anything else.
 
     ``on_overage`` is called once, when the stream first reports paid extra usage; returning
-    False kills the child (the apply cap is reached).
+    False kills the child (the apply cap is reached). ``user_message`` is neutralized first
+    (:func:`neutralize`), so nothing in it can make the CLI attach a file or run a command.
     """
+    user_message = neutralize(user_message)
     cwd = Path(cwd)
     leftovers = sorted(p.name for p in cwd.iterdir()) if cwd.is_dir() else None
     if leftovers is None:
@@ -347,7 +385,12 @@ def run(
             "empty it and try again"
         )
     argv = build_argv(
-        binary, model=model, system_prompt=system_prompt, schema=schema, effort=effort
+        binary,
+        model=model,
+        system_prompt=system_prompt,
+        schema=schema,
+        effort=effort,
+        max_budget_usd=max_budget_usd,
     )
     try:
         proc = _spawn(
@@ -404,12 +447,23 @@ def run(
     seen_init = False
     overage = False
     result: CliResult | None = None
+    partial = CliResult(model="")
+
+    def fail(reason: str, **kw: Any) -> CliFailure:
+        return CliFailure(
+            reason,
+            overage=overage,
+            started=seen_init,
+            partial=partial if seen_init else None,
+            **kw,
+        )
+
     try:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _kill(proc)
-                raise CliFailure(f"the CLI timed out after {int(timeout)} s", killed=True)
+                raise fail(f"the CLI timed out after {int(timeout)} s", killed=True)
             try:
                 raw = lines.get(timeout=min(remaining, 1.0))
             except queue.Empty:
@@ -430,6 +484,7 @@ def run(
                     raise CliFailure(reason, turn_off=True, killed=True)
                 seen_init = True
                 init_model = str(msg.get("model") or "")
+                partial.model = init_model
                 continue
             if kind == "system":
                 continue
@@ -446,11 +501,21 @@ def run(
                     overage = True
                     if not on_overage():
                         _kill(proc)
-                        raise CliFailure(
-                            "the subscription is on paid extra usage and the apply daily cap "
-                            "is reached; the call was stopped",
+                        raise fail(
+                            "the subscription is on paid extra usage and this run was not "
+                            "confirmed as paid, or the apply daily cap is reached; the call "
+                            "was stopped",
                             killed=True,
                         )
+                continue
+            if kind == "assistant":
+                usage = (msg.get("message") or {}).get("usage")
+                if isinstance(usage, Mapping):
+                    partial.input_tokens = max(partial.input_tokens, _int(usage, "input_tokens"))
+                    partial.output_tokens += _int(usage, "output_tokens")
+                    partial.cache_read_tokens = max(
+                        partial.cache_read_tokens, _int(usage, "cache_read_input_tokens")
+                    )
                 continue
             if kind == "result":
                 result = _parse_result(msg, init_model, overage)
@@ -469,7 +534,7 @@ def run(
 
     if result is None:
         detail = stderr_text()
-        raise CliFailure(
+        raise fail(
             f"the CLI exited with code {code} and no result" + (f": {detail}" if detail else "")
         )
     if code != 0:
