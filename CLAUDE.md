@@ -73,3 +73,73 @@ Pushing bug refs needs plain git (git-bug's own push can't use the credential he
 
 When a spec is ambiguous or you deviate from it, make the call, then record it as a comment on
 your bug: `Decision: <what>. Reason: <why>.` Mention it in your final report.
+
+## Process: orchestrator as PM, workers, adversarial review
+
+Set by the user on 2026-10-09. Why: several merged changes shipped with defects their own
+author's tests could not catch (a Sankey test asserted a link to a page that did not exist; a
+template edit in the user's live checkout took /prefs down; a salary parser passed its tests but
+missed common real-world shapes). Independent review by a stronger reviewer catches these.
+
+### Roles
+
+- **Orchestrator (PM).** The top-level session. Talks to the user, triages requests into
+  git-bug issues, writes briefs, picks the worker model, runs reviews, decides what lands, and
+  reports outcomes in plain language. The PM does not write feature code. It may make trivial
+  fixes (one-line, no logic) and must still put them through review.
+- **Workers.** Subagents that implement one bug each on their own branch in an isolated
+  worktree, push the branch, and report. They never merge.
+- **Reviewers.** Subagents that try to break a worker's change before it lands.
+
+### Model and effort scoping
+
+Pick the cheapest model that can do the task well, and label the bug to match
+(`difficulty:*`, `agent:*`).
+
+| Task | Worker | Reviewer |
+|---|---|---|
+| Mechanical (renames, copy, config, small template tweaks) | haiku | sonnet |
+| Normal features and fixes | sonnet | opus |
+| Hard (scoring, money paths, migrations, concurrency, parsing real-world data) | opus | opus at the next higher effort (high to xhigh, xhigh to max) |
+
+The rule: **the reviewer is always stronger than the author**, either a stronger model or, for
+opus, a higher reasoning effort. A model never reviews its own output at the same tier.
+
+### Review gate (every PR, no exceptions)
+
+Run as a workflow, not ad hoc. Shape: find, then adversarially verify, then decide.
+
+1. **Find.** One or more reviewer agents read the diff and the code around it, with lenses:
+   correctness on real data shapes, tests that assert behavior rather than implementation
+   (would the test fail if the feature were broken?), money and credit paths (could this spend
+   scorer credits unexpectedly?), privacy (personal data, secrets, network in tests), UI
+   (links resolve, dark mode, phone width, cache), migrations against a copy of real-shaped data.
+2. **Verify.** Each finding goes to a skeptic told to refute it, defaulting to refuted when
+   unsure. Only findings that survive are reported.
+3. **Decide.** Blocking findings go back to the worker (or a new worker) before merge.
+   Non-blocking findings become git-bug issues labelled `review` and are linked in the PR.
+   The PM merges only when CI is green and no blocking finding is open.
+
+Review a change before merge. If something merged unreviewed, review it retroactively and file
+what is found.
+
+### Working-tree safety
+
+- Never edit files in the main checkout. The user's console runs from it and reads templates
+  from disk on every request, so a half-done edit there breaks the live app. Use a worktree.
+- After merging, the main checkout is fast-forwarded only. Tell the user to restart the
+  console when Python changed.
+
+### Verification habits
+
+- Before claiming a data fix works, measure it on a **copy** of the user's database
+  (`sqlite3 data/jobhunter.db ".backup <scratch>/copy.db"`) and report before and after counts.
+- Back up the real database before any write to it (`data/backups/`).
+- Reproduce user-reported UI bugs in a browser against a copy of their data before fixing.
+- Paid actions (scorer runs) are the user's call; give them the command and the estimate.
+
+### Workflows
+
+Multi-agent work runs through the Workflow tool (dynamic workflows). Keep each workflow to a
+single phase (implement, or review, or research) so the PM stays in the loop between phases.
+At most 4 workers implement at once.
