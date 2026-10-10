@@ -14,9 +14,12 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.apply import paste
 from jobhunter.console import detail
+from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.models import ApplyStatus
 from jobhunter.pipeline import applylink
+from jobhunter.pipeline.ats_rules import is_http_url
 from jobhunter.scoring.profile import Profile
 
 MAX_VERIFY_AGE_H = 24
@@ -75,6 +78,9 @@ def register(
         job = require_job(conn, group_id)
         current = now()
         link = applylink.get_apply_link(conn, group_id)
+        if link is None and not is_http_url(detail.posting_url(job)):
+            # A posting pasted without a URL (specs/017): its url is a placeholder, never opened.
+            raise HTTPException(404, "this posting has no URL to open")
         if link is not None and link.status == ApplyStatus.live:
             link = applylink.reverify(
                 conn,
@@ -106,12 +112,16 @@ def register(
     @app.post("/job/{group_id}/description")
     async def paste_description(request: Request, conn: Conn, group_id: int) -> Response:
         """Pasted posting text for a partial job: store it and queue a re-score (specs/012)."""
-        require_job(conn, group_id)
+        job = require_job(conn, group_id)
         form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
         text = (form.get("text") or [""])[-1]
         if not text.strip():
             raise HTTPException(422, "paste the posting's description text")
-        detail.paste_description(conn, group_id, text, now())
+        if job["source_key"] == PASTE_MANUAL:
+            # A pasted posting (specs/017) is scored only on request: store, never queue.
+            paste.store_posting_text(conn, group_id, text, now())
+        else:
+            detail.paste_description(conn, group_id, text, now())
         return RedirectResponse(f"/job/{group_id}", status_code=303)
 
     @app.post("/job/{group_id}/applied", response_class=HTMLResponse)

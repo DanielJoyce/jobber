@@ -255,6 +255,28 @@ def _merge_label(conn: sqlite3.Connection, s: int, a: int, res: MergeResult) -> 
     res.labels_merged += 1
 
 
+def _merge_packets(conn: sqlite3.Connection, win: int, lose: int, now: datetime) -> None:
+    """Move the losing application's packets (specs/017) to the winner before it is deleted.
+
+    One live packet per application: when the winner already has one, the loser's live packet
+    becomes ``abandoned`` (kept, documents and answers included) under the winner. Documents,
+    answers and fill sessions hang off the packet, so they follow without further work.
+    """
+    winner_live = conn.execute(
+        "SELECT 1 FROM application_packet WHERE application_id = ? AND status != 'abandoned'",
+        (win,),
+    ).fetchone()
+    if winner_live:
+        conn.execute(
+            "UPDATE application_packet SET status = 'abandoned', updated_at = ? "
+            "WHERE application_id = ? AND status != 'abandoned'",
+            (to_iso(now), lose),
+        )
+    conn.execute(
+        "UPDATE application_packet SET application_id = ? WHERE application_id = ?", (win, lose)
+    )
+
+
 def _merge_application(
     conn: sqlite3.Connection, s: int, a: int, now: datetime, res: MergeResult
 ) -> None:
@@ -281,6 +303,7 @@ def _merge_application(
         "VALUES (?, ?, ?, ?, 'manual')",
         (win["id"], to_iso(now), win["status"], f"Merged duplicate application ({detail})"),
     )
+    _merge_packets(conn, win["id"], lose["id"], now)
     conn.execute("DELETE FROM application WHERE id = ?", (lose["id"],))
     conn.execute(
         "UPDATE application SET job_group_id = ?, applied_at = COALESCE(applied_at, ?), "

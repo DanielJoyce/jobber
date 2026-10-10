@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import sqlite3
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 
@@ -59,15 +61,50 @@ def application_exists(conn: sqlite3.Connection, app_id: int) -> bool:
 # --- events and derived status -------------------------------------------------------------
 
 
+# Notes of the early-stage events jobhunter writes as a side effect of a press (shortlist in the
+# inbox, an Apply click, Prepare packet). They are stamped now, so a backdated event accepted
+# later (a confirmation email's 'applied') would sort before them. SHORTLIST_NOTE must equal
+# inbox.SHORTLIST_NOTE.
+SHORTLIST_NOTE = "shortlisted from inbox"
+APPLY_CLICK_NOTE = "opened apply link"
+PREPARE_NOTE = "packet started"
+AUTO_NOTES = (SHORTLIST_NOTE, APPLY_CLICK_NOTE, PREPARE_NOTE)
+EARLY_STATUSES = ("interested", "preparing")
+
+
+def effective_events(evs: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The events that decide status, newest first (``evs`` is newest first: at, id DESC).
+
+    Every reader of status (``rebuild_status``, ``status_since``, the dashboard) uses this, so
+    the cached status and the derived one never differ. Automatic early events (``AUTO_NOTES``)
+    are dropped when the application has gone past 'preparing' and the user has not moved it
+    back since: a later manual early event after the newest past-preparing one is a deliberate
+    move back, and then the log is read as it is (latest event wins).
+    """
+    newest_past = next((i for i, e in enumerate(evs) if e["status"] not in EARLY_STATUSES), None)
+    if newest_past is None:
+        return list(evs)
+    moved_back = any(
+        e["note"] not in AUTO_NOTES and e["status"] in EARLY_STATUSES for e in evs[:newest_past]
+    )
+    if moved_back:
+        return list(evs)
+    return [e for e in evs if e["note"] not in AUTO_NOTES]
+
+
 def rebuild_status(conn: sqlite3.Connection, application_id: int) -> str:
-    """Set application.status (and applied_at) from the event log; returns the status."""
-    row = conn.execute(
-        "SELECT status FROM application_event WHERE application_id = ? "
-        "ORDER BY at DESC, id DESC LIMIT 1",
+    """Set application.status (and applied_at) from the event log; returns the status.
+
+    The latest of ``effective_events`` wins.
+    """
+    evs = conn.execute(
+        "SELECT status, note, at FROM application_event WHERE application_id = ? "
+        "ORDER BY at DESC, id DESC",
         (application_id,),
-    ).fetchone()
-    if row is None:
+    ).fetchall()
+    if not evs:
         raise TrackingError(f"application {application_id} has no events")
+    row = effective_events(evs)[0]
     applied = conn.execute(
         "SELECT MIN(at) FROM application_event WHERE application_id = ? AND status = 'applied'",
         (application_id,),
@@ -120,7 +157,7 @@ def status_since(conn: sqlite3.Connection, app_id: int) -> datetime | None:
     """When the current status began: the first event of the latest run of the same status."""
     since: str | None = None
     current: str | None = None
-    for ev in events(conn, app_id):
+    for ev in effective_events(events(conn, app_id)):
         if current is None:
             current = ev["status"]
         if ev["status"] != current:

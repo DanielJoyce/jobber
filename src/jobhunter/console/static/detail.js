@@ -16,5 +16,11 @@
     b: function () {
       window.location.href = "/inbox";
     },
+    p: function () {
+      var link = document.getElementById("prepare-link");
+      if (link) { window.location.href = link.getAttribute("href"); return; }
+      var form = document.getElementById("prepare-form");
+      if (form) form.submit();
+    },
   });
 })();

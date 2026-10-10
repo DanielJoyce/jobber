@@ -14,11 +14,14 @@ from typing import Any
 
 from markupsafe import Markup, escape
 
+from jobhunter.apply.packets import live_packet_id
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
+from jobhunter.console.tracking import APPLY_CLICK_NOTE, rebuild_status
 from jobhunter.core import rejections
+from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline.applylink import get_apply_link
-from jobhunter.pipeline.ats_rules import host_of
+from jobhunter.pipeline.ats_rules import host_of, is_http_url
 from jobhunter.pipeline.dedupe import _refresh_group, group_members
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.pipeline.normalize import normalize_job
@@ -274,6 +277,18 @@ class Detail:
     # Rejections from employers (core/rejections): this very posting, or another role here.
     posting_rejection: str | None = None
     employer_rejection: str | None = None
+    packet_id: int | None = None  # the live assisted-apply packet (specs/017)
+
+    @property
+    def pasted_posting(self) -> bool:
+        """Pasted on New packet (specs/017): not from an email alert, scored only on request."""
+        return self.job["source_key"] == PASTE_MANUAL
+
+    @property
+    def posting_href(self) -> str | None:
+        """The posting's web page, or None (a pasted posting with no URL has none)."""
+        url = posting_url(self.job)
+        return url if is_http_url(url) else None
 
 
 def group_job(conn: sqlite3.Connection, group_id: int) -> sqlite3.Row | None:
@@ -403,11 +418,16 @@ def load_detail(
             {
                 "title": m["title"],
                 "employer": m["employer"] or m["agency_raw"],
-                "url": m["apply_url"] or m["url"],
+                # None for a pasted job's ``paste:<id>`` placeholder: never shown as a link
+                "url": u if is_http_url(u := m["apply_url"] or m["url"]) else None,
                 "source": sources.get(m["source_key"], m["source_key"]),
             }
         )
-    d.button = apply_button(conn, group_id, now)
+    link = get_apply_link(conn, group_id)
+    if link is not None or is_http_url(posting_url(job)):
+        d.button = apply_button(conn, group_id, now, link, fetch_link=False)
+    # else: a posting pasted without a URL (specs/017) has nowhere to apply; no button.
+    d.packet_id = live_packet_id(conn, group_id)
     d.prompt = did_you_apply(conn, group_id)
     index = rejections.RejectionIndex.load(conn, now, rejection_days)
     if index:
@@ -444,13 +464,10 @@ def log_click(
         if app and app["status"] == "interested":
             conn.execute(
                 "INSERT INTO application_event (application_id, at, status, note, source) "
-                "VALUES (?, ?, 'preparing', 'opened apply link', 'manual')",
-                (app["id"], at),
+                "VALUES (?, ?, 'preparing', ?, 'manual')",
+                (app["id"], at, APPLY_CLICK_NOTE),
             )
-            conn.execute(
-                "UPDATE application SET status = 'preparing', updated_at = ? WHERE id = ?",
-                (at, app["id"]),
-            )
+            rebuild_status(conn, app["id"])  # the cache follows the log (tracking rules)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

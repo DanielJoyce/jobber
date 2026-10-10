@@ -43,7 +43,7 @@ class InboxItem:
     employment_type: str | None
     remote: str | None
     posted: str | None
-    url: str
+    url: str | None
     source_name: str
     source_badge: str
     recency_skills: int
@@ -132,6 +132,10 @@ LEFT JOIN label l ON l.job_group_id = g.id
 """
 
 
+def _web_url(url: str | None) -> str | None:
+    return url if url and url.startswith(("http://", "https://")) else None
+
+
 def _employer_flag(index: rejections.RejectionIndex | None, row: sqlite3.Row) -> str | None:
     if not index:
         return None
@@ -174,7 +178,9 @@ def _item(
         employment_type=None if row["employment_type"] == "unknown" else row["employment_type"],
         remote=None if row["remote"] == "unknown" else row["remote"],
         posted=posted_age(row["posted_at"], now),
-        url=row["apply_url"] or row["url"],  # the human page when `url` is a JSON endpoint
+        # the human page when `url` is a JSON endpoint; None for a posting pasted without a
+        # URL, whose `url` is a placeholder (specs/017)
+        url=_web_url(row["apply_url"] or row["url"]),
         source_name=row["source_name"],
         source_badge=SOURCE_BADGE.get(row["source_class"], "state"),
         recency_skills=fit.recency_weighted_skills,
@@ -356,11 +362,13 @@ def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
         events = conn.execute(
             "SELECT COUNT(*) FROM application_event WHERE application_id = ?", (app["id"],)
         ).fetchone()[0]
-        # A mail proposal about this application keeps it (accepting it needs the row).
+        # A mail proposal about this application keeps it (accepting it needs the row), and so
+        # does an assisted-apply packet (specs/017): it is work the user started on it.
         others = conn.execute(
             "SELECT (SELECT COUNT(*) FROM contact WHERE application_id = :a) + "
             "(SELECT COUNT(*) FROM attachment WHERE application_id = :a) + "
-            "(SELECT COUNT(*) FROM mail_proposal WHERE application_id = :a)",
+            "(SELECT COUNT(*) FROM mail_proposal WHERE application_id = :a) + "
+            "(SELECT COUNT(*) FROM application_packet WHERE application_id = :a)",
             {"a": app["id"]},
         ).fetchone()[0]
         mine = conn.execute(

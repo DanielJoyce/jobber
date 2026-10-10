@@ -170,8 +170,18 @@ def score(
             "Shows the estimate and asks first.",
         ),
     ] = None,
+    group: Annotated[
+        int | None,
+        typer.Option(
+            "--group",
+            metavar="GID",
+            help="Score this one job group now (a pasted posting, specs/017). Shows the "
+            "estimate and asks first; bypasses the prefilter rules because you chose it.",
+        ),
+    ] = None,
     yes: Annotated[
-        bool, typer.Option("--yes", help="With --rescore: skip the confirmation prompt.")
+        bool,
+        typer.Option("--yes", help="With --rescore or --group: skip the confirmation prompt."),
     ] = False,
     limit: Annotated[int, typer.Option(help="Most job groups to submit.", min=1)] = 500,
     deep: Annotated[
@@ -212,19 +222,20 @@ def score(
         deep_group is not None,
         rescore_pending,
         rescore is not None,
+        group is not None,
     ]
     if sum(modes) != 1:
         typer.echo(
             "pass exactly one of --submit, --collect, --collect-pending, --deep, --deep-group, "
-            "--rescore-pending or --rescore",
+            "--rescore-pending, --rescore or --group",
             err=True,
         )
         raise typer.Exit(2)
     if rescore is not None and rescore not in ("recent", "all"):
         typer.echo("--rescore takes 'recent' or 'all'", err=True)
         raise typer.Exit(2)
-    if yes and rescore is None:
-        typer.echo("--yes applies to --rescore only", err=True)
+    if yes and rescore is None and group is None:
+        typer.echo("--yes applies to --rescore and --group only", err=True)
         raise typer.Exit(2)
 
     from datetime import UTC, datetime
@@ -243,6 +254,12 @@ def score(
     except ProfileError as exc:
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
+    if group is not None:
+        if scorer_override is not None or jobs_per_request is not None:
+            typer.echo("--group scores with scoring.screen_scorer; no other options", err=True)
+            raise typer.Exit(2)
+        _score_group(settings, profile, group, yes)
+        return
     rescoring = rescore_pending or rescore is not None
     if scorer_override is not None and not (submit or collect is not None or rescoring):
         typer.echo("--scorer applies to --submit, --collect and re-score runs only", err=True)
@@ -345,6 +362,41 @@ def score(
                 raise typer.Exit(2)
             result = screen.collect_batch(conn, client, collect, profile, now=now)
             typer.echo(json.dumps(result.as_dict(), indent=2))
+    finally:
+        conn.close()
+
+
+def _score_group(settings, profile, group_id: int, yes: bool) -> None:
+    """``score --group GID``: estimate, confirm, then score that one group (specs/017)."""
+    from jobhunter.apply import score as group_score
+    from jobhunter.scoring.scorers import privacy_notice
+
+    conn = db.connect(settings.paths.db_path)
+    db.migrate(conn)
+    now = datetime.now(UTC)
+    try:
+        est = group_score.estimate(conn, profile, settings.scoring, group_id, now)
+        typer.echo(
+            f"group {group_id}: score with {est.scorer}, estimated ${est.estimated_usd:.4f} "
+            f"({'measured' if est.cost_source != 'default' else 'assumed'}); "
+            f"spend cap remaining ${max(est.remaining_usd, 0):.2f}"
+        )
+        if est.refusal:
+            typer.echo(f"refused: {est.refusal}", err=True)
+            raise typer.Exit(1)
+        if notice := privacy_notice(est.scorer, settings.scoring):
+            typer.echo(notice, err=True)
+        if not yes and not typer.confirm("Score it? This spends credits.", default=False):
+            typer.echo("not run")
+            raise typer.Exit(1)
+        try:
+            out = group_score.score_now(
+                conn, profile, settings.scoring, group_id, token=est.token, now=now
+            )
+        except group_score.ScoreRefused as exc:
+            typer.echo(f"not scored: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        typer.echo(f"{out.status}: {out.detail}")
     finally:
         conn.close()
 

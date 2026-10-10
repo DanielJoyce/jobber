@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
 <link rel="stylesheet" href="{{ static_url('detail.css') }}">
-<div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.job['apply_url'] or d.job['url'] }}">
+<div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.posting_href or '' }}">
   <p><a href="/inbox">&larr; inbox</a></p>
 
   {% if d.prompt %}
@@ -45,7 +45,16 @@
   </header>
 
   {% set b = d.button %}
-  {% include "_apply_button.html" %}
+  {% if b %}{% include "_apply_button.html" %}{% endif %}
+  <div class="prepare-line">
+    {% if d.packet_id %}
+    <a class="act" id="prepare-link" href="/packet/{{ d.packet_id }}">Open packet (p)</a>
+    {% else %}
+    <form method="post" action="/job/{{ d.group_id }}/prepare" id="prepare-form" class="inline-form">
+      <button type="submit" class="act" id="prepare-btn" title="start an application packet: targeted resume, cover letter, drafts">Prepare packet (p)</button>
+    </form>
+    {% endif %}
+  </div>
 
   {% if d.scored %}
   <section class="card">
@@ -80,7 +89,11 @@
 
   <section class="card">
     <h2>Description</h2>
-    {% if d.partial %}
+    {% if d.pasted_posting and not d.text.paragraphs %}
+    <div class="banner partial-banner" role="note" id="pasted-no-text">
+      <p><strong>No posting text yet.</strong> This posting was added on New packet with only its URL.{% if d.packet_id %} Paste its text on <a href="/packet/{{ d.packet_id }}">its packet</a>; a pasted posting is scored only when you ask there.{% endif %}</p>
+    </div>
+    {% elif d.partial %}
     <div class="banner partial-banner" role="note">
       <p><strong>Partial description.</strong> This job came from an email alert and the full
       posting could not be fetched (the site disallows automated access). Open the posting
@@ -100,7 +113,7 @@
     <h2>Also posted ({{ d.siblings | length }})</h2>
     <ul>
       {% for s in d.siblings %}
-      <li><a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.title }}</a> &middot; {{ s.employer or "employer not stated" }} <span class="muted">via {{ s.source }}</span></li>
+      <li>{% if s.url %}<a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.title }}</a>{% else %}{{ s.title }}{% endif %} &middot; {{ s.employer or "employer not stated" }} <span class="muted">via {{ s.source }}</span></li>
       {% endfor %}
     </ul>
   </section>
@@ -110,6 +123,7 @@
     <strong>keys</strong>
     <span><kbd>o</kbd> open posting</span>
     <span><kbd>A</kbd> apply</span>
+    <span><kbd>p</kbd> prepare packet</span>
     <span><kbd>b</kbd> back to inbox</span>
   </aside>
 </div>

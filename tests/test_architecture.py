@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "jobhunter"
-GUARDED_PACKAGES = ["sources", "pipeline", "scoring", "mail"]
+GUARDED_PACKAGES = ["sources", "pipeline", "scoring", "mail", "apply"]
 FORBIDDEN = {"httpx", "playwright"}
 # API clients (not scrapers) that may use httpx: the OpenAI-compatible scorer talks to an LLM
 # endpoint the user configured. Keep this list explicit and tiny.

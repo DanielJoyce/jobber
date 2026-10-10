@@ -19,6 +19,9 @@ MODULES = [
     "jobhunter.pipeline",
     "jobhunter.scoring",
     "jobhunter.console",
+    "jobhunter.apply",
+    "jobhunter.apply.paste",
+    "jobhunter.apply.score",
 ]
 
 

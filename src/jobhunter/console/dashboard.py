@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime, timedelta
 from statistics import median
 from typing import Any
 
+from jobhunter.console.tracking import effective_events
 from jobhunter.core import geo, rejections
 from jobhunter.core.bucketnames import (
     BUCKET_TITLES,
@@ -27,6 +28,7 @@ from jobhunter.core.bucketnames import (
     group_name,
     parse_letters,
 )
+from jobhunter.core.manual_sources import EMAIL_MANUAL, PASTE_MANUAL
 from jobhunter.core.models import Bucket, JobLocation
 from jobhunter.core.textnorm import annualize
 from jobhunter.pipeline.locations import REMOTE_SCOPES
@@ -278,14 +280,18 @@ class AppFact:
 
 
 def application_facts(conn: sqlite3.Connection) -> list[AppFact]:
-    events: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    newest_first: dict[int, list[sqlite3.Row]] = defaultdict(list)
     for e in conn.execute(
-        "SELECT application_id, at, status FROM application_event ORDER BY at, id"
+        "SELECT application_id, at, status, note FROM application_event ORDER BY at DESC, id DESC"
     ):
-        events[e["application_id"]].append((e["at"], e["status"]))
+        newest_first[e["application_id"]].append(e)
     out: list[AppFact] = []
     for a in conn.execute("SELECT * FROM application ORDER BY id"):
-        evs = events.get(a["id"], [])
+        # The same events tracking.rebuild_status reads, oldest first.
+        evs = [
+            (e["at"], e["status"])
+            for e in reversed(effective_events(newest_first.get(a["id"], [])))
+        ]
         applied = a["applied_at"]
         if applied is None:
             applied = next((at for at, st in evs if st == "applied"), None)
@@ -880,9 +886,7 @@ def series(
 
 # ─── outcomes Sankey ────────────────────────────────────────────────────────
 
-MANUAL_SOURCE = (
-    "email-manual"  # proposals.MANUAL_SOURCE: groups made when accepting a mail proposal
-)
+MANUAL_SOURCE = EMAIL_MANUAL  # proposals.MANUAL_SOURCE: groups made accepting a mail proposal
 _UNPREFILTERED = ("listed", "resolved", "normalized", "grouped")
 # Stages before a posting is grouped: such a job has no job_group yet, so group_facts never sees it.
 _UNGROUPED_STAGES = ("listed", "resolved", "normalized")
@@ -905,6 +909,8 @@ _OUTCOME_NODE = {
 _SANKEY_NODES: tuple[tuple[str, str, int, str, str | None], ...] = (
     ("fetched", "Fetched", 0, "flow", None),
     ("elsewhere", "Applied elsewhere", 0, "flow", "/pipeline?node=elsewhere"),
+    # Postings pasted on New packet (specs/017) that were scored on request.
+    ("pasted", "Pasted", 0, "flow", None),
     ("prefiltered_out", "Prefiltered out", 1, "loss", None),
     ("awaiting_prefilter", "Awaiting prefilter", 1, "loss", None),
     ("passed", "Passed prefilter", 1, "flow", None),
@@ -926,6 +932,8 @@ _SANKEY_NODES: tuple[tuple[str, str, int, str, str | None], ...] = (
     ("no_response", "No response", 5, "loss", "/pipeline?node=no_response"),
 )
 _SANKEY_ORDER = {n[0]: i for i, n in enumerate(_SANKEY_NODES)}
+# Where groups enter the chart: nothing flows into these, so their value is their outflow.
+_SOURCE_NODES = ("fetched", "elsewhere", "pasted")
 # Nodes whose /pipeline list is the applications in that node (the page filters by these).
 PIPELINE_NODES = frozenset(
     {
@@ -1056,6 +1064,7 @@ def _walk(conn: sqlite3.Connection, facts: dict[int, GroupFact]) -> _Walk:
             "LEFT JOIN prefilter_result p ON p.job_id = j.id"
         )
     }
+    scored_ids = {r[0] for r in conn.execute("SELECT DISTINCT job_group_id FROM fit_score")}
     links: dict[tuple[str, str], int] = defaultdict(int)
     members: dict[str, set[int]] = defaultdict(set)
 
@@ -1075,6 +1084,15 @@ def _walk(conn: sqlite3.Connection, facts: dict[int, GroupFact]) -> _Walk:
             if app is None:  # a manual group exists only to hold an application
                 continue
             came_from = "elsewhere"
+        elif m["source_key"] == PASTE_MANUAL:
+            # A pasted posting skips fetch and prefilter (the user chose it). Scored, it flows
+            # through the buckets like an ingested group; unscored, it is only in the pipeline.
+            # Whether it is scored comes from fit_score, not ``facts``: pipeline_node_apps
+            # walks with no facts and must list the same applications the chart counts.
+            if gid not in scored_ids:
+                continue
+            scored = f"bucket_{fact.bucket.value}" if fact.bucket else "unscored"
+            links[("pasted", scored)] += 1
         else:
             touched = fact.scored or shortlisted or label is not None
             if not touched and m["stage"] in _UNPREFILTERED:
@@ -1086,6 +1104,7 @@ def _walk(conn: sqlite3.Connection, facts: dict[int, GroupFact]) -> _Walk:
             scored = f"bucket_{fact.bucket.value}" if fact.bucket else "unscored"
             links[("fetched", "passed")] += 1
             links[("passed", scored)] += 1
+        if m["source_key"] != MANUAL_SOURCE:
             if shortlisted:
                 triage = "shortlisted"
             elif label == "not_interesting":
@@ -1151,7 +1170,7 @@ def sankey(conn: sqlite3.Connection, profile: Profile) -> dict[str, Any]:
     value: dict[str, int] = defaultdict(int)
     for (a, b), n in links.items():
         value[b] += n
-        if a in ("fetched", "elsewhere"):
+        if a in _SOURCE_NODES:
             value[a] += n
     nodes = [
         {"id": i, "label": label, "col": col, "kind": kind, "href": href, "value": value[i]}
@@ -1164,4 +1183,4 @@ def sankey(conn: sqlite3.Connection, profile: Profile) -> dict[str, Any]:
             links.items(), key=lambda kv: tuple(_SANKEY_ORDER[k] for k in kv[0])
         )
     ]
-    return {"nodes": nodes, "links": link_rows, "total": value["fetched"] + value["elsewhere"]}
+    return {"nodes": nodes, "links": link_rows, "total": sum(value[n] for n in _SOURCE_NODES)}

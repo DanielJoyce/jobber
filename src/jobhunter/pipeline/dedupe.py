@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from rapidfuzz import fuzz
 
+from jobhunter.core.manual_sources import MANUAL_SOURCES_SQL
 from jobhunter.pipeline.listing import _txn, to_iso
 
 SHINGLE_WORDS = 5
@@ -169,7 +170,13 @@ def group_pending(
             )
         )
 
-    for r in conn.execute("SELECT id FROM job WHERE job_group_id IS NOT NULL").fetchall():
+    # Jobs the user made by hand (a pasted posting, an application found in mail) are never
+    # match targets: an ingested copy joining such a group would become its canonical job and
+    # take it out of the manual-source rules (scored only on request, specs/017).
+    for r in conn.execute(
+        "SELECT id FROM job WHERE job_group_id IS NOT NULL "
+        f"AND source_key NOT IN ({MANUAL_SOURCES_SQL})"
+    ).fetchall():
         add_cand(r["id"])
 
     with _txn(conn):
@@ -183,6 +190,7 @@ def group_pending(
             if job["content_hash"]:
                 other = conn.execute(
                     "SELECT id, job_group_id FROM job WHERE content_hash = ? AND id != ? "
+                    f"AND source_key NOT IN ({MANUAL_SOURCES_SQL}) "
                     "ORDER BY (job_group_id IS NULL), id LIMIT 1",
                     (job["content_hash"], jid),
                 ).fetchone()

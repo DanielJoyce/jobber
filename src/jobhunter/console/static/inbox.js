@@ -236,6 +236,16 @@
     },
     a: function () { go("/job/{id}#apply"); },
     A: function () { go("/apply/{id}"); },
+    p: function () {
+      // Prepare is a write: POST (same-origin) and follow the redirect to the packet page.
+      if (!current) return;
+      var form = document.createElement("form");
+      form.method = "post";
+      form.action = "/job/" + current.dataset.gid + "/prepare";
+      document.body.appendChild(form);
+      form.submit();
+    },
+    n: function () { window.location.href = "/apply/new"; },
     u: undo,
     f: function () {
       var d = document.getElementById("stale-details");

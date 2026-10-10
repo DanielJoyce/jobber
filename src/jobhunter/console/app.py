@@ -23,6 +23,7 @@ from jobhunter.console import (
     alerts_routes,
     detail_routes,
     inbox_routes,
+    packet_routes,
     pages_routes,
     prefs_routes,
     proposals_routes,
@@ -386,6 +387,8 @@ def create_app(
         )
         return templates.TemplateResponse(request, "_state_table.html", ctx)
 
+    # Before detail_routes: /apply/new must not be read as /apply/{group_id}.
+    packet_routes.register(app, templates, get_conn, NAV, get_profile, now)
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     rescore_routes.register(app, templates, get_conn, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
