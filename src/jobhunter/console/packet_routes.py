@@ -11,6 +11,7 @@ the same one. Registered before ``detail_routes`` so ``/apply/new`` is not read 
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -19,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.apply import (
     answers,
+    checklists,
     cli_runner,
     documents,
     export,
@@ -35,7 +37,7 @@ from jobhunter.console.inbox_routes import load_console_profile
 from jobhunter.console.tracking_routes import Form
 from jobhunter.core import pdf
 from jobhunter.pipeline import applylink
-from jobhunter.scoring.profile import Profile
+from jobhunter.scoring.profile import Profile, ProfileConflict, ProfileError
 from jobhunter.scoring.scorers import ScorerError, privacy_notice
 
 NEW_FIELDS = ("url", "text", "employer", "title")
@@ -299,6 +301,52 @@ def register(
         except generator.ApplyRefused:
             return {}
 
+    # ─── answers, checklist, already applied (phase 1d) ─────────────────────
+
+    def answers_ctx(
+        request: Request,
+        conn: sqlite3.Connection,
+        p: packets.Packet,
+        *,
+        message: str | None = None,
+        ok: str | None = None,
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Saved answers, reuse offers, /prefs answers and the board checklist. Runs nothing
+        and sends nothing: these are shown to copy, never given to a model."""
+        loaded = answers.load_answers(Path(request.app.state.settings.paths.profile_dir))
+        saved = answers.packet_answers(conn, p.id)
+        drafts = review.question_drafts(conn, p.id)
+        questions: dict[str, str] = {}
+        for v in drafts:
+            questions.setdefault(v.question_key, v.doc.get("question") or v.question_key)
+        for s in saved:
+            questions.setdefault(s.field_key.removeprefix(answers.QUESTION_PREFIX), s.question)
+        mine = {s.field_key: s.value for s in saved}
+        reuse = []
+        for key, text in questions.items():
+            fk = answers.QUESTION_PREFIX + key
+            earlier = [
+                e for e in answers.earlier_answers(conn, p.id, fk) if e.value != mine.get(fk)
+            ]
+            if earlier:
+                reuse.append({"question": text, "earlier": earlier})
+        return {
+            "saved_answers": saved,
+            "draft_saves": [(v, v.question_key in {k[2:] for k in mine}) for v in drafts],
+            "reuse": reuse,
+            "prefs_answers": loaded.answers,
+            "prefs_offers": answers.prefs_offers(loaded.answers, set(questions)),
+            "prefs_link_fields": answers.LINK_FIELDS,
+            "prefs_text_fields": answers.TEXT_FIELDS,
+            "answers_warnings": loaded.warnings,
+            "answers_message": message,
+            "answers_ok": ok,
+            "checklist": checklists.for_packet(conn, p.id),
+            "evidence": evidence,
+            "applied_before": packets.already_applied(conn, p),
+        }
+
     def render_packet(
         request: Request,
         conn: sqlite3.Connection,
@@ -308,6 +356,7 @@ def register(
         score_message: str | None = None,
         score_ok: str | None = None,
         export_msg: tuple[bool, str] | None = None,
+        answers_extra: dict[str, Any] | None = None,
         **docs: Any,
     ) -> HTMLResponse:
         p = require_packet(conn, p.id)  # re-read: status and pointers may have moved
@@ -315,6 +364,7 @@ def register(
         ctx = score_ctx(request, conn, p, score_message, score_ok)
         ctx.update(docs_ctx(request, conn, p, **docs))
         ctx.update(export_ctx(request, conn, p, export_msg or ((False, warn) if warn else None)))
+        ctx.update(answers_ctx(request, conn, p, **(answers_extra or {})))
         return templates.TemplateResponse(
             request,
             "packet.html",
@@ -525,6 +575,59 @@ def register(
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
         return back(request, conn, packet_id, "letter")
 
+    @app.post("/packet/{packet_id}/answers")
+    def packet_save_answer(request: Request, conn: Conn, form: Form, packet_id: int) -> Response:
+        """Save as answer: a question draft's text (``doc_id``) or your own (``value``), kept on
+        this packet only. A never-store question is refused before anything is read."""
+        p = require_packet(conn, packet_id)
+        question, value, source = form.get("question", ""), form.get("value", ""), "user"
+        if form.get("doc_id"):
+            v = review.get_version(conn, int(form["doc_id"]) if form["doc_id"].isdigit() else 0)
+            if v is None or v.packet_id != p.id or v.kind != "question_draft":
+                raise HTTPException(404, "no such draft on this packet")
+            question, value, source = v.doc.get("question") or v.question_key, v.body_md, "draft"
+        try:
+            answers.save_question_answer(conn, p.id, question, value, source)
+        except (answers.NeverStore, ValueError) as exc:
+            extra = {"message": str(exc)}
+            return render_packet(request, conn, p, status=409, answers_extra=extra)
+        return RedirectResponse(f"/packet/{packet_id}?answer=saved#answers", status_code=303)
+
+    @app.post("/packet/{packet_id}/answers/{answer_id}/promote")
+    def packet_promote_answer(
+        request: Request, conn: Conn, packet_id: int, answer_id: int
+    ) -> Response:
+        """Promote to /prefs: copy a saved answer into Application answers (answers.custom),
+        through the same model validation and round-trip write as the /prefs save."""
+        p = require_packet(conn, packet_id)
+        row = answers.get_answer(conn, answer_id)
+        if row is None or row.packet_id != p.id:
+            raise HTTPException(404, "no such saved answer on this packet")
+        profile_dir = Path(request.app.state.settings.paths.profile_dir).expanduser()
+        try:
+            answers.promote(conn, profile_dir, answer_id)
+        except ProfileConflict:
+            message = "The preferences file changed while saving; nothing was written. Try again."
+        except (answers.NeverStore, answers.AnswersRefused, ProfileError, ValueError) as exc:
+            message = f"Not promoted: {exc}"
+        else:
+            return RedirectResponse(f"/packet/{packet_id}?answer=promoted#answers", 303)
+        return render_packet(request, conn, p, status=409, answers_extra={"message": message})
+
+    @app.post("/packet/{packet_id}/evidence", response_class=HTMLResponse)
+    def packet_evidence(request: Request, conn: Conn, form: Form, packet_id: int):
+        """A federal self-assessment statement: the resume lines that may be relevant. Never a
+        level, never a model call (specs/017 "Checklists")."""
+        p = require_packet(conn, packet_id)
+        statement = " ".join(form.get("statement", "").split())[:1000]
+        profile, _error = load_console_profile(request.app.state.settings)
+        lines = documents.numbered_resume(profile.resume_text) if profile else {}
+        evidence = {
+            "statement": statement,
+            "lines": checklists.relevant_lines(lines, statement) if statement else [],
+        }
+        return render_packet(request, conn, p, answers_extra={"evidence": evidence})
+
     def safe_next(target: str) -> str:
         ok = target.startswith("/") and not target.startswith("//") and "\\" not in target
         return target if ok else "/costs"
@@ -550,9 +653,20 @@ def register(
         packet_id: int,
         resume: int | None = None,
         letter: int | None = None,
+        answer: str | None = None,
     ) -> HTMLResponse:
         p = require_packet(conn, packet_id)
-        return render_packet(request, conn, p, view={"resume": resume, "cover_letter": letter})
+        ok = {
+            "saved": "Saved on this packet. Promote it to /prefs to offer it on every packet.",
+            "promoted": "Promoted: it is now in Application answers on /prefs.",
+        }.get(answer or "")
+        return render_packet(
+            request,
+            conn,
+            p,
+            view={"resume": resume, "cover_letter": letter},
+            answers_extra={"ok": ok},
+        )
 
     @app.post("/packet/{packet_id}/posting")
     def packet_posting(conn: Conn, form: Form, packet_id: int) -> Response:

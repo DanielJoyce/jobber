@@ -1,0 +1,129 @@
+{# Packet answers and checklist (specs/017 phase 1d). Everything here is shown to copy: saved
+   answers and /prefs answers are never sent to a model. Every POST is a same-origin form. #}
+<section class="card" id="answers">
+  <h2>Answers and checklist</h2>
+  {% if answers_message %}<div class="banner banner-error" role="alert" id="answers-message">{{ answers_message }}</div>{% endif %}
+  {% if answers_ok %}<div class="banner banner-ok" role="status" id="answers-ok">{{ answers_ok }}</div>{% endif %}
+  {% if answers_warnings %}
+  <div class="banner banner-error" role="alert" id="answers-warnings">
+    <p><strong>Some Application answers in your preferences file were not loaded</strong> (they are not offered here):</p>
+    <ul>{% for w in answers_warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  <div class="checklist" id="checklist" data-board="{{ checklist.board }}">
+    <h3>Checklist: {{ checklist.title }}</h3>
+    <ol>{% for step in checklist.steps %}<li>{{ step }}</li>{% endfor %}</ol>
+    {% if checklist.warning %}<p class="banner banner-warn" role="note">{{ checklist.warning }}</p>{% endif %}
+    {% if checklist.board == "usajobs" %}
+    <form method="post" action="/packet/{{ p.id }}/evidence" class="answer-form" id="evidence-form">
+      <label for="statement">Self-assessment question</label>
+      <textarea id="statement" name="statement" rows="2" required>{{ evidence.statement if evidence else "" }}</textarea>
+      <div><button type="submit" class="act">Show relevant resume lines</button> <span class="muted">free; the level is yours to choose</span></div>
+    </form>
+    {% if evidence %}
+    <div id="evidence">
+      {% if evidence.lines %}<ul>{% for lid, ltext in evidence.lines %}<li><b>{{ lid }}</b> {{ ltext }}</li>{% endfor %}</ul>
+      {% else %}<p class="muted">No resume line shares words with it.</p>{% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="answers-grid">
+    <div id="saved-answers">
+      <h3>Saved on this packet</h3>
+      <p class="muted">Kept on this packet only, never sent to a model. <strong>Promote to /prefs</strong> offers one on every packet.</p>
+      {% if saved_answers %}
+      <ul class="answer-list">
+        {% for s in saved_answers %}
+        <li id="answer-{{ s.id }}">
+          <p class="answer-q">{{ s.question }} <span class="badge">{{ "your text" if s.source == "user" else "from a draft" }}</span></p>
+          <p class="answer-v">{{ s.value }}</p>
+          <div class="answer-actions">
+            <button type="button" class="act copy-btn" data-copy="{{ s.value }}">Copy</button>
+            <form method="post" action="/packet/{{ p.id }}/answers/{{ s.id }}/promote"><button type="submit" class="act">Promote to /prefs</button></form>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted">None yet.</p>{% endif %}
+
+      {% if draft_saves %}
+      <h4>Save a draft as an answer</h4>
+      <ul class="answer-list">
+        {% for v, already in draft_saves %}
+        <li>
+          <p class="answer-q">{{ v.doc.get("question") or v.question_key }}</p>
+          <form method="post" action="/packet/{{ p.id }}/answers" class="answer-actions">
+            <input type="hidden" name="doc_id" value="{{ v.id }}">
+            <button type="submit" class="act">{{ "Save this version again" if already else "Save as answer" }}</button>
+            <span class="muted">v{{ v.version }}{% if v.unsupported %}, {{ v.unsupported }} unsupported line{{ "s" if v.unsupported != 1 }}{% endif %}</span>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <form method="post" action="/packet/{{ p.id }}/answers" class="answer-form" id="own-answer">
+        <h4>Save your own answer</h4>
+        <label for="ans-question">Question</label>
+        <input id="ans-question" name="question" maxlength="300" required>
+        <label for="ans-value">Your answer</label>
+        <textarea id="ans-value" name="value" rows="3" required></textarea>
+        <p class="muted">Salary, EEO, self-ID, address, consent and signature questions are yours: nothing is stored for them.</p>
+        <div><button type="submit" class="act">Save as answer</button></div>
+      </form>
+    </div>
+
+    <div id="reuse">
+      {% if reuse %}
+      <h3>Your earlier answers</h3>
+      <p class="muted">The same question on other packets.</p>
+      <ul class="answer-list">
+        {% for r in reuse %}{% for e in r.earlier %}
+        <li>
+          <p class="answer-q">{{ r.question }}</p>
+          <p class="answer-v">{{ e.value }}</p>
+          <div class="answer-actions">
+            <button type="button" class="act copy-btn" data-copy="{{ e.value }}">Copy</button>
+            <form method="post" action="/packet/{{ p.id }}/answers">
+              <input type="hidden" name="question" value="{{ e.question }}">
+              <input type="hidden" name="value" value="{{ e.value }}">
+              <button type="submit" class="act">Use on this packet</button>
+            </form>
+            <a href="/packet/{{ e.packet_id }}#answers" class="muted">from packet {{ e.packet_id }}</a>
+          </div>
+        </li>
+        {% endfor %}{% endfor %}
+      </ul>
+      {% endif %}
+
+      <h3>From /prefs</h3>
+      {% set pa = prefs_answers %}
+      <dl class="kv-answers" id="prefs-answers">
+        {% for k, label in prefs_link_fields %}{% set val = pa.links[k] %}{% if val %}
+        <dt>{{ label }}</dt><dd>{{ val }}</dd><dd><button type="button" class="act copy-btn" data-copy="{{ val }}">Copy</button></dd>
+        {% endif %}{% endfor %}
+        {% for k, label in prefs_text_fields %}{% set val = pa[k] %}{% if val %}
+        <dt>{{ label }}</dt><dd>{{ val }}</dd><dd><button type="button" class="act copy-btn" data-copy="{{ val }}">Copy</button></dd>
+        {% endif %}{% endfor %}
+        {% if pa.work_authorization is not none %}{% set val = "Yes" if pa.work_authorization else "No" %}
+        <dt>Work authorization</dt><dd>{{ val }}</dd><dd><button type="button" class="act copy-btn" data-copy="{{ val }}">Copy</button></dd>
+        {% endif %}
+      </dl>
+      {% if prefs_offers %}
+      <ul class="answer-list" id="prefs-custom">
+        {% for c, matched in prefs_offers %}
+        <li{% if matched %} class="matched"{% endif %}>
+          <p class="answer-q">{{ c.question }}{% if matched %} <span class="badge">a question on this packet</span>{% endif %}</p>
+          <p class="answer-v">{{ c.answer }}</p>
+          <div class="answer-actions"><button type="button" class="act copy-btn" data-copy="{{ c.answer }}">Copy</button></div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <p class="muted"><a href="/prefs#sec-answers">Edit Application answers on /prefs</a>. They are never sent to a model.</p>
+    </div>
+  </div>
+</section>
