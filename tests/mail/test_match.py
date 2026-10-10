@@ -727,3 +727,47 @@ def test_cli_dry_run_lists_employer_rejections(monkeypatch, tmp_path):
     c = db.connect(path)
     assert c.execute("SELECT COUNT(*) FROM rejection").fetchone()[0] == 0
     c.close()
+
+
+# Shapes of real rejection emails that once produced sentence fragments as employer/title.
+@pytest.mark.parametrize(
+    ("sender", "subject", "body", "want"),
+    [
+        (
+            "Ditto Hiring Team <no-reply@ashbyhq.com>",
+            "Update - Senior Software Engineer, Cloud at Ditto",
+            "Thank you for applying for this role. Thanks for the time you put in.",
+            ("Ditto", "Senior Software Engineer, Cloud"),
+        ),
+        (
+            "FluidStack Hiring Team <no-reply@ashbyhq.com>",
+            "Fluidstack Application Update",
+            "We've decided to move forward with other candidates whose experience more closely "
+            "aligns with the requirements of the Telemetry Platform Lead role at Fluidstack. "
+            "After reviewing your application, we've decided to move forward.",
+            ("FluidStack", None),
+        ),
+        (
+            "no-reply@us.greenhouse-mail.io",
+            "Important information about your application to Machinify",
+            "We've decided to move forward with other candidates whose experience more closely "
+            "aligns with our current needs at Machinify. After careful review, we've decided.",
+            ("Machinify", None),
+        ),
+        (
+            "no-reply@example-space.com",
+            "K2 Space: Application Update",
+            "Thank you for your interest in the Senior Flight Software Engineer role at K2 Space.",
+            ("K2 Space", "Senior Flight Software Engineer"),
+        ),
+        (
+            '"Pure Storage Inc." <careers@example.com>',
+            "Thank You for Applying With Everpure",
+            "Unfortunately we will not be moving forward.",
+            ("Everpure", None),
+        ),
+    ],
+)
+def test_parse_employer_title_rejects_sentence_fragments(sender, subject, body, want):
+    employer, title = match.parse_employer_title(msg_of(sender, subject, body))
+    assert (employer, title) == want

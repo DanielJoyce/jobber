@@ -498,36 +498,85 @@ def match_groups(msg: Message, groups: list[Group]) -> Match | None:
 
 # --- extracting employer/title for unmatched confirmations and rejections ------------------
 
+# Titles and employers are short noun phrases; the length caps and no sentence punctuation keep
+# lazy matches from swallowing whole body sentences (real rejections produced titles like
+# "applying for this role. Thank you for the time ..." before these caps existed).
+_T = r"(?P<t>[^.,!?|\n]{2,80}?)"
+# Subject titles may carry a comma ("Senior Software Engineer, Cloud"); bodies use commas as
+# clause breaks, so only subjects allow them.
+_TS = r"(?P<t>[^.!?|\n]{2,80}?)"
+_E = r"(?P<e>[^.,!?|:\n]{2,60}?)"
+_END = r"(?=\s*(?:[.,!?|\n]|$| - ))"
+
+# Subject-only shapes, tried first: subjects are terse and reliable.
+_SUBJECT_PATTERNS = (
+    re.compile(rf"^(?:update|re|fwd?)\s*[-:]\s*{_TS} at {_E}{_END}", re.I),
+    re.compile(rf"application (?:to|with|at) {_E}{_END}", re.I),
+    re.compile(rf"applying (?:to|with|at) {_E}{_END}", re.I),
+    re.compile(rf"^{_E}\s*:\s*(?:your )?application", re.I),
+    re.compile(rf"^{_E} application (?:update|status)", re.I),
+)
 _TITLE_PATTERNS = (
-    re.compile(
-        r"applying (?:for|to) (?:the )?(?P<t>.+?) (?:position |role )?at (?P<e>[^.,!|]+)", re.I
-    ),
-    re.compile(
-        r"application (?:for|to) (?:the )?(?P<t>.+?) (?:position |role )?at (?P<e>[^.,!|]+)", re.I
-    ),
-    re.compile(r"your application (?:to|with) (?P<e>[^.,!|-]+?)(?: - |: )(?P<t>[^.,!|]+)", re.I),
+    re.compile(rf"applying (?:for|to) (?:the )?{_T} (?:position |role )?at {_E}{_END}", re.I),
+    re.compile(rf"application (?:for|to) (?:the )?{_T} (?:position |role )?at {_E}{_END}", re.I),
+    re.compile(rf"your application (?:to|with) {_E}(?: - |: ){_T}{_END}", re.I),
     # Rejections: "Thank you for your interest in the Data Engineer position at Acme".
     re.compile(
-        r"interest in (?:the )?(?P<t>.+?) (?:position |role |opening )?(?:at|with) (?P<e>[^.,!|]+)",
-        re.I,
+        rf"interest in (?:the )?{_T} (?:position |role |opening )?(?:at|with) {_E}{_END}", re.I
     ),
-    re.compile(r"for the (?P<t>[^.,!|]+?) (?:position|role)\b", re.I),
+    re.compile(rf"for the {_T} (?:position|role)\b", re.I),
 )
+# Words that mean a capture is a sentence fragment, not a name or a job title.
+_NOT_A_NAME = re.compile(
+    r"\b(?:we|we've|we have|you|your|our|us|thank|thanks|after|decided|candidates?|"
+    r"experience|unfortunately|reviewing|review|process|this role|time and effort)\b",
+    re.I,
+)
+_SENDER_TEAM = re.compile(r"\b(?:hiring|recruiting|talent|careers?|people)\b(?: team)?", re.I)
+
+
+def _clean(value: str | None, max_words: int) -> str | None:
+    v = (value or "").strip(" -:\"'")
+    if not v or len(v.split()) > max_words or _NOT_A_NAME.search(v):
+        return None
+    return v
+
+
+def _sender_employer(msg: Message) -> str | None:
+    """ "Acme Hiring Team" or "Acme Careers" from the display name; None for ATS-only names."""
+    name = msg.sender_name.strip().strip('"')
+    if not name or not _SENDER_TEAM.search(name):
+        return None
+    return _clean(_GENERIC_NAMES.sub("", name).strip(" -:|,"), 6)
 
 
 def parse_employer_title(msg: Message) -> tuple[str | None, str | None]:
-    employer = title = None
+    """Best-effort employer and title for mail that matched no known job.
+
+    Order: the sender's "X Hiring Team" name, then terse subject shapes, then body sentences.
+    Every capture is validated as a short name or title, never a sentence fragment.
+    """
+    employer = _sender_employer(msg)
+    title = None
+    for pat in _SUBJECT_PATTERNS:
+        m = pat.search(msg.subject)
+        if m:
+            gd = m.groupdict()
+            employer = employer or _clean(gd.get("e"), 6)
+            title = title or _clean(gd.get("t"), 12)
     for text in (msg.subject, (msg.body or msg.snippet)[:1500]):
-        for pat in _TITLE_PATTERNS:
-            m = pat.search(text)
-            if m:
-                gd = m.groupdict()
-                title = title or (gd.get("t") or "").strip(" -:") or None
-                employer = employer or (gd.get("e") or "").strip(" -:") or None
         if employer and title:
             break
+        for pat in _TITLE_PATTERNS:
+            for m in pat.finditer(text):
+                gd = m.groupdict()
+                t, e = _clean(gd.get("t"), 12), _clean(gd.get("e"), 6)
+                if gd.get("t") is not None and t is None:
+                    continue  # a fragment: skip this match entirely
+                title = title or t
+                employer = employer or e
     if not employer:
-        employer = _GENERIC_NAMES.sub("", msg.sender_name).strip(" -:|,") or None
+        employer = _clean(_GENERIC_NAMES.sub("", msg.sender_name).strip(" -:|,"), 6)
     return employer, title
 
 
