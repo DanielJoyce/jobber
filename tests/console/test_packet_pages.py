@@ -238,6 +238,8 @@ def test_prepare_opens_application_at_preparing_and_a_packet(client, conn):
 
 def test_prepare_moves_a_shortlisted_application_forward_and_keeps_later_ones(client, conn):
     client.post("/inbox/1/label?label=interesting")
+    # The inbox stamps the shortlist with the wall clock; put it before this test's fixed NOW.
+    conn.execute("UPDATE application_event SET at = '2026-10-01T00:00:00+00:00'")
     client.post("/job/1/prepare")
     assert conn.execute("SELECT status FROM application WHERE job_group_id = 1").fetchone()[0] == (
         "preparing"

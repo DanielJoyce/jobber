@@ -16,6 +16,7 @@ from markupsafe import Markup, escape
 
 from jobhunter.apply.packets import live_packet_id
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
+from jobhunter.console.tracking import APPLY_CLICK_NOTE, rebuild_status
 from jobhunter.core import rejections
 from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.models import ApplyLink, ApplyStatus
@@ -463,13 +464,10 @@ def log_click(
         if app and app["status"] == "interested":
             conn.execute(
                 "INSERT INTO application_event (application_id, at, status, note, source) "
-                "VALUES (?, ?, 'preparing', 'opened apply link', 'manual')",
-                (app["id"], at),
+                "VALUES (?, ?, 'preparing', ?, 'manual')",
+                (app["id"], at, APPLY_CLICK_NOTE),
             )
-            conn.execute(
-                "UPDATE application SET status = 'preparing', updated_at = ? WHERE id = ?",
-                (at, app["id"]),
-            )
+            rebuild_status(conn, app["id"])  # the cache follows the log (tracking rules)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

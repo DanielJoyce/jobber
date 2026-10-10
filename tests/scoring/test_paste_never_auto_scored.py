@@ -249,3 +249,64 @@ def test_two_concurrent_score_now_confirms_pay_once(tmp_path, profile):  # noqa:
     reasons = c.execute("SELECT reasons FROM prefilter_result").fetchone()[0]
     assert json.loads(reasons) == ["user-requested"]  # the winner's row survives
     c.close()
+
+
+def _pasted_db(tmp_path, profile):  # noqa: F811
+    c = db.connect(tmp_path / "claim.db")
+    db.migrate(c)
+    c.execute(
+        "INSERT INTO source (key, class, name, family, tier, entry, policy) VALUES "
+        "('wa', 'B', 'WA', 'neogov', 'http', 'https://example.com', 'enabled'), "
+        "('paste-manual', 'C', 'Pasted posting', 'manual', 'manual', 'console', 'manual')"
+    )
+    gid = add_group(c, 1, profile, passed=None)
+    manual(c, gid, "paste-manual")
+    c.execute("UPDATE job SET stage = 'normalized' WHERE job_group_id = ?", (gid,))
+    return c, gid
+
+
+def test_interrupted_score_now_releases_its_claim(tmp_path, profile):  # noqa: F811
+    from jobhunter.apply import score as group_score
+
+    c, gid = _pasted_db(tmp_path, profile)
+    scoring = Scoring(screen_scorer=SPEC)
+
+    class CtrlC(FakeScorer):
+        def submit(self, requests):
+            raise KeyboardInterrupt
+
+    token = group_score.estimate(c, profile, scoring, gid, NOW).token
+    with pytest.raises(KeyboardInterrupt):
+        group_score.score_now(
+            c, profile, scoring, gid, token=token, now=NOW, scorer_factory=lambda s: CtrlC()
+        )
+    assert c.execute("SELECT COUNT(*) FROM prefilter_result").fetchone()[0] == 0
+    est = group_score.estimate(c, profile, scoring, gid, NOW)
+    assert est.refusal is None
+    out = group_score.score_now(
+        c, profile, scoring, gid, token=est.token, now=NOW, scorer_factory=lambda s: FakeScorer()
+    )
+    assert out.status == "scored"
+    c.close()
+
+
+def test_a_killed_run_says_when_to_retry_and_expires(tmp_path, profile):  # noqa: F811
+    from datetime import timedelta
+
+    from jobhunter.apply import score as group_score
+
+    c, gid = _pasted_db(tmp_path, profile)
+    scoring = Scoring(screen_scorer=SPEC)
+    job_id = c.execute("SELECT id FROM job WHERE job_group_id = ?", (gid,)).fetchone()[0]
+    # What a process killed mid-call leaves behind.
+    c.execute(
+        "INSERT INTO prefilter_result (job_id, passed, reasons, filter_version, evaluated_at) "
+        "VALUES (?, 1, '[\"user-requested\"]', ?, ?)",
+        (job_id, profile.filter_version, NOW.isoformat()),
+    )
+    est = group_score.estimate(c, profile, scoring, gid, NOW + timedelta(minutes=5))
+    retry = (NOW + group_score.CLAIM_TTL).astimezone()
+    assert est.refusal and f"retry after {retry:%H:%M}" in est.refusal
+    later = NOW + group_score.CLAIM_TTL + timedelta(minutes=1)
+    assert group_score.estimate(c, profile, scoring, gid, later).refusal is None
+    c.close()

@@ -146,6 +146,8 @@ def estimate(
         est.refusal = "this posting is already scored"
     elif in_open_batch(conn, group_id):
         est.refusal = "this posting is in a submitted batch; it is scored when that is collected"
+    elif (claim := _claim_refusal(conn, job["id"], now)) is not None:
+        est.refusal = claim
     elif est.estimated_usd > est.remaining_usd:
         est.refusal = (
             f"estimated ${est.estimated_usd:.4f} is over the remaining spend cap "
@@ -162,22 +164,30 @@ class Outcome:
     cost_usd: float = 0.0
 
 
-def _claimed(conn: sqlite3.Connection, job_id: int, now: datetime) -> bool:
-    """A Score now for this job started less than ``CLAIM_TTL`` ago and has not finished.
+def _claim_refusal(conn: sqlite3.Connection, job_id: int, now: datetime) -> str | None:
+    """Why a new Score now must wait, or None.
 
-    Its ``user-requested`` prefilter row is the marker; a run that died leaves one behind, which
-    stops counting as a claim after ``CLAIM_TTL``.
+    A Score now marks the job with a ``user-requested`` prefilter row and removes it again if
+    it scores nothing (including on Ctrl-C). A row from the last ``CLAIM_TTL`` with no score is
+    a run still going, or one whose process was killed; the message says when to retry.
     """
     row = conn.execute(
         "SELECT reasons, evaluated_at FROM prefilter_result WHERE job_id = ?", (job_id,)
     ).fetchone()
     if row is None or json.loads(row["reasons"] or "[]") != [USER_REQUESTED]:
-        return False
+        return None
     try:
         started = from_iso(row["evaluated_at"])
     except ValueError:
-        return False
-    return now - started < CLAIM_TTL
+        return None
+    if now - started >= CLAIM_TTL:
+        return None
+    retry = (started + CLAIM_TTL).astimezone()
+    return (
+        f"a Score now for this posting started at {started.astimezone():%H:%M} and has not "
+        f"finished. If it is still running, its result will show here; if it was stopped, "
+        f"you can retry after {retry:%H:%M}"
+    )
 
 
 def _snapshot(conn: sqlite3.Connection, job_id: int) -> tuple[sqlite3.Row | None, str]:
@@ -231,8 +241,8 @@ def score_now(
             raise ScoreRefused("this posting is already scored")
         if in_open_batch(conn, group_id):
             raise ScoreRefused("this posting is in a submitted batch")
-        if _claimed(conn, job["id"], now):
-            raise ScoreRefused("this posting is being scored right now; reload in a minute")
+        if (msg := _claim_refusal(conn, job["id"], now)) is not None:
+            raise ScoreRefused(msg)
         snap = _snapshot(conn, job["id"])
         conn.execute(
             "INSERT OR REPLACE INTO prefilter_result (job_id, passed, reasons, filter_version, "
@@ -295,5 +305,9 @@ def score_now(
     except Exception as exc:  # restored below; the caller shows the message
         logger.warning("score group %s failed: %s", group_id, exc)
         why = f"scoring failed: {exc}"
+    except BaseException:
+        # Ctrl-C during `score --group`, or shutdown: release the claim so a retry can run.
+        _restore(conn, job["id"], snap)
+        raise
     _restore(conn, job["id"], snap)
     raise ScoreRefused(f"{why}; nothing is left waiting to be scored")

@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from jobhunter.console.tracking import PREPARE_NOTE
+from jobhunter.console.tracking import PREPARE_NOTE, rebuild_status
 from jobhunter.core import db
 from jobhunter.core.manual_sources import PASTE_MANUAL
 
@@ -66,17 +66,15 @@ def prepare_in_txn(conn: sqlite3.Connection, group_id: int, now: datetime) -> in
     else:
         app_id = int(app["id"])
         moved = app["status"] in _BEFORE_PREPARING
-        if moved:
-            conn.execute(
-                "UPDATE application SET status = 'preparing', updated_at = ? WHERE id = ?",
-                (at, app_id),
-            )
     if moved:
         conn.execute(
             "INSERT INTO application_event (application_id, at, status, note, source) "
             "VALUES (?, ?, 'preparing', ?, 'manual')",
             (app_id, at, PREPARE_NOTE),
         )
+        if app is not None:
+            # The cache comes from the log, the same way every reader derives it.
+            rebuild_status(conn, app_id)
     # Preparing a packet is a shortlist: the row leaves the inbox like a pressed `s`. A
     # dismissal is overridden (the user chose this job after all); 'applied' is kept. A job
     # already applied to (or further) is not newly shortlisted: no label is written for it.

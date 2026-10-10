@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime, timedelta
 from statistics import median
 from typing import Any
 
+from jobhunter.console.tracking import effective_events
 from jobhunter.core import geo, rejections
 from jobhunter.core.bucketnames import (
     BUCKET_TITLES,
@@ -279,14 +280,18 @@ class AppFact:
 
 
 def application_facts(conn: sqlite3.Connection) -> list[AppFact]:
-    events: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    newest_first: dict[int, list[sqlite3.Row]] = defaultdict(list)
     for e in conn.execute(
-        "SELECT application_id, at, status FROM application_event ORDER BY at, id"
+        "SELECT application_id, at, status, note FROM application_event ORDER BY at DESC, id DESC"
     ):
-        events[e["application_id"]].append((e["at"], e["status"]))
+        newest_first[e["application_id"]].append(e)
     out: list[AppFact] = []
     for a in conn.execute("SELECT * FROM application ORDER BY id"):
-        evs = events.get(a["id"], [])
+        # The same events tracking.rebuild_status reads, oldest first.
+        evs = [
+            (e["at"], e["status"])
+            for e in reversed(effective_events(newest_first.get(a["id"], [])))
+        ]
         applied = a["applied_at"]
         if applied is None:
             applied = next((at for at, st in evs if st == "applied"), None)

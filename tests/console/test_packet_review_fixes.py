@@ -174,3 +174,67 @@ def test_new_packet_key_works_without_a_profile(client, pdir):  # noqa: F811
     page = client.get("/inbox").text
     assert "No profile yet" in page and 'href="/apply/new"' in page
     assert "inbox.js" in page  # binds n
+
+
+# ─── one status rule for every reader (re-review) ───────────────────────────
+
+
+def test_backdated_applied_drives_days_nudge_and_in_flight(client, conn):  # noqa: F811
+    """Prepare Oct 10, a Sep 20 'applied' accepted from mail on Oct 11: every reader agrees."""
+    from datetime import UTC, datetime
+
+    from jobhunter.apply import packets
+
+    client.post("/inbox/2/label?label=interesting")
+    conn.execute("UPDATE application_event SET at = '2026-09-15T00:00:00+00:00'")
+    packets.prepare(conn, 2, datetime(2026, 10, 10, 9, 0, tzinfo=UTC))
+    app_id = conn.execute("SELECT id FROM application WHERE job_group_id = 2").fetchone()[0]
+    tracking.add_event(conn, app_id, "applied", "from email", "2026-09-20T09:00:00+00:00", "email")
+    assert tracking.status_since(conn, app_id) == datetime(2026, 9, 20, 9, 0, tzinfo=UTC)
+    oct11 = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
+    card = tracking.card(conn, app_id, oct11)
+    assert card.status == "applied" and card.days == 21 and card.stale
+    nudges = [f for f in tracking.followups(conn, oct11) if f.kind == "nudge"]
+    assert [f.app_id for f in nudges] == [app_id]
+    (fact,) = [a for a in dash.application_facts(conn) if a.app_id == app_id]
+    assert fact.status == "applied" and fact.status in dash.IN_FLIGHT
+    assert dash._status_on(fact, "2026-10-10") == "applied"
+
+
+def test_prepare_after_a_manual_move_back_stays_preparing(client, conn):  # noqa: F811
+    """applied, moved back to interested by hand, then Prepare: a later backdated event
+    (older than the move back) must not drop the card back to interested."""
+    from datetime import UTC, datetime
+
+    from jobhunter.apply import packets
+
+    conn.execute(
+        "INSERT INTO application (job_group_id, status, created_at, updated_at) "
+        "VALUES (2, 'applied', ?, ?)",
+        (ISO, ISO),
+    )
+    app_id = conn.execute("SELECT id FROM application WHERE job_group_id = 2").fetchone()[0]
+    tracking.add_event(conn, app_id, "applied", "from email", "2026-10-01T09:00:00+00:00", "email")
+    tracking.add_event(conn, app_id, "interested", "wrong match", "2026-10-10T10:00:00+00:00")
+    packets.prepare(conn, 2, datetime(2026, 10, 10, 11, 0, tzinfo=UTC))
+
+    def status():
+        return conn.execute("SELECT status FROM application WHERE id = ?", (app_id,)).fetchone()[0]
+
+    assert status() == "preparing"
+    assert tracking.rebuild_status(conn, app_id) == "preparing"  # cache == derivation
+    tracking.add_event(conn, app_id, "preparing", "drawer", "2026-10-10T09:30:00+00:00")
+    assert status() == "preparing"
+
+
+def test_apply_click_cache_matches_the_log(client, conn):  # noqa: F811
+    from datetime import UTC, datetime
+
+    from jobhunter.console import detail
+
+    client.post("/inbox/2/label?label=interesting")
+    conn.execute("UPDATE application_event SET at = '2026-10-01T00:00:00+00:00'")
+    detail.log_click(conn, 2, GH, "redirected", datetime(2026, 10, 10, tzinfo=UTC))
+    app_id = conn.execute("SELECT id FROM application WHERE job_group_id = 2").fetchone()[0]
+    cached = conn.execute("SELECT status FROM application WHERE id = ?", (app_id,)).fetchone()[0]
+    assert cached == "preparing" == tracking.rebuild_status(conn, app_id)
