@@ -5,7 +5,7 @@ import sqlite3
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -57,6 +57,55 @@ def register(
                 "titles": inbox.BUCKET_TITLES,
                 "all_buckets": inbox.BUCKETS,
             },
+        )
+
+    def bulk_ids(conn: sqlite3.Connection, group_id: list[int]) -> list[int]:
+        ids = list(dict.fromkeys(group_id))  # de-duplicate, keep order
+        if not ids:
+            raise HTTPException(422, "select at least one job")
+        if len(ids) > inbox.BULK_MAX:
+            raise HTTPException(422, f"at most {inbox.BULK_MAX} jobs per bulk action")
+        missing = set(ids) - inbox.existing_group_ids(conn, ids)
+        if missing:
+            raise HTTPException(404, f"no such job group: {sorted(missing)[0]}")
+        return ids
+
+    # Declared before the /inbox/{group_id}/... routes so "bulk" is never parsed as an id.
+    @app.post("/inbox/bulk", response_class=HTMLResponse)
+    def bulk_label(
+        request: Request,
+        conn: Conn,
+        label: Annotated[str, Form()],
+        group_id: Annotated[list[int] | None, Form()] = None,
+    ) -> HTMLResponse:
+        if label not in inbox.LABELS:
+            raise HTTPException(422, "label must be interesting or not_interesting")
+        ids = bulk_ids(conn, group_id or [])
+        triaged = [{"group_id": g, "job_title": inbox.group_title(conn, g)} for g in ids]
+        inbox.set_labels(conn, ids, label)
+        return templates.TemplateResponse(
+            request,
+            "_inbox_bulk.html",
+            {"triaged": triaged, "label": label, "ids": ids, "undo": False, "restored": []},
+        )
+
+    @app.post("/inbox/bulk/undo", response_class=HTMLResponse)
+    def bulk_undo(
+        request: Request,
+        conn: Conn,
+        group_id: Annotated[list[int] | None, Form()] = None,
+    ) -> HTMLResponse:
+        ids = bulk_ids(conn, group_id or [])
+        inbox.undo_labels(conn, ids)
+        profile, _ = load_console_profile(request.app.state.settings)
+        restored = []
+        for g in ids:
+            item = inbox.inbox_item(conn, profile, g) if profile else None
+            restored.append({"group_id": g, "item": item})
+        return templates.TemplateResponse(
+            request,
+            "_inbox_bulk.html",
+            {"triaged": [], "label": None, "ids": ids, "undo": True, "restored": restored},
         )
 
     @app.post("/inbox/{group_id}/label", response_class=HTMLResponse)

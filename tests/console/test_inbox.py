@@ -296,6 +296,76 @@ def test_label_and_undo_routes(client):
     assert client.post("/inbox/999/label?label=interesting").status_code == 404
 
 
+def test_set_labels_bulk_and_undo(seeded):
+    inbox.set_labels(seeded, [1, 2, 3], "interesting")
+    assert seeded.execute("SELECT COUNT(*) FROM label").fetchone()[0] == 3
+    assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 3
+    inbox.set_labels(seeded, [2, 3], "not_interesting")  # relabel keeps the applications
+    assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 3
+    inbox.undo_labels(seeded, [1, 2, 3])
+    for table in ("label", "application", "application_event"):
+        assert seeded.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_set_labels_is_atomic(seeded):
+    # group 999 has no job_group row: the FK on label fails after 1 and 2 were written
+    with pytest.raises(Exception):  # noqa: B017 - any DB error must roll back everything
+        inbox.set_labels(seeded, [1, 2, 999], "interesting")
+    assert not seeded.in_transaction
+    for table in ("label", "application", "application_event"):
+        assert seeded.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    with pytest.raises(ValueError):
+        inbox.set_labels(seeded, [1], "applied")
+
+
+def test_bulk_routes(client):
+    r = client.post("/inbox/bulk", data={"label": "not_interesting", "group_id": [1, 2, 2]})
+    assert r.status_code == 200
+    assert r.text.count('hx-swap-oob="true"') == 3  # two rows (deduped) and the toast
+    assert "Dismissed: Bullseye" in r.text and "Dismissed: Strong" in r.text
+    assert 'name="group_id" value="1"' in r.text and "/inbox/bulk/undo" in r.text
+    page = client.get("/inbox").text
+    assert "Bullseye" not in page and "Strong" not in page
+    r = client.post("/inbox/bulk/undo", data={"group_id": [1, 2]})
+    assert r.status_code == 200
+    assert 'id="row-1"' in r.text and "Bullseye" in r.text and "Strong" in r.text
+    assert "Undone: 2 jobs restored." in r.text
+    assert "Bullseye" in client.get("/inbox").text
+
+
+def test_bulk_shortlist_creates_applications(client, tmp_path):
+    client.post("/inbox/bulk", data={"label": "interesting", "group_id": [1, 2]})
+    c = db.connect(tmp_path / "t.db")
+    assert c.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 2
+    client.post("/inbox/bulk/undo", data={"group_id": [1, 2]})
+    assert c.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 0
+
+
+def test_bulk_validation(client, tmp_path):
+    ok = {"label": "interesting"}
+    assert (
+        client.post("/inbox/bulk", data={**ok, "group_id": [1], "label": "applied"}).status_code
+        == 422
+    )
+    assert client.post("/inbox/bulk", data=ok).status_code == 422  # empty selection
+    assert client.post("/inbox/bulk", data={**ok, "group_id": ["x"]}).status_code == 422
+    over = list(range(1, inbox.BULK_MAX + 2))
+    assert client.post("/inbox/bulk", data={**ok, "group_id": over}).status_code == 422
+    # unknown id: 404 and nothing applied, even for the valid ids in the request
+    assert client.post("/inbox/bulk", data={**ok, "group_id": [1, 999]}).status_code == 404
+    c = db.connect(tmp_path / "t.db")
+    assert c.execute("SELECT COUNT(*) FROM label").fetchone()[0] == 0
+    assert client.post("/inbox/bulk/undo", data={}).status_code == 422
+    assert client.post("/inbox/bulk/undo", data={"group_id": [999]}).status_code == 404
+
+
+def test_page_has_bulk_controls(client):
+    t = client.get("/inbox").text
+    assert 'id="select-all"' in t and 'id="bulk-bar"' in t and "Clear selection" in t
+    assert 'type="checkbox" class="sel" name="group_id" value="1"' in t
+    assert "Select Bullseye" in t
+
+
 def test_no_profile_banner(tmp_path, seeded):
     settings = Settings(paths=Paths(profile_dir=tmp_path / "missing", db_path=tmp_path / "t.db"))
     c = TestClient(create_app(settings, lambda: db.connect(tmp_path / "t.db")))

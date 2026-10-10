@@ -1,0 +1,17 @@
+{# Out-of-band response for /inbox/bulk and /inbox/bulk/undo: swaps every affected row by id
+   and replaces the undo toast. The request itself uses hx-swap="none". #}
+{% if undo %}
+{% for r in restored %}
+{% if r.item %}{% with i = r.item, oob = True %}{% include "_inbox_row.html" %}{% endwith %}
+{% else %}<div class="row triaged" id="row-{{ r.group_id }}" hx-swap-oob="true">Undone.</div>{% endif %}
+{% endfor %}
+<div id="bulk-toast" class="bulk-toast" role="status" hx-swap-oob="true">Undone: {{ ids | length }} job{{ "" if ids | length == 1 else "s" }} restored.</div>
+{% else %}
+{% for t in triaged %}{% with group_id = t.group_id, job_title = t.job_title, oob = True %}{% include "_inbox_triaged.html" %}{% endwith %}
+{% endfor %}
+<form id="bulk-toast" class="bulk-toast" role="status" hx-post="/inbox/bulk/undo" hx-swap="none" hx-swap-oob="true">
+  <span>{% if label == "interesting" %}Shortlisted{% else %}Dismissed{% endif %} {{ ids | length }} job{{ "" if ids | length == 1 else "s" }}.</span>
+  {% for g in ids %}<input type="hidden" name="group_id" value="{{ g }}">{% endfor %}
+  <button type="submit" class="act bulk-undo">undo all (u)</button>
+</form>
+{% endif %}

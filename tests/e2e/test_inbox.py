@@ -114,3 +114,97 @@ def test_typing_in_input_does_not_trigger_shortcuts(inbox, server):
     assert selected_gid(inbox) == before
     assert not server.rows("SELECT 1 FROM label")
     assert inbox.locator("#stale-details").evaluate("d => d.open") is False
+
+
+# ─── bulk triage ────────────────────────────────────────────────────────────
+
+
+def check(page, gid):
+    page.locator(f"#row-{gid} input.sel").check()
+
+
+def test_bulk_dismiss_and_undo(inbox, server):
+    order = visible_gids(inbox)
+    a, b = order[0], order[1]
+    expect(inbox.locator("#bulk-actions")).to_be_hidden()
+    check(inbox, a)
+    check(inbox, b)
+    expect(inbox.locator("#bulk-count")).to_have_text("2 selected")
+    inbox.locator("#bulk-bar").get_by_role("button", name="Dismiss").click()
+    for gid in (a, b):
+        expect(inbox.locator(f"#row-{gid}")).to_have_class("row triaged")
+        expect(inbox.locator(f"#row-{gid}")).to_contain_text("Dismissed")
+    labels = server.rows("SELECT job_group_id, label FROM label ORDER BY job_group_id")
+    assert {r[0] for r in labels} == {a, b} and {r[1] for r in labels} == {"not_interesting"}
+    expect(inbox.locator("#bulk-actions")).to_be_hidden()
+    assert selected_gid(inbox) == order[2]
+    inbox.get_by_role("button", name="undo all").click()
+    for gid in (a, b):
+        expect(inbox.locator(f"article#row-{gid}")).to_be_visible()
+    assert not server.rows("SELECT 1 FROM label")
+    assert not inbox.errors
+
+
+def test_bulk_shortlist_button(inbox, server):
+    a, b = visible_gids(inbox)[:2]
+    check(inbox, a)
+    check(inbox, b)
+    inbox.locator("#bulk-bar").get_by_role("button", name="Shortlist").click()
+    expect(inbox.locator(f"#row-{b}")).to_contain_text("Shortlisted")
+    apps = server.rows(
+        "SELECT job_group_id FROM application a JOIN label l USING (job_group_id) "
+        "WHERE l.label = 'interesting'"
+    )
+    assert {r[0] for r in apps} == {a, b}
+
+
+def test_checkbox_label_and_no_navigation(inbox):
+    gid = visible_gids(inbox)[1]
+    title = inbox.locator(f"#row-{gid} .row-title").inner_text()
+    inbox.get_by_label(f"Select {title}").check()
+    assert inbox.url.endswith("/inbox")
+    expect(inbox.locator(f"#row-{gid} .row-detail")).to_be_hidden()
+    expect(inbox.locator("#bulk-count")).to_have_text("1 selected")
+
+
+def test_select_all_tristate_and_clear(inbox):
+    gids = visible_gids(inbox)
+    select_all = inbox.locator("#select-all")
+    select_all.check()
+    expect(inbox.locator("#bulk-count")).to_have_text(f"{len(gids)} selected")
+    inbox.locator(f"#row-{gids[0]} input.sel").uncheck()
+    assert select_all.evaluate("e => e.indeterminate") is True
+    select_all.check()
+    assert inbox.locator("input.sel:checked").count() == len(gids)
+    inbox.locator("#bulk-bar").get_by_role("button", name="Clear selection").click()
+    expect(inbox.locator("input.sel:checked")).to_have_count(0)
+    expect(inbox.locator("#bulk-actions")).to_be_hidden()
+    assert select_all.evaluate("e => e.indeterminate || e.checked") is False
+
+
+def test_shift_click_range(inbox):
+    gids = visible_gids(inbox)
+    inbox.locator(f"#row-{gids[0]} input.sel").click()
+    inbox.locator(f"#row-{gids[3]} input.sel").click(modifiers=["Shift"])
+    expect(inbox.locator("#bulk-count")).to_have_text("4 selected")
+    for g in gids[:4]:
+        expect(inbox.locator(f"#row-{g} input.sel")).to_be_checked()
+    expect(inbox.locator(f"#row-{gids[4]} input.sel")).not_to_be_checked()
+
+
+def test_space_toggles_and_s_x_apply_to_selection(inbox, server):
+    gids = visible_gids(inbox)
+    inbox.keyboard.press(" ")  # row 0 is focused
+    inbox.keyboard.press("j")
+    inbox.keyboard.press("j")
+    inbox.keyboard.press(" ")
+    expect(inbox.locator("#bulk-count")).to_have_text("2 selected")
+    inbox.keyboard.press("x")  # acts on the selection, not just the focused row
+    for g in (gids[0], gids[2]):
+        expect(inbox.locator(f"#row-{g}")).to_contain_text("Dismissed")
+    expect(inbox.locator(f"article#row-{gids[1]}")).to_be_visible()
+    assert len(server.rows("SELECT 1 FROM label")) == 2
+    inbox.keyboard.press("u")  # one undo reverts the whole bulk action
+    expect(inbox.locator(f"article#row-{gids[0]}")).to_be_visible()
+    expect(inbox.locator(f"article#row-{gids[2]}")).to_be_visible()
+    assert not server.rows("SELECT 1 FROM label")

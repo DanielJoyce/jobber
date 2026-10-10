@@ -1,4 +1,5 @@
-<article class="row" id="row-{{ i.group_id }}" data-gid="{{ i.group_id }}" data-job="{{ i.job_id }}" data-url="{{ i.url }}" tabindex="-1">
+<article class="row" id="row-{{ i.group_id }}" data-gid="{{ i.group_id }}" data-job="{{ i.job_id }}" data-url="{{ i.url }}" tabindex="-1"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <label class="row-check"><input type="checkbox" class="sel" name="group_id" value="{{ i.group_id }}"><span class="sr-only">Select {{ i.title }}</span></label>
   <div class="row-score" title="overall {{ i.overall }}">{{ i.overall }}</div>
   <div class="row-body">
     <div class="row-head">
