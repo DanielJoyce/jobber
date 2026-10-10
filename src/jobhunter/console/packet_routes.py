@@ -14,13 +14,14 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from jobhunter.apply import (
     answers,
     cli_runner,
     documents,
+    export,
     generator,
     labels,
     packets,
@@ -32,6 +33,7 @@ from jobhunter.apply import score as group_score
 from jobhunter.console import detail, packet_docs
 from jobhunter.console.inbox_routes import load_console_profile
 from jobhunter.console.tracking_routes import Form
+from jobhunter.core import pdf
 from jobhunter.pipeline import applylink
 from jobhunter.scoring.profile import Profile
 from jobhunter.scoring.scorers import ScorerError, privacy_notice
@@ -237,6 +239,43 @@ def register(
             }
         return out
 
+    # ─── export (phase 1c) ──────────────────────────────────────────────────
+
+    # Tests inject a fake renderer; None prints with headless Chromium (the browser extra).
+    app.state.packet_pdf_renderer = None
+    app.state.export_notes = {}
+
+    def pdf_renderer(request: Request) -> export.PdfRenderer:
+        return request.app.state.packet_pdf_renderer or pdf.render_pdf
+
+    def export_ctx(
+        request: Request,
+        conn: sqlite3.Connection,
+        p: packets.Packet,
+        msg: tuple[bool, str] | None,
+    ) -> dict[str, Any]:
+        data_dir = request.app.state.settings.paths.data_dir
+        slots: dict[str, Any] = {}
+        for kind in export.KINDS:
+            exp = export.current_export(conn, p.id, kind)
+            slots[kind] = (
+                None
+                if exp is None
+                else {
+                    "exp": exp,
+                    "refusal": export.packet_refusal(p.status) or export.refusal(exp),
+                    "on_disk": (
+                        {f: False for f in export.FORMATS}
+                        if export.packet_refusal(p.status)
+                        else export.available(data_dir, p.id, exp)
+                    ),
+                    "named_version": export.named_version(data_dir, p.id, exp),
+                }
+            )
+        # The result of the last Export click (it redirects, so it is kept here once).
+        notes: dict[int, tuple[bool, str]] = request.app.state.export_notes
+        return {"export": slots, "export_msg": msg or notes.pop(p.id, None)}
+
     def request_sizes(conn: sqlite3.Connection, p: packets.Packet) -> dict[str, int]:
         """This packet's real request sizes, so a button's estimate is for what it sends."""
         profile, _error = load_console_profile(app.state.settings)
@@ -262,11 +301,14 @@ def register(
         status: int = 200,
         score_message: str | None = None,
         score_ok: str | None = None,
+        export_msg: tuple[bool, str] | None = None,
         **docs: Any,
     ) -> HTMLResponse:
         p = require_packet(conn, p.id)  # re-read: status and pointers may have moved
+        warn = export.safe_sync(conn, request.app.state.settings.paths.data_dir, p.id)
         ctx = score_ctx(request, conn, p, score_message, score_ok)
         ctx.update(docs_ctx(request, conn, p, **docs))
+        ctx.update(export_ctx(request, conn, p, export_msg or ((False, warn) if warn else None)))
         return templates.TemplateResponse(
             request,
             "packet.html",
@@ -274,7 +316,13 @@ def register(
             status_code=status,
         )
 
-    def back(packet_id: int, anchor: str) -> RedirectResponse:
+    def back(
+        request: Request, conn: sqlite3.Connection, packet_id: int, anchor: str
+    ) -> RedirectResponse:
+        # The version may just have changed: the files to attach must follow it.
+        warn = export.safe_sync(conn, request.app.state.settings.paths.data_dir, packet_id)
+        if warn:
+            request.app.state.export_notes[packet_id] = (False, warn)
         return RedirectResponse(f"/packet/{packet_id}#{anchor}", status_code=303)
 
     def apply_profile(request: Request) -> Profile:
@@ -350,7 +398,7 @@ def register(
         except (answers.NeverStore, ValueError) as exc:
             gen.update(message=str(exc), offer_api=False, paid=False)
             return render_packet(request, conn, p, status=409, gen=gen)
-        return back(packet_id, anchor)
+        return back(request, conn, packet_id, anchor)
 
     @app.post("/packet/{packet_id}/base")
     def packet_base(request: Request, conn: Conn, packet_id: int) -> Response:
@@ -360,7 +408,7 @@ def register(
             generator.use_base_resume(conn, apply_profile(request), p.id, now=now())
         except generator.ApplyRefused as exc:
             return render_packet(request, conn, p, status=409, doc_message=exc.message)
-        return back(packet_id, "resume")
+        return back(request, conn, packet_id, "resume")
 
     @app.post("/packet/{packet_id}/doc/{doc_id}/save")
     def packet_doc_save(request: Request, conn: Conn, form: Form, packet_id: int, doc_id: int):
@@ -371,7 +419,7 @@ def register(
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
         v = review.get_version(conn, new_id)
         anchor = {"resume": "resume", "cover_letter": "letter"}.get(v.kind if v else "", "drafts")
-        return back(packet_id, anchor)
+        return back(request, conn, packet_id, anchor)
 
     @app.post("/packet/{packet_id}/doc/{doc_id}/confirm")
     def packet_doc_confirm(request: Request, conn: Conn, form: Form, packet_id: int, doc_id: int):
@@ -383,7 +431,7 @@ def register(
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
         v = review.get_version(conn, doc_id)
         anchor = {"resume": "resume", "cover_letter": "letter"}.get(v.kind if v else "", "drafts")
-        return back(packet_id, anchor)
+        return back(request, conn, packet_id, anchor)
 
     @app.post("/packet/{packet_id}/doc/{doc_id}/restore")
     def packet_doc_restore(request: Request, conn: Conn, form: Form, packet_id: int, doc_id: int):
@@ -392,7 +440,7 @@ def register(
             review.restore(conn, p.id, doc_id, form.get("line", ""), now())
         except review.ReviewError as exc:
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
-        return back(packet_id, "resume")
+        return back(request, conn, packet_id, "resume")
 
     @app.post("/packet/{packet_id}/ready")
     def packet_ready(request: Request, conn: Conn, packet_id: int) -> Response:
@@ -401,7 +449,62 @@ def register(
             review.mark_ready(conn, p.id, now())
         except review.ReviewError as exc:
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
-        return back(packet_id, "documents")
+        return back(request, conn, packet_id, "documents")
+
+    @app.post("/packet/{packet_id}/export")
+    def packet_export(request: Request, conn: Conn, form: Form, packet_id: int) -> Response:
+        """Write the current resume or cover letter as md, txt, html and (if possible) PDF."""
+        p = require_packet(conn, packet_id)
+        kind = form.get("kind", "")
+        try:
+            if (why := export.packet_refusal(p.status)) is not None:
+                raise export.ExportError(why)
+            exp = export.current_export(conn, p.id, kind)
+            if exp is None:
+                raise export.ExportError("There is no such document to export yet.")
+            data_dir = request.app.state.settings.paths.data_dir
+            written = export.write_export(conn, data_dir, p.id, exp, pdf_renderer(request))
+        except export.ExportError as exc:
+            return render_packet(request, conn, p, status=409, export_msg=(False, str(exc)))
+        label = "cover letter" if kind == "cover_letter" else "resume"
+        if written.pdf_error:
+            text = (
+                f"Saved the {label} (v{exp.version.version}) as Markdown, text and HTML. "
+                f"No PDF: {written.pdf_error}"
+            )
+            request.app.state.export_notes[p.id] = (False, text)
+        else:
+            text = f"Saved the {label} (v{exp.version.version}) as PDF, text, Markdown and HTML."
+            request.app.state.export_notes[p.id] = (True, text)
+        return back(request, conn, p.id, "export")
+
+    @app.get("/packet/{packet_id}/export/{slug}/{fmt}")
+    def packet_export_file(
+        request: Request, conn: Conn, packet_id: int, slug: str, fmt: str
+    ) -> Response:
+        """Download an exported file of the current version (the HTML opens inline to print)."""
+        p = require_packet(conn, packet_id)
+        kind = export.SLUGS.get(slug)
+        if kind is None or fmt not in export.FORMATS:
+            raise HTTPException(404, "no such export")
+        exp = export.current_export(conn, p.id, kind)
+        if exp is None or export.refusal(exp) or export.packet_refusal(p.status):
+            raise HTTPException(404, "no such export")
+        data_dir = request.app.state.settings.paths.data_dir
+        path = export.versioned_path(data_dir, p.id, exp, fmt)
+        if not path.is_file():
+            raise HTTPException(404, "not exported yet: press Export on the packet page")
+        return FileResponse(
+            path,
+            media_type=export.MEDIA[fmt],
+            filename=exp.download_name(fmt),
+            content_disposition_type="inline" if fmt == "html" else "attachment",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.post("/packet/{packet_id}/notes")
     def packet_notes(request: Request, conn: Conn, form: Form, packet_id: int) -> Response:
@@ -414,7 +517,7 @@ def register(
             )
         except (answers.NeverStore, ValueError) as exc:
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
-        return back(packet_id, "letter")
+        return back(request, conn, packet_id, "letter")
 
     def safe_next(target: str) -> str:
         ok = target.startswith("/") and not target.startswith("//") and "\\" not in target

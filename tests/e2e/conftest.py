@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
@@ -21,6 +22,16 @@ from jobhunter.core import db
 from . import seed as seeding
 
 ARTIFACTS = Path(__file__).parent / "artifacts"
+# Resolved at import, before the autouse fixture in tests/conftest.py moves HOME to a tmp dir:
+# a browser launched by the code under test (the PDF export) must still find its Chromium.
+_BROWSERS = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(
+    Path(os.path.expanduser("~")) / ".cache" / "ms-playwright"
+)
+
+
+@pytest.fixture(autouse=True)
+def _real_browsers_path(monkeypatch):
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", _BROWSERS)
 
 
 @dataclass

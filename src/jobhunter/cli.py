@@ -1344,7 +1344,7 @@ def apply_draft(
     subscription; the API runs only with --runner api, after showing its estimate. A failed
     subscription run never switches to the API by itself.
     """
-    from jobhunter.apply import answers, documents, generator, labels, runner_state
+    from jobhunter.apply import answers, documents, export, generator, labels, runner_state
     from jobhunter.scoring.profile import ProfileError, load_profile_for
 
     if letter and question:
@@ -1416,6 +1416,9 @@ def apply_draft(
             instruction=instruction,
             confirm_paid=confirm_paid,
         )
+        # A new version is current now: files named for employers must not hold an older one.
+        if (warn := export.safe_sync(conn, settings.paths.data_dir, packet_id)) is not None:
+            typer.echo(warn, err=True)
     except generator.ApplyRefused as exc:
         typer.echo(f"not run: {exc.message}", err=True)
         if exc.offer_api:
