@@ -284,6 +284,8 @@ def test_mouse_undo_all_leaves_no_stale_undo_entry(inbox, server):
     inbox.keyboard.press("x")  # a single dismiss of the focused row
     expect(inbox.locator(".row.triaged")).to_have_count(1)
     assert len(labelled(server)) == 1
+    # htmx wires the new row's undo button when the swap settles (20ms); let it.
+    inbox.wait_for_function("!document.querySelector('.htmx-settling, .htmx-swapping')")
     inbox.keyboard.press("u")  # the first u must undo this dismissal, not a spent bulk entry
     expect(inbox.locator(".row.triaged")).to_have_count(0)
     assert not labelled(server)

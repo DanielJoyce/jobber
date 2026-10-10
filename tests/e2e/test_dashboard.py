@@ -109,11 +109,25 @@ def test_sankey_renders_nodes_links_and_table(dash):
 
 def test_sankey_node_hover_and_click_navigates(dash):
     dash.wait_for_selector(SANKEY_NODES)
-    hit = dash.locator("#chart-sankey .snode a[href='/pipeline'] .hit").first
+    hit = dash.locator("#chart-sankey .snode a[href^='/pipeline?node='] .hit").first
     hit.hover()
     expect(dash.locator("#chart-sankey .chart-tip")).to_be_visible()
     hit.click()
-    dash.wait_for_url("**/pipeline**")
+    dash.wait_for_url("**/pipeline?node=*")
+    expect(dash.locator("#node-filter")).to_be_visible()
+
+
+def test_every_sankey_link_loads_a_page(dash, server):
+    # Request each href the chart draws: the Sankey once linked to a page that did not exist.
+    dash.wait_for_selector(SANKEY_NODES)
+    hrefs = dash.eval_on_selector_all(
+        "#chart-sankey .snode a", "as => [...new Set(as.map(a => a.getAttribute('href')))]"
+    )
+    assert any(h.startswith("/pipeline?node=") for h in hrefs)
+    assert any(h.startswith("/inbox?bucket=") for h in hrefs)
+    for href in hrefs:
+        resp = dash.request.get(f"{server.url}{href}")
+        assert resp.status == 200, href
 
 
 def test_sankey_dark_mode_keeps_marks_and_label_contrast(dash):

@@ -6,6 +6,7 @@
       <a class="row-title" href="/job/{{ i.group_id }}">{{ i.title }}</a>
       <span class="row-employer">{{ i.employer or "employer not stated" }}</span>
       <span class="badge" title="source market">{{ i.source_badge }}</span>
+      {% if i.labeled == "not_interesting" %}<span class="badge badge-triaged" title="already triaged">dismissed</span>{% elif i.labeled or i.tracked %}<span class="badge badge-triaged" title="already triaged">shortlisted</span>{% endif %}
       <span class="row-loc">{{ i.location }}{% if "+" in i.location %} <span title="multiple locations">&#8853;</span>{% endif %}</span>
     </div>
     <div class="row-meta">

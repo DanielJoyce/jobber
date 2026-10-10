@@ -3,6 +3,11 @@
 <link rel="stylesheet" href="{{ static_url('tracking.css') }}">
 <div class="pipeline">
   <header class="pipe-head"><h1>Pipeline</h1><span class="muted">amber = past the per-status threshold</span></header>
+  {% if node_filter %}
+  <p class="node-filter" id="node-filter">Showing the {{ node_filter.count }} application{{ "" if node_filter.count == 1 else "s" }} counted at <strong>{{ node_filter.label }}</strong> on Today's outcomes chart.
+    {% if node_filter.emailed %}Also counted there: {{ node_filter.emailed }} rejection email{{ "" if node_filter.emailed == 1 else "s" }} for jobs applied elsewhere (see <a href="/rejections">Employer rejections</a>).{% endif %}
+    <a href="/pipeline">Show all</a></p>
+  {% endif %}
   {% if proposal_count %}
   <section class="proposals-panel" id="proposals-panel" aria-label="Mail proposals">
     <a href="/proposals"><strong>Proposals ({{ proposal_count }})</strong></a>

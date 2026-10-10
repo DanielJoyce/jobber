@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.console import dashboard as dash
 from jobhunter.console import proposals as props
 from jobhunter.console import tracking as t
 
@@ -85,14 +86,29 @@ def register(
         )
 
     @app.get("/pipeline", response_class=HTMLResponse)
-    def pipeline_page(request: Request, conn: Conn) -> HTMLResponse:
+    def pipeline_page(request: Request, conn: Conn, node: str | None = None) -> HTMLResponse:
+        board = t.pipeline(conn, now())
+        node_filter = None
+        if node in dash.PIPELINE_NODES:
+            # The Today Sankey links here: show exactly the applications that node counts.
+            keep = dash.pipeline_node_apps(conn, node)
+            board.columns = {
+                s: [c for c in cards if c.app_id in keep] for s, cards in board.columns.items()
+            }
+            board.closed = [c for c in board.closed if c.app_id in keep]
+            node_filter = {
+                "label": dash.node_label(node),
+                "count": len(keep),
+                "emailed": dash.emailed_count(conn) if node in dash.EMAILED_NODES else 0,
+            }
         return templates.TemplateResponse(
             request,
             "pipeline.html",
             page_ctx(
                 "Pipeline",
                 "/pipeline",
-                board=t.pipeline(conn, now()),
+                board=board,
+                node_filter=node_filter,
                 detail=False,
                 proposals=props.pending(conn, 3),
                 proposal_count=props.pending_count(conn),

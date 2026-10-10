@@ -59,6 +59,7 @@ class InboxItem:
     blockers: list[str] = field(default_factory=list)
     stale_skills: list[str] = field(default_factory=list)
     labeled: str | None = None
+    tracked: bool = False  # has an application (applied from the job page, or shortlisted)
     employer_rejection: str | None = None  # "rejected for <title> on <date>" (other role)
 
 
@@ -119,6 +120,7 @@ def _strs(value: Any) -> list[str]:
 _SQL = """
 SELECT fs.dimensions, fs.blockers, fs.shape_flags, fs.evidence_unverified,
        j.*, j.id AS job_id, g.id AS group_id, l.label AS label_value,
+       EXISTS (SELECT 1 FROM application ap WHERE ap.job_group_id = g.id) AS has_app,
        s.name AS source_name, s.class AS source_class
 FROM job_group g
 JOIN job j ON j.id = g.canonical_job_id
@@ -188,6 +190,7 @@ def _item(
         blockers=fit.blockers,
         stale_skills=_strs(dims.get("stale_skills")),
         labeled=row["label_value"],
+        tracked=bool(row["has_app"]),
         employer_rejection=_employer_flag(index, row),
     )
 
@@ -213,6 +216,7 @@ def inbox_items(
     state: str | None = None,
     bucket: str | None = None,
     include_triaged: bool = False,
+    triaged: bool = False,
     limit: int = 500,
     now: datetime | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
@@ -223,9 +227,12 @@ def inbox_items(
 
     ``counts`` cover every group matching the state filter; ``limit`` caps rows per bucket.
     Postings an employer already rejected you for are left out unless ``include_triaged``.
+    ``triaged`` also lists the groups you already shortlisted or dismissed (marked on their
+    row), still leaving out rejected postings you never acted on: the lists the Today
+    outcomes chart links to.
     """
     now = now or datetime.now(UTC)
-    where = "" if include_triaged else " WHERE l.job_group_id IS NULL"
+    where = "" if (include_triaged or triaged) else " WHERE l.job_group_id IS NULL"
     rows = conn.execute(_SQL + where).fetchall()
     keep = _state_groups(conn, profile, state) if state else None
     index = rejections.RejectionIndex.load(conn, now, rejection_days)
@@ -234,7 +241,8 @@ def inbox_items(
     for row in rows:
         if keep is not None and row["group_id"] not in keep:
             continue
-        if row["group_id"] in rejected:
+        acted = row["label_value"] or row["has_app"]
+        if row["group_id"] in rejected and not (triaged and acted):
             continue
         item = _item(conn, row, profile, now, index)
         buckets[item.bucket].append(item)

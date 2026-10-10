@@ -13,13 +13,13 @@ from __future__ import annotations
 import math
 import sqlite3
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from statistics import median
 from typing import Any
 
-from jobhunter.core import geo
+from jobhunter.core import geo, rejections
 from jobhunter.core.bucketnames import (
     BUCKET_TITLES,
     DEFAULT_GROUP,
@@ -46,6 +46,16 @@ IN_FLIGHT = ("applied", "acknowledged", "screening", "interview")
 RESPONSE = ("screening", "interview", "offer", "rejected")
 TERMINAL = ("rejected", "withdrawn", "no_response", "closed")
 NOT_YET_APPLIED = ("interested", "preparing")
+# Statuses that can only be reached after applying.
+APPLIED_EVIDENCE = (
+    "applied",
+    "acknowledged",
+    "screening",
+    "interview",
+    "offer",
+    "rejected",
+    "no_response",
+)
 
 # metric key -> (label, kind). kind drives break rounding and value formatting.
 METRICS: dict[str, tuple[str, str]] = {
@@ -279,9 +289,12 @@ def application_facts(conn: sqlite3.Connection) -> list[AppFact]:
         applied = a["applied_at"]
         if applied is None:
             applied = next((at for at, st in evs if st == "applied"), None)
-        if applied is None and a["status"] not in NOT_YET_APPLIED:
-            applied = a["created_at"]
         statuses = {st for _, st in evs} | {a["status"]}
+        # No applied date recorded: a status that only follows an application (acknowledged,
+        # screening, rejected...) shows it happened, so date it from creation. Withdrawn or
+        # closed alone does not: a shortlisted job dropped before applying is not an application.
+        if applied is None and statuses & set(APPLIED_EVIDENCE):
+            applied = a["created_at"]
         out.append(
             AppFact(
                 app_id=a["id"],
@@ -871,6 +884,8 @@ MANUAL_SOURCE = (
     "email-manual"  # proposals.MANUAL_SOURCE: groups made when accepting a mail proposal
 )
 _UNPREFILTERED = ("listed", "resolved", "normalized", "grouped")
+# Stages before a posting is grouped: such a job has no job_group yet, so group_facts never sees it.
+_UNGROUPED_STAGES = ("listed", "resolved", "normalized")
 # application status -> outcome node. ``acknowledged`` is an automated receipt, so it is still
 # awaiting; ``screening`` is a person engaging, so it shares the interview node.
 _OUTCOME_NODE = {
@@ -885,50 +900,153 @@ _OUTCOME_NODE = {
     "no_response": "no_response",
 }
 # (id, label, column, kind, href). kind picks the color: flow, win, loss, bad.
+# Application nodes link to /pipeline?node=<id>, which lists exactly the cards the node counts;
+# bucket nodes to the inbox with already-triaged groups included; Untriaged to every bucket.
 _SANKEY_NODES: tuple[tuple[str, str, int, str, str | None], ...] = (
     ("fetched", "Fetched", 0, "flow", None),
-    ("elsewhere", "Applied elsewhere", 0, "flow", "/pipeline"),
+    ("elsewhere", "Applied elsewhere", 0, "flow", "/pipeline?node=elsewhere"),
     ("prefiltered_out", "Prefiltered out", 1, "loss", None),
     ("awaiting_prefilter", "Awaiting prefilter", 1, "loss", None),
     ("passed", "Passed prefilter", 1, "flow", None),
     ("unscored", "Not yet scored", 2, "loss", None),
     *(
-        (f"bucket_{b}", title.title(), 2, "flow", f"/inbox?bucket={b}")
+        (f"bucket_{b}", title.title(), 2, "flow", f"/inbox?bucket={b}&triaged=1")
         for b, (title, _hint) in BUCKET_TITLES.items()
     ),
-    ("untriaged", "Untriaged", 3, "loss", "/inbox"),
+    ("untriaged", "Untriaged", 3, "loss", "/inbox?bucket=" + ",".join(BUCKET_TITLES)),
     ("dismissed", "Dismissed", 3, "loss", None),
-    ("shortlisted", "Shortlisted", 3, "flow", "/pipeline"),
-    ("not_applied", "Not applied yet", 4, "loss", "/pipeline"),
-    ("applied", "Applied", 4, "flow", "/pipeline"),
-    ("awaiting", "Awaiting response", 5, "loss", "/pipeline"),
-    ("interview", "Screening / interview", 5, "win", "/pipeline"),
-    ("offer", "Offer", 5, "win", "/pipeline"),
-    ("rejected", "Rejected", 5, "bad", "/rejections"),
-    ("closed", "Withdrawn / closed", 5, "loss", "/pipeline"),
-    ("no_response", "No response", 5, "loss", "/pipeline"),
+    ("shortlisted", "Shortlisted", 3, "flow", "/pipeline?node=shortlisted"),
+    ("not_applied", "Not applied yet", 4, "loss", "/pipeline?node=not_applied"),
+    ("applied", "Applied", 4, "flow", "/pipeline?node=applied"),
+    ("awaiting", "Awaiting response", 5, "loss", "/pipeline?node=awaiting"),
+    ("interview", "Screening / interview", 5, "win", "/pipeline?node=interview"),
+    ("offer", "Offer", 5, "win", "/pipeline?node=offer"),
+    ("rejected", "Rejected", 5, "bad", "/pipeline?node=rejected"),
+    ("closed", "Withdrawn / closed", 5, "loss", "/pipeline?node=closed"),
+    ("no_response", "No response", 5, "loss", "/pipeline?node=no_response"),
 )
 _SANKEY_ORDER = {n[0]: i for i, n in enumerate(_SANKEY_NODES)}
+# Nodes whose /pipeline list is the applications in that node (the page filters by these).
+PIPELINE_NODES = frozenset(
+    {
+        "elsewhere",
+        "shortlisted",
+        "not_applied",
+        "applied",
+        "awaiting",
+        "interview",
+        "offer",
+        "rejected",
+        "closed",
+        "no_response",
+    }
+)
+# Nodes whose count also holds rejection emails that matched no application here.
+EMAILED_NODES = frozenset({"elsewhere", "applied", "rejected"})
 
 
-def sankey(
-    conn: sqlite3.Connection,
-    profile: Profile,
-    extra_rejected: Collection[int] = (),
-    elsewhere_rejected: int = 0,
-) -> dict[str, Any]:
-    """Outcome flows over every job group (deduped, not postings), all time.
+@dataclass
+class RejectionClaims:
+    """What the employer-rejection table says about job groups and applications.
 
-    Each group takes exactly one path, so flow is conserved: for every node that has outgoing
-    links, in == out. ``extra_rejected`` is a hook for job-group ids known to be rejected from
-    other evidence (employer rejection emails); they land on the Rejected node whatever their
-    application status says; one with no applied application here was applied for elsewhere
-    (the rejection proves an application) and flows Applied elsewhere -> Applied -> Rejected.
-    ``elsewhere_rejected`` counts rejection emails that matched no job group: they take that
-    same path. Zero-value nodes and links are dropped from the payload.
+    ``hidden``: groups for a posting the employer rejected (the inbox leaves them out too).
+    ``apps``: application ids that count as rejected whatever their own status says: one per
+    rejection, matched by group, else by employer and title. ``emailed``: rejections that
+    matched no application of ours; the candidate applied elsewhere and was turned down.
     """
-    facts = {f.group_id: f for f in group_facts(conn, profile, "")}
-    apps = {a.group_id: a for a in application_facts(conn)}
+
+    hidden: set[int] = field(default_factory=set)
+    apps: set[int] = field(default_factory=set)
+    emailed: int = 0
+
+
+def rejection_claims(conn: sqlite3.Connection, apps: Sequence[AppFact]) -> RejectionClaims:
+    """Pair each rejection with at most one applied application; the rest are ``emailed``.
+
+    A rejection counts once however many groups share its employer and title (a posting in
+    several locations is several groups), and an application a rejection email already refers
+    to is not counted a second time as "applied elsewhere".
+    """
+    index = rejections.RejectionIndex.load(conn)
+    if not index:
+        return RejectionClaims()
+    claims = RejectionClaims(hidden=rejections.rejected_group_ids(conn, index))
+    applied = [a for a in apps if a.applied_on]
+    by_group = {a.group_id: a for a in applied}
+    where = {
+        r["app_id"]: (rejections.employer_norm(r["emp"]), r["title"])
+        for r in conn.execute(
+            "SELECT a.id AS app_id, COALESCE(j.employer, j.agency_raw, '') AS emp, j.title "
+            "FROM application a JOIN job_group g ON g.id = a.job_group_id "
+            "JOIN job j ON j.id = g.canonical_job_id"
+        )
+    }
+    seen: set[object] = set()
+    unmatched: list[rejections.Rejection] = []
+    # Rejections pinned to a group go first, so an employer-wide match never takes their app.
+    for r in sorted(index.rejections, key=lambda r: r.job_group_id is None):
+        key = (
+            r.job_group_id
+            if r.job_group_id is not None
+            else (r.employer_norm, rejections.title_norm(r.title))
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        if r.job_group_id is not None:
+            app = by_group.get(r.job_group_id)
+            if app is not None:
+                claims.apps.add(app.app_id)
+                continue
+        else:
+            near = [
+                a
+                for a in applied
+                if r.employer_norm
+                and where.get(a.app_id, ("", None))[0] == r.employer_norm
+                and (not r.title or rejections.same_title(r.title, where[a.app_id][1]))
+            ]
+            free = [a for a in near if a.app_id not in claims.apps]
+            if free:
+                # the one already marked rejected is the likely match, then any still open
+                free.sort(key=lambda a: (a.status != "rejected", a.status in TERMINAL, a.app_id))
+                claims.apps.add(free[0].app_id)
+                continue
+            if near:
+                continue  # another email for an application a rejection already accounts for
+        if not any(_same_rejection(r, e) for e in unmatched):
+            unmatched.append(r)
+            claims.emailed += 1
+    return claims
+
+
+def _same_rejection(a: rejections.Rejection, b: rejections.Rejection) -> bool:
+    """Two rejection rows plausibly about one job: same employer, titles agree or one is blank."""
+    return (
+        bool(a.employer_norm)
+        and a.employer_norm == b.employer_norm
+        and (not a.title or not b.title or rejections.same_title(a.title, b.title))
+    )
+
+
+@dataclass
+class _Walk:
+    links: dict[tuple[str, str], int]
+    members: dict[str, set[int]]  # node id -> application ids counted there
+
+
+_NO_FACT = GroupFact(group_id=0, job_id=0, first_seen="", scored=False, bucket=None)
+
+
+def _walk(conn: sqlite3.Connection, facts: dict[int, GroupFact]) -> _Walk:
+    """Send every job group down exactly one path; remember which applications sit on each node.
+
+    ``facts`` only decides the bucket of groups no one has touched; applications never need it,
+    so ``pipeline_node_apps`` passes an empty dict.
+    """
+    apps_all = application_facts(conn)
+    apps = {a.group_id: a for a in apps_all}
+    claims = rejection_claims(conn, apps_all)
     labels = dict(conn.execute("SELECT job_group_id, label FROM label").fetchall())
     meta = {
         r["gid"]: r
@@ -938,22 +1056,22 @@ def sankey(
             "LEFT JOIN prefilter_result p ON p.job_id = j.id"
         )
     }
-    rejected_extra = set(extra_rejected)
     links: dict[tuple[str, str], int] = defaultdict(int)
+    members: dict[str, set[int]] = defaultdict(set)
 
-    for gid, fact in facts.items():
-        m = meta.get(gid)
+    def put(app: AppFact | None, node: str) -> None:
+        if app is not None:
+            members[node].add(app.app_id)
+
+    for gid, m in meta.items():
+        fact = facts.get(gid, _NO_FACT)
         app = apps.get(gid)
         label = labels.get(gid)
-        if m is None:
-            continue
-        if gid in rejected_extra and (app is None or app.applied_on is None):
-            links[("elsewhere", "applied")] += 1
-            links[("applied", "rejected")] += 1
-            continue
-        elsewhere = m["source_key"] == MANUAL_SOURCE
+        applied_here = app is not None and app.applied_on is not None
+        if gid in claims.hidden and not applied_here:
+            continue  # the rejected posting itself; claims.emailed counts the application
         shortlisted = app is not None or label in ("interesting", "applied")
-        if elsewhere:
+        if m["source_key"] == MANUAL_SOURCE:
             if app is None:  # a manual group exists only to hold an application
                 continue
             came_from = "elsewhere"
@@ -972,22 +1090,64 @@ def sankey(
                 triage = "shortlisted"
             elif label == "not_interesting":
                 triage = "dismissed"
+            elif scored == "unscored":
+                continue  # not scored, so not in the inbox either: it ends at "Not yet scored"
             else:
                 triage = "untriaged"
             links[(scored, triage)] += 1
             if not shortlisted:
                 continue
             came_from = "shortlisted"
-        if app is None or app.applied_on is None:
+        put(app, came_from)
+        if not applied_here:
             links[(came_from, "not_applied")] += 1
+            put(app, "not_applied")
             continue
         links[(came_from, "applied")] += 1
-        outcome = "rejected" if gid in rejected_extra else _OUTCOME_NODE.get(app.status)
+        put(app, "applied")
+        outcome = "rejected" if app.app_id in claims.apps else _OUTCOME_NODE.get(app.status)
         links[("applied", outcome or "awaiting")] += 1
+        put(app, outcome or "awaiting")
 
-    if elsewhere_rejected > 0:
-        links[("elsewhere", "applied")] += elsewhere_rejected
-        links[("applied", "rejected")] += elsewhere_rejected
+    # Postings listed but not grouped yet are in no job_group, so the walk above never saw them.
+    waiting = conn.execute(
+        "SELECT COUNT(*) FROM job WHERE job_group_id IS NULL AND stage IN (?, ?, ?)",
+        _UNGROUPED_STAGES,
+    ).fetchone()[0]
+    if waiting:
+        links[("fetched", "awaiting_prefilter")] += waiting
+    if claims.emailed:
+        links[("elsewhere", "applied")] += claims.emailed
+        links[("applied", "rejected")] += claims.emailed
+    return _Walk(links, members)
+
+
+def node_label(node: str) -> str:
+    return next((n[1] for n in _SANKEY_NODES if n[0] == node), node)
+
+
+def pipeline_node_apps(conn: sqlite3.Connection, node: str) -> set[int]:
+    """Application ids the Sankey counts on ``node`` (what /pipeline?node=<id> lists)."""
+    return set(_walk(conn, {}).members.get(node, ()))
+
+
+def emailed_count(conn: sqlite3.Connection) -> int:
+    """Rejections with no application here: the part of a Sankey node /pipeline cannot list."""
+    return rejection_claims(conn, application_facts(conn)).emailed
+
+
+def sankey(conn: sqlite3.Connection, profile: Profile) -> dict[str, Any]:
+    """Outcome flows over every job group (deduped, not postings), all time.
+
+    Each group takes exactly one path, so flow is conserved: for every node that has outgoing
+    links, in == out. A group the employer rejected you for (rejection emails) lands on the
+    Rejected node whatever its application status says. A rejection that matches no
+    application of ours was applied for elsewhere (the email proves it): it flows Applied
+    elsewhere -> Applied -> Rejected, once, however many job groups share that title. Postings
+    not grouped yet count as Fetched and Awaiting prefilter. Zero-value nodes and links are
+    dropped from the payload.
+    """
+    links = _walk(conn, {f.group_id: f for f in group_facts(conn, profile, "")}).links
     value: dict[str, int] = defaultdict(int)
     for (a, b), n in links.items():
         value[b] += n

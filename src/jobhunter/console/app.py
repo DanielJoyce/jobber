@@ -30,7 +30,7 @@ from jobhunter.console import (
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
-from jobhunter.core import bucketnames, db, geo, rejections
+from jobhunter.core import bucketnames, db, geo
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
 logger = logging.getLogger(__name__)
@@ -260,14 +260,7 @@ def create_app(
             "tile_grid": json.dumps({k: list(v) for k, v in geo.TILE_GRID.items()}),
             "fips": json.dumps({s.fips: s.usps for s in geo.STATES}),
             "names": json.dumps({s.usps: s.name for s in geo.STATES}),
-            "sankey": json.dumps(
-                dash.sankey(
-                    conn,
-                    get_profile(),
-                    extra_rejected=rejections.rejected_group_ids(conn),
-                    elsewhere_rejected=rejections.unmatched_email_count(conn),
-                )
-            ).replace("</", "<\\/"),
+            "sankey": json.dumps(dash.sankey(conn, get_profile())).replace("</", "<\\/"),
             **kpi_context(conn, range_, dash.clamp_buckets(buckets)),
             **table_context(conn, range_, metric_, sort, dir, dash.clamp_buckets(buckets)),
         }

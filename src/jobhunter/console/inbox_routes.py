@@ -37,6 +37,7 @@ def register(
         conn: Conn,
         state: str | None = None,
         bucket: str | None = None,
+        triaged: str | None = None,
     ) -> HTMLResponse:
         profile, error = load_console_profile(request.app.state.settings)
         state = (state or "").strip().upper() or None
@@ -45,7 +46,14 @@ def register(
         data = None
         if profile is not None:
             days = request.app.state.settings.scoring.employer_rejection_days
-            data = inbox.inbox_items(conn, profile, state=state, bucket=bucket, rejection_days=days)
+            data = inbox.inbox_items(
+                conn,
+                profile,
+                state=state,
+                bucket=bucket,
+                triaged=triaged in ("1", "true"),
+                rejection_days=days,
+            )
         return templates.TemplateResponse(
             request,
             "inbox.html",

@@ -414,6 +414,35 @@ def _reject(conn, title, gid=None, days_ago=5):
     )
 
 
+def test_triaged_param_lists_shortlisted_and_dismissed_groups_with_a_badge(client):
+    client.post("/inbox/1/label?label=interesting")
+    client.post("/inbox/2/label?label=not_interesting")
+    plain = client.get("/inbox?bucket=A,B").text
+    assert "badge-triaged" not in plain  # untriaged lists show no triage badges
+    t = client.get("/inbox?bucket=A,B&triaged=1").text
+    assert re.search(r'<article class="row" id="row-1".*?badge-triaged"[^>]*>shortlisted<', t, re.S)
+    assert re.search(r'<article class="row" id="row-2".*?badge-triaged"[^>]*>dismissed<', t, re.S)
+    assert "badge-triaged" in t and t.count("badge-triaged") == 2
+
+
+def test_triaged_param_still_hides_rejected_postings_you_never_acted_on(client, seeded):
+    _reject(seeded, "Bullseye", gid=1)
+    _reject(seeded, "Strong", gid=2)
+    client.post("/inbox/2/label?label=interesting")
+    t = client.get("/inbox?bucket=A,B&triaged=1").text
+    assert 'id="row-1"' not in t  # rejected, never triaged: left out as in the plain inbox
+    assert 'id="row-2"' in t  # rejected but shortlisted: you are tracking it
+
+
+def test_a_capped_bucket_says_how_many_rows_it_is_showing(client, seeded):
+    assert "Showing the first" not in client.get("/inbox").text
+    for n in range(100, 100 + inbox.BULK_MAX + 1):
+        add(seeded, n, dims(90), title=f"Extra {n}")
+    seeded.commit()
+    t = client.get("/inbox?bucket=A").text
+    assert f"Showing the first {inbox.BULK_MAX} of {inbox.BULK_MAX + 1 + 1}." in t
+
+
 def test_rejected_posting_left_out_and_other_roles_flagged(seeded, profile):
     _reject(seeded, "Bullseye", gid=1)
     data = inbox.inbox_items(seeded, profile)
