@@ -23,6 +23,7 @@ from typing import Any
 from jobhunter.config import Settings
 from jobhunter.core import rejections
 from jobhunter.core.models import SourceRow
+from jobhunter.core.spend import SCORING_ONLY
 from jobhunter.pipeline import runner
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.scoring import screen
@@ -219,7 +220,8 @@ def estimate(
     }
     eligible = conn.execute(_COUNT_ELIGIBLE, params).fetchone()[0]
     spent = conn.execute(
-        "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ?", (to_iso(now)[:10],)
+        f"SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ? AND {SCORING_ONLY}",
+        (to_iso(now)[:10],),
     ).fetchone()[0]
     pending = conn.execute(
         "SELECT coalesce(sum(request_count), 0) FROM score_batch WHERE collected_at IS NULL"

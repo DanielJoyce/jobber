@@ -30,6 +30,7 @@ from jobhunter.core.bucketnames import (
 )
 from jobhunter.core.manual_sources import EMAIL_MANUAL, PASTE_MANUAL
 from jobhunter.core.models import Bucket, JobLocation
+from jobhunter.core.spend import SCORING_ONLY
 from jobhunter.core.textnorm import annualize
 from jobhunter.pipeline.locations import REMOTE_SCOPES
 from jobhunter.scoring.buckets import compute_row
@@ -382,7 +383,8 @@ def kpis(
     spend_days = _days(now, max(range_days, 7))
     spend_rows = dict(
         conn.execute(
-            "SELECT day, SUM(cost_usd) FROM llm_spend WHERE day >= ? GROUP BY day",
+            f"SELECT day, SUM(cost_usd) FROM llm_spend WHERE day >= ? AND {SCORING_ONLY} "
+            "GROUP BY day",
             (spend_days[0],),
         ).fetchall()
     )

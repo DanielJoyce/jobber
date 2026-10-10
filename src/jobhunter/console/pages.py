@@ -12,6 +12,7 @@ from typing import Any
 
 from jobhunter.console.inbox import BUCKETS, salary_text
 from jobhunter.core.models import SourceRow
+from jobhunter.core.spend import PACKET_TIERS
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.prefilter import rejected_summary
@@ -401,11 +402,15 @@ def costs(
     weekly: dict[str, float] = {}
     by_model: dict[tuple[str, str], dict[str, Any]] = {}
     for r in spend:
-        if r["day"] in daily:
+        # Packet drafting (specs/017) has its own cap and its own line on the page; it never
+        # counts in the totals shown against the scoring caps.
+        scoring_row = r["tier"] not in PACKET_TIERS
+        if r["day"] in daily and scoring_row:
             daily[r["day"]] += r["cost_usd"]
         d = datetime.fromisoformat(r["day"]).date()
         monday = (d - timedelta(days=d.weekday())).isoformat()
-        weekly[monday] = weekly.get(monday, 0.0) + r["cost_usd"]
+        if scoring_row:
+            weekly[monday] = weekly.get(monday, 0.0) + r["cost_usd"]
         m = by_model.setdefault(
             (r["model"], r["tier"]),
             {
@@ -423,7 +428,9 @@ def costs(
         m["cost"] += r["cost_usd"]
     total = sum(daily.values())
     last7_since = (today - timedelta(days=6)).isoformat()
-    last7 = sum(r["cost_usd"] for r in spend if r["day"] >= last7_since)
+    last7 = sum(
+        r["cost_usd"] for r in spend if r["day"] >= last7_since and r["tier"] not in PACKET_TIERS
+    )
     fs = conn.execute(
         "SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o, "
         "COALESCE(SUM(cache_read_tokens), 0) AS c FROM fit_score "

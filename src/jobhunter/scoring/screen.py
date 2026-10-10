@@ -28,6 +28,7 @@ from jobhunter.config import Scoring
 from jobhunter.core import rejections
 from jobhunter.core.manual_sources import MANUAL_SOURCES_SQL
 from jobhunter.core.models import LocationScope, Screen
+from jobhunter.core.spend import SCORING_ONLY
 from jobhunter.pipeline.listing import _txn, to_iso
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.scoring.profile import Profile, scoring_inputs
@@ -437,7 +438,8 @@ def _pending_batch_usd(conn: sqlite3.Connection) -> float:
 def remaining_daily_budget(conn: sqlite3.Connection, cap_usd: float, now: datetime) -> float:
     """``cap_usd`` minus today's recorded spend and an estimate for uncollected batches."""
     spent = conn.execute(
-        "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ?", (to_iso(now)[:10],)
+        f"SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ? AND {SCORING_ONLY}",
+        (to_iso(now)[:10],),
     ).fetchone()[0]
     return cap_usd - spent - _pending_batch_usd(conn)
 
@@ -446,7 +448,8 @@ def weekly_remaining(conn: sqlite3.Connection, cap_usd: float, now: datetime) ->
     """``cap_usd`` minus the last seven days' spend and an estimate for uncollected batches."""
     since = (now - timedelta(days=6)).date().isoformat()
     spent = conn.execute(
-        "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day >= ?", (since,)
+        f"SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day >= ? AND {SCORING_ONLY}",
+        (since,),
     ).fetchone()[0]
     return cap_usd - spent - _pending_batch_usd(conn)
 
