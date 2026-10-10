@@ -5,10 +5,11 @@ entry point. Matching is by whole word or phrase, never substring, so "managed",
 "design", "generate", "collaborate" and "trace" do not match ``age``, ``sign``, ``rate`` or
 ``race``.
 
-Phase 1b uses it for question drafts (no generation, no spend on a match) and for every
-``packet_answer`` write (``apply/answers.py::save_packet_answer``). Phase 1d owns the rest of the
-table's enforcement (the vector file, the ``Answers`` model on /prefs, Promote to /prefs) and
-grows the table like ``ats_rules.py``; this module is the one matcher they all call.
+Every entry point calls this one matcher: question drafts (no generation, no spend on a match),
+every ``packet_answer`` write (``apply/answers.py::save_packet_answer``, which Save as answer
+goes through), the ``Answers`` model behind /prefs Application answers (on every load, form save
+and Promote to /prefs), and the raw YAML save on /prefs. ``tests/fixtures/never_store_vectors.json``
+holds the label vectors, negatives included; the table grows like ``ats_rules.py``.
 """
 
 from __future__ import annotations
@@ -39,7 +40,11 @@ NEVER_STORE: dict[str, tuple[str, ...]] = {
         "rate",
         "hourly rate",
         "pay rate",
+        "pay range",
         "current pay",
+        "wage",
+        "wages",
+        "remuneration",
     ),
     "eeo": (
         "gender",
@@ -113,8 +118,20 @@ SELF_ID_OPTIONS = (
     "i don't want to answer",
 )
 
-# "Are you 18 or older?" is a yes/no eligibility question, not a date of birth.
-_AGE_EXCEPTION = re.compile(r"\b(18|eighteen)\s*(years\s*(of\s*age\s*)?)?(or|and)\s*(older|over)\b")
+# Labels that are never-store only as the whole label: a bare "Address" field is a postal one,
+# while "How did you address the conflict?" is a behavioral question and must still draft.
+NEVER_STORE_WHOLE_LABEL: dict[str, tuple[str, ...]] = {
+    "identity": ("address", "address 1", "address 2", "street", "street 1", "street 2"),
+}
+
+# A phrase with an exception matches only where the exception does not: "Are you 18 or older?"
+# and "at least 18 years of age" are yes/no eligibility questions, not a date of birth.
+_EXCEPTIONS: dict[str, re.Pattern[str]] = {
+    "age": re.compile(
+        r"\b(18|eighteen)\s*(years\s*(of\s*age\s*)?)?(or|and)\s*(older|over)\b"
+        r"|\b(at least|over)\s+(18|eighteen)\b"
+    ),
+}
 
 _WS = re.compile(r"\s+")
 _TRAIL = re.compile(r"[\s*:?.!,;]+$")
@@ -142,6 +159,8 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     (cat, phrase, _pattern(phrase)) for cat, phrases in NEVER_STORE.items() for phrase in phrases
 ]
 _OPTION_PATTERNS = [_pattern(normalize(o)) for o in SELF_ID_OPTIONS]
+_WHOLE = {label: cat for cat, labels in NEVER_STORE_WHOLE_LABEL.items() for label in labels}
+_SEPARATORS = re.compile(r"[\s_\-]+")
 
 
 @dataclass(frozen=True)
@@ -154,14 +173,18 @@ def never_store(label: str, options: Sequence[str] = (), names: Iterable[str] = 
     """The first never-store match for a question label (and, in phase 2, field names and a
     choice group's option texts), or None."""
     for text in (label, *names):
-        norm = normalize(text)
+        # Underscores and hyphens as spaces, so a field name like ``address_line_1`` reads as
+        # its words.
+        norm = _SEPARATORS.sub(" ", normalize(text)).strip()
         if not norm:
             continue
         for cat, phrase, pat in _PATTERNS:
             if pat.search(norm):
-                if phrase == "age" and _AGE_EXCEPTION.search(norm):
+                if (exc := _EXCEPTIONS.get(phrase)) is not None and exc.search(norm):
                     continue
                 return Match(cat, phrase)
+        if norm in _WHOLE:
+            return Match(_WHOLE[norm], norm)
     for option in options:
         norm = normalize(option)
         if any(p.search(norm) for p in _OPTION_PATTERNS):
