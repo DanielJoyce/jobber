@@ -188,6 +188,8 @@ def _isolate_user_files(
     # The old defaults (./data, ./profile, ./resume) are relative to the cwd, and a checkout
     # that holds the developer's real ones would otherwise be picked up as a legacy fallback.
     monkeypatch.chdir(home)
+    # The same goes for the checkout the package runs from (legacy data is found there too).
+    monkeypatch.setattr("jobhunter.config.source_checkout", lambda: None)
     monkeypatch.delenv("JOBHUNTER_CONFIG", raising=False)
     monkeypatch.delenv("JOBHUNTER_ENV_FILE", raising=False)
     # Defaults resolve below HOME (a tmp dir) unless a test sets these on purpose.

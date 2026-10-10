@@ -187,3 +187,105 @@ def test_nothing_to_migrate(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "nothing to move" in result.output
     assert not data_home().exists()
+
+
+# ─── the user's real layout: backups, use after migration, failures ─────────
+
+
+def _add_backups(old: Path) -> None:
+    (old / "data" / "backups").mkdir()
+    for stamp in ("20260101T000000", "20260102T000000"):
+        conn = sqlite3.connect(old / "data" / "backups" / f"jobhunter-{stamp}.db")
+        conn.execute("CREATE TABLE t (v TEXT)")
+        conn.execute(f"INSERT INTO t VALUES ('backup {stamp}')")
+        conn.commit()
+        conn.close()
+
+
+def test_apply_with_an_existing_backups_directory(old):
+    _add_backups(old)
+    result = run("--apply")
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    names = sorted(p.name for p in (data_home() / "backups").glob("jobhunter-*.db"))
+    # the two old backups plus the one apply took, all in one directory
+    assert len(names) == 3
+    assert {"jobhunter-20260101T000000.db", "jobhunter-20260102T000000.db"} <= set(names)
+    assert not list(data_home().glob("*.migrating"))
+    assert (old / "data" / "MOVED.txt").exists()
+    # and the next run is a no-op, not a conflict
+    again = run("--apply")
+    assert again.exit_code == 0, again.output
+    assert "[conflict]" not in again.output
+
+
+def test_remove_old_works_after_the_new_locations_have_been_used(old):
+    _add_backups(old)
+    assert run("--apply").exit_code == 0
+    # normal use: the database gains a row, the profile is edited in the console
+    live = sqlite3.connect(data_home() / "jobhunter.db")
+    live.execute("INSERT INTO t VALUES ('written after the migration')")
+    live.commit()
+    live.close()
+    (data_home() / "profile" / "preferences.yaml").write_text("hard: {remote_ok: true}\n")
+    # even a dry run calls this healthy
+    dry = run()
+    assert dry.exit_code == 0, dry.output
+    assert "[conflict]" not in dry.output and "changed since" in dry.output
+    result = run("--apply", "--remove-old")
+    assert result.exit_code == 0, result.output
+    assert "refusing" not in result.output
+    assert not (old / "data" / "jobhunter.db").exists()
+    assert not (old / "data" / "backups").exists()
+    assert not (old / "profile" / "preferences.yaml").exists()
+    assert not (old / "resume" / "me.md").exists()
+    # the live copies keep everything written since
+    live = sqlite3.connect(data_home() / "jobhunter.db")
+    rows = live.execute("SELECT v FROM t ORDER BY v").fetchall()
+    live.close()
+    assert ("written after the migration",) in rows
+    assert (data_home() / "profile" / "preferences.yaml").read_text() == (
+        "hard: {remote_ok: true}\n"
+    )
+
+
+def test_a_changed_original_is_still_kept_after_use(old):
+    assert run("--apply").exit_code == 0
+    (data_home() / "resume" / "me.md").write_text("edited in the new place\n")
+    (old / "resume" / "me.md").write_text("edited in the old place\n")
+    result = run("--apply", "--remove-old")
+    assert result.exit_code == 1 and "[conflict] resume" in result.output
+    assert (old / "resume" / "me.md").read_text() == "edited in the old place\n"
+    assert (data_home() / "resume" / "me.md").read_text() == "edited in the new place\n"
+
+
+def test_conflict_message_does_not_tell_the_user_to_move_data_aside(old):
+    (data_home() / "profile").mkdir(parents=True)
+    (data_home() / "profile" / "preferences.yaml").write_text("other\n")
+    out = run().output
+    assert "move or merge" not in out and "in use" in out
+
+
+def test_a_failed_copy_is_a_clean_error_and_the_rerun_resumes(old, monkeypatch):
+    import shutil
+
+    from jobhunter.ops import migrate_paths as mp
+
+    real = shutil.copytree
+
+    def boom(src, dst, *a, **kw):
+        if Path(src).name == "resume":
+            raise OSError(28, "No space left on device")
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(mp.shutil, "copytree", boom)
+    result = run("--apply")
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output and "No space left" in result.output
+    assert not list(data_home().glob("*.migrating"))
+    # what was copied before the failure is recorded, so the rerun is not a conflict
+    assert (old / "data" / "MOVED.txt").exists()
+    monkeypatch.setattr(mp.shutil, "copytree", real)
+    again = run("--apply")
+    assert again.exit_code == 0, again.output
+    assert (data_home() / "resume" / "me.md").exists()

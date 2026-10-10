@@ -56,9 +56,40 @@ def default_config_path() -> Path:
     return config_home() / CONFIG_FILE_NAME
 
 
+def source_checkout() -> Path | None:
+    """The source checkout this package runs from, or None for an installed copy.
+
+    The old repo-relative data lives in the checkout, so it is found from there even when
+    jobhunter is run from another directory (tests patch this to None).
+    """
+    root = Path(__file__).resolve().parents[2]
+    if (root / "pyproject.toml").is_file() and (root / "src" / "jobhunter").is_dir():
+        return root
+    return None
+
+
+def find_legacy_root() -> Path:
+    """The directory that holds the pre-XDG ``data``/``profile``/``resume``.
+
+    The working directory when it has any of them, else the source checkout when it has any,
+    else the working directory. Looking at the cwd alone made a run from another directory
+    miss the real database and start an empty one at the new location.
+    """
+    cwd = Path.cwd()
+    candidates = [cwd]
+    checkout = source_checkout()
+    if checkout is not None and checkout != cwd:
+        candidates.append(checkout)
+    probes = [LEGACY_RELATIVE[f] for f in ("db_path", "profile_dir", "resume_path", "cache_dir")]
+    for root in candidates:
+        if any((root / rel).exists() for rel in probes):
+            return root
+    return cwd
+
+
 def legacy_locations(base: Path | None = None) -> dict[str, Path]:
-    """The pre-XDG default locations, absolute, relative to ``base`` (default: the cwd)."""
-    root = base if base is not None else Path.cwd()
+    """The pre-XDG default locations, absolute, below ``base`` (default: ``find_legacy_root``)."""
+    root = base if base is not None else find_legacy_root()
     return {k: root / v for k, v in LEGACY_RELATIVE.items()}
 
 

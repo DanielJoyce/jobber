@@ -189,6 +189,41 @@ def test_explicit_paths_never_fall_back(tmp_path, monkeypatch):
     assert "legacy" not in s.paths.sources.values()
 
 
+def test_legacy_data_is_found_from_the_checkout_when_run_from_another_directory(
+    tmp_path, monkeypatch
+):
+    """Running from ~ must not miss the checkout's data and start an empty database."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    _legacy_tree(checkout)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(cfg, "source_checkout", lambda: checkout)
+    s = load_settings()
+    assert s.paths.db_path == checkout / "data/jobhunter.db"
+    assert s.paths.sources["db_path"] == "legacy"
+    assert s.paths.profile_dir == checkout / "profile"
+    # a command that opens the database uses the real one and creates nothing at the new place
+    from jobhunter.core import db
+
+    conn = db.connect(s.paths.db_path)
+    conn.close()
+    assert not data_home().exists()
+
+
+def test_cwd_legacy_data_wins_over_the_checkout(tmp_path, monkeypatch):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    _legacy_tree(checkout)
+    here = tmp_path / "here"
+    here.mkdir()
+    _legacy_tree(here)
+    monkeypatch.chdir(here)
+    monkeypatch.setattr(cfg, "source_checkout", lambda: checkout)
+    assert load_settings().paths.db_path == here / "data/jobhunter.db"
+
+
 def test_fallback_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _legacy_tree(tmp_path)

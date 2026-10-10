@@ -170,11 +170,16 @@ resolve against the working directory.
 **Compatibility with the old layout.** The previous defaults were `./data`, `./profile` and
 `./resume`, relative to the working directory. For each of the database, profile, resume and
 cache that has no explicit path: if the old location exists and the new one does not, the old
-one is used and a single warning says to run `jobhunter migrate-paths`. Nothing silently starts
-an empty database. `migrate-paths` is a dry run by default; `--apply` takes a timestamped
+one is used and a single warning says to run `jobhunter migrate-paths`. The old location is
+looked for in the working directory, then in the source checkout the package runs from, so a
+command run from another directory still finds the real database instead of starting an empty
+one. (An installed copy with no checkout and no old data in the cwd has nothing to fall back to.) `migrate-paths` is a dry run by default; `--apply` takes a timestamped
 sqlite backup of the database, copies (never moves) the database, profile, resume and cache,
 and leaves a `MOVED.txt` in each old directory. It refuses when a destination exists and
-differs. `--apply --remove-old` deletes only originals whose copy is identical. The tests'
+differs, unless the original is unchanged since it was copied (each `MOVED.txt` records a
+digest), which means the destination is simply in use. `--apply --remove-old` deletes only
+originals whose copy is identical or, by that digest, in use since the migration. Old
+`backups/` are copied before the database backup is written into the new `backups/`. The tests'
 isolation guard (`tests/conftest.py`) blocks the real XDG locations as well as the repo-relative ones.
 
 ## Configuration

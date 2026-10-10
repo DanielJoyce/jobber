@@ -36,8 +36,9 @@ jobhunter migrate-paths --apply        # sqlite-backs-up the DB, copies resume/p
 jobhunter migrate-paths --apply --remove-old   # later, once you have checked: delete identical originals
 ```
 
-It refuses when a destination already exists and differs, and never deletes originals unless
-you pass `--remove-old`.
+It refuses when a destination already exists and differs from an original you have not migrated,
+but a destination you have used since migrating is fine, so `--apply --remove-old` works later.
+It never deletes originals unless you pass `--remove-old`.
 
 ## Setup
 
