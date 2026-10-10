@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
 <link rel="stylesheet" href="{{ static_url('detail.css') }}">
-<div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.job['apply_url'] or d.job['url'] }}">
+<div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.posting_href or '' }}">
   <p><a href="/inbox">&larr; inbox</a></p>
 
   {% if d.prompt %}
@@ -45,7 +45,16 @@
   </header>
 
   {% set b = d.button %}
-  {% include "_apply_button.html" %}
+  {% if b %}{% include "_apply_button.html" %}{% endif %}
+  <div class="prepare-line">
+    {% if d.packet_id %}
+    <a class="act" id="prepare-link" href="/packet/{{ d.packet_id }}">Open packet (p)</a>
+    {% else %}
+    <form method="post" action="/job/{{ d.group_id }}/prepare" id="prepare-form" class="inline-form">
+      <button type="submit" class="act" id="prepare-btn" title="start an application packet: targeted resume, cover letter, drafts">Prepare packet (p)</button>
+    </form>
+    {% endif %}
+  </div>
 
   {% if d.scored %}
   <section class="card">
@@ -110,6 +119,7 @@
     <strong>keys</strong>
     <span><kbd>o</kbd> open posting</span>
     <span><kbd>A</kbd> apply</span>
+    <span><kbd>p</kbd> prepare packet</span>
     <span><kbd>b</kbd> back to inbox</span>
   </aside>
 </div>

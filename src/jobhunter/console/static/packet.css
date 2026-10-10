@@ -1,0 +1,34 @@
+/* Packet page and New packet (specs/017). Loaded after detail.css; colors are app.css tokens. */
+.packet-head h1 { margin: 8px 0 4px; overflow-wrap: anywhere; }
+.packet-sub { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0; }
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 0; }
+.packet-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 12px 0; }
+.packet-btn {
+  font: inherit; display: inline-block; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid var(--axis); background: var(--surface-1); color: var(--text-primary);
+  text-decoration: none; cursor: pointer;
+}
+.packet-btn.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+.packet-btn:disabled, .packet-btn[disabled] {
+  background: var(--surface-1); border-color: var(--border); color: var(--text-muted);
+  cursor: not-allowed; opacity: 0.6;
+}
+.banner-error { border-color: var(--status-critical); }
+.banner-ok { border-color: var(--status-good); }
+.refusal { color: var(--status-critical); }
+.coming { color: var(--text-secondary); }
+.packet-form { display: flex; flex-direction: column; gap: 10px; max-width: 75ch; }
+.packet-form label { display: flex; flex-direction: column; gap: 4px; }
+.packet-form input, .packet-form textarea {
+  font: inherit; width: 100%; box-sizing: border-box; padding: 6px 8px; color: var(--text-primary);
+  background: var(--page); border: 1px solid var(--axis); border-radius: 6px;
+}
+.packet-form .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.packet-form .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.dups { margin: 8px 0; padding-left: 20px; }
+.dups li { margin: 6px 0; }
+.dups form { display: inline; margin: 0; }
+.posting-text summary { cursor: pointer; }
+@media (max-width: 560px) {
+  .packet-form .row2 { grid-template-columns: 1fr; }
+}

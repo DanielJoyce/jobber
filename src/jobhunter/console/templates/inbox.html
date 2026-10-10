@@ -4,6 +4,7 @@
 <div class="inbox">
   <header class="inbox-head">
     <h1>Inbox</h1>
+    <a class="act new-packet" id="new-packet" href="/apply/new" title="a packet for a posting from anywhere: paste its URL or text">New packet (n)</a>
     {% if data %}
     <nav class="chips" aria-label="Buckets">
       {% for b in all_buckets %}
@@ -72,6 +73,8 @@
     <span><kbd>o</kbd> open posting</span>
     <span><kbd>a</kbd> applied</span>
     <span><kbd>A</kbd> apply link</span>
+    <span><kbd>p</kbd> prepare packet</span>
+    <span><kbd>n</kbd> new packet</span>
     <span><kbd>u</kbd> undo</span>
     <span><kbd>1</kbd>-<kbd>7</kbd> bucket</span>
     <span><kbd>f</kbd> toggle Stale Match</span>

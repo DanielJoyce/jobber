@@ -1,5 +1,5 @@
 {% set done = i.labeled %}
-<article class="row{% if done %} readonly{% endif %}" id="row-{{ i.group_id }}" data-gid="{{ i.group_id }}" data-job="{{ i.job_id }}" data-url="{{ i.url }}" tabindex="-1"{% if oob %} hx-swap-oob="true"{% endif %}>
+<article class="row{% if done %} readonly{% endif %}" id="row-{{ i.group_id }}" data-gid="{{ i.group_id }}" data-job="{{ i.job_id }}" data-url="{{ i.url or '' }}" tabindex="-1"{% if oob %} hx-swap-oob="true"{% endif %}>
   {% if not done %}<label class="row-check"><input type="checkbox" class="sel" name="group_id" value="{{ i.group_id }}"><span class="sr-only">Select {{ i.title }}</span></label>{% else %}<span class="row-check"></span>{% endif %}
   <div class="row-score" title="overall {{ i.overall }}">{{ i.overall }}</div>
   <div class="row-body">
@@ -41,7 +41,7 @@
     <div class="row-actions">
       {% if not done %}<button type="button" class="act" hx-post="/inbox/{{ i.group_id }}/label?label=interesting" hx-target="#row-{{ i.group_id }}" hx-swap="outerHTML">shortlist (s)</button>
       <button type="button" class="act" hx-post="/inbox/{{ i.group_id }}/label?label=not_interesting" hx-target="#row-{{ i.group_id }}" hx-swap="outerHTML">dismiss (x)</button>{% endif %}
-      <a class="act" href="{{ i.url }}" target="_blank" rel="noopener noreferrer">posting (o)</a>
+      {% if i.url %}<a class="act" href="{{ i.url }}" target="_blank" rel="noopener noreferrer">posting (o)</a>{% endif %}
     </div>
   </div>
 </article>

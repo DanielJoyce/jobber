@@ -2,7 +2,7 @@
   <header class="drawer-head">
     <div>
       <h2><a href="/job/{{ c.group_id }}">{{ c.title }}</a></h2>
-      <div class="muted">{{ c.employer }} &middot; {{ c.location }}</div>
+      <div class="muted">{{ c.employer }} &middot; {{ c.location }}{% if packet_id %} &middot; <a href="/packet/{{ packet_id }}" id="drawer-packet">packet</a>{% endif %}</div>
       <div><span class="badge-status">{{ c.status }}</span> <span class="days{% if c.stale %} amber{% endif %}">{{ c.days }}d in status{% if c.stale %} &#9888; stale{% endif %}</span></div>
     </div>
     <button type="button" class="act" id="drawer-close" aria-label="close">close (Esc)</button>

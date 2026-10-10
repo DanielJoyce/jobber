@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from jobhunter.console import detail
 from jobhunter.core.models import ApplyStatus
 from jobhunter.pipeline import applylink
+from jobhunter.pipeline.ats_rules import is_http_url
 from jobhunter.scoring.profile import Profile
 
 MAX_VERIFY_AGE_H = 24
@@ -75,6 +76,9 @@ def register(
         job = require_job(conn, group_id)
         current = now()
         link = applylink.get_apply_link(conn, group_id)
+        if link is None and not is_http_url(detail.posting_url(job)):
+            # A posting pasted without a URL (specs/017): its url is a placeholder, never opened.
+            raise HTTPException(404, "this posting has no URL to open")
         if link is not None and link.status == ApplyStatus.live:
             link = applylink.reverify(
                 conn,

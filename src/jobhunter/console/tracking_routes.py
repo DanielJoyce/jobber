@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.apply import packets
 from jobhunter.console import dashboard as dash
 from jobhunter.console import proposals as props
 from jobhunter.console import tracking as t
@@ -73,6 +74,7 @@ def register(
             "error": error,
             "oob_card": "true" if oob else None,
             "stale_days": t.STALE_DAYS,
+            "packet_id": packets.live_packet_for_application(conn, app_id),
         }
 
     def drawer_response(

@@ -14,11 +14,12 @@ from typing import Any
 
 from markupsafe import Markup, escape
 
+from jobhunter.apply.packets import live_packet_id
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
 from jobhunter.core import rejections
 from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline.applylink import get_apply_link
-from jobhunter.pipeline.ats_rules import host_of
+from jobhunter.pipeline.ats_rules import host_of, is_http_url
 from jobhunter.pipeline.dedupe import _refresh_group, group_members
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.pipeline.normalize import normalize_job
@@ -274,6 +275,13 @@ class Detail:
     # Rejections from employers (core/rejections): this very posting, or another role here.
     posting_rejection: str | None = None
     employer_rejection: str | None = None
+    packet_id: int | None = None  # the live assisted-apply packet (specs/017)
+
+    @property
+    def posting_href(self) -> str | None:
+        """The posting's web page, or None (a pasted posting with no URL has none)."""
+        url = posting_url(self.job)
+        return url if is_http_url(url) else None
 
 
 def group_job(conn: sqlite3.Connection, group_id: int) -> sqlite3.Row | None:
@@ -407,7 +415,11 @@ def load_detail(
                 "source": sources.get(m["source_key"], m["source_key"]),
             }
         )
-    d.button = apply_button(conn, group_id, now)
+    link = get_apply_link(conn, group_id)
+    if link is not None or is_http_url(posting_url(job)):
+        d.button = apply_button(conn, group_id, now, link, fetch_link=False)
+    # else: a posting pasted without a URL (specs/017) has nowhere to apply; no button.
+    d.packet_id = live_packet_id(conn, group_id)
     d.prompt = did_you_apply(conn, group_id)
     index = rejections.RejectionIndex.load(conn, now, rejection_days)
     if index:

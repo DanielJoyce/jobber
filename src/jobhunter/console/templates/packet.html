@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ static_url('detail.css') }}">
+<link rel="stylesheet" href="{{ static_url('packet.css') }}">
+<div class="detail packet" data-packet="{{ p.id }}">
+  <p class="crumbs">
+    <a href="/inbox">&larr; inbox</a>
+    <a href="/pipeline/{{ p.application_id }}">pipeline card</a>
+    <a href="/job/{{ p.group_id }}">job page</a>
+  </p>
+
+  <header class="packet-head">
+    <h1>{{ p.title }}</h1>
+    <div class="packet-sub">
+      <span>{{ p.employer }}</span>
+      <span class="badge" title="packet status">packet {{ p.status }}</span>
+      <span class="badge" title="application status">{{ p.app_status }}</span>
+      {% if p.pasted %}<span class="badge" title="pasted on New packet; kept out of the nightly run">pasted posting</span>{% endif %}
+    </div>
+  </header>
+
+  <div class="packet-actions">
+    {% if d and d.button %}
+    <a class="packet-btn" id="open-application" href="/apply/{{ p.group_id }}">Open application &#8599;</a>
+    <span class="muted">opens the employer's page and logs the click, so "Did you apply?" asks when you are back</span>
+    {% else %}
+    <span class="muted" id="no-url">No posting URL was given, so there is no application link to open.</span>
+    {% endif %}
+  </div>
+
+  {% include "_packet_score.html" %}
+
+  <section class="card" id="posting">
+    <h2>Posting</h2>
+    {% if not p.has_description %}
+    <div class="banner" role="note" id="needs-text">
+      <p><strong>This posting has no description yet.</strong> Paste it here first: a targeted resume and cover letter are built from it, and it can only be scored with it. Saving it does not queue a re-score.</p>
+      <form method="post" action="/packet/{{ p.id }}/posting" class="paste-form">
+        <label for="posting-text">Posting text</label>
+        <textarea id="posting-text" name="text" rows="8" required></textarea>
+        <button type="submit" class="act">Save posting text</button>
+      </form>
+    </div>
+    {% elif d %}
+    <details class="posting-text">
+      <summary>Show the posting text ({{ d.text.paragraphs | length }} paragraph{{ "" if d.text.paragraphs | length == 1 else "s" }})</summary>
+      {% for para in d.text.paragraphs %}<p class="desc">{{ para }}</p>{% endfor %}
+    </details>
+    {% endif %}
+  </section>
+
+  <section class="card" id="documents">
+    <h2>Targeted resume and cover letter</h2>
+    <p class="coming">Coming in 1b: a resume tailored from your own resume lines, each line shown beside the line it came from, and an optional cover letter. Nothing here generates or spends anything yet.</p>
+  </section>
+
+  <section class="card" id="export">
+    <h2>Export</h2>
+    <p class="coming">Coming in 1c: PDF, plain text and Markdown.</p>
+  </section>
+
+  <section class="card" id="answers">
+    <h2>Answers and checklist</h2>
+    <p class="coming">Coming in 1d: drafts for custom questions, saved answers, and a checklist for this board.</p>
+  </section>
+</div>
+{% endblock %}

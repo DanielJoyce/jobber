@@ -1,0 +1,23 @@
+<section class="card" id="score-panel">
+  <h2>Fit score</h2>
+  {% if score_message %}<div class="banner banner-error" role="alert" id="score-message">{{ score_message }}</div>{% endif %}
+  {% if score_ok %}<div class="banner banner-ok" role="status" id="score-ok">{{ score_ok }}</div>{% endif %}
+  {% if d and d.scored %}
+  <p id="score-result"><span class="badge" title="Bucket {{ d.bucket }}">{{ bucket_name(d.bucket) }} <span class="bucket-badge">{{ d.bucket }}</span></span>
+    <span class="badge">overall {{ d.overall }}</span>
+    <a href="/job/{{ p.group_id }}">score breakdown on the job page</a></p>
+  {% elif profile_error %}
+  <p class="muted">Fix the preferences file first; nothing can be scored without a valid profile. <a href="/prefs">Preferences</a></p>
+  {% elif est %}
+  {% if est.batch %}{% set spend = "Estimated $%.4f, billed when the batch is collected." | format(est.estimated_usd) %}{% else %}{% set spend = "Estimated $%.4f." | format(est.estimated_usd) %}{% endif %}
+  <p class="muted">Not scored yet. {% if p.pasted %}A pasted posting is never scored by the nightly run; only this button scores it.{% else %}Score it now instead of waiting for the nightly run.{% endif %}</p>
+  <p id="score-estimate">One Stage 2 screen with <strong>{{ est.scorer }}</strong>, estimated <strong>${{ "%.4f" | format(est.estimated_usd) }}</strong> ({% if est.cost_source == "default" %}assumed; nothing measured yet{% else %}measured from earlier scores{% endif %}), charged to your scoring spend caps. Spend cap remaining: ${{ "%.2f" | format([est.remaining_usd, 0] | max) }}.{% if est.batch %} Anthropic batch: scored when the batch is collected (nightly at 03:30).{% endif %} It skips your prefilter rules, because you chose this posting.</p>
+  {% if notice %}<p class="muted">{{ notice }}</p>{% endif %}
+  {% if est.refusal %}<p class="refusal" role="alert" id="score-refusal">{{ est.refusal }}</p>{% endif %}
+  <form method="post" action="/packet/{{ p.id }}/score" hx-post="/packet/{{ p.id }}/score" hx-target="#score-panel" hx-swap="outerHTML"
+        hx-confirm="Score this posting with {{ est.scorer }}? {{ spend }} This spends credits.">
+    <input type="hidden" name="token" value="{{ est.token }}">
+    <button type="submit" class="packet-btn primary" id="score-now"{% if est.refusal %} disabled{% endif %}>Score this group now</button>
+  </form>
+  {% endif %}
+</section>

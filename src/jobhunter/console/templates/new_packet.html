@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ static_url('detail.css') }}">
+<link rel="stylesheet" href="{{ static_url('packet.css') }}">
+<div class="detail new-packet">
+  <p class="crumbs"><a href="/inbox">&larr; inbox</a></p>
+  <h1>New packet</h1>
+  <p class="muted">A packet for a posting from anywhere: paste its URL, its text, or both. Nothing is scored or sent anywhere; the posting is kept out of the nightly run.</p>
+
+  {% if message %}<div class="banner banner-error" role="alert" id="new-message">{{ message }}</div>{% endif %}
+  {% if note %}<div class="banner banner-ok" role="status" id="new-note">{{ note }}</div>{% endif %}
+
+  {% if dups %}
+  <section class="card" id="dups">
+    <h2>Already here</h2>
+    <ul class="dups">
+      {% for d in dups %}
+      <li><a href="/job/{{ d.group_id }}">{{ d.title }}</a> &middot; {{ d.employer }} <span class="muted">({{ d.why }})</span>
+        {% if d.packet_id %}<a class="act" href="/packet/{{ d.packet_id }}">open its packet</a>
+        {% else %}<form method="post" action="/job/{{ d.group_id }}/prepare"><button type="submit" class="act">prepare that one</button></form>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% if not can_force %}<p class="muted">The same URL is already here, so use that posting.</p>{% endif %}
+  </section>
+  {% endif %}
+
+  <form method="post" action="/apply/new" class="packet-form" id="new-packet-form">
+    <label>Posting or apply URL
+      <input type="url" name="url" id="new-url" value="{{ f.url }}" placeholder="https://jobs.example.com/acme/12345" autocomplete="off">
+    </label>
+    <div class="buttons">
+      <button type="submit" class="packet-btn" formaction="/apply/new/fetch" formnovalidate id="fetch-btn" title="fetches the page if its robots.txt allows; otherwise paste the text">Fetch posting text</button>
+    </div>
+    <label>Posting text
+      <textarea name="text" id="new-text" rows="12" placeholder="Paste the posting's description">{{ f.text }}</textarea>
+    </label>
+    <div class="row2">
+      <label>Employer <input name="employer" id="new-employer" value="{{ f.employer }}" required></label>
+      <label>Title <input name="title" id="new-title" value="{{ f.title }}" required></label>
+    </div>
+    <div class="buttons">
+      <button type="submit" class="packet-btn primary" id="create-btn">Create packet</button>
+      {% if can_force %}<button type="submit" class="packet-btn" name="force" value="1" id="force-btn" title="a different posting with the same employer and title">Create a new packet anyway</button>{% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}
