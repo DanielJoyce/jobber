@@ -166,6 +166,16 @@ def create_app(
 
     app.state.conn_factory = factory
 
+    @app.middleware("http")
+    async def no_store_pages(request: Request, call_next):
+        # Why: Back restored a cached /inbox from before a shortlist, so triaged rows came
+        # back and looked untriaged. Pages are cheap local renders; never cache them.
+        # Static files keep normal caching (their URLs carry a content hash).
+        response = await call_next(request)
+        if not request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     def render(request: Request, title: str, active: str) -> HTMLResponse:
         return templates.TemplateResponse(
             request,

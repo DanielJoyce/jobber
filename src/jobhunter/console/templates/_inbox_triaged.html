@@ -1,4 +1,4 @@
 <div class="row triaged" id="row-{{ group_id }}" data-gid="{{ group_id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
-  <span>{% if label == "interesting" %}Shortlisted{% else %}Dismissed{% endif %}: {{ job_title }}</span>
+  <span>{% if label == "interesting" %}Shortlisted{% else %}Dismissed{% endif %}: {{ job_title }}{% if label == "interesting" %} &middot; <a href="/pipeline">see it in Pipeline</a>{% endif %}</span>
   <button type="button" class="act undo" hx-post="/inbox/{{ group_id }}/undo" hx-target="#row-{{ group_id }}" hx-swap="outerHTML">undo (u)</button>
 </div>

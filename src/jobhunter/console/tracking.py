@@ -155,6 +155,9 @@ class Card:
     resume_version: str | None
     next_action: str | None
     next_action_at: str | None
+    # Why: two postings with the same title and employer looked like one job listed twice.
+    source: str = ""
+    posted: str | None = None
 
 
 @dataclass
@@ -165,9 +168,11 @@ class Pipeline:
 
 def card(conn: sqlite3.Connection, app_id: int, now: datetime) -> Card | None:
     row = conn.execute(
-        "SELECT a.*, j.id AS job_id, j.title, j.employer, j.agency_raw, j.location_scope "
+        "SELECT a.*, j.id AS job_id, j.title, j.employer, j.agency_raw, j.location_scope, "
+        "j.posted_at, s.name AS source_name "
         "FROM application a JOIN job_group g ON g.id = a.job_group_id "
-        "JOIN job j ON j.id = g.canonical_job_id WHERE a.id = ?",
+        "JOIN job j ON j.id = g.canonical_job_id LEFT JOIN source s ON s.key = j.source_key "
+        "WHERE a.id = ?",
         (app_id,),
     ).fetchone()
     if row is None:
@@ -187,6 +192,8 @@ def card(conn: sqlite3.Connection, app_id: int, now: datetime) -> Card | None:
         resume_version=row["resume_version"],
         next_action=row["next_action"],
         next_action_at=row["next_action_at"],
+        source=row["source_name"] or "",
+        posted=(row["posted_at"] or "")[:10] or None,
     )
 
 
