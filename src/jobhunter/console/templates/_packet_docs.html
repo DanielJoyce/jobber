@@ -1,0 +1,311 @@
+{# Packet documents (specs/017 phase 1b): runner line, resume, cover letter, question drafts.
+   Every generated line is an edit box beside the lines it cites and its check status. A
+   button that spends API money says so and shows its estimate; nothing runs on page load. #}
+{% set r = runner %}
+
+{% macro badge(row) -%}
+  {% if row.status == "unsupported" %}<span class="chk bad" title="the checker could not tie this to the cited lines">unsupported</span>
+  {% elif row.status == "confirmed" %}<span class="chk conf" title="you confirmed it is true">confirmed</span>
+  {% else %}<span class="chk ok">checked</span>{% endif %}
+  {% if row.entail %}<span class="entail entail-{{ row.entail }}" title="advisory Haiku check: do the cited lines support this line?">support: {{ row.entail }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro evidence(row, doc_id, editable) -%}
+  <div class="cited">
+    {{ badge(row) }}
+    {% if row.reasons %}<ul class="reasons">{% for why in row.reasons %}<li>{{ why }}</li>{% endfor %}</ul>{% endif %}
+    {% for sid, stext in row.cited %}<p class="src"><b>{{ sid }}</b> {{ stext }}</p>{% else %}<p class="src muted">cites no line</p>{% endfor %}
+    {% if editable and row.status == "unsupported" %}
+    <button type="submit" class="act confirm-btn" form="confirm-{{ doc_id }}" name="ckey" value="{{ row.ckey }}" data-needs-clean="1">This is true, keep it</button>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro cited_box(row, doc_id, editable, quotes=False, label="Text") -%}
+  <div class="item item-{{ row.status }}" data-item="{{ row.name }}">
+    <div class="edit">
+      {% if editable %}
+      <label class="sr" for="{{ row.name }}.text">{{ label }}</label>
+      <textarea id="{{ row.name }}.text" name="{{ row.name }}.{{ 'name' if row.role == 'skill' else 'text' }}" rows="{{ 1 if row.role == 'skill' else 3 }}">{{ row.text }}</textarea>
+      <div class="meta">
+        <label>sources <input name="{{ row.name }}.sources" value="{{ row.sources_str }}" size="10" spellcheck="false"></label>
+        <label>order <input type="number" name="{{ row.name }}.pos" value="{{ row.pos }}" step="1"></label>
+        <label><input type="checkbox" name="{{ row.name }}.remove" value="1"> remove</label>
+      </div>
+      {% if quotes %}<label class="quotes">posting quotes, one per line <textarea name="{{ row.name }}.quotes" rows="1">{{ row.quotes_str }}</textarea></label>{% endif %}
+      {% else %}
+      <p class="ro">{{ row.text }}</p>
+      {% endif %}
+    </div>
+    {{ evidence(row, doc_id, editable) }}
+  </div>
+{%- endmacro %}
+
+{% macro new_box(prefix, quotes=False, what="line") -%}
+  <details class="new-item">
+    <summary>Add a {{ what }}</summary>
+    <textarea name="{{ prefix }}.text" rows="2" aria-label="new {{ what }}"></textarea>
+    <div class="meta">
+      <label>sources <input name="{{ prefix }}.sources" size="10" placeholder="L12" spellcheck="false"></label>
+      <label><input type="checkbox" name="{{ prefix }}.true" value="1"> This is true (no source line)</label>
+    </div>
+    {% if quotes %}<label class="quotes">posting quotes, one per line <textarea name="{{ prefix }}.quotes" rows="1"></textarea></label>{% endif %}
+  </details>
+{%- endmacro %}
+
+{% macro run_buttons(kind, label, extra_class="") -%}
+  {% set est = r.estimates[kind] %}
+  {% if r.default == "cli" and r.cli_ok %}
+    {% if r.overage %}
+    <button type="submit" class="packet-btn primary {{ extra_class }}" name="runner" value="cli" data-runner="cli"
+            data-paid="1" data-confirm="Your subscription is on paid extra usage, so this run is charged (about ${{ '%.2f' | format(est.usd) }}, against the [apply] daily cap). Run it?">{{ label }} (subscription, paid extra usage)</button>
+    {% else %}
+    <button type="submit" class="packet-btn primary {{ extra_class }}" name="runner" value="cli" data-runner="cli">{{ label }} (subscription)</button>
+    {% endif %}
+  {% endif %}
+  {% if r.default == "api" or not r.cli_ok %}
+    <button type="submit" class="packet-btn {{ extra_class }}{% if r.default == 'api' %} primary{% endif %}" name="runner" value="api" data-runner="api"
+            {% if not r.api_ok %}disabled title="{{ r.api_reason }}"{% endif %}
+            data-confirm="Run on the API? About ${{ '%.2f' | format(est.usd) }} from your API credit ({{ est.source }}), against the ${{ '%.2f' | format(r.cap_usd) }} daily apply cap.">{{ label }} (API, &asymp; ${{ "%.2f" | format(est.usd) }})</button>
+  {% endif %}
+  <input type="hidden" name="confirm_paid" value="">
+{%- endmacro %}
+
+{% macro gen_error(kind) -%}
+  {% if gen and gen.kind == kind %}
+  <div class="banner banner-error gen-error" role="alert" id="gen-error-{{ kind }}">
+    <p>{% if gen.failed %}Nothing was saved: {% endif %}{{ gen.message }}</p>
+    {% if gen.offer_api %}
+    {% set est = r.estimates[kind] %}
+    <form method="post" action="/packet/{{ p.id }}/generate" class="inline">
+      <input type="hidden" name="kind" value="{{ kind }}">
+      <input type="hidden" name="question" value="{{ gen.question }}">
+      <input type="hidden" name="facts" value="{{ gen.facts }}">
+      <input type="hidden" name="instruction" value="{{ gen.instruction }}">
+      {% if gen.paid and r.cli_ok %}
+      <button type="submit" class="packet-btn" name="runner" value="cli" id="run-paid-{{ kind }}"
+              data-paid="1">Run on paid extra usage (&asymp; ${{ "%.2f" | format(est.usd) }})</button>
+      <input type="hidden" name="confirm_paid" value="">
+      {% endif %}
+      <button type="submit" class="packet-btn" name="runner" value="api" id="run-api-{{ kind }}"
+              {% if not r.api_ok %}disabled title="{{ r.api_reason }}"{% endif %}
+              data-confirm="Run on the API? About ${{ '%.2f' | format(est.usd) }} from your API credit, against the ${{ '%.2f' | format(r.cap_usd) }} daily apply cap.">Run on the API (&asymp; ${{ "%.2f" | format(est.usd) }})</button>
+      {% if not r.api_ok %}<span class="muted">{{ r.api_reason }}</span>{% endif %}
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+{%- endmacro %}
+
+{# Confirm and Restore post their own forms, never the editor's: Enter in an edit box saves,
+   and a confirmation never rides on (or silently drops) unsaved edits. #}
+{% macro side_forms(doc_id) -%}
+  <form id="confirm-{{ doc_id }}" method="post" action="/packet/{{ p.id }}/doc/{{ doc_id }}/confirm" hidden></form>
+  <form id="restore-{{ doc_id }}" method="post" action="/packet/{{ p.id }}/doc/{{ doc_id }}/restore" hidden></form>
+{%- endmacro %}
+
+{% macro version_links(slot, param) -%}
+  {% if slot.versions | length > 1 %}
+  <p class="versions">Versions:
+    {% for v in slot.versions | reverse %}
+    <a href="/packet/{{ p.id }}?{{ param }}={{ v.id }}#{{ 'resume' if param == 'resume' else 'letter' }}"{% if slot.shown and v.id == slot.shown.id %} aria-current="true" class="on"{% endif %}>v{{ v.version }}</a>
+    {% endfor %}
+  </p>
+  {% endif %}
+{%- endmacro %}
+
+{% macro provenance(v) -%}
+  <span class="badge">v{{ v.version }}</span>
+  <span class="badge">{{ v.origin }}{% if v.runner %} on {{ "subscription" if v.runner == "cli" else "API" }}{% endif %}</span>
+  {% if v.model %}<span class="muted">{{ v.model }}</span>{% endif %}
+  {% if v.runner == "api" and v.cost_usd %}<span class="muted">${{ "%.3f" | format(v.cost_usd) }}</span>{% endif %}
+  {% if v.report.ok %}<span class="chk ok">all lines checked</span>{% elif v.unsupported %}<span class="chk bad">{{ v.unsupported }} unsupported</span>{% endif %}
+{%- endmacro %}
+
+<section class="card" id="documents">
+  <h2>Targeted resume and cover letter</h2>
+
+  <div class="runner-line" id="runner-line">
+    {% if r.off %}
+    <div class="banner banner-error" role="status" id="runner-off">
+      <p><strong>CLI runner off.</strong> {{ r.off_reason }}{% if r.off_at %} ({{ r.off_at[:16] | replace("T", " ") }} UTC){% endif %}</p>
+      <form method="post" action="/apply/runner/on" class="inline">
+        <input type="hidden" name="next" value="/packet/{{ p.id }}#documents">
+        <button type="submit" class="act" id="runner-on">Turn back on</button>
+      </form>
+    </div>
+    {% endif %}
+    {% if r.overage %}
+    <div class="banner" role="status" id="runner-overage"><p><strong>Your subscription is on paid extra usage.</strong> CLI runs are charged against the ${{ "%.2f" | format(r.cap_usd) }} daily apply cap and each one waits for a click that says so. Turning the runner back on does not change this.</p>
+      <form method="post" action="/apply/runner/clear-overage" class="inline"><input type="hidden" name="next" value="/packet/{{ p.id }}#documents">
+        <button type="submit" class="act" id="clear-overage" data-confirm="Clear only if your Claude subscription is back within its plan. The next run that reports paid extra usage is charged (under the apply cap) and sets this hold again. Clear it?">My plan has reset: clear</button></form></div>
+    {% endif %}
+    <p class="muted">
+      {% if r.default == "cli" %}Runs on your Claude subscription (the <code>claude</code> CLI, no API credit){% if not r.cli_ok and not r.off %}: {{ r.cli_reason }}{% endif %}.
+      The API is only used when you click a button that shows its cost.
+      {% else %}Runs on the API (<code>[apply] runner = "api"</code>).{% endif %}
+      API today: ${{ "%.2f" | format(r.spent_today_usd) }} of ${{ "%.2f" | format(r.cap_usd) }} apply cap.
+    </p>
+  </div>
+
+  {% if doc_message %}<div class="banner banner-error" role="alert" id="doc-message">{{ doc_message }}</div>{% endif %}
+
+  {# ─── resume ─────────────────────────────────────────────────────────── #}
+  {% set slot = resume %}
+  <div class="doc-block" id="resume">
+    <h3>Resume</h3>
+    {{ gen_error("resume") }}
+    {% if not p.has_description %}
+    <p class="muted">Paste the posting text above first: the resume is tailored to it.</p>
+    {% endif %}
+    <div class="doc-actions">
+      <form method="post" action="/packet/{{ p.id }}/generate" class="gen-form">
+        <input type="hidden" name="kind" value="resume">
+        {% if slot.shown %}<label class="instr">Regenerate with an instruction (optional)
+          <input name="instruction" maxlength="300" placeholder="shorter; lead with the security work"></label>{% endif %}
+        {{ run_buttons("resume", "Regenerate" if slot.shown else "Generate resume") }}
+      </form>
+      <form method="post" action="/packet/{{ p.id }}/base" class="inline">
+        <button type="submit" class="packet-btn" id="use-base">Use base resume</button>
+        <span class="muted">free: your resume as it is</span>
+      </form>
+    </div>
+
+    {% if slot.shown %}
+    {% set v = slot.shown %}{% set view = slot.view %}
+    <div class="doc-head">{{ provenance(v) }}{% if not slot.is_current %} <a href="/packet/{{ p.id }}#resume">back to the current version</a>{% endif %}</div>
+    {{ version_links(slot, "resume") }}
+    {% if view.base %}
+    <p class="muted">The base resume, unchanged: nothing to check.</p>
+    <pre class="body-md">{{ v.body_md }}</pre>
+    {% else %}
+    {% if view.change_notes %}<details class="notes" open><summary>What changed</summary><ul>{% for n in view.change_notes %}<li>{{ n }}</li>{% endfor %}</ul></details>{% endif %}
+    {% set editable = slot.is_current %}
+    {{ side_forms(v.id) }}
+    <form method="post" action="/packet/{{ p.id }}/doc/{{ v.id }}/save" class="editor" id="resume-editor">
+      {% if editable %}<button type="submit" class="sr default-save" tabindex="-1" aria-hidden="true">Save</button>{% endif %}
+      <div class="item item-{{ view.header_row.status }}">
+        <div class="edit">
+          <label>Header lines (shown verbatim) <input name="header" value="{{ view.header }}" spellcheck="false"{% if not editable %} disabled{% endif %}></label>
+        </div>
+        {{ evidence(view.header_row, v.id, editable) }}
+      </div>
+      <h4>Summary</h4>
+      {{ cited_box(view.summary, v.id, editable, label="Summary") }}
+      {% for e in view.entries %}
+      <fieldset class="entry">
+        <legend>{{ e.heading }}: {{ e.row.text }}</legend>
+        {% if e.heading_row and e.heading_row.reasons %}
+        <div class="item item-{{ e.heading_row.status }} heading-check"><div class="edit"><p class="ro">Section heading: {{ e.heading }}</p></div>{{ evidence(e.heading_row, v.id, editable) }}</div>
+        {% endif %}
+        <div class="item item-{{ e.row.status }}">
+          <div class="edit entry-fields">
+            {% if editable %}
+            <label>Section <input name="e.{{ e.i }}.heading" value="{{ e.heading }}"></label>
+            <label>Title <input name="e.{{ e.i }}.title" value="{{ e.row.fields.title }}"></label>
+            <label>Employer <input name="e.{{ e.i }}.employer" value="{{ e.row.fields.employer }}"></label>
+            <label>Dates <input name="e.{{ e.i }}.dates" value="{{ e.row.fields.dates }}"></label>
+            <label>Source line <input name="e.{{ e.i }}.source_line" value="{{ e.source_line }}" size="5" spellcheck="false"></label>
+            <label>order <input type="number" name="e.{{ e.i }}.pos" value="{{ e.i }}"></label>
+            <label><input type="checkbox" name="e.{{ e.i }}.remove" value="1"> remove entry</label>
+            {% endif %}
+          </div>
+          {{ evidence(e.row, v.id, editable) }}
+        </div>
+        {% for b in e.bullets %}{{ cited_box(b, v.id, editable, label="Bullet") }}{% endfor %}
+        {% if editable %}{{ new_box("nb." ~ e.i, what="bullet") }}{% endif %}
+      </fieldset>
+      {% endfor %}
+      <h4>Skills</h4>
+      {% for k in view.skills %}{{ cited_box(k, v.id, editable, label="Skill") }}{% endfor %}
+      {% if editable %}{{ new_box("nk", what="skill") }}{% endif %}
+      {% if view.omitted %}
+      <details class="omitted"><summary>Left out ({{ view.omitted | length }} lines)</summary>
+        <ul>{% for lid, ltext in view.omitted %}<li><b>{{ lid }}</b> {{ ltext }}
+          {% if editable %}<button type="submit" class="act restore-btn" form="restore-{{ v.id }}" name="line" value="{{ lid }}" data-needs-clean="1">Restore</button>{% endif %}</li>{% endfor %}</ul>
+      </details>
+      {% endif %}
+      {% if editable %}<p class="save-line"><button type="submit" class="packet-btn primary" id="save-resume">Save as a new version</button>
+        <span class="muted">nothing is overwritten; the checker re-runs on your edits</span></p>{% endif %}
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  {# ─── Mark ready ─────────────────────────────────────────────────────── #}
+  <div class="ready-line" id="ready">
+    {% if p.status == "ready" %}
+    <p><span class="chk ok">ready</span> Every document in this packet passed its check as it is now. Export comes in 1c.</p>
+    {% else %}
+    <form method="post" action="/packet/{{ p.id }}/ready" class="inline">
+      <button type="submit" class="packet-btn primary" id="mark-ready"{% if blockers %} disabled{% endif %}>Mark ready</button>
+    </form>
+    {% if blockers %}<ul class="blockers">{% for b in blockers %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
+    {% endif %}
+  </div>
+
+  {# ─── cover letter ───────────────────────────────────────────────────── #}
+  {% set slot = cover_letter %}
+  <div class="doc-block" id="letter">
+    <h3>Cover letter</h3>
+    {{ gen_error("cover_letter") }}
+    {% if not slot.shown %}<p class="muted">No cover letter: a packet has one only when you ask.{% if not resume.current_id %} Make the resume version first.{% endif %}</p>{% endif %}
+    <form method="post" action="/packet/{{ p.id }}/generate" class="gen-form notes-form" id="letter-form">
+      <input type="hidden" name="kind" value="cover_letter">
+      <label for="notes">Employer notes, one to three lines in your words (why this employer, any history). Blank is fine: the letter then says nothing about the employer beyond posting quotes. They are saved when you add the letter.</label>
+      <textarea id="notes" name="notes" rows="3">{{ notes | join("\n") }}</textarea>
+      {% if slot.shown %}<label class="instr">Instruction (optional) <input name="instruction" maxlength="300"></label>{% endif %}
+      <div class="inline">
+        {% if resume.current_id %}{{ run_buttons("cover_letter", "Rewrite cover letter" if slot.shown else "Add cover letter") }}{% endif %}
+        <button type="submit" class="act" formaction="/packet/{{ p.id }}/notes" id="save-notes">Save notes only</button>
+      </div>
+    </form>
+    {% if slot.shown %}
+    {% set v = slot.shown %}{% set editable = slot.is_current %}
+    <div class="doc-head">{{ provenance(v) }}{% if not slot.is_current %} <a href="/packet/{{ p.id }}#letter">back to the current version</a>{% endif %}</div>
+    {{ version_links(slot, "letter") }}
+    {{ side_forms(v.id) }}
+    <form method="post" action="/packet/{{ p.id }}/doc/{{ v.id }}/save" class="editor" id="letter-editor">
+      {% if editable %}<button type="submit" class="sr default-save" tabindex="-1" aria-hidden="true">Save</button>{% endif %}
+      {% for row in slot.view.rows %}{{ cited_box(row, v.id, editable, quotes=True, label="Paragraph") }}{% endfor %}
+      {% if editable %}{{ new_box("np", quotes=True, what="paragraph") }}
+      <p class="save-line"><button type="submit" class="packet-btn primary" id="save-letter">Save as a new version</button></p>{% endif %}
+    </form>
+    {% endif %}
+  </div>
+
+  {# ─── question drafts ────────────────────────────────────────────────── #}
+  <div class="doc-block" id="drafts">
+    <h3>Custom question drafts</h3>
+    {{ gen_error("question_draft") }}
+    {% if numeric %}
+    <div class="banner" role="status" id="numeric-evidence">
+      <p><strong>{{ numeric.question }}</strong>: a years-of-experience question gets the resume lines that may be relevant, never a computed number. The answer is yours.</p>
+      {% if numeric.lines %}<ul>{% for lid, ltext in numeric.lines %}<li><b>{{ lid }}</b> {{ ltext }}</li>{% endfor %}</ul>{% else %}<p class="muted">No resume line names it.</p>{% endif %}
+    </div>
+    {% endif %}
+    <form method="post" action="/packet/{{ p.id }}/generate" class="gen-form draft-form">
+      <input type="hidden" name="kind" value="question_draft">
+      <label for="question">Paste the question</label>
+      <textarea id="question" name="question" rows="2" required>{{ gen.question if gen and gen.kind == "question_draft" else "" }}</textarea>
+      <label for="facts">Story facts for a "Describe a time..." question: one to three lines in your words (S1-S3). The draft only structures them.</label>
+      <textarea id="facts" name="facts" rows="3">{{ gen.facts if gen and gen.kind == "question_draft" else "" }}</textarea>
+      <p class="muted">Salary, EEO, self-ID, address, consent and signature questions are yours: no draft, nothing stored.</p>
+      {{ run_buttons("question_draft", "Draft an answer") }}
+    </form>
+    {% for v, view in drafts %}
+    <div class="draft" id="draft-{{ v.id }}">
+      <h4>{{ view.question }}</h4>
+      <div class="doc-head">{{ provenance(v) }}</div>
+      <p class="draft-text"><button type="button" class="act copy-btn" data-copy="{{ v.body_md }}">Copy</button> {{ v.body_md }}</p>
+      {{ side_forms(v.id) }}
+      <form method="post" action="/packet/{{ p.id }}/doc/{{ v.id }}/save" class="editor">
+      <button type="submit" class="sr default-save" tabindex="-1" aria-hidden="true">Save</button>
+        {% for row in view.rows %}{{ cited_box(row, v.id, True, quotes=True, label="Sentence") }}{% endfor %}
+        {{ new_box("nq", quotes=True, what="sentence") }}
+        <p class="save-line"><button type="submit" class="packet-btn">Save as a new version</button></p>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</section>

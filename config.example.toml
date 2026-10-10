@@ -77,3 +77,15 @@
 [console]
 # host = "127.0.0.1"
 # port = 8808
+
+# Assisted apply drafting (specs/017): targeted resume, cover letter, question drafts.
+# runner = "cli" runs `claude -p` on your Claude subscription (no API credit) in a scrubbed
+# environment with no tools; "api" uses ANTHROPIC_API_KEY. With "cli", a failed run offers the
+# API run with its estimate and waits for your click; it never switches by itself.
+[apply]
+# runner = "cli"
+# cli_model = "opus"                 # CLI alias
+# api_model = "claude-opus-5"        # API model id for the fallback
+# effort = "medium"
+# daily_cap_usd = 1.00               # packet API spend only; separate from [scoring] caps
+# entailment_check = true            # advisory Haiku pass: do the cited lines support each line?

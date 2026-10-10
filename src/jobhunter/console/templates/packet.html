@@ -2,6 +2,7 @@
 {% block main %}
 <link rel="stylesheet" href="{{ static_url('detail.css') }}">
 <link rel="stylesheet" href="{{ static_url('packet.css') }}">
+<script src="{{ static_url('packet.js') }}" defer></script>
 <div class="detail packet" data-packet="{{ p.id }}">
   <p class="crumbs">
     <a href="/inbox">&larr; inbox</a>
@@ -58,10 +59,7 @@
     {% endif %}
   </section>
 
-  <section class="card" id="documents">
-    <h2>Targeted resume and cover letter</h2>
-    <p class="coming">Coming in 1b: a resume tailored from your own resume lines, each line shown beside the line it came from, and an optional cover letter. Nothing here generates or spends anything yet.</p>
-  </section>
+  {% include "_packet_docs.html" %}
 
   <section class="card" id="export">
     <h2>Export</h2>
@@ -70,7 +68,7 @@
 
   <section class="card" id="answers">
     <h2>Answers and checklist</h2>
-    <p class="coming">Coming in 1d: drafts for custom questions, saved answers, and a checklist for this board.</p>
+    <p class="coming">Coming in 1d: saved answers you can reuse, and a checklist for this board. Drafts for custom questions are above.</p>
   </section>
 </div>
 {% endblock %}

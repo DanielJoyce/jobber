@@ -20,6 +20,7 @@ from typing import Any
 from jobhunter.core import rejections
 from jobhunter.core.bucketnames import BUCKET_TITLES, parse_letters  # noqa: F401 (re-export)
 from jobhunter.core.models import Bucket
+from jobhunter.core.spend import SCORING_ONLY
 from jobhunter.pipeline.locations import jobs_in_state, load_job_group_locations, location_summary
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile
@@ -211,7 +212,9 @@ def _state_groups(conn: sqlite3.Connection, profile: Profile, state: str) -> set
 
 def weekly_cost(conn: sqlite3.Connection, now: datetime) -> float | None:
     since = (now - timedelta(days=7)).date().isoformat()
-    row = conn.execute("SELECT SUM(cost_usd) FROM llm_spend WHERE day >= ?", (since,)).fetchone()
+    row = conn.execute(
+        f"SELECT SUM(cost_usd) FROM llm_spend WHERE day >= ? AND {SCORING_ONLY}", (since,)
+    ).fetchone()
     return row[0]
 
 

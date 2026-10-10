@@ -12,6 +12,7 @@ from typing import Any
 
 from jobhunter.console.inbox import BUCKETS, salary_text
 from jobhunter.core.models import SourceRow
+from jobhunter.core.spend import PACKET_CLI_TIER, PACKET_TIER, PACKET_TIERS
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.prefilter import rejected_summary
@@ -401,11 +402,15 @@ def costs(
     weekly: dict[str, float] = {}
     by_model: dict[tuple[str, str], dict[str, Any]] = {}
     for r in spend:
-        if r["day"] in daily:
+        # Packet drafting (specs/017) has its own cap and its own line on the page; it never
+        # counts in the totals shown against the scoring caps.
+        scoring_row = r["tier"] not in PACKET_TIERS
+        if r["day"] in daily and scoring_row:
             daily[r["day"]] += r["cost_usd"]
         d = datetime.fromisoformat(r["day"]).date()
         monday = (d - timedelta(days=d.weekday())).isoformat()
-        weekly[monday] = weekly.get(monday, 0.0) + r["cost_usd"]
+        if scoring_row:
+            weekly[monday] = weekly.get(monday, 0.0) + r["cost_usd"]
         m = by_model.setdefault(
             (r["model"], r["tier"]),
             {
@@ -423,7 +428,9 @@ def costs(
         m["cost"] += r["cost_usd"]
     total = sum(daily.values())
     last7_since = (today - timedelta(days=6)).isoformat()
-    last7 = sum(r["cost_usd"] for r in spend if r["day"] >= last7_since)
+    last7 = sum(
+        r["cost_usd"] for r in spend if r["day"] >= last7_since and r["tier"] not in PACKET_TIERS
+    )
     fs = conn.execute(
         "SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o, "
         "COALESCE(SUM(cache_read_tokens), 0) AS c FROM fit_score "
@@ -463,4 +470,44 @@ def costs(
         shortlisted=shortlisted,
         per_shortlisted=total / shortlisted if shortlisted else None,
         max_daily=max(daily.values(), default=0.0),
+    )
+
+
+@dataclass
+class PacketCosts:
+    """Packet drafting spend (specs/017): its own line on /costs, against its own cap."""
+
+    days: int
+    today_usd: float  # charged (tier packet) today, what [apply] daily_cap_usd caps
+    api_usd: float  # charged in the window
+    api_calls: int
+    cli_calls: int  # subscription calls (tier packet-cli, $0)
+    cli_equiv_usd: float  # the CLI's API-equivalent figure, for information only
+    daily_cap: float
+
+
+def packet_costs(
+    conn: sqlite3.Connection, now: datetime, days: int, daily_cap: float
+) -> PacketCosts:
+    today = now.astimezone(UTC).date()
+    since = (today - timedelta(days=days - 1)).isoformat()
+    rows = conn.execute(
+        "SELECT tier, day, coalesce(sum(calls), 0) AS calls, coalesce(sum(cost_usd), 0) AS cost "
+        "FROM llm_spend WHERE day >= ? AND tier IN (?, ?) GROUP BY tier, day",
+        (since, PACKET_TIER, PACKET_CLI_TIER),
+    ).fetchall()
+    equiv = conn.execute(
+        "SELECT coalesce(sum(api_equiv_usd), 0) FROM packet_document "
+        "WHERE substr(created_at, 1, 10) >= ?",
+        (since,),
+    ).fetchone()[0]
+    paid = [r for r in rows if r["tier"] == PACKET_TIER]
+    return PacketCosts(
+        days=days,
+        today_usd=sum(r["cost"] for r in paid if r["day"] == today.isoformat()),
+        api_usd=sum(r["cost"] for r in paid),
+        api_calls=sum(r["calls"] for r in paid),
+        cli_calls=sum(r["calls"] for r in rows if r["tier"] == PACKET_CLI_TIER),
+        cli_equiv_usd=float(equiv or 0.0),
+        daily_cap=daily_cap,
     )

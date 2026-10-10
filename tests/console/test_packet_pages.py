@@ -233,7 +233,7 @@ def test_prepare_opens_application_at_preparing_and_a_packet(client, conn):
     page = client.get(f"/packet/{pid}")
     assert page.status_code == 200
     assert "Unscored Analyst" in page.text and "packet draft" in page.text
-    assert "Coming in 1b" in page.text
+    assert "Generate resume" in page.text and "Use base resume" in page.text
 
 
 def test_prepare_moves_a_shortlisted_application_forward_and_keeps_later_ones(client, conn):

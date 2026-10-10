@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.apply import runner_state
 from jobhunter.console import pages
 from jobhunter.console.inbox_routes import load_console_profile
 from jobhunter.sources.registry import load_registry
@@ -111,4 +112,16 @@ def register(
         days = days if days in pages.RANGES else 30
         scoring = request.app.state.settings.scoring
         data = pages.costs(conn, now(), days, scoring.daily_cap_usd, scoring.weekly_cap_usd)
-        return render(request, "costs.html", "Costs", "/costs", c=data, ranges=pages.RANGES)
+        settings = request.app.state.settings
+        pk = pages.packet_costs(conn, now(), days, settings.apply.daily_cap_usd)
+        runner = runner_state.load(settings.paths.data_dir)
+        return render(
+            request,
+            "costs.html",
+            "Costs",
+            "/costs",
+            c=data,
+            pk=pk,
+            runner=runner,
+            ranges=pages.RANGES,
+        )
