@@ -513,7 +513,7 @@ _SUBJECT_PATTERNS = (
     re.compile(rf"^(?:update|re|fwd?)\s*[-:]\s*{_TS} at {_E}{_END}", re.I),
     re.compile(rf"application (?:to|with|at) {_E}{_END}", re.I),
     re.compile(rf"applying (?:to|with|at) {_E}{_END}", re.I),
-    re.compile(rf"^{_E}\s*:\s*(?:your )?application", re.I),
+    re.compile(rf"^{_E}\s*:\s*(?:your application|application|thank you|thanks)\b", re.I),
     re.compile(rf"^{_E} application (?:update|status)", re.I),
 )
 _TITLE_PATTERNS = (
@@ -532,51 +532,85 @@ _NOT_A_NAME = re.compile(
     r"experience|unfortunately|reviewing|review|process|this role|time and effort)\b",
     re.I,
 )
-_SENDER_TEAM = re.compile(r"\b(?:hiring|recruiting|talent|careers?|people)\b(?: team)?", re.I)
+_SENDER_TEAM = re.compile(
+    r"\b(?:talent acquisition|hiring|recruiting|recruitment|talent|careers?|people)\b", re.I
+)
+# "Talent at Acme", "Recruiting @ Acme", "Careers from Acme": the employer follows.
+_SENDER_AT = re.compile(
+    r"^(?:the )?(?:talent acquisition|hiring|recruiting|recruitment|talent|careers?|people)"
+    r"(?: team)?\s+(?:at|@|from|with)\s+(?P<e>.+)$",
+    re.I,
+)
+# Trailing words that are a careers site or team, not part of the employer's name.
+_EMPLOYER_SUFFIX = re.compile(
+    r"(?:\s+(?:talent acquisition|hiring|recruiting|recruitment|talent|careers?|jobs|team|"
+    r"people))+$",
+    re.I,
+)
+# A title never starts with an article or a pronoun: "applying for a career at Acme".
+_NOT_A_TITLE = re.compile(r"^(?:a|an|any|this|that|these|those|our|your|one|some)\b", re.I)
 
 
 def _clean(value: str | None, max_words: int) -> str | None:
-    v = (value or "").strip(" -:\"'")
+    v = _WS.sub(" ", (value or "")).strip(" -:\"'")
     if not v or len(v.split()) > max_words or _NOT_A_NAME.search(v):
         return None
     return v
 
 
+def _clean_employer(value: str | None) -> str | None:
+    return _clean(_EMPLOYER_SUFFIX.sub("", (value or "").strip(" -:|,\"'")), 6)
+
+
+def _clean_title(value: str | None) -> str | None:
+    v = _clean(value, 12)
+    return None if v is None or _NOT_A_TITLE.match(v) else v
+
+
 def _sender_employer(msg: Message) -> str | None:
-    """ "Acme Hiring Team" or "Acme Careers" from the display name; None for ATS-only names."""
-    name = msg.sender_name.strip().strip('"')
-    if not name or not _SENDER_TEAM.search(name):
+    """ "Acme Hiring Team", "Acme Talent Acquisition" or "Talent at Acme" from the display
+    name: the words before the team word, or after "at". None for ATS-only names."""
+    name = _WS.sub(" ", msg.sender_name.strip().strip('"'))
+    if not name:
         return None
-    return _clean(_GENERIC_NAMES.sub("", name).strip(" -:|,"), 6)
+    at = _SENDER_AT.match(name)
+    if at:
+        return _clean_employer(at["e"])
+    team = _SENDER_TEAM.search(name)
+    if team is None:
+        return None
+    return _clean_employer(name[: team.start()])
 
 
 def parse_employer_title(msg: Message) -> tuple[str | None, str | None]:
     """Best-effort employer and title for mail that matched no known job.
 
-    Order: the sender's "X Hiring Team" name, then terse subject shapes, then body sentences.
-    Every capture is validated as a short name or title, never a sentence fragment.
+    Order: terse subject shapes, then the sender's "X Hiring Team" name, then body
+    sentences. A clean subject employer ("Thank you for your application to Acme") wins over
+    the display name, which is often a team name ("Acme Talent Acquisition"). Every capture
+    is validated as a short name or title, never a sentence fragment.
     """
-    employer = _sender_employer(msg)
-    title = None
+    employer = title = None
     for pat in _SUBJECT_PATTERNS:
         m = pat.search(msg.subject)
         if m:
             gd = m.groupdict()
-            employer = employer or _clean(gd.get("e"), 6)
-            title = title or _clean(gd.get("t"), 12)
+            employer = employer or _clean_employer(gd.get("e"))
+            title = title or _clean_title(gd.get("t"))
+    employer = employer or _sender_employer(msg)
     for text in (msg.subject, (msg.body or msg.snippet)[:1500]):
         if employer and title:
             break
         for pat in _TITLE_PATTERNS:
             for m in pat.finditer(text):
                 gd = m.groupdict()
-                t, e = _clean(gd.get("t"), 12), _clean(gd.get("e"), 6)
+                t, e = _clean_title(gd.get("t")), _clean_employer(gd.get("e"))
                 if gd.get("t") is not None and t is None:
                     continue  # a fragment: skip this match entirely
                 title = title or t
                 employer = employer or e
     if not employer:
-        employer = _clean(_GENERIC_NAMES.sub("", msg.sender_name).strip(" -:|,"), 6)
+        employer = _clean_employer(_GENERIC_NAMES.sub("", msg.sender_name).strip(" -:|,"))
     return employer, title
 
 

@@ -747,7 +747,7 @@ def test_cli_dry_run_lists_employer_rejections(monkeypatch, tmp_path):
             "We've decided to move forward with other candidates whose experience more closely "
             "aligns with the requirements of the Example Platform Lead role at Acmecloud. "
             "After reviewing your application, we've decided to move forward.",
-            ("AcmeCloud", None),
+            ("Acmecloud", None),  # the subject wins over the display name
         ),
         (
             "no-reply@us.greenhouse-mail.io",
@@ -774,3 +774,52 @@ def test_cli_dry_run_lists_employer_rejections(monkeypatch, tmp_path):
 def test_parse_employer_title_rejects_sentence_fragments(sender, subject, body, want):
     employer, title = match.parse_employer_title(msg_of(sender, subject, body))
     assert (employer, title) == want
+
+
+# A clean employer in the subject beats the sender's display name, and generic words in a
+# display name ("Talent Acquisition", "Recruiting at") never leave fragments behind.
+@pytest.mark.parametrize(
+    ("sender", "subject", "body", "want"),
+    [
+        (
+            "Acme Talent Acquisition <noreply@acme.example.com>",
+            "Thank you for your application to Acme",
+            "",
+            ("Acme", None),
+        ),
+        (
+            "Globex Hiring Team <no-reply@ashbyhq.com>",
+            "Thanks for applying to Globex Technologies!",
+            "",
+            ("Globex Technologies", None),
+        ),
+        (
+            "The Initech Talent Time <no-reply@initech.breezy-mail.com>",
+            "Thank you for applying to Initech!",
+            "",
+            ("Initech", None),
+        ),
+        ("Talent at Acme <no-reply@ashbyhq.com>", "We received it", "", ("Acme", None)),
+        ("Recruiting at Acme <no-reply@ashbyhq.com>", "We received it", "", ("Acme", None)),
+        (
+            "Acme Talent Acquisition Team <no-reply@ashbyhq.com>",
+            "We received it",
+            "",
+            ("Acme", None),
+        ),
+        (
+            "no-reply@us.greenhouse-mail.io",
+            "Important information about your application to Example Corp Careers",
+            "Thank you for applying for a career at Example Corp. We will be in touch.",
+            ("Example Corp", None),
+        ),
+        (
+            "no-reply@us.greenhouse-mail.io",
+            "Acme Robotics: Thank you for applying for the Senior Widget Engineer position",
+            "",
+            ("Acme Robotics", "Senior Widget Engineer"),
+        ),
+    ],
+)
+def test_parse_employer_prefers_subject_and_strips_generic_words(sender, subject, body, want):
+    assert match.parse_employer_title(msg_of(sender, subject, body)) == want
