@@ -18,7 +18,7 @@ repos:
   - repo: local
     hooks:
       - id: forbid-personal-paths
-        name: forbid personal data and secrets paths (resume/, profile/, data/, config.toml, .env)
+        name: forbid personal data and secrets paths (resume/, profile/, data/ and their .migrated-* archives, config.toml, .env)
         language: fail
         entry: "Personal data must stay local; these paths are gitignored. Unstage them."
-        files: ^(resume/|profile/|data/|config\.toml$|.*\.local\.toml$|(.*/)?\.env(\..*)?$)
+        files: ^((resume|profile|data)(\.migrated-[^/]*)?/|config\.toml$|.*\.local\.toml$|(.*/)?\.env(\..*)?$)

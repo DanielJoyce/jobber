@@ -211,7 +211,8 @@ found above (two different old databases need `--from`). `--apply`:
    `profile.migrated-YYYYMMDD`, `resume.migrated-YYYYMMDD` (with `-2` and so on if taken) and
    writes a `MOVED.txt` inside each. A rename is atomic and reversible, and no process can keep
    using the old path. There is no `--remove-old`: the user deletes the `.migrated` folders by
-   hand; the command prints the `rm -rf` line.
+   hand; the command prints the `rm -rf` line. The archives still hold personal data, so
+   `.gitignore` and the forbid-personal-paths hook cover `<name>.migrated-*/` as well.
 
 A failure before step 5 removes this run's copies and leaves the old layout untouched. A
 destination that exists and differs (a database that exists at all) is a conflict: nothing
