@@ -3,7 +3,7 @@
 <link rel="stylesheet" href="{{ static_url('tracking.css') }}">
 <div class="followups">
   <h1>Follow-ups</h1>
-  <p class="muted">Due or overdue next actions, plus applications with no reply after 21 days.</p>
+  <p class="muted">Due or overdue next actions, applications with no reply after 21 days, and packets ready for a week that were never applied.</p>
   {% if items %}
   <ul class="fu-list">
     {% for i in items %}
@@ -11,11 +11,16 @@
       <span class="fu-due{% if i.overdue_days %} amber{% endif %}">{{ i.due.date().isoformat() }}{% if i.overdue_days %} ({{ i.overdue_days }}d overdue){% endif %}</span>
       <span class="fu-body"><a href="/pipeline/{{ i.app_id }}">{{ i.title }}</a> <span class="muted">{{ i.employer }}</span><br>{{ i.text }}</span>
       <span class="fu-actions">
+        {% if i.kind == "packet" %}
+        <a class="act" href="/packet/{{ i.packet_id }}">open packet</a>
+        <button type="button" class="act" hx-post="/followups/{{ i.app_id }}/applied" hx-target="#fu-{{ i.kind }}-{{ i.app_id }}" hx-swap="outerHTML">I applied</button>
+        {% else %}
         {% if i.kind == "action" %}
         <button type="button" class="act" hx-post="/followups/{{ i.app_id }}/done" hx-target="#fu-{{ i.kind }}-{{ i.app_id }}" hx-swap="outerHTML">done</button>
         <button type="button" class="act" hx-post="/followups/{{ i.app_id }}/snooze" hx-target="#fu-{{ i.kind }}-{{ i.app_id }}" hx-swap="outerHTML">snooze 3d</button>
         {% endif %}
         <button type="button" class="act" hx-post="/followups/{{ i.app_id }}/no-response" hx-target="#fu-{{ i.kind }}-{{ i.app_id }}" hx-swap="outerHTML">mark no_response</button>
+        {% endif %}
       </span>
     </li>
     {% endfor %}

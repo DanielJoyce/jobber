@@ -273,3 +273,11 @@ def register(
         t.add_event(conn, app_id, "no_response", "marked from follow-ups", now())
         t.done(conn, app_id)
         return followup_reply(request)
+
+    @app.post("/followups/{app_id}/applied")
+    def fu_applied(request: Request, conn: Conn, app_id: int) -> Response:
+        """ "Ready, not applied?": you did apply. A manual 'applied' event, which attaches the
+        ready packet like every other applied path."""
+        require_app(conn, app_id)
+        t.add_event(conn, app_id, "applied", "marked applied from follow-ups", now())
+        return followup_reply(request)

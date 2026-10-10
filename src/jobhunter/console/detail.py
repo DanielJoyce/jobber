@@ -14,7 +14,7 @@ from typing import Any
 
 from markupsafe import Markup, escape
 
-from jobhunter.apply.packets import live_packet_id
+from jobhunter.apply.packets import attach_sent_packet, live_packet_id
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
 from jobhunter.console.tracking import APPLY_CLICK_NOTE, rebuild_status
 from jobhunter.core import rejections
@@ -567,6 +567,9 @@ def answer_prompt(conn: sqlite3.Connection, group_id: int, choice: str, now: dat
             "VALUES (?, ?, ?, ?, 'manual')",
             (app_id, at, status, "marked applied" if yes else "not applied yet"),
         )
+        if yes:
+            # The packet that went out, in the same transaction (specs/017 "Closing the loop").
+            attach_sent_packet(conn, int(app_id))
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

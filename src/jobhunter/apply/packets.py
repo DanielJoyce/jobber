@@ -7,16 +7,34 @@ ones are kept as history.
 **Prepare** opens (or reuses) the live packet for a job group: it shortlists the group, puts its
 application at ``preparing`` (creating one if needed, with an append-only event) and returns the
 packet id. It never fetches, scores or spends anything.
+
+**Closing the loop** (phase 1d): :func:`attach_sent_packet` records which packet was sent, on
+every path that writes an ``applied`` event (``tracking.add_event`` and the "Did you apply?"
+*Yes* in ``console/detail.py::answer_prompt``), inside that event's transaction.
 """
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from jobhunter.console.tracking import PREPARE_NOTE, rebuild_status
+from jobhunter.console.tracking import (
+    PREPARE_NOTE,
+    TrackingError,
+    rebuild_status,
+    validate_attachment_path,
+)
 from jobhunter.core import db
+from jobhunter.pipeline.dedupe import normalize_employer
+from jobhunter.pipeline.dedupe_xstate import normalize_title
+
+logger = logging.getLogger(__name__)
+
+PACKET_REF_PREFIX = "packet:"
+# Statuses that mean the application went out ("sent" is not stored: specs/017 "Data model").
+SENT_STATUSES = ("applied", "acknowledged", "screening", "interview", "offer")
 
 # Application statuses Prepare moves to 'preparing'; later ones are left where they are.
 _BEFORE_PREPARING = ("interested",)
@@ -153,3 +171,104 @@ def get_packet(conn: sqlite3.Connection, packet_id: int) -> Packet | None:
         has_description=bool(row["has_text"]),
         score_on_request=bool(row["score_on_request"]),
     )
+
+
+# ─── closing the loop (phase 1d) ────────────────────────────────────────────
+
+
+def packet_ref(packet_id: int, version: int) -> str:
+    """``application.resume_version`` for a sent packet: ``packet:<id>/resume/v<n>``."""
+    return f"{PACKET_REF_PREFIX}{packet_id}/resume/v{version}"
+
+
+def attach_sent_packet(conn: sqlite3.Connection, app_id: int) -> bool:
+    """Record the application's ``ready`` packet as what was sent. True when one was attached.
+
+    Called inside the transaction that writes an ``applied`` event, on every path. Sets
+    ``application.resume_version`` to the packet's resume version (unless you typed your own),
+    ``cover_letter_path`` to the rendered letter (when empty), and adds ``attachment`` rows for
+    the rendered files, which must pass ``tracking.validate_attachment_path`` (outside the
+    tracked tree). Idempotent: an application already carrying a packet ref is left as it is,
+    so a later version of the packet can never replace what was sent. Commits nothing.
+    """
+    app = conn.execute(
+        "SELECT resume_version, cover_letter_path FROM application WHERE id = ?", (app_id,)
+    ).fetchone()
+    if app is None or (app["resume_version"] or "").startswith(PACKET_REF_PREFIX):
+        return False
+    pk = conn.execute(
+        "SELECT id, resume_doc_id, cover_doc_id FROM application_packet "
+        "WHERE application_id = ? AND status = 'ready'",
+        (app_id,),
+    ).fetchone()
+    if pk is None or pk["resume_doc_id"] is None:
+        return False
+    docs = {
+        kind: conn.execute(
+            "SELECT version, rendered_path FROM packet_document WHERE id = ?", (doc_id,)
+        ).fetchone()
+        for kind, doc_id in (("resume", pk["resume_doc_id"]), ("cover_letter", pk["cover_doc_id"]))
+        if doc_id is not None
+    }
+    at = _iso(datetime.now(UTC))
+    if not (app["resume_version"] or "").strip():
+        conn.execute(
+            "UPDATE application SET resume_version = ?, updated_at = ? WHERE id = ?",
+            (packet_ref(pk["id"], docs["resume"]["version"]), at, app_id),
+        )
+    for kind, doc in docs.items():
+        if doc is None or not doc["rendered_path"]:
+            continue  # not exported yet (phase 1c renders the files)
+        try:
+            path = str(validate_attachment_path(doc["rendered_path"]))
+        except TrackingError as exc:
+            logger.warning("packet %s: %s not attached: %s", pk["id"], kind, exc)
+            continue
+        dup = conn.execute(
+            "SELECT 1 FROM attachment WHERE application_id = ? AND path = ?", (app_id, path)
+        ).fetchone()
+        if dup is None:
+            conn.execute(
+                "INSERT INTO attachment (application_id, kind, path, added_at) VALUES (?, ?, ?, ?)",
+                (app_id, kind, path, at),
+            )
+        if kind == "cover_letter" and not (app["cover_letter_path"] or "").strip():
+            conn.execute(
+                "UPDATE application SET cover_letter_path = ? WHERE id = ?", (path, app_id)
+            )
+    return True
+
+
+@dataclass(frozen=True)
+class AppliedBefore:
+    app_id: int
+    group_id: int
+    title: str
+    employer: str
+    status: str
+    applied_at: str | None
+
+
+def already_applied(conn: sqlite3.Connection, p: Packet) -> list[AppliedBefore]:
+    """Other applications to the same employer and title that went out (``applied`` or
+    later, or with an applied date): the warning shown before Generate. Read only."""
+    emp, tit = normalize_employer(p.employer), normalize_title(p.title)
+    if not (emp and tit):
+        return []
+    out: list[AppliedBefore] = []
+    rows = conn.execute(
+        "SELECT a.id, a.job_group_id, a.status, a.applied_at, j.title, j.employer, j.agency_raw "
+        "FROM application a JOIN job_group g ON g.id = a.job_group_id "
+        "JOIN job j ON j.id = g.canonical_job_id WHERE a.id != ? "
+        f"AND (a.applied_at IS NOT NULL OR a.status IN ({','.join('?' * len(SENT_STATUSES))}))",
+        (p.application_id, *SENT_STATUSES),
+    ).fetchall()
+    for r in rows:
+        employer = r["employer"] or r["agency_raw"] or ""
+        if normalize_title(r["title"]) == tit and normalize_employer(employer) == emp:
+            out.append(
+                AppliedBefore(
+                    r["id"], r["job_group_id"], r["title"], employer, r["status"], r["applied_at"]
+                )
+            )
+    return out
