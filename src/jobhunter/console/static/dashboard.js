@@ -30,6 +30,55 @@
     return null;
   }
 
+  // ─── bucket filter ─────────────────────────────────────────────────────────
+
+  var LETTERS = ["A", "B", "C", "D", "E", "F", "G"];
+  var DEFAULT_BUCKETS = ["A", "B"];
+  var FIT_BUCKETS = ["A", "B", "C", "D", "E", "F"];
+
+  function bucketName(letter) {
+    return (window.jh && window.jh.bucketName) ? window.jh.bucketName(letter) : letter;
+  }
+
+  // "b,a,x" -> ["A", "B"]: valid letters, de-duplicated, best fit first.
+  function parseBuckets(raw) {
+    var wanted = String(raw || "").toUpperCase().split(",").map(function (p) { return p.trim(); });
+    return LETTERS.filter(function (l) { return wanted.indexOf(l) >= 0; });
+  }
+
+  function sameBuckets(a, b) { return a.join(",") === b.join(","); }
+
+  function syncChips() {
+    ui.chips.forEach(function (chip) {
+      chip.setAttribute("aria-pressed", ui.buckets.indexOf(chip.dataset.bucket) >= 0 ? "true" : "false");
+      var count = chip.querySelector("[data-count]");
+      if (count && data && data.bucket_totals) count.textContent = data.bucket_totals[chip.dataset.bucket];
+    });
+    ui.bucketsInput.value = ui.buckets.join(",");
+  }
+
+  function setBuckets(next) {
+    next = parseBuckets(next.join(","));
+    if (!next.length || sameBuckets(next, ui.buckets)) return;  // never leave nothing selected
+    ui.buckets = next;
+    store("jh-dash-buckets", next.join(","));
+    syncChips();
+    refresh();
+  }
+
+  function bindChips() {
+    document.getElementById("bucket-filter").addEventListener("click", function (ev) {
+      var chip = ev.target.closest && ev.target.closest("button.chip");
+      if (!chip) return;
+      var action = chip.dataset.action;
+      if (action === "fits") return setBuckets(FIT_BUCKETS);
+      if (action === "reset") return setBuckets(DEFAULT_BUCKETS);
+      var l = chip.dataset.bucket;
+      var on = ui.buckets.indexOf(l) >= 0;
+      setBuckets(on ? ui.buckets.filter(function (x) { return x !== l; }) : ui.buckets.concat([l]));
+    });
+  }
+
   function readJSON(id) {
     var el = document.getElementById(id);
     try { return el ? JSON.parse(el.textContent) : {}; } catch (e) { return {}; }
@@ -324,8 +373,13 @@
       ? (row.applied ? "n = " + row.applied + ", too few to rate" : "no applications")
       : fmt(row.response_rate, "rate") + " (" + row.responses + "/" + row.applied + ")";
     var cov = COVERAGE[row.coverage] || COVERAGE.none;
+    var picked = data.buckets || [];
+    // With several buckets selected, show how the "new" count splits across them.
+    var split = picked.length > 1 ? picked.map(function (l) {
+      return ["\u00a0\u00a0" + bucketName(l), (row.by_bucket || {})[l] || 0];
+    }) : [];
     var lines = [
-      ["new_ab", "New A+B", row.new_ab],
+      ["new_ab", "New: " + (data.bucket_label || "matches"), row.new_ab],
       ["scored", "Scored", row.scored],
       ["shortlisted", "Shortlisted", row.shortlisted],
       ["applied", "Applied", row.applied],
@@ -334,8 +388,14 @@
       ["median_salary", "Median salary", fmt(row.median_salary, "money")],
       ["col_adjusted", "COL-adjusted", fmt(row.col_adjusted, "money")]
     ].filter(function (l) { return l[0] !== data.metric; })  // the metric leads the list
-      .map(function (l) { return [l[1], l[2]]; });
-    return [[data.label, fmt(row.value, data.kind)]].concat(lines, [
+      .reduce(function (acc, l) {
+        acc.push([l[1], l[2]]);
+        if (l[0] === "new_ab") acc.push.apply(acc, split);
+        return acc;
+      }, []);
+    var head = [[data.label, fmt(row.value, data.kind)]];
+    if (data.metric === "new_ab") head = head.concat(split);
+    return head.concat(lines, [
       ["Coverage", cov[0] + " " + (row.coverage_label || cov[1])],
       ["Sources", row.sources.length ? row.sources.join(", ") : "none"],
       ["Last collected", row.last_ok_at ? row.last_ok_at.slice(0, 10) : "never"],
@@ -379,7 +439,8 @@
   }
 
   function go(usps) {
-    window.location.href = "/inbox?state=" + encodeURIComponent(usps);
+    window.location.href = "/inbox?state=" + encodeURIComponent(usps) +
+      "&bucket=" + encodeURIComponent(ui.buckets.join(","));
   }
 
   function bindMap() {
@@ -411,20 +472,21 @@
   function params() {
     var form = document.getElementById("dash-controls");
     var fd = new FormData(form);
-    return { range: fd.get("range") || "7", metric: ui.metric.value };
+    return { range: fd.get("range") || "7", metric: ui.metric.value, buckets: ui.buckets.join(",") };
   }
 
   function loadMap() {
     var p = params();
     var seq = ++reqSeq;
     return fetch(ui.map.dataset.api + "?metric=" + encodeURIComponent(p.metric) +
-      "&range=" + encodeURIComponent(p.range))
+      "&range=" + encodeURIComponent(p.range) + "&buckets=" + encodeURIComponent(p.buckets))
       .then(function (r) { return r.json(); })
       .then(function (json) {
         if (seq !== reqSeq) return;
         json.byState = {};
         json.states.forEach(function (s) { json.byState[s.state] = s; });
         data = json;
+        syncChips();
         render();
       })
       .catch(function () { ui.map.textContent = "Map data failed to load."; });
@@ -436,6 +498,7 @@
       var url = new URL(window.location.href);
       url.searchParams.set("range", p.range);
       url.searchParams.set("metric", p.metric);
+      url.searchParams.set("buckets", p.buckets);
       history.replaceState(null, "", url);
     } catch (e) {}
     document.body.dispatchEvent(new CustomEvent("dash-refresh"));
@@ -449,6 +512,8 @@
     ui.tip = document.getElementById("map-tooltip");
     ui.metric = document.getElementById("map-metric");
     ui.status = document.getElementById("map-status");
+    ui.chips = Array.prototype.slice.call(document.querySelectorAll("#bucket-filter button.chip[data-bucket]"));
+    ui.bucketsInput = document.querySelector('#dash-controls input[name="buckets"]');
     ui.grid = readJSON("tile-grid");
     ui.fips = readJSON("fips-usps");
 
@@ -468,6 +533,15 @@
       store("jh-dash-status", ui.status.checked ? "on" : "off");
       render();
     });
+
+    // Buckets: URL wins, then the saved choice, else what the server rendered.
+    var served = parseBuckets(ui.bucketsInput.value);
+    var urlB = parseBuckets(new URLSearchParams(window.location.search).get("buckets"));
+    var savedB = parseBuckets(store("jh-dash-buckets"));
+    ui.buckets = urlB.length ? urlB : (savedB.length ? savedB : (served.length ? served : DEFAULT_BUCKETS));
+    var bucketsChanged = !sameBuckets(ui.buckets, served);
+    syncChips();
+    bindChips();
 
     var urlMetric = new URLSearchParams(window.location.search).get("metric");
     var saved = store("jh-dash-metric");
@@ -510,7 +584,7 @@
       .then(function (r) { return r.json(); })
       .then(function (json) { atlas = json; render(); })
       .catch(function () { ui.view = "grid"; render(); });
-    if (metricChanged) refresh(); else loadMap();
+    if (metricChanged || bucketsChanged) refresh(); else loadMap();
   }
 
   document.addEventListener("DOMContentLoaded", init);

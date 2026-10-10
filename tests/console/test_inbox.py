@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -459,3 +460,83 @@ def test_rejected_page_is_still_the_prefilter_page(client):
     # /rejected (jobs we filtered out) is unchanged and distinct from /rejections.
     assert client.get("/rejected").status_code == 200
     assert "Employer rejections" not in client.get("/rejected").text.split("<main")[-1]
+
+
+# ─── multi-bucket filter (?bucket=A,B) ─────────────────────────────────────
+
+
+def test_inbox_items_accepts_several_buckets(seeded, profile):
+    data = inbox.inbox_items(seeded, profile, bucket="A,B")
+    assert data.shown == ["A", "B"]
+    assert [i.title for i in data.buckets["A"]] == ["Bullseye"]
+    assert [i.title for i in data.buckets["B"]] == ["Strong"]
+    assert data.buckets["F"] == []
+    assert inbox.inbox_items(seeded, profile, bucket="b,zz").shown == ["B"]
+    assert "G" not in inbox.inbox_items(seeded, profile, bucket="nonsense").shown
+
+
+def test_inbox_page_multi_bucket_chips(client):
+    t = client.get("/inbox?bucket=A,B").text
+    assert 'id="bucket-A"' in t and 'id="bucket-B"' in t and 'id="bucket-F"' not in t
+    assert 'class="chip on" href="#bucket-A"' in t
+    assert 'class="chip on" href="#bucket-B"' in t
+    assert 'class="chip" href="#bucket-F"' in t
+
+
+# ─── stray bucket letters ──────────────────────────────────────────────────
+
+# Buckets are shown by name; a bare letter is allowed only as a small badge
+# (class bucket-badge / bucket-letter), which is removed before scanning.
+_BADGE = re.compile(r'<span class="(?:bucket-badge|bucket-letter)[^"]*"[^>]*>.*?</span>', re.S)
+_TITLE_ATTR = re.compile(r'\s(?:title|aria-label)="[^"]*"')  # hover text may say "Bucket B"
+_KBD = re.compile(r"<kbd>.*?</kbd>", re.S)  # keyboard shortcut keys, not buckets
+_SCRIPT = re.compile(r"<(script|style)\b.*?</\1>", re.S | re.I)
+_STRAY = [
+    ("letters joined with +", re.compile(r"\b[A-G]\s?\+\s?[A-G]\b")),
+    ("'bucket X'", re.compile(r"\bbucket\s+[A-G]\b", re.I)),
+    ("letter then count", re.compile(r">\s*[A-G]\s+\d+\s*<")),
+    ("bare letter element", re.compile(r">\s*[A-G]\s*<")),
+    ("New A", re.compile(r"\bNew [A-G]\b")),
+]
+_PAGES = [
+    "/",
+    "/dash/state-table?buckets=A,B",
+    "/dash/kpis",
+    "/inbox",
+    "/inbox?bucket=A,B",
+    "/inbox?bucket=G",
+    "/job/1",
+    "/job/3",
+    "/search?bucket_from=A&bucket_to=C",
+    "/prefs",
+    "/pipeline",
+    "/costs",
+    "/rejections",
+    "/proposals",
+    "/alerts",
+]
+
+
+def stray_letters(html: str) -> list[str]:
+    visible = _KBD.sub("", _BADGE.sub("", _SCRIPT.sub("", _TITLE_ATTR.sub("", html))))
+    return [name for name, rx in _STRAY if rx.search(visible)]
+
+
+def test_stray_scanner_catches_known_bad_patterns():
+    assert "letters joined with +" in stray_letters("<span>New A+B</span>")
+    assert "letters joined with +" in stray_letters("<td>A + B</td>")
+    assert "'bucket X'" in stray_letters("<span>bucket B</span>")
+    assert stray_letters('<span title="Bucket B">Strong</span>') == []
+    assert "letter then count" in stray_letters(
+        '<a class="chip"><b>B 12</b></a>'.replace("<b>", ">")
+    )
+    assert "bare letter element" in stray_letters("<td>C</td>")
+    assert stray_letters('<span class="bucket-badge" title="Bucket B">B</span> Strong') == []
+    assert stray_letters("<script>var x = 'A+B';</script>") == []
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_pages_show_bucket_names_not_letters(client, path):
+    r = client.get(path)
+    assert r.status_code == 200, path
+    assert stray_letters(r.text) == [], path

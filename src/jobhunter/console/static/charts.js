@@ -5,6 +5,12 @@
 (function () {
   "use strict";
 
+  // "Bullseye + Strong": the A+B group, named from the injected bucket table.
+  function abName() {
+    var n = window.jh && window.jh.bucketName;
+    return n ? n("A") + " + " + n("B") : "Bullseye + Strong";
+  }
+
   var SVGNS = "http://www.w3.org/2000/svg";
   var W = 460;
   var ui = {};
@@ -87,13 +93,13 @@
     sel.on("mousemove", function (ev, d) { fn(ev, d); }).on("mouseleave", untip);
   }
 
-  // ─── line: New A+B per day ────────────────────────────────────────────────
+  // ─── line: new Bullseye + Strong per day ────────────────────────────────────────────────
 
   function lineChart(body, block) {
     var pts = block.points;
     var H = 220, m = { l: 30, r: 62, t: 12, b: 26 };
     var svg = svgIn(body, H);
-    svg.attr("aria-label", "New A+B per day, last " + pts.length + " days, mean of the last 7 days " +
+    svg.attr("aria-label", "New " + abName() + " per day, last " + pts.length + " days, mean of the last 7 days " +
       block.mean7.toFixed(1));
     var x = d3.scalePoint().domain(pts.map(function (p) { return p.day; })).range([m.l, W - m.r]);
     var y = niceInt(d3.max(pts, function (p) { return p.count; })).range([H - m.b, m.t]);
@@ -132,7 +138,7 @@
         cross.attr("display", null).attr("x1", x(best.day)).attr("x2", x(best.day));
         dot.attr("display", null).attr("cx", x(best.day)).attr("cy", y(best.count));
         tip(ev, shortDay(best.day), [
-          { label: "New A+B", value: best.count, color: "var(--series-1)" },
+          { label: "New " + abName(), value: best.count, color: "var(--series-1)" },
           { label: "7-day mean", value: block.mean7.toFixed(1) }
         ]);
       })
@@ -552,7 +558,7 @@
   // ─── data flow ────────────────────────────────────────────────────────────
 
   var CHARTS = [
-    { id: "chart-line", key: "line", draw: lineChart, name: "New A+B per day" },
+    { id: "chart-line", key: "line", draw: lineChart, name: "New Bullseye + Strong per day" },
     { id: "chart-funnel", key: "funnel", draw: funnelChart, name: "Funnel" },
     { id: "chart-mix", key: "mix", draw: mixChart, name: "Bucket mix per week" },
     { id: "chart-status", key: "status", draw: statusChart, name: "Applications by status" }

@@ -19,8 +19,15 @@ from datetime import UTC, date, datetime, timedelta
 from statistics import median
 from typing import Any
 
-from jobhunter.console.inbox import BUCKET_TITLES
 from jobhunter.core import geo
+from jobhunter.core.bucketnames import (
+    BUCKET_TITLES,
+    DEFAULT_GROUP,
+    FIT_GROUP,
+    GROUP_AB,
+    group_name,
+    parse_letters,
+)
 from jobhunter.core.models import Bucket, JobLocation
 from jobhunter.core.textnorm import annualize
 from jobhunter.pipeline.locations import REMOTE_SCOPES
@@ -44,7 +51,7 @@ NOT_YET_APPLIED = ("interested", "preparing")
 
 # metric key -> (label, kind). kind drives break rounding and value formatting.
 METRICS: dict[str, tuple[str, str]] = {
-    "new_ab": ("New A+B", "count"),
+    "new_ab": ("New matches", "count"),  # key stays: URLs and sort keys; label follows the buckets
     "scored": ("All scored jobs", "count"),
     "shortlisted": ("Shortlisted", "count"),
     "applied": ("Applied", "count"),
@@ -470,6 +477,7 @@ def _empty_row(key: str) -> dict[str, Any]:
         "kind": st.kind if st else "remote",
         "fips": st.fips if st else None,
         "new_ab": 0,
+        "by_bucket": {},
         "scored": 0,
         "shortlisted": 0,
         "applied": 0,
@@ -481,18 +489,41 @@ def _empty_row(key: str) -> dict[str, Any]:
     }
 
 
+def clamp_buckets(raw: str | Sequence[str] | None) -> tuple[str, ...]:
+    """The map's bucket selection from ``?buckets=A,B``; invalid or empty means the default."""
+    return tuple(parse_letters(raw)) or DEFAULT_GROUP
+
+
 def state_stats(
     conn: sqlite3.Connection,
     profile: Profile,
     metric: str,
     range_days: int,
     now: datetime,
+    buckets: Sequence[str] = DEFAULT_GROUP,
 ) -> list[dict[str, Any]]:
+    """Per-state rows; see :func:`state_stats_with_totals`."""
+    return state_stats_with_totals(conn, profile, metric, range_days, now, buckets)[0]
+
+
+def state_stats_with_totals(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    metric: str,
+    range_days: int,
+    now: datetime,
+    buckets: Sequence[str] = DEFAULT_GROUP,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """One row per subdivision in ``geo.US_SUBDIVISIONS`` plus REMOTE, each with ``value``.
 
     A job counts in every state it lists (011 display rules). A remote_us / nationwide /
     negotiable job also counts once in REMOTE, never spread across states.
+
+    ``new_ab`` (and the salary medians) count only the selected ``buckets``; every row also
+    carries ``by_bucket`` (letter -> count for all buckets) so a client can re-slice. The
+    second return value is the distinct-group count per bucket (a multi-state job once).
     """
+    chosen = {Bucket(b) for b in buckets}
     metric = clamp_metric(metric)
     since = _since(now, range_days)
     rows = {k: _empty_row(k) for k in (*geo.US_SUBDIVISIONS, REMOTE)}
@@ -504,11 +535,16 @@ def state_stats(
         return keys
 
     salaries: dict[str, list[float]] = defaultdict(list)
+    totals: dict[str, int] = {}
     for f in group_facts(conn, profile, since):
+        if f.bucket is not None:
+            totals[f.bucket.value] = totals.get(f.bucket.value, 0) + 1
         for key in places(f.states, f.remote):
             r = rows[key]
             r["scored"] += f.scored
-            if f.bucket in AB:
+            if f.bucket is not None:
+                r["by_bucket"][f.bucket.value] = r["by_bucket"].get(f.bucket.value, 0) + 1
+            if f.bucket in chosen:
                 r["new_ab"] += 1
                 if f.salary is not None:
                     salaries[key].append(f.salary)
@@ -553,7 +589,7 @@ def state_stats(
             last_ok_at=c.last_ok_at,
         )
         r["value"] = r[metric]
-    return list(rows.values())
+    return list(rows.values()), totals
 
 
 # ─── class breaks ───────────────────────────────────────────────────────────
@@ -592,14 +628,28 @@ def class_breaks(values: Iterable[float | None], kind: str, classes: int = 5) ->
     return out
 
 
-def map_payload(rows: Sequence[dict[str, Any]], metric: str, range_days: int) -> dict[str, Any]:
+def map_payload(
+    rows: Sequence[dict[str, Any]],
+    metric: str,
+    range_days: int,
+    buckets: Sequence[str] = DEFAULT_GROUP,
+    totals: dict[str, int] | None = None,
+) -> dict[str, Any]:
     metric = clamp_metric(metric)
     label, kind = METRICS[metric]
+    picked = list(buckets)
+    if metric == "new_ab":
+        label = f"New: {group_name(picked)}"
     breaks = class_breaks((r["value"] for r in rows if r["state"] != REMOTE), kind)
     return {
         "metric": metric,
         "label": label,
         "kind": kind,
+        "buckets": picked,
+        "bucket_label": group_name(picked),
+        "bucket_totals": {b: (totals or {}).get(b, 0) for b in BUCKET_TITLES},
+        "fit_buckets": list(FIT_GROUP),
+        "default_buckets": list(DEFAULT_GROUP),
         "range": range_days,
         "breaks": breaks,
         "states": list(rows),
@@ -638,7 +688,7 @@ FUNNEL_DAYS = 30
 FUNNEL_STAGES: tuple[tuple[str, str], ...] = (
     ("found", "Found"),
     ("prefilter", "Passed prefilter"),
-    ("ab", "A + B"),
+    ("ab", GROUP_AB),
     ("shortlisted", "Shortlisted"),
     ("applied", "Applied"),
     ("responded", "Responded"),

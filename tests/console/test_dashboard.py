@@ -294,6 +294,51 @@ def test_coverage_email_stale_needs_a_mail_source(conn):
     assert cov["TX"].status == "email_stale"
 
 
+def test_state_stats_counts_only_the_selected_buckets(conn):
+    a = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("A",)))
+    assert a["CO"]["new_ab"] == 1 and a["WA"]["new_ab"] == 0 and a["REMOTE"]["new_ab"] == 1
+    assert a["CO"]["median_salary"] == 110_000  # only co_a's salary
+    b = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("B",)))
+    assert b["CO"]["new_ab"] == 1 and b["WA"]["new_ab"] == 1 and b["REMOTE"]["new_ab"] == 0
+    g = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("G",)))
+    assert g["TX"]["new_ab"] == 1 and g["CO"]["new_ab"] == 0
+    both = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("A", "B")))
+    assert both["CO"]["new_ab"] == 2
+
+
+def test_state_stats_default_buckets_are_a_and_b(conn):
+    default = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW))
+    explicit = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("A", "B")))
+    assert {k: r["new_ab"] for k, r in default.items()} == {
+        k: r["new_ab"] for k, r in explicit.items()
+    }
+
+
+def test_rows_carry_per_bucket_counts_and_totals_count_groups_once(conn):
+    rows, totals = dash.state_stats_with_totals(conn, PROFILE, "new_ab", 7, NOW, ("A",))
+    s = by_state(rows)
+    assert s["CO"]["by_bucket"] == {"A": 1, "B": 1}
+    assert s["WA"]["by_bucket"] == {"B": 1} and s["TX"]["by_bucket"] == {"G": 1}
+    assert s["REMOTE"]["by_bucket"] == {"A": 1}
+    assert totals == {"A": 2, "B": 1, "G": 1}  # fed_b is one group though listed in 3 states
+
+
+def test_clamp_buckets():
+    assert dash.clamp_buckets("c,a") == ("A", "C")
+    assert dash.clamp_buckets("") == dash.clamp_buckets(None) == ("A", "B")
+    assert dash.clamp_buckets("zz") == ("A", "B")
+
+
+def test_map_payload_names_the_selection(conn):
+    rows, totals = dash.state_stats_with_totals(conn, PROFILE, "new_ab", 7, NOW, ("B", "A"))
+    body = dash.map_payload(rows, "new_ab", 7, ("A", "B"), totals)
+    assert body["label"] == "New: Bullseye + Strong"
+    assert body["buckets"] == ["A", "B"] and body["bucket_label"] == "Bullseye + Strong"
+    assert body["bucket_totals"]["A"] == 2 and body["bucket_totals"]["C"] == 0
+    other = dash.map_payload(rows, "scored", 7, ("A",), totals)
+    assert other["label"] == "All scored jobs"
+
+
 def test_class_breaks():
     assert dash.class_breaks([0, None, 1, 1, 2], "count") == [1.0, 2.0]
     assert dash.class_breaks([None, 0], "count") == []
@@ -399,6 +444,39 @@ def test_api_map_unknown_metric_falls_back(client):
     body = client.get("/api/dash/map?metric=response_rate&range=7").json()
     assert body["kind"] == "rate"
     assert body["breaks"] == [pytest.approx(3 / 7, abs=1e-3)]
+
+
+def test_api_map_buckets_param(client):
+    body = client.get("/api/dash/map?metric=new_ab&range=7&buckets=B").json()
+    assert body["buckets"] == ["B"] and body["bucket_label"] == "Strong"
+    co = next(s for s in body["states"] if s["state"] == "CO")
+    assert co["value"] == 1 and co["by_bucket"] == {"A": 1, "B": 1}
+    assert body["bucket_totals"]["A"] == 2
+    default = client.get("/api/dash/map").json()
+    assert default["buckets"] == ["A", "B"] and default["default_buckets"] == ["A", "B"]
+    assert client.get("/api/dash/map?buckets=nonsense").json()["buckets"] == ["A", "B"]
+
+
+def test_state_table_follows_buckets(client):
+    html = client.get("/dash/state-table?metric=new_ab&range=7&buckets=B").text
+    assert "New: Strong" in html and "New A" not in html
+    assert "&amp;bucket=B" in html  # state links carry the selection into the inbox
+    assert 'data-buckets="B"' in html
+    row = re.search(r'<tr data-state="WA">.*?<td class="num">(\d+)</td>', html, re.S)
+    assert row and row.group(1) == "1"
+    assert "buckets=B" in html  # sort links keep the selection
+
+
+def test_today_page_renders_bucket_chips(client):
+    html = client.get("/?buckets=A,C").text
+    assert 'id="bucket-filter"' in html
+    assert re.search(r'data-bucket="A" aria-pressed="true"', html)
+    assert re.search(r'data-bucket="B" aria-pressed="false"', html)
+    assert re.search(r'data-bucket="C" aria-pressed="true"', html)
+    assert 'name="buckets" value="A,C"' in html
+    assert "Stretch Up" in html and "Stale Match" in html
+    assert "New: Bullseye + Stretch Up" in html
+    assert 'id="bucket-names"' in html
 
 
 def table_order(html: str) -> list[str]:

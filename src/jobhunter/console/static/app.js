@@ -20,6 +20,13 @@
   });
 
   window.jh = window.jh || {};
+  // Bucket letter -> name, injected once by base.html from core/bucketnames.py.
+  var bucketNames = {};
+  try {
+    bucketNames = JSON.parse(document.getElementById("bucket-names").textContent) || {};
+  } catch (e) {}
+  window.jh.bucketNames = bucketNames;
+  window.jh.bucketName = function (letter) { return bucketNames[letter] || letter; };
   // Replace the page's key bindings: registerKeys({ j: fn, k: fn, "?": fn }).
   window.jh.registerKeys = function (map) {
     keymap = Object.assign({}, map);

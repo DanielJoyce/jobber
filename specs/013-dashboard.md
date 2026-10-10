@@ -144,7 +144,20 @@ already says it.
 Below the charts sits the **state table**: one sortable row per state plus Remote and
 territories, with every map metric as a column, coverage status as icon + text, and sources.
 It is the map's accessible equivalent, it's where precise comparisons happen, and
-sorting by "New A+B" is the fastest way to answer *where should I look this week?*
+sorting by "New matches" is the fastest way to answer *where should I look this week?*
+
+### Bucket filter
+
+Above the map, one toggle chip per bucket, shown by name (Bullseye, Strong, ...) with that
+bucket's count in the range; plus **All fits** (A-F) and **Reset** (Bullseye + Strong, the
+default). Chips are `aria-pressed` buttons; at least one stays on. The selection drives the
+"New: ..." metric, the legend, tooltips (with a per-bucket split), the median-salary metrics
+and the state table. It lives in `?buckets=A,B` (letters in URLs) and `localStorage`
+(`jh-dash-buckets`), the URL winning. The map payload carries `by_bucket` per state and
+`bucket_totals`; a toggle re-fetches the payload and table. Clicking a state opens
+`/inbox?state=XX&bucket=A,B`; the inbox accepts a comma list. Names come from
+`core/bucketnames.py`; the KPI tile, trend line and funnel use the fixed group "Bullseye +
+Strong".
 
 ## Charts
 

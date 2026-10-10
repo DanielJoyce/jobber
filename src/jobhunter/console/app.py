@@ -30,7 +30,7 @@ from jobhunter.console import (
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
-from jobhunter.core import db, geo, rejections
+from jobhunter.core import bucketnames, db, geo, rejections
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,11 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["sparkline"] = sparkline
     templates.env.globals["static_url"] = static_url
+    templates.env.globals["bucket_name"] = bucketnames.bucket_name
+    templates.env.globals["group_name"] = bucketnames.group_name
+    templates.env.globals["bucket_names_json"] = json.dumps(
+        {b: bucketnames.bucket_name(b) for b in bucketnames.LETTERS}
+    )
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.state.conn_factory = factory
@@ -198,9 +203,14 @@ def create_app(
     pages_routes.register(app, templates, get_conn, NAV, now)
 
     def table_context(
-        conn: sqlite3.Connection, range_: int, metric: str, sort: str | None, dir_: str | None
+        conn: sqlite3.Connection,
+        range_: int,
+        metric: str,
+        sort: str | None,
+        dir_: str | None,
+        buckets: tuple[str, ...] = dash.DEFAULT_GROUP,
     ) -> dict[str, object]:
-        rows = dash.state_stats(conn, get_profile(), metric, range_, now())
+        rows = dash.state_stats(conn, get_profile(), metric, range_, now(), buckets)
         sort = sort if sort in dash.SORT_KEYS else metric
         dir_ = "asc" if dir_ == "asc" or (dir_ is None and sort == "state") else "desc"
         return {
@@ -211,6 +221,9 @@ def create_app(
             "dir": dir_,
             "metrics": dash.METRICS,
             "coverage": dash.COVERAGE,
+            "buckets": list(buckets),
+            "buckets_param": ",".join(buckets),
+            "buckets_name": bucketnames.group_name(buckets),
         }
 
     def kpi_context(conn: sqlite3.Connection, range_: int) -> dict[str, object]:
@@ -225,6 +238,7 @@ def create_app(
         metric: str | None = None,
         sort: str | None = None,
         dir: str | None = None,
+        buckets: str | None = None,
     ) -> HTMLResponse:
         range_ = dash.clamp_range(range)
         metric_ = dash.clamp_metric(metric)
@@ -234,6 +248,8 @@ def create_app(
             "nav": NAV,
             "today": now(),
             "ranges": dash.RANGES,
+            "bucket_letters": bucketnames.LETTERS,
+            "bucket_hints": {b: v[1] for b, v in bucketnames.BUCKET_TITLES.items()},
             "tile_grid": json.dumps({k: list(v) for k, v in geo.TILE_GRID.items()}),
             "fips": json.dumps({s.fips: s.usps for s in geo.STATES}),
             "names": json.dumps({s.usps: s.name for s in geo.STATES}),
@@ -246,7 +262,7 @@ def create_app(
                 )
             ).replace("</", "<\\/"),
             **kpi_context(conn, range_),
-            **table_context(conn, range_, metric_, sort, dir),
+            **table_context(conn, range_, metric_, sort, dir, dash.clamp_buckets(buckets)),
         }
         return templates.TemplateResponse(request, "dashboard.html", ctx)
 
@@ -264,11 +280,19 @@ def create_app(
         )
 
     @app.get("/api/dash/map")
-    def api_map(conn: Conn, metric: str | None = None, range: str | None = None) -> JSONResponse:
+    def api_map(
+        conn: Conn,
+        metric: str | None = None,
+        range: str | None = None,
+        buckets: str | None = None,
+    ) -> JSONResponse:
         range_ = dash.clamp_range(range)
         metric_ = dash.clamp_metric(metric)
-        rows = dash.state_stats(conn, get_profile(), metric_, range_, now())
-        return JSONResponse(dash.map_payload(rows, metric_, range_))
+        picked = dash.clamp_buckets(buckets)
+        rows, totals = dash.state_stats_with_totals(
+            conn, get_profile(), metric_, range_, now(), picked
+        )
+        return JSONResponse(dash.map_payload(rows, metric_, range_, picked, totals))
 
     @app.get("/api/dash/series")
     def api_series(conn: Conn, range: str | None = None) -> JSONResponse:
@@ -282,8 +306,16 @@ def create_app(
         range: str | None = None,
         sort: str | None = None,
         dir: str | None = None,
+        buckets: str | None = None,
     ) -> HTMLResponse:
-        ctx = table_context(conn, dash.clamp_range(range), dash.clamp_metric(metric), sort, dir)
+        ctx = table_context(
+            conn,
+            dash.clamp_range(range),
+            dash.clamp_metric(metric),
+            sort,
+            dir,
+            dash.clamp_buckets(buckets),
+        )
         return templates.TemplateResponse(request, "_state_table.html", ctx)
 
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)

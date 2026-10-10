@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.config import Settings
 from jobhunter.console import inbox
+from jobhunter.core.bucketnames import parse_letters
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
 
@@ -39,7 +40,8 @@ def register(
     ) -> HTMLResponse:
         profile, error = load_console_profile(request.app.state.settings)
         state = (state or "").strip().upper() or None
-        bucket = (bucket or "").strip().upper() or None
+        picked = parse_letters(bucket)  # ?bucket=B or ?bucket=A,B
+        bucket = ",".join(picked) or None
         data = None
         if profile is not None:
             days = request.app.state.settings.scoring.employer_rejection_days
@@ -55,6 +57,7 @@ def register(
                 "profile_error": error,
                 "state": state,
                 "bucket": bucket,
+                "picked": picked,
                 "titles": inbox.BUCKET_TITLES,
                 "all_buckets": inbox.BUCKETS,
             },
