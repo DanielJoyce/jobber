@@ -37,11 +37,11 @@
       {% if d.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
       {% if d.partial %}<span class="flag partial" title="scored from an email alert summary; capped at Strong">partial: open to confirm</span>{% endif %}
       {% if d.pasted %}<span class="badge" title="description pasted by you">pasted description</span>{% endif %}
-      {% if d.employer_rejection %}<a class="flag employer-rejection" href="/rejections" title="a recent rejection from this employer for another posting (or an unnamed role); the score is not capped">{{ d.employer_rejection }}</a>{% endif %}
     </div>
     {% else %}
     <div class="muted">Not scored yet.</div>
     {% endif %}
+    {% if d.employer_rejection %}<div class="job-flags"><a class="flag employer-rejection" href="/rejections" title="a recent rejection from this employer for another posting (or an unnamed role); the score is not capped">{{ d.employer_rejection }}</a></div>{% endif %}
   </header>
 
   {% set b = d.button %}
