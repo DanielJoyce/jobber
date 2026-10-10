@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":5,"timestamp":1791597185,"nonce":"2lCkBbqsmBGdFwGseZzdNSHjq1o=","added":["milestone:M8"],"removed":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791597206,"nonce":"tEpm6AmI0XobcVjNrP+D8zkW2UQ=","message":"Landed in PR #70 (858169c). no-store on console pages, Pipeline link in the shortlist toast, source/posted/job link on pipeline cards.","files":null}]}
