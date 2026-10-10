@@ -1,333 +1,473 @@
 # 018 — Running jobhunter in rootless podman
 
-Status: **draft for review** (bug `671bbf0`). Written 2026-10-10.
+Status: **draft for review, revision 2** (bug `671bbf0`). Written 2026-10-10; revised the same
+day after an adversarial review ([History](#history)).
 
 You asked for jobhunter to run under rootless podman: an image, a SQLite store, compose, config
 that makes sense inside a container (XDG home does not), and secrets (API keys, Google
 credentials) handled securely. This spec settles those, and the [tickets](#phased-tickets) are
 filed in git-bug.
 
-Nothing here changes how jobhunter runs on the host today. Container mode is opt-in, and the
-host install (`uv run jobhunter ...`, `jobhunter schedule install`) keeps working.
+Nothing here changes how jobhunter runs on the host today, except three safety fixes that help
+the host too: a run lock ([C5](#phased-tickets)), a schema version guard with a backup before
+migrating ([C12](#phased-tickets)), and stricter secret validation ([C2](#phased-tickets)).
+Container mode is opt-in, and `uv run jobhunter ...` and `jobhunter schedule install` keep
+working.
 
 ## What exists today (checked in code, 2026-10-10)
 
 | Thing | Today | Where |
 |---|---|---|
-| Runtime | Python 3.13 via `uv`, `uv.lock` committed | `pyproject.toml` |
-| Console | FastAPI via uvicorn, `127.0.0.1:8808`; a non-loopback bind needs `--allow-remote`; POSTs from a browser must carry a loopback `Host` and a same-origin `Origin` | `cli.py console`, `console/app.py` `check_host`, `cross_site_reason` |
+| Runtime | Python 3.13 via `uv`, `uv.lock` committed, hatchling build with `readme = "README.md"` | `pyproject.toml` |
+| Console | FastAPI via uvicorn, `127.0.0.1:8808`; a non-loopback bind needs `--allow-remote`; POSTs from a browser must carry a loopback `Host` and a same-origin `Origin`; GETs are not checked | `cli.py console`, `console/app.py` `check_host`, `cross_site_reason` |
 | Paths | XDG: config `~/.config/jobhunter`, data `~/.local/share/jobhunter`, cache `~/.cache/jobhunter`; overrides `JOBHUNTER_DATA_DIR`, `_CACHE_DIR`, `_DB_PATH`, `_PROFILE_DIR`, `_RESUME_PATH`, `JOBHUNTER_CONFIG` | `xdg.py`, `config.py` `PATH_ENV_VARS` |
+| Absolute paths in the DB | `attachment.path`, `application.cover_letter_path`, and 017's `packet_document.rendered_path` store absolute paths | `core/migrations`, `console/tracking.py`, specs/017 |
 | Legacy guard | Every command but `paths`, `migrate-paths`, `init`, `schedule` looks for an old `data/jobhunter.db` (uses `git rev-parse`) | `cli.py _load_env`, `legacy_data.py` |
+| Migrations | `db.migrate()` applies any missing migration on every command and at console start; no backup first; no check for a database newer than the code | `core/db.py` |
 | Secrets | Read from `os.environ` at use time; `.env` files loaded at startup from `$JOBHUNTER_ENV_FILE`, `./.env`, `~/.env` (real env wins) | `config.py load_env_files` |
 | Secret names | `ANTHROPIC_API_KEY` (bare `anthropic.Anthropic()`), `OPENROUTER_API_KEY`, `OPENAI_COMPAT_API_KEY`, `LLAMA_API_KEY` (each an `api_key_env` setting), `USAJOBS_API_KEY`, `USAJOBS_EMAIL` (registry `auth.key_env`/`email_env`) | `config.py`, `sources/adapters/usajobs.py` |
-| Gmail | Installed-app OAuth. Client secrets JSON at `mail.client_secrets_path` or `$JOBHUNTER_GOOGLE_CLIENT_SECRETS`. Refresh token in the OS keyring, else `~/.config/jobhunter/gmail_token.json` (0600). Loopback flow on a random port, or `--manual` paste flow (no local server) | `mail/auth.py` |
-| gcloud | **None.** No `gcloud` CLI, no Application Default Credentials, no service account, no `google-cloud-*` package. The only Google credentials are the OAuth client JSON and the Gmail refresh token above | grep of `src/`, `pyproject.toml`, `scripts/` |
+| Secret leak path | httpx refuses a header value with a trailing `\n`, `\r`, space or tab and puts the **whole value** in the exception text; several places log or store `str(exc)` | `scoring/scorers.py`, `scoring/screen.py`, `scoring/decisions.py`, `core/fetch/context.py` |
+| Gmail | Installed-app OAuth. Client secrets JSON at `mail.client_secrets_path` (default `~/.config/jobhunter/google_client_secret.json`) or `$JOBHUNTER_GOOGLE_CLIENT_SECRETS`. Refresh token in the OS keyring, else `~/.config/jobhunter/gmail_token.json` (0600). This host uses the file fallback | `mail/auth.py` |
+| gcloud | **None.** No `gcloud` CLI, no Application Default Credentials, no service account, no `google-cloud-*` package. The only Google credentials are the OAuth client JSON and the Gmail refresh token | grep of `src/`, `pyproject.toml`, `scripts/` |
 | SQLite | WAL, `busy_timeout=5000` | `core/db.py` |
-| Scheduling | `systemd --user` timers rendered by `jobhunter schedule install`: run 02:00, collect 03:30, verify Sun 04:00, `OnFailure=jobhunter-notify@` | `ops/schedule.py`, `ops/units/` |
-| Run exclusivity | **None.** Two `jobhunter run` processes can run at once | (gap; see [C5](#phased-tickets)) |
-| Playwright | Optional `browser` extra; no source in the registry is `tier: browser` today; spec 017 PDF export uses headless Chromium when present | `core/fetch/context.py`, `specs/017` |
+| Backups | Manual, in `<data dir>/backups/`, named like `jobhunter-YYYYMMDD-HHMMSS-pre-<what>.db` | CLAUDE.md habit |
+| Scheduling | `systemd --user` timers from `jobhunter schedule install`: run 02:00, collect then rescore-pending 03:30, verify Sun 04:00, `OnFailure=jobhunter-notify@`. `schedule uninstall` removes all of them, notify unit included | `ops/schedule.py`, `ops/units/` |
+| Run exclusivity | **None.** Two `jobhunter run` processes can run at once | gap, [C5](#phased-tickets) |
+| Playwright | Optional `browser` extra; no source is `tier: browser` today; 017 PDF export uses headless Chromium when present | `core/fetch/context.py`, specs/017 |
 | Local LLM | `scripts/setup-local-llm.sh`: llama-server or Ollama on host loopback, key in `~/.env` as `LLAMA_API_KEY` | specs/016 |
-| Drafting (017 rev 5, in progress) | `claude -p` on the host, SDK fallback | specs/017 (parallel draft) |
+| Drafting (017, being revised) | `claude -p` on the host, SDK fallback | specs/017 |
 
 ## Goals
 
 1. One image that runs every jobhunter command, with no secrets and no personal data in it.
 2. Console and the scheduled runs as rootless containers on Fedora atomic, SELinux enforcing.
-3. The database and files stay readable by host tools (`sqlite3`, backups, the host CLI).
+3. The database and files stay readable by host tools (`sqlite3`, the host CLI).
 4. Secrets reach the process as files from podman secrets: never in a compose file, an env
-   file, an image layer, `podman inspect`, or a log.
+   file, an image layer, a unit file, `podman inspect`, or a log. Each container gets only the
+   secrets it uses. (At rest, podman's default secret store is no stronger than a 0600 file;
+   see [At rest](#at-rest).)
 5. Everything testable without the network and without paid calls.
 
 Non-goals: Kubernetes, multi-user, remote access to the console, running the 017 phase 2
-browser agent in a container.
+browser agent in a container, a local LLM container in this round (deferred, C10).
 
 ## Decisions
 
 | # | Decision | Reason |
 |---|---|---|
-| D1 | **Quadlet** (systemd user units generated from `.container`/`.pod`) is the recommended way to run it. A `compose.yaml` is kept for ad-hoc and dev use | Quadlet ships with podman on Fedora atomic; compose needs `podman-compose` or `docker-compose` layered or installed in a toolbox. Quadlet gives timers, `journalctl`, `OnFailure=`, `Persistent=true` and `podman auto-update` for free, matching how the host install already works (002). Compose has no timer, and its `secrets:` either point at plain files on disk or (`external: true`) depend on which compose implementation `podman compose` delegates to |
-| D2 | **One pod** (`jobhunter.pod`) holds the console, the oneshot run containers and the optional LLM | Containers in a pod share a network namespace, so the LLM server stays bound to `127.0.0.1` (016's rule) and the default `[scoring.local]` URL works unchanged. One `PublishPort=127.0.0.1:8808:8808` on the pod |
-| D3 | **Bind-mount the existing host XDG directories**, not a named volume: `~/.local/share/jobhunter:/data:z`, `~/.cache/jobhunter:/cache:z`, `~/.config/jobhunter:/config:ro,z` | No data migration at all; host `sqlite3`, backups and the host CLI keep working on the same files; the host can still run a command (for example `claude -p` drafting, [D10](#drafting-with-claude--p)). Named volume documented as an option ([Moving to containers](#moving-to-containers)) |
-| D4 | SELinux label **`:z` (shared), never `:Z`** | `:Z` gives each container a private MCS label; the second container to start would relabel the directory and lock the first out. Console and run share the data directory, so they need the shared label. Host processes running as `unconfined_t` still read `container_file_t` files |
-| D5 | **`UserNS=keep-id:uid=1000,gid=1000`** with image user `jobhunter` uid 1000 | Your host UID maps to the image user regardless of what it is, so files created in `/data` are owned by you on the host, at their 0600/0700 modes. No `chown`, no `podman unshare` |
-| D6 | **Explicit container mode, `JOBHUNTER_CONTAINER=1`**, set in the image; never auto-detected | Auto-detecting `/run/.containerenv` would misfire inside toolbox and distrobox, which have that file and where the host-style XDG layout is right |
-| D7 | Fixed paths in container mode: data `/data`, cache `/cache`, config `/config` (read-only). Existing `JOBHUNTER_*` path variables still win | Container mode is a new *default*, not a new precedence rule; the precedence in 002 stays as written |
-| D8 | Secrets are **podman secrets mounted as files** (`type=mount`, mode 0400, owned by uid 1000) and named by **`<NAME>_FILE`** env vars, resolved once at CLI start | Files never appear in `podman inspect` (only the secret name does), in the unit, or in an image layer. One resolver keeps every existing `os.environ.get(...)` reader working, including the Anthropic SDK's own `ANTHROPIC_API_KEY` lookup |
-| D9 | Gmail refresh token: **a podman secret written from the host** by `jobhunter mail auth --podman-secret NAME`; fallback a 0600 file under `/data/state/` written by `mail auth --manual` inside the container | The host has a browser and a keyring; the container has neither. The token is only read in use (`build_service` never rewrites it), so a read-only secret fits. Keeping it off the data directory keeps it out of anything that copies `/data` |
-| D10 | `claude -p` drafting stays **on the host**; **no `~/.claude` mount**; in container mode drafting uses the SDK only on an explicit click, never as a silent fallback | Mounting `~/.claude` hands a whole subscription credential (and its settings, history and MCP config) to a long-running network-facing container for a feature used a few times a week. A silent switch from subscription to API would spend credits without asking |
-| D11 | Console binds `0.0.0.0` **inside** the container in container mode without `--allow-remote`; the Host/Origin loopback check is unchanged | Rootless port forwarding (pasta) delivers to the container's interface, not its loopback, so a loopback bind is unreachable. The host side publishes on `127.0.0.1` only, and the browser (and the 017 extension) still sends `Host: 127.0.0.1:8808`, so `cross_site_reason` keeps refusing DNS-rebinding and cross-site POSTs exactly as on the host |
-| D12 | A **run lock** (`fcntl` on `<data dir>/run.lock`) for `run`, `score` submit/collect and `--rescore-pending`, on host and in containers | Host timers and container timers both enabled during a switch could otherwise submit two paid batches at once. `fcntl` locks hold across containers that bind-mount the same file on one kernel |
-| D13 | Profile and resume live in `/data`, **read-write** | The console edits `profile/preferences.yaml` (014) and takes resume uploads (`POST /prefs/resume`); read-only mounts would break both. The brief suggested read-only; it would only fit the run containers, which write the database in the same directory anyway |
-| D14 | Playwright/Chromium is a **separate build target** (`browser`), not the default | No source is `tier: browser` today; Chromium adds roughly 600-700 MB. Spec 017 PDF export needs it, and falls back to print-to-PDF HTML without it |
+| D1 | **Quadlet** (systemd user units generated from `.container` files) is the recommended way to run it. A `compose.yaml` for **podman-compose** is kept for ad-hoc and dev use | Quadlet ships with podman on Fedora atomic; compose needs a provider installed. Quadlet gives timers, `journalctl`, `OnFailure=`, `Persistent=true` and `podman auto-update`, matching how the host install already works (002). Compose has no timer. `podman compose` delegates to docker-compose when that is installed (it is on this host), and docker-compose refuses `external: true` secrets outside swarm, so compose here means podman-compose only |
+| D2 | **No pod.** The console is one container that publishes its port; run, collect, rescore, verify and backup are separate oneshot containers with no published port and no `[Install]` section | A pod's service `Wants=` every member by default (`StartWithPod=true`), so starting it would start the paid run. Oneshots that `BindsTo=` a pod would also fail whenever port 8808 is busy. The pod existed only for the optional LLM, now deferred (C10) |
+| D3 | **Bind-mount the existing host directories.** Data at the **same absolute path** inside the container as on the host (`%h/.local/share/jobhunter:%h/.local/share/jobhunter:z`, with `JOBHUNTER_DATA_DIR` set to it). Cache at `/cache`. Config: **only the file** `config.toml` at `/config/config.toml:ro`, never the directory | No data migration. Host `sqlite3` and the host CLI keep working on the same files. The DB stores absolute paths (attachments, cover letters, 017 PDFs); one path on both sides keeps rows written by the host readable in the container and the other way round. The config directory also holds `gmail_token.json` and `google_client_secret.json`, so mounting it would hand both to every container, the console included |
+| D4 | SELinux label **`:z` (shared), never `:Z`** | `:Z` gives each container a private MCS label; the next container to start relabels the directory and locks the others out. Host processes running as `unconfined_t` still read `container_file_t` files. Files moved in with `mv` keep their old label: copy, don't move ([SELinux](#selinux)) |
+| D5 | **`UserNS=keep-id:uid=1000,gid=1000`**, image user `jobhunter` uid 1000 | Your host UID maps to the image user, so files created in the data directory are owned by you on the host at their 0600/0700 modes |
+| D6 | **Explicit container mode, `JOBHUNTER_CONTAINER=1`**, set in the image; never auto-detected | Auto-detecting `/run/.containerenv` would misfire in toolbox and distrobox, which have that file and where the host layout is right |
+| D7 | Container-mode defaults: data `/data`, cache `/cache`, config file `/config/config.toml`, Google client JSON `/run/secrets/google_client_secret.json`. The `JOBHUNTER_*` variables still win, and the Quadlet units set `JOBHUNTER_DATA_DIR` per D3 | Container mode adds *defaults*, not a new precedence rule. `/data` is what a bare `podman run` (CI, a quick try) gets |
+| D8 | Secrets are **podman secrets mounted as files** (`type=mount`, mode 0400, uid 1000) and named by **`<NAME>_FILE`** variables, resolved once at CLI start. Whitespace around a value is stripped; a value with whitespace or control characters inside is refused, whatever its source | Files never show in `podman inspect` (only the secret name does), in a unit, or in an image layer. One resolver keeps every existing `os.environ.get(...)` reader working, including the Anthropic SDK. The validation closes the httpx path that would put a key with a stray `\r\n` into logs, the DB and the console |
+| D9 | **Each unit gets only its secrets**, through one Quadlet drop-in per secret, written by `jobhunter container preflight` only for secrets that exist ([matrix](#which-container-gets-which-secret)) | podman refuses to create a container that names a missing secret, so fixed `Secret=` lines would break every install that lacks one provider. Drop-ins also give least privilege: the console never gets the Gmail token |
+| D10 | Gmail: `mail auth` runs **on the host only**. `jobhunter mail auth --podman-secret jobhunter_gmail_token` stores the refresh token as a podman secret; container mode refuses `mail auth` and never reads a token from `/config` | The host has the browser; the container has no keyring and no browser. A single place to authenticate avoids a second token copy under the data directory, which host backup tools would pick up |
+| D11 | Console reachability: **first choice**, keep binding `127.0.0.1` inside the container and give the console container `Network=pasta:--host-lo-to-ns-lo` so host-loopback connections land on the container's loopback. **Fallback**, if the host check shows that does not work: bind `0.0.0.0` inside, allowed only when `JOBHUNTER_PUBLISHED_LOOPBACK_ONLY=1` is set in the unit, never implied by container mode. Either way, publish `127.0.0.1:8808` only, and refuse a non-loopback `Host` on every request, not only POSTs | pasta's default sends host-loopback connections to the container's public address, so a loopback bind is unreachable without that option; whether podman passes it through cleanly is a host check, not something to assume. Keeping an interlock means a mistaken `-p 8808:8808` on a Fedora firewall zone that opens high ports does not silently expose paid actions to the LAN. The Host check stops DNS rebinding for reads too; it is not auth against a LAN client, which can forge `Host`, so the publish address remains the real control |
+| D12 | A **run lock**: `flock` on one fd of `<db_path>.run.lock`, held by `run`, `score` submit, `--rescore-pending` and the console's Re-score now; `collect` waits for it ([Run lock](#run-lock)) | With host and container timers both enabled during a switch, two runs could submit two paid batches. `flock` holds across containers that bind-mount the same file on one kernel; POSIX `fcntl` locks are dropped when any other fd on the file is closed in the holder |
+| D13 | Profile and resume live in the data directory, **read-write** | The console edits `profile/preferences.yaml` (014) and takes resume uploads (`POST /prefs/resume`) |
+| D14 | Playwright is a **separate build target** (`browser`), headless shell only | No source is `tier: browser`. 017 PDF export needs it, and 017 phase 2's Attach resume needs that PDF, so the browser image is required before the 017 phase 2 gate (open question 5) |
+| D15 | **Version skew guard** (C12): code refuses a database with a migration it does not know, and every migration is preceded by an automatic backup | The host checkout and the image share one DB. Without the guard, an older image (or a rollback) would run against a newer schema, and the first command of a newer one would migrate with no way back |
+| D16 | `claude -p` drafting stays **on the host** through a CLI command (`jobhunter packet draft <id>`, owned by 017); **no `~/.claude` mount**; in containers drafting uses the SDK only on an explicit click | Mounting `~/.claude` gives a subscription credential, history and MCP config to a long-running network-facing container for a few drafts a week. A silent switch from subscription to API would spend credits without asking |
+| D17 | Automatic backups go to `<data dir>/backups/auto/`, named in UTC, and pruning only ever touches that directory and that exact name pattern | Manual `jobhunter-...-pre-<what>.db` backups already sit in `backups/` with the same prefix; they are rollback points and must never be pruned. `python:3.13-slim` has no local timezone, so container and host names would interleave wrongly in local time |
 
 ## Image
 
-`Containerfile` at the repo root, multi-stage:
+`Containerfile` at the repo root, multi-stage. The sketch shows shape, not final syntax; C3 owns
+the real file.
 
 ```
-# builder
 FROM ghcr.io/astral-sh/uv:<ver>@sha256:<digest> AS uv
+
 FROM docker.io/library/python:3.13-slim-trixie@sha256:<digest> AS builder
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --no-dev --no-install-project      # dependency layer, cached
 COPY src/ src/
 RUN uv sync --locked --no-dev --no-editable
 
-# runtime
+FROM builder AS builder-browser
+RUN uv sync --locked --no-dev --no-editable --extra browser
+
 FROM docker.io/library/python:3.13-slim-trixie@sha256:<digest> AS runtime
+ARG BUILD_COMMIT=unknown
 RUN groupadd -g 1000 jobhunter && useradd -u 1000 -g 1000 -m -d /home/jobhunter jobhunter \
  && mkdir -p /data /cache /config && chown 1000:1000 /data /cache
 COPY --from=builder /app/.venv /app/.venv
-ENV PATH=/app/.venv/bin:$PATH JOBHUNTER_CONTAINER=1 PYTHONUNBUFFERED=1
+ENV PATH=/app/.venv/bin:$PATH JOBHUNTER_CONTAINER=1 PYTHONUNBUFFERED=1 \
+    JOBHUNTER_BUILD_COMMIT=$BUILD_COMMIT
+LABEL org.opencontainers.image.revision=$BUILD_COMMIT
 USER 1000:1000
 EXPOSE 8808
 ENTRYPOINT ["jobhunter"]
-CMD ["console", "--host", "0.0.0.0"]
+CMD ["console"]
 
-# optional
 FROM runtime AS browser
 USER 0
-RUN uv pip ... install the browser extra; playwright install --with-deps chromium (browsers in /opt/pw)
+COPY --from=builder-browser /app/.venv /app/.venv
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw
+RUN playwright install --with-deps --only-shell chromium && rm -rf /var/lib/apt/lists/*
 USER 1000:1000
 ```
 
-The sketch shows shape, not final syntax; C3 owns the real file.
-
 | Topic | Rule |
 |---|---|
-| Base pinning | Every `FROM` carries `@sha256:`. A tag alone is refused by `tests/test_containerfile.py`. Digests are bumped by hand in a `chore:` PR (monthly, or for a CVE); Renovate is an option later |
-| Non-root | Final `USER` is 1000, never 0. No `sudo`, no setuid helpers added |
-| Never in the image | `.env*`, `config.toml`, `data/`, `profile/`, `resume/`, `*.migrated-*/`, `token*.json`, `*.pem`, `.git`, `.claude/`, `tests/`, `specs/`. Enforced by `.containerignore` (mirrors `.gitignore`'s personal and secret entries) **and** by copying only `pyproject.toml`, `uv.lock` and `src/` |
-| Secrets in build | None. No `ARG`/`ENV` named like a key, token or secret (tested). Nothing jobhunter needs at build time is secret |
-| Size budget | Default target ≤ 450 MB uncompressed; `browser` ≤ 1.3 GB. C8 prints the size and fails over budget; the numbers are revisited after the first real build |
-| Health | No `HEALTHCHECK` in the image; the console unit uses `HealthCmd=` with a Python one-liner fetching `/` on loopback |
+| Base pinning | Every `FROM` carries `@sha256:` (tested). Digests are bumped by hand in a `chore:` PR, monthly or for a CVE |
+| Non-root | Final `USER` is 1000 in both targets |
+| What is copied | `pyproject.toml`, `uv.lock`, `README.md` (hatchling needs it to build the wheel), `src/`. Nothing else |
+| Never in the image | `.env*`, `config.toml`, `*.local.toml`, `data/`, `profile/`, `resume/`, `*.migrated-*/`, `*token*.json`, `*client_secret*.json`, `*.pem`, `.git`, `.claude/`, `tests/`, `specs/`. `.containerignore` uses `**/` prefixes, because its patterns anchor at the context root, unlike `.gitignore`; hatchling has no `.gitignore` in the build context and packages every file under `src/jobhunter` |
+| Secrets in build | None; no `ARG`/`ENV` named like a key, token or secret (tested) |
+| Size budget | Default ≤ 450 MB uncompressed; `browser` ≤ 1.1 GB. C8 prints the size and fails over budget; revisited after the first real build |
+| Health | No `HEALTHCHECK` in the image; the console unit has `HealthCmd=` with a Python one-liner fetching `/` with `Host: 127.0.0.1:8808` |
+| Version | `JOBHUNTER_BUILD_COMMIT` and the OCI revision label carry the commit (C12 compares it with the host checkout) |
 
 ## Container mode
 
-`JOBHUNTER_CONTAINER=1` (C1) changes defaults only:
+`JOBHUNTER_CONTAINER=1` (C1) changes defaults and refusals only:
 
 | Behaviour | Host (unchanged) | Container mode |
 |---|---|---|
-| config file | `$XDG_CONFIG_HOME/jobhunter/config.toml` | `/config/config.toml` (read-only mount) |
-| data dir, db, profile, resume | `~/.local/share/jobhunter/...` | `/data`, `/data/jobhunter.db`, `/data/profile`, `/data/resume` |
+| config file | `$XDG_CONFIG_HOME/jobhunter/config.toml` | `/config/config.toml` (single-file read-only mount) |
+| data dir | `~/.local/share/jobhunter` | `/data`; the Quadlet units set `JOBHUNTER_DATA_DIR` to the host path (D3) |
 | cache | `~/.cache/jobhunter` | `/cache` |
+| Google client JSON default | `~/.config/jobhunter/google_client_secret.json` | `/run/secrets/google_client_secret.json` |
+| Gmail token | keyring, else `~/.config/jobhunter/gmail_token.json` | only `$JOBHUNTER_GMAIL_TOKEN_FILE`; never keyring, never `/config` |
 | `jobhunter paths` | sources like `default (XDG_DATA_HOME)` | first line `mode: container`, source `container default` |
-| `.env` files | `$JOBHUNTER_ENV_FILE`, `./.env`, `~/.env` | only `$JOBHUNTER_ENV_FILE` (discouraged; use secrets) |
-| legacy-data guard | runs | skipped (no checkout, no `git` in the image) |
-| `migrate-paths`, `schedule install/uninstall` | work | refuse: "run this on the host" |
-| keyring | tried first | not tried |
-| `mail auth` | loopback server or `--manual` | `--manual` only (or `--podman-secret` on the host) |
-| console bind | `127.0.0.1`; other hosts need `--allow-remote` | `0.0.0.0` allowed without `--allow-remote` (D11) |
+| `.env` files | `$JOBHUNTER_ENV_FILE`, `./.env`, `~/.env` | only `$JOBHUNTER_ENV_FILE` (discouraged) |
+| legacy-data guard | runs | skipped (no checkout, no `git`) |
+| `migrate-paths`, `schedule`, `mail auth`, `container preflight` | work | refuse: "run this on the host" with the command |
+| console bind | `127.0.0.1`; other hosts need `--allow-remote` | the same, plus `0.0.0.0` when `JOBHUNTER_PUBLISHED_LOOPBACK_ONLY=1` (D11 fallback only) |
+| Host check | POSTs only | every request when `allow_remote` is off, host and container alike |
 
-An explicit `JOBHUNTER_DATA_DIR` and friends, `JOBHUNTER_CONFIG`, or `[paths]` in
-`/config/config.toml` still win, so a non-standard layout is a config change, not a code change.
-Paths inside `config.toml` must be container paths; the host config file is shared read-only,
-so if it sets `[paths]` for the host, set the `JOBHUNTER_*_DIR` variables in the units to
-override them.
+A single-file mount pins the inode: an editor that saves by rename leaves the container on the
+old file until it restarts. The console reads `config.toml` at start anyway.
 
 ## Secrets
 
 ### Mechanism
 
 ```
-printf '%s' "$KEY" | podman secret create jobhunter_openrouter -    # or: podman secret create jobhunter_openrouter ./key.txt
+podman secret create jobhunter_openrouter ./key.txt && shred -u ./key.txt
+# or from a password manager, on stdin:
+<password-manager-command> | podman secret create jobhunter_openrouter -
 ```
 
-Use stdin from a password manager or a file you then delete; never put a key on the command
-line (shell history, `ps`). In the unit:
+Never put a key on the command line (shell history, `ps`). A drop-in written by preflight:
 
 ```
+# ~/.config/containers/systemd/jobhunter-ctr-run.container.d/50-openrouter.conf
+[Container]
 Secret=jobhunter_openrouter,type=mount,target=/run/secrets/openrouter_api_key,uid=1000,gid=1000,mode=0400
 Environment=OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_api_key
 ```
 
-`type=env` secrets also keep the value out of `podman inspect`, but put it in the container's
-initial environment, visible to `podman exec ... env`; files are preferred. C8 verifies the
-inspect claim with a fake value instead of trusting it.
+`type=env` secrets also stay out of `podman inspect` but sit in the initial environment, visible
+to `podman exec ... env`; files are preferred. C8 checks the inspect claim with a fake value.
 
-### `*_FILE` resolution (C2)
+A replaced secret (`--replace`) reaches only newly created containers: the oneshots pick it up
+at their next run; the console needs `systemctl --user restart jobhunter-console`.
+
+### `*_FILE` resolution and validation (C2)
 
 At CLI start, before `.env` loading: for each known secret name `N`, if `N_FILE` is set, read
-the file (one trailing newline stripped) and set `N` in the process environment. Known names:
-`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_COMPAT_API_KEY`, `LLAMA_API_KEY`,
-`USAJOBS_API_KEY`, `USAJOBS_EMAIL`, plus every `api_key_env` in config and every `key_env` /
-`email_env` in the registry. Refused, naming the variable and path but never the value: both
-`N` and `N_FILE` set; file missing, unreadable, empty or over 64 KiB.
+the file and set `N` in the process environment. Known names: `ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY`, `OPENAI_COMPAT_API_KEY`, `LLAMA_API_KEY`, `USAJOBS_API_KEY`,
+`USAJOBS_EMAIL`, plus every `api_key_env` in config and every `key_env` / `email_env` in the
+registry.
 
-Putting the value in `os.environ` means child processes inherit it and same-UID processes can
-read `/proc/<pid>/environ`. That is the same exposure as today's `.env` loading and it is not
-visible from `podman inspect`; a per-call accessor would avoid it but would touch every reader
-for little gain in a single-user container.
+- Strip all leading and trailing whitespace (`\r\n`, `\n\n`, spaces, tabs).
+- Refuse a value that then contains any whitespace or control character, is empty, or comes
+  from a file that is missing, unreadable or over 64 KiB; refuse `N` and `N_FILE` both set.
+- The same validation runs on every known secret **whatever its source** (real env, `.env`),
+  on the host too.
+- Errors name the variable and the path only: never the value, a prefix, or a length.
 
-`jobhunter secrets status` lists each known name as `set (env)`, `set (file /run/secrets/...)`,
-`set (.env)` or `unset`. Never values, prefixes or lengths. Works on the host too.
+Values end up in `os.environ`, so child processes inherit them and same-UID processes can read
+`/proc/<pid>/environ`. That is today's `.env` exposure and is not visible to `podman inspect`.
+One child matters: `claude -p` would bill `ANTHROPIC_API_KEY` instead of the subscription.
+017's runner starts it with an allowlisted environment that drops `ANTHROPIC_*` and every known
+secret name (017 revision 6); 018 relies on that and C9 tests it from the container side.
 
-| Secret | podman secret | Env in unit |
-|---|---|---|
-| Anthropic API key | `jobhunter_anthropic` | `ANTHROPIC_API_KEY_FILE` |
-| OpenRouter / Jev key | `jobhunter_openrouter` | `OPENROUTER_API_KEY_FILE` |
-| USAJOBS key and email | `jobhunter_usajobs_key`, `jobhunter_usajobs_email` | `USAJOBS_API_KEY_FILE`, `USAJOBS_EMAIL_FILE` |
-| Local LLM key | `jobhunter_llama` | `LLAMA_API_KEY_FILE` (and the LLM container reads the same secret) |
-| Google OAuth client JSON | `jobhunter_google_client` | `JOBHUNTER_GOOGLE_CLIENT_SECRETS=/run/secrets/google_client_secret.json` (existing variable; already a path) |
-| Gmail refresh token | `jobhunter_gmail_token` | `JOBHUNTER_GMAIL_TOKEN_FILE` (new, C7) |
+`jobhunter secrets status` lists each known name as `set (env)`, `set (file PATH)`,
+`set (.env)`, `invalid (reason)` or `unset`. Never values, prefixes or lengths.
 
-`ant auth login` profiles are not available in the container; the Anthropic SDK uses
-`ANTHROPIC_API_KEY` there. Tests use fake values and fake files; none touches podman.
+### Which container gets which secret
+
+| Secret (podman name) | Env in the drop-in | console | ctr-run | ctr-collect | ctr-rescore | ctr-verify | ctr-backup |
+|---|---|---|---|---|---|---|---|
+| `jobhunter_anthropic` | `ANTHROPIC_API_KEY_FILE` | yes (Re-score now) | yes | yes | yes | | |
+| `jobhunter_openrouter` | `OPENROUTER_API_KEY_FILE` | yes | yes | | yes | | |
+| `jobhunter_openai_compat` | `OPENAI_COMPAT_API_KEY_FILE` | yes | yes | | yes | | |
+| `jobhunter_llama` | `LLAMA_API_KEY_FILE` | yes | yes | | yes | | |
+| `jobhunter_usajobs_key`, `jobhunter_usajobs_email` | `USAJOBS_API_KEY_FILE`, `USAJOBS_EMAIL_FILE` | | yes | | | yes | |
+| `jobhunter_google_client` | `JOBHUNTER_GOOGLE_CLIENT_SECRETS=/run/secrets/google_client_secret.json` | | yes | | | | |
+| `jobhunter_gmail_token` | `JOBHUNTER_GMAIL_TOKEN_FILE` (new, C7) | | yes | | | | |
+
+C13 writes the drop-ins from `podman secret ls` (names only) and this matrix; a secret that
+does not exist gets no drop-in, so no unit fails for a provider you do not use.
 
 ### Gmail
 
-- **Client secrets JSON** is a podman secret, mounted read-only and pointed to by the existing
-  `JOBHUNTER_GOOGLE_CLIENT_SECRETS`.
-- **Refresh token (recommended path).** Run `jobhunter mail auth --podman-secret
-  jobhunter_gmail_token` on the host. The usual browser flow runs on the host; the token is
-  piped to `podman secret create --replace jobhunter_gmail_token -` on stdin (never argv, never
-  printed) and not kept in the keyring unless `--keep-local`. Each nightly run is a fresh
-  container, so it sees a replaced secret; the console, which does not call Gmail, needs no
-  restart.
-- **Fallback.** `podman exec -it jobhunter-console jobhunter mail auth --manual`: the existing
-  paste flow (no local server, so no extra published port). With no keyring and `/config`
-  read-only, the token goes to `/data/state/gmail_token.json` (0600, dir 0700).
+- **Client JSON** is the podman secret `jobhunter_google_client`, mounted at
+  `/run/secrets/google_client_secret.json` in the run container only.
+- **Refresh token.** Run `jobhunter mail auth --podman-secret jobhunter_gmail_token` on the
+  host (C7). Before the consent flow it checks podman works, through the same host-escape chain
+  the browser opener uses (`podman`, `flatpak-spawn --host podman`, `distrobox-host-exec
+  podman`), so a toolbox without podman fails before you click anything. The token is piped to
+  `podman secret create --replace jobhunter_gmail_token -` on stdin, never argv, never printed.
+  If that fails after consent, the token is stored locally as today (keyring, else the 0600
+  file) with a warning, so the consent is not lost. On success nothing is kept locally unless
+  `--keep-local`.
+- After the switch, preflight warns while `~/.config/jobhunter/gmail_token.json` or
+  `google_client_secret.json` still exist on the host and prints the `rm` line; it never
+  deletes.
 - The OAuth app is in Google "Testing" mode (012), where refresh tokens expire after about seven
-  days, so re-auth is a routine step; one host command keeps it cheap. See open question 3.
+  days, so re-auth is a routine one-command step. See open question 3.
+
+### At rest
+
+podman's default `file` secret driver keeps values base64-encoded in a 0600 file under
+`~/.local/share/containers/storage/secrets/`; `podman secret inspect --showsecret` prints them.
+That is equivalent to today's `~/.env` and `gmail_token.json`, not encrypted. What podman
+secrets add is keeping values out of units, `inspect`, logs and image layers. C11 documents
+excluding that directory from home backups and the `pass` or `shell` drivers (for example
+`secret-tool` / libsecret) for encryption at rest.
 
 ## Running it
 
 ### Quadlet (recommended)
 
-Files in `deploy/quadlet/`, copied to `~/.config/containers/systemd/` (C4):
+Two directories, because the Quadlet generator reads only its own unit types and systemd does
+not read `~/.config/containers/systemd/` (C4):
 
-| File | What |
-|---|---|
-| `jobhunter.pod` | `PublishPort=127.0.0.1:8808:8808`, `UserNS=keep-id:uid=1000,gid=1000` |
-| `jobhunter-console.container` | `Pod=jobhunter.pod`, `Exec=console --host 0.0.0.0`, `Restart=on-failure`, health check, volumes, secrets |
-| `jobhunter-ctr-run.container` + `.timer` | `Exec=run`, `[Service] Type=oneshot`, timer `02:00` with `RandomizedDelaySec=10m`, `Persistent=true` |
-| `jobhunter-ctr-collect.container` + `.timer` | `Exec=score --collect-pending` then `--rescore-pending` (two `ExecStart` are not available to Quadlet, so a small `jobhunter score --collect-then-rescore` or two units; C4 decides) at 03:30 |
-| `jobhunter-ctr-verify.container` + `.timer` | `Exec=sources verify`, Sun 04:00 |
-| `jobhunter-llm.container` | optional, C10 |
+| File | Installed to | What |
+|---|---|---|
+| `deploy/quadlet/jobhunter-console.container` | `~/.config/containers/systemd/` | `ContainerName=jobhunter-console`, `PublishPort=127.0.0.1:8808:8808`, `Network=pasta:--host-lo-to-ns-lo` (D11), `UserNS=keep-id:uid=1000,gid=1000`, `Exec=console`, `HealthCmd=`, `[Service] Restart=on-failure`, `[Install] WantedBy=default.target` |
+| `deploy/quadlet/jobhunter-ctr-backup.container` | same | `Exec=db backup --auto`, oneshot |
+| `deploy/quadlet/jobhunter-ctr-run.container` | same | `Exec=run`; `[Unit] Requires=` and `After=jobhunter-ctr-backup.service` |
+| `deploy/quadlet/jobhunter-ctr-collect.container` | same | `Exec=score --collect-pending`; `[Unit] OnSuccess=jobhunter-ctr-rescore.service` |
+| `deploy/quadlet/jobhunter-ctr-rescore.container` | same | `Exec=score --rescore-pending` |
+| `deploy/quadlet/jobhunter-ctr-verify.container` | same | `Exec=sources verify` |
+| `deploy/systemd/jobhunter-ctr-run.timer`, `-collect.timer`, `-verify.timer` | `~/.config/systemd/user/` | 02:00 with `RandomizedDelaySec=10m`, 03:30, Sun 04:00; `Persistent=true` |
+| `deploy/systemd/jobhunter-ctr-notify@.service` | `~/.config/systemd/user/` | copy of the host notify unit under its own name, so `jobhunter schedule uninstall` (which deletes `jobhunter-notify@.service`) cannot break `OnFailure=` |
 
-All use `Image=localhost/jobhunter:<tag>`, `Volume=%h/.local/share/jobhunter:/data:z`,
-`Volume=%h/.cache/jobhunter:/cache:z`, `Volume=%h/.config/jobhunter:/config:ro,z`,
-`OnFailure=jobhunter-notify@%n.service` (the host unit from `jobhunter schedule install`, or
-copied from `src/jobhunter/ops/units/`). `%h` assumes default XDG bases; edit if yours differ.
-The names carry `-ctr-` so they never collide with the host's `jobhunter-run.service`.
+Common to every `.container`: `Image=localhost/jobhunter:<tag>`,
+`ContainerName=jobhunter-ctr-<job>` (the default `systemd-<unit>` name would break every
+`podman exec` in this spec), `UserNS=keep-id:uid=1000,gid=1000`,
+`Volume=%h/.local/share/jobhunter:%h/.local/share/jobhunter:z`,
+`Environment=JOBHUNTER_DATA_DIR=%h/.local/share/jobhunter`,
+`Volume=%h/.cache/jobhunter:/cache:z`,
+`Volume=%h/.config/jobhunter/config.toml:/config/config.toml:ro,z`,
+`[Service] ExecStartPre=/usr/bin/mkdir -p %h/.local/share/jobhunter %h/.cache/jobhunter`
+(podman, unlike docker, refuses a missing bind source; `ExecStartPre` runs on the host),
+`OnFailure=jobhunter-ctr-notify@%n.service`, `Timezone=local`. Oneshots carry
+`[Service] Type=oneshot` and **no `[Install]`**; only timers start them. No `Secret=` lines in
+the base files: secrets come from drop-ins (D9).
+
+The collect chain replaces the host unit's two `ExecStart=` lines (Quadlet takes one `Exec=`)
+without a new CLI mode. `%h` assumes default XDG bases; edit if yours differ.
 `loginctl enable-linger $USER` keeps timers running while logged out, as on the host.
 
-### Compose (option)
+### Compose (option, podman-compose only)
 
-`compose.yaml` for ad-hoc and dev: a `console` service (`127.0.0.1:8808:8808`, `userns_mode:
-keep-id:uid=1000,gid=1000`, the same three bind mounts with `:z`) and a `run` service under a
-`manual` profile (`podman compose run --rm run`). Secrets are `external: true`; if your compose
-implementation does not support external secrets with podman, use Quadlet. No scheduler in
-compose: scheduled runs belong to Quadlet or a host timer calling `podman run`.
+`compose.yaml` for ad-hoc and dev: a `console` service (`127.0.0.1:8808:8808`,
+`userns_mode: keep-id:uid=1000,gid=1000`, the mounts above with `:z`) and a `run` service
+under a `manual` profile (`podman-compose run --rm run`). It sets `x-podman: in_pod: false`,
+because podman-compose puts services in a pod by default and podman refuses `--userns` with
+`--pod`. Secrets are `external: true` podman secrets. Use `podman-compose` directly
+(`rpm-ostree install podman-compose` or `uv tool install podman-compose`), not `podman
+compose`, which on this host delegates to docker-compose. No scheduler in compose.
 
-### Local LLM (option, C10)
+### Local LLM (deferred, C10)
 
-A digest-pinned llama.cpp server image in the pod, bound to `127.0.0.1:8080` inside the pod,
-model directory mounted read-only, `LLAMA_API_KEY` from the same secret, GPU via CDI only when
-the host has it. A llama-server already running on the host's loopback is not reachable from
-the pod by default; which pasta option maps host loopback is to be verified in C10 on the host.
+Not in this round. If wanted later: a digest-pinned llama.cpp server container reached from
+the run and console containers. A llama-server already running on host loopback is not
+reachable from a container by default; how to reach it under pasta is the first thing C10
+checks on the host.
 
 ## SQLite store
 
-- **One file, many processes**, as on the host: the console and each oneshot run open
-  `/data/jobhunter.db` in WAL mode. WAL needs a shared `-shm` mapping and POSIX locks; both work
-  across containers that bind-mount the same file on one kernel and local filesystem. Never put
-  `/data` on NFS/SMB or a VM-shared folder.
-- **Run lock** (D12, C5): one writer job at a time across host and containers; a second one
-  exits 0 with "already running" and spends nothing.
-- **Backups** (C6): `jobhunter db backup` uses SQLite's online backup API into
-  `/data/backups/jobhunter-YYYYMMDD-HHMMSS.db` (0600) with `integrity_check`; the nightly run
-  takes one first and keeps the newest 14 automatic backups. Never `cp` a live WAL database.
-  Because `/data` is your host directory, host backup tools see it directly.
-- **Restore**: `jobhunter db restore PATH` refuses while the run lock is held or another process
-  has the database open; stop the pod first (`systemctl --user stop jobhunter-pod`). It backs
-  up the current database, then restores, then verifies.
+- **One file, many processes**, as on the host. WAL needs a shared `-shm` mapping and file
+  locks; both work across containers that bind-mount the same file on one kernel and local
+  filesystem. Never put the data directory on NFS/SMB or a VM-shared folder.
+- **Host backup tools** (restic, borg, Déjà Dup) must not copy the live `jobhunter.db`,
+  `-wal` and `-shm`: they read them at different moments. Back up `backups/` and exclude the
+  live files, or run `jobhunter db backup` from the tool's pre-backup hook.
+
+### Run lock
+
+C5, D12. `flock(LOCK_EX)` on one fd kept open for the whole job, on `<db_path>.run.lock` (keyed
+on the database, which can live outside the data dir). Metadata (pid, hostname, command, start
+time) is written through that same fd.
+
+| Job | Behaviour when the lock is held |
+|---|---|
+| `run`, `score` submit, `--rescore-pending` | exit 0 with "another jobhunter run is in progress (pid, host, since)"; nothing spent |
+| `--collect-pending` | waits up to 2 h, then exits non-zero so `OnFailure=` fires; collecting spends nothing but must not be skipped silently after a long or catch-up run |
+| console Re-score now | takes the lock non-blocking for the paid part; if held, the panel says a run is in progress and offers to retry |
+| any job, holder older than 6 h | exit non-zero (75) so a hung run is reported instead of every later timer quietly exiting 0 |
+
+### Backups
+
+C6, D17. `jobhunter db backup` uses SQLite's online backup API, then `integrity_check`:
+
+- `--auto` (the `jobhunter-ctr-backup` oneshot, before every nightly run) writes
+  `backups/auto/jobhunter-auto-YYYYMMDDTHHMMSSZ.db` (UTC, 0600) and prunes to the newest 14
+  files matching exactly `^jobhunter-auto-\d{8}T\d{6}Z\.db$` in `backups/auto/`. Nothing else is
+  ever deleted. At about 86 MB per copy today, that is about 1.2 GB.
+- Without `--auto`, or with `--to PATH`, it writes a manual backup and never prunes.
+- C12 writes `backups/auto/pre-migrate-<from>-<to>-<UTC>Z.db` before any migration; those are
+  not pruned by the nightly rule either (different name).
+
+### Restore
+
+`jobhunter db restore PATH` runs **on the host** with the console and timers stopped; container
+mode refuses it (a container cannot see other processes):
+
+1. `systemctl --user stop jobhunter-console jobhunter-ctr-*.timer`, then wait for any running
+   `jobhunter-ctr-*` service to finish.
+2. Take the run lock (C5).
+3. Back up the current database (manual name).
+4. Copy the backup **into the live path through the SQLite backup API**, which handles the WAL;
+   never rename a file over a WAL database (a leftover `-wal` would be replayed onto it). Temp
+   files are created inside the data directory so they carry the right SELinux label.
+5. `integrity_check`, then print row counts before and after.
+
+### Version skew
+
+C12, D15. The host checkout moves forward on every merge; the image moves when you rebuild.
+Both open one database.
+
+- Code refuses a DB that holds a migration it does not know: "database is newer than this
+  jobhunter (code has N, database has M); update the image or the checkout". The console shows
+  this instead of starting.
+- Every migration is preceded by an automatic backup (above), so a forward migration can be
+  undone with `db restore`.
+- `jobhunter version` prints the package version, the commit, and the highest migration number;
+  preflight compares host and image.
+- Upgrade order: rebuild the image from the commit the host is on, then restart the console.
+  Rolling the image back past a migration means restoring the matching `pre-migrate-*` backup.
+
+### SELinux
+
+`:z` relabels the bind-mounted directories `container_file_t` at container start. Then:
+
+- Files created later in those directories inherit the label. Files **moved** in (`mv` from
+  `~/Downloads`) keep their old label and the containers get EACCES. Copy instead (`cp`), or
+  relabel with the `chcon` command preflight prints.
+- `restorecon -R ~/.local/share` would reset the label; podman relabels at the next start, but
+  a running console gets EACCES until it restarts. Optional permanent fix, printed by C11:
+  `semanage fcontext -a -t container_file_t '<home>/.local/share/jobhunter(/.*)?'`.
 
 ## Moving to containers
 
-With bind mounts (D3) there is no data copy. The switch is:
+With bind mounts (D3) there is no data copy. The switch, all on the host:
 
-1. On the host: `jobhunter db backup` (C6), then `jobhunter schedule uninstall` so host timers
-   stop.
-2. `jobhunter container preflight` (C6): directories exist and are yours, labels reported, no
-   host timers enabled, prints the install commands.
-3. Create secrets, build the image, install the Quadlet files, start the pod.
+1. `jobhunter db backup` (C6).
+2. `jobhunter schedule uninstall`, so the host timers stop.
+3. Create the podman secrets you use; run `jobhunter mail auth --podman-secret
+   jobhunter_gmail_token` if you use Gmail.
+4. `podman build --build-arg BUILD_COMMIT=$(git rev-parse HEAD) -t localhost/jobhunter:dev .`
+5. Install the files: `cp deploy/quadlet/*.container ~/.config/containers/systemd/` and
+   `cp deploy/systemd/* ~/.config/systemd/user/`.
+6. `jobhunter container preflight` (C13): creates missing directories (0700) and an empty
+   `config.toml` if absent, checks ownership and labels, refuses while host timers are enabled,
+   compares versions (C12), writes the secret drop-ins, prints the remaining commands.
+7. `systemctl --user daemon-reload`, start the console, enable the timers
+   ([Host verification](#host-verification)).
 
-Old repo-relative data (`./data`) must go through `jobhunter migrate-paths` on the host first;
-container mode refuses to migrate.
+Old repo-relative data (`./data`) goes through `jobhunter migrate-paths` on the host first.
 
-**Named-volume option.** For a volume instead of your home directory:
-`podman volume create jobhunter-data`, then
-`podman run --rm -v jobhunter-data:/data -v ~/.local/share/jobhunter:/src:ro,z
-localhost/jobhunter jobhunter db import-volume /src` (C6), which copies the database through the
-backup API and the other files with sha256 checks. Host tools then need `podman unshare` or
-`podman volume export` to read it, which is why it is not the default.
+A **named volume** is not supported in this revision: host tools could not read it without
+`podman unshare`, and absolute paths in the DB would no longer match the host. Dropped with the
+`import-volume` command the first draft proposed.
 
 ## Drafting with `claude -p`
 
-Spec 017 rev 5 drafts with `claude -p` on the host, SDK as fallback. In containers (D10, C9):
+D16, C9. Spec 017 drafts with `claude -p` on the host. 018 needs from 017:
 
-- The `claude` CLI is not in the image and `~/.claude` is not mounted.
-- The packet page in a container says drafting here uses the Anthropic API at the shown
-  estimate under the `[apply]` cap, and needs a click; it never switches silently.
-- To keep using the subscription, run the host command (017's draft command) on the host;
-  it writes to the same bind-mounted data directory, guarded by SQLite locking.
+- a CLI command, `jobhunter packet draft <packet_id>`, that drafts one packet with the same
+  checks and caps as the console path, so drafting needs no second console on the host (which
+  could not share port 8808 with the container);
+- the runner starting `claude` with an allowlisted environment that drops `ANTHROPIC_*` and
+  every known secret name (017 revision 6), so the subscription path never bills the API.
+
+In containers: the `claude` CLI is not in the image and `~/.claude` is not mounted. The packet
+page says "drafting here uses the Anthropic API at about $X under the `[apply]` cap" with a
+button, and shows the host command as the alternative. It never switches silently. Because the
+data directory has the same path on both sides (D3), a PDF drafted on the host is served by the
+container console unchanged. C9 is blocked on that 017 command.
 
 ## The 017 Chrome extension
 
-The extension (017 rev 5, parallel) talks to `http://127.0.0.1:8808`. The container provides:
+The extension (017) talks to `http://127.0.0.1:8808`. The container provides:
 
-- the pod publishes `127.0.0.1:8808` only, IPv4; the extension must use `127.0.0.1`, not
-  `localhost` (which may try `::1` first);
-- the same app code, so the same `Host` loopback and `Origin` checks. Requests arrive with
-  `Host: 127.0.0.1:8808` and pass; whatever origin rule 017 adds for the extension
-  (`chrome-extension://<id>`) applies unchanged. The container never runs with `--allow-remote`;
-- packet files under `/data/packets/` that the host's Chrome reaches through the console, never
-  a host path the container cannot see.
+- `127.0.0.1:8808` published, IPv4 only; the extension uses `127.0.0.1`, not `localhost`;
+- the same app code, so the same `Host` loopback check (now on every request) and `Origin`
+  rules; whatever rule 017 adds for `chrome-extension://<id>` applies unchanged; never
+  `--allow-remote`;
+- packet files at the same absolute path as on the host (D3);
+- rendered PDFs only with the `browser` image (D14); without it, Attach resume has nothing to
+  fetch, so the browser image is a precondition of the 017 phase 2 gate.
 
 ## Testing
 
-**No podman in the agent sandbox.** Workers implement in a container without podman. Every
-ticket says which checks the worker runs (unit tests, file-parse tests, ruff) and which need CI
-or you on the host.
+Workers run in a container without a podman runtime. What they can still run there: pytest,
+ruff, `uv build --wheel` in a temp directory holding only the files the Containerfile copies,
+and, when the binaries exist (they do in the current sandbox), `/usr/libexec/podman/quadlet
+-dryrun -user` with `QUADLET_UNIT_DIRS` pointed at the repo files and `systemd-analyze --user
+verify` for the timers. Those tests skip when the binary is missing.
 
 | Layer | Where | What |
 |---|---|---|
-| Unit | pytest, worker sandbox | container-mode defaults and refusals (C1); `*_FILE` resolution and that a fake value never appears in output or logs (C2); Containerfile/.containerignore rules (C3); Quadlet and compose files parsed: 127.0.0.1 publish, keep-id, `:z`, no inline secrets, oneshot, timer schedules equal the host units (C4); run lock with two processes and a counting mock scorer (C5); backup/restore on a tmp WAL db (C6); fake `podman` on `PATH` recording argv and stdin (C7) |
-| Image smoke | GitHub Actions `ubuntu-latest`, podman preinstalled (C8) | build; size; with `--network=none`: `--help`, `id -u` = 1000, `paths` shows container mode, `init` on a fresh volume, console answers `/` with 200 (fetched from inside with Python urllib), fake secret: `secrets status` says set while `podman inspect` and `podman logs` lack the value, no `.env`/`data`/`profile`/`resume` in the image; hadolint |
-| Host | you, commands below | Quadlet generation, SELinux, real secrets, real timers |
+| Unit | pytest, worker sandbox | container-mode defaults and refusals, Host check on GET (C1); `*_FILE` resolution with values ending `\r\n`, ` \n`, `\n\n`, `\t`, and a capture of all output, logs and stored errors asserting a fake value appears nowhere (C2); Containerfile rules and a fixture tree proving `.containerignore` excludes nested `.env`, `token.json`, `client_secret.json` (C3); run lock with two processes, a counting mock scorer, collect waiting, stale holder (C5); backup naming, prune never touching `jobhunter-20261009-160902-pre-jev.db`-shaped names, restore with an uncheckpointed WAL present (C6); fake `podman` recording argv and stdin, missing binary, non-zero exit keeps the token (C7); schema guard and pre-migrate backup (C12); drop-ins and preflight with fake outputs (C13) |
+| Generator | pytest, sandbox, skipped without `quadlet` (C4) | dry run succeeds; container names; no `[Install]` on oneshots; no unit `Wants=` a `jobhunter-ctr-*` oneshot; no `Secret=` in base files; publish `127.0.0.1` only; no `.timer`/`.service` under `deploy/quadlet/`; timers match the host schedule |
+| Image smoke | GitHub Actions `ubuntu-latest` (C8) | build both targets (browser on `main` only); sizes; with `--network=none`: `--help`, `id -u` = 1000, `paths` shows container mode, `init` on a fresh volume, console answers `/` with 200 from inside, a fake secret with a trailing `\r\n` resolves and `secrets status` says set while `podman inspect` and `podman logs` lack it (each check fails if the podman command itself fails), no `.env`/`data`/`profile`/`resume`/`token` files in the image; hadolint. Ubuntu's podman is 4.x and is not used for Quadlet; Quadlet is covered by the generator tests and the host |
+| Host | you, commands below | real SELinux, keep-id, pasta loopback, secrets, timers |
 
 No smoke step contacts a job board or a paid API; CI has no real secrets.
 
 ### Host verification
 
-Run on the host after C3 and C4 land (expected output in comments):
+Run on the host after C3, C4 and C13 land. Expected output in comments.
 
 ```
-podman build -t localhost/jobhunter:dev .                # ends: Successfully tagged localhost/jobhunter:dev
+podman build --build-arg BUILD_COMMIT=$(git rev-parse HEAD) -t localhost/jobhunter:dev .
+                                                         # ends with the image id; no README error
 podman run --rm localhost/jobhunter:dev paths            # first line: mode: container ; data_dir /data
 podman run --rm --entrypoint id localhost/jobhunter:dev -u   # 1000
-jobhunter container preflight                            # all checks ok; no host timers enabled
-cp deploy/quadlet/* ~/.config/containers/systemd/
-/usr/libexec/podman/quadlet -dryrun -user | grep '^---'  # ---jobhunter-console.service--- and the -ctr- units, no errors
+jobhunter container preflight                            # every line ok; lists drop-ins written
+/usr/libexec/podman/quadlet -dryrun -user | grep '^---'  # ---jobhunter-console.service--- and the six -ctr- services
+/usr/libexec/podman/quadlet -dryrun -user | grep -c 'Wants=jobhunter-ctr'   # 0
 systemctl --user daemon-reload
-systemctl --user start jobhunter-pod jobhunter-console
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8808/   # 200
+systemctl --user start jobhunter-console
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8808/   # 200  (if 000: D11 fallback, see below)
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' http://127.0.0.1:8808/   # 400
 ss -ltn | grep 8808                                      # 127.0.0.1:8808 only, never 0.0.0.0 or *
+systemctl --user list-units 'jobhunter-ctr-*' --all      # oneshots inactive (dead): starting the console started none
 ls -lZ ~/.local/share/jobhunter/jobhunter.db             # owner you, -rw-------, container_file_t:s0 (no c-categories)
-podman exec jobhunter-console jobhunter secrets status   # names with set (file ...) or unset, no values
-podman inspect jobhunter-console | grep -c -i 'sk-'      # 0
+podman exec jobhunter-console jobhunter secrets status   # names with set (file ...) or unset; no values
+podman inspect jobhunter-console >/dev/null && podman inspect jobhunter-console | grep -c -e sk-ant -e sk-or   # 0 (fails loudly if inspect fails)
+podman exec jobhunter-console sh -c 'ls /config; ls /run/secrets'   # config.toml only; scorer keys only, no gmail token
 systemctl --user enable --now jobhunter-ctr-run.timer jobhunter-ctr-collect.timer jobhunter-ctr-verify.timer
 systemctl --user list-timers 'jobhunter-ctr-*'           # three timers with next run times
 ```
 
+If the first `curl` prints `000`, the pasta loopback option did not work: switch the console unit
+to the D11 fallback (`Exec=console --host 0.0.0.0` with
+`Environment=JOBHUNTER_PUBLISHED_LOOPBACK_ONLY=1`), and report it so the spec records which.
+
 ## Docs
 
-C11 writes `docs/containers.md` from this spec (build, secrets, Quadlet, switching, backups,
-Gmail re-auth, upgrade and rollback by image tag, the host checks above) and amends 002's
+C11 writes `docs/containers.md`: build, secrets (from a file or stdin, never argv; at-rest
+property; excluding podman's secret store from home backups; `pass`/`shell` drivers; restart
+the console after rotating a key), the switch steps, Quadlet and podman-compose, backups (host
+tools back up `backups/` only), restore, SELinux (`cp` not `mv`, `chcon`, optional `semanage`),
+Gmail re-auth, upgrade order and rollback, and the host verification above. It amends 002
 *Where files live* and *Process model* to point here.
 
 ## Phased tickets
@@ -336,34 +476,79 @@ All labelled `area:containers`; model per CLAUDE.md (reviewer one tier stronger)
 
 | Phase | Ticket | Id | Model | Effort | Depends on |
 |---|---|---|---|---|---|
-| 1 | C1 Container path mode (`JOBHUNTER_CONTAINER=1`) | `5d7d73e` | sonnet | 0.5-1 d | |
-| 1 | C2 `*_FILE` secrets and `jobhunter secrets status` | `efb6104` | sonnet | 0.5 d | |
-| 1 | C5 Single-writer run lock, host and containers | `b4c13eb` | opus | 0.5-1 d | |
-| 2 | C3 Containerfile and .containerignore | `e591f11` | sonnet | 0.5 d | C1 |
-| 2 | C7 Gmail token storage in containers | `257edaa` | sonnet | 0.5-1 d | C1, C2 |
-| 2 | C6 SQLite backup/restore, host preflight, volume import | `5a2063c` | opus | 1-1.5 d | C1, C5 |
-| 3 | C4 Quadlet units and compose.yaml | `1cbc6b9` | sonnet | 0.5-1 d | C1, C2, C3 |
+| 1 | C1 Container mode (paths, refusals, Host check on every request, D11 interlock) | `5d7d73e` | sonnet | 0.5-1 d | |
+| 1 | C5 Run lock (`flock`), host and containers | `b4c13eb` | opus | 0.5-1 d | |
+| 1 | C12 Schema version guard and backup before migrate | `ef185ba` | opus | 0.5-1 d | C6 naming only |
+| 1b | C2 `*_FILE` secrets, validation, `secrets status` | `efb6104` | sonnet | 0.5-1 d | C1 (same lines in `cli.py`/`config.py`; serial) |
+| 1b | C6 Backup (auto dir, exact prune) and safe restore | `5a2063c` | opus | 0.5-1 d | C5 |
+| 2 | C3 Containerfile and `.containerignore` | `e591f11` | sonnet | 0.5 d | C1 |
+| 2 | C7 Gmail token as a podman secret, host only | `257edaa` | sonnet | 0.5-1 d | C1, C2 |
+| 2 | C13 Host preflight and per-secret drop-ins | `9a1e1b7` | sonnet | 0.5-1 d | C1, C12 |
+| 3 | C4 Quadlet units, systemd timers, compose.yaml | `1cbc6b9` | sonnet | 1 d | C1, C2, C3, C6, C7, C12, C13 |
 | 3 | C8 CI image build and smoke test | `7b24373` | sonnet | 0.5-1 d | C1, C2, C3 |
-| 4 | C11 Docs | `166a4c1` | haiku | 0.5 d | C4, C6, C7 |
-| later | C10 Optional local LLM container in the pod | `0adb58b` | sonnet | 0.5-1 d | C4 |
-| later | C9 Drafting backend in container mode | `9910432` | sonnet | 0.5 d | C1, 017 drafting code |
+| 4 | C11 Docs | `166a4c1` | haiku | 0.5 d | C4, C6, C7, C13 |
+| later | C9 Drafting backend in container mode | `9910432` | opus | 0.5 d | C1, 017 `packet draft` and env scrub |
+| deferred | C10 Local LLM container | `0adb58b` | sonnet | 0.5-1 d | C4; only if wanted |
 
-Total about 6-9 days of worker time. Phases 1 and 2 land with no change to how you run
-jobhunter today; C5 is worth landing on its own.
+About 7-11 days of worker time. Phase 1 lands with no change to how you run jobhunter today, and
+C5 and C12 are worth landing on their own.
 
 ## Open questions
 
-1. **Quadlet over compose.** OK to make Quadlet the supported path and compose the convenience
-   option, given compose is not in Fedora atomic's base image?
-2. **Bind mounts of your XDG directories** (relabelled `container_file_t` by `:z`) rather than a
-   named volume. OK? A later `restorecon -R ~/.local/share` would reset the label; podman
-   relabels again at the next start.
+1. **Quadlet over compose.** Quadlet as the supported path and podman-compose as the
+   convenience option, given compose is not in Fedora atomic's base image and `podman compose`
+   here delegates to docker-compose?
+2. **Bind mounts of your directories,** relabelled `container_file_t`, with the data directory
+   at the same path inside the container. OK? (A named volume is dropped.)
 3. **Gmail token expiry.** In Testing mode the refresh token lasts about a week. Re-auth weekly
    with one host command, or publish the OAuth app to "In production" (unverified, personal use)
    so the token stops expiring?
-4. **Drafting in containers.** Is "API with a click, or run the draft command on the host" right,
-   or would you rather mount `~/.claude` read-only into a dedicated drafting container?
-5. **Browser image.** Build the `browser` target by default (bigger image, PDF export works in
-   the console), or keep it optional?
+4. **Drafting in containers.** "API with a click, or `jobhunter packet draft` on the host": right?
+   Or a dedicated drafting container with `~/.claude` mounted read-only?
+5. **Browser image.** It is needed before the 017 phase 2 gate. Make it the default image now
+   (about +500 MB), or switch when phase 2 is close?
 6. **Image registry.** Local builds only (`localhost/jobhunter`), or push to GHCR from CI for
-   `podman auto-update`? Pushing publishes the image (no personal data in it, by design).
+   `podman auto-update`? Pushing publishes the image (no personal data in it, by design), and
+   auto-update would need the version guard's upgrade order.
+7. **Attachments.** In containers only the data directory is visible, so attaching a file from
+   `~/Documents` fails. Copy attachments into the data directory first (the console could do
+   that on upload), or mount `~/Documents` read-only into the console?
+8. **Backup space.** 14 nightly copies is about 1.2 GB today. Fewer, or a weekly tier?
+
+## History
+
+### Revision 2: adversarial review
+
+An Opus review (2026-10-10) raised 18 blocking findings (about 11 distinct) and 32 minor ones.
+All were taken; none was rejected. In short:
+
+- **Config mount** now mounts only `config.toml`; container mode never reads a token or client
+  JSON from `/config` (D3, D7, D10). Preflight warns about the host copies.
+- **Secrets**: whitespace stripped and inner whitespace or control characters refused from any
+  source, errors without values, tests with `\r\n` and friends (D8). Per-unit drop-ins for
+  existing secrets only, least privilege matrix (D9). At-rest property stated.
+- **Units**: no pod, so starting the console starts nothing paid (D2); oneshots have no
+  `[Install]`; timers and a renamed notify unit go to `~/.config/systemd/user/`;
+  `ContainerName=` set; collect then rescore via `OnSuccess=`; a backup oneshot before the run;
+  missing bind sources created by `ExecStartPre`; compose is podman-compose with
+  `in_pod: false`.
+- **Database**: version skew guard and pre-migration backup, new ticket C12 (D15); automatic
+  backups in `backups/auto/` with an exact prune pattern and UTC names (D17); restore through
+  the backup API on the host with everything stopped; `flock` with collect waiting and stale
+  holders reported (D12); same-path data mount for absolute paths in the DB (D3).
+- **Image**: `README.md` copied (hatchling), `**/` ignore patterns tested on a fixture tree, a
+  buildable browser stage with `PLAYWRIGHT_BROWSERS_PATH` and `--only-shell`.
+- **Console exposure**: keep the loopback bind via pasta's `--host-lo-to-ns-lo` if it works,
+  otherwise `0.0.0.0` only with an explicit unit variable; Host check on every request (D11).
+- **Drafting**: 018 states the interface it needs from 017 (`jobhunter packet draft`, env
+  scrub in 017 revision 6); C9 relabelled hard/opus as a money path (D16).
+- **Gmail**: host-only auth, podman reached through the host-escape chain and checked before
+  consent, token kept locally if the secret write fails (D10).
+- **Checked**: sketch units for the console (pasta option, single-file config mount,
+  `Timezone=`, `ExecStartPre=`) and the run oneshot with a secret drop-in were run through
+  `quadlet -dryrun -user` (podman 5.8.4) in the agent sandbox: they generate, the drop-in's
+  `--secret` and `--env` land on the run container only, and nothing `Wants=` the oneshot.
+  Runtime behaviour (pasta loopback, SELinux, keep-id) is still a host check.
+- **Tickets**: C6 split (preflight is now C13), `import-volume` dropped, C10 deferred, C12
+  added, C1 and C2 serialized, C4 depends on C7, C12 and C13; generator dry runs added to what
+  workers can test without a podman runtime.
