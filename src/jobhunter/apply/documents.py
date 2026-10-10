@@ -103,6 +103,8 @@ def items_of(doc: Mapping[str, Any]) -> list[Item]:
         if r.summary.text.strip():
             items.append(Item("summary", "summary", "Summary", r.summary.text, r.summary.sources))
         for i, sec in enumerate(r.sections):
+            if not sec.entries:
+                continue  # an empty section is neither rendered nor checked
             # A heading cites nothing; the checker reads it against the whole resume.
             items.append(Item(f"s{i}.h", "heading", "Section heading", sec.heading, []))
             for j, e in enumerate(sec.entries):
@@ -158,6 +160,8 @@ def render_md(doc: Mapping[str, Any], base_text: str = "") -> str:
         if r.summary.text.strip():
             out += ["## Summary", "", norm_text(r.summary.text), ""]
         for sec in r.sections:
+            if not sec.entries:
+                continue
             out += [f"## {norm_text(sec.heading)}", ""]
             for e in sec.entries:
                 head = ", ".join(x for x in (norm_text(e.title), norm_text(e.employer)) if x)

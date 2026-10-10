@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
 <link rel="stylesheet" href="{{ static_url('pages.css') }}">
+<script src="{{ static_url('costs.js') }}" defer></script>
 <div class="pg">
   <h1>Costs</h1>
   <p class="muted">Last {{ c.days }} days.
@@ -40,7 +41,7 @@
   {% if runner.overage %}
   <div class="callout" id="runner-overage">
     <p>Your subscription reported paid extra usage on a packet call: CLI runs are charged against the apply cap and each waits for a click that says so. Turning the runner back on does not change this.</p>
-    <form method="post" action="/apply/runner/clear-overage"><input type="hidden" name="next" value="/costs"><button type="submit" id="clear-overage">My plan has reset: clear</button></form>
+    <form method="post" action="/apply/runner/clear-overage"><input type="hidden" name="next" value="/costs"><button type="submit" id="clear-overage" data-confirm="Clear only if your Claude subscription is back within its plan. The next run that reports paid extra usage is charged (under the apply cap) and sets this hold again. Clear it?">My plan has reset: clear</button></form>
   </div>
   {% endif %}
 

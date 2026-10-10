@@ -84,22 +84,18 @@ CLAIM_CLASSES: dict[str, tuple[str, ...]] = {
         "exceptional",
     ),
 }
-# Seniority words are checked only on resume lines (a letter may name the role it applies for).
-SENIORITY: tuple[str, ...] = (
-    "senior",
-    "sr",
-    "staff",
-    "principal",
-    "distinguished",
-    "chief",
-    "vp",
-    "vice president",
-    "director",
-    "manager",
-    "executive",
-    "cto",
-    "cio",
-    "ciso",
+# Seniority in a job-title context, checked only on resume lines (a letter may name the role it
+# applies for). Bare "staff", "manager" or "executive" are ordinary nouns ("staff meetings",
+# "package manager", "executive summary"), so a title context is required.
+_ROLE = (
+    r"(engineer|developer|architect|scientist|analyst|administrator|consultant|designer|sre|"
+    r"programmer|specialist|technologist|researcher|manager)"
+)
+SENIORITY_RE = re.compile(
+    rf"\b(senior|sr\.?|staff|principal|distinguished|lead)\s+(?:[a-z/&\-]+\s+){{0,2}}{_ROLE}\b"
+    r"|\b(engineering|product|program|project|technical|it|general|delivery|development)\s+manager\b"
+    r"|\b(director|vp|vice president|head)\s+of\b"
+    r"|\bchief\s+\w+\s+officer\b|\b(cto|cio|ciso|cfo|coo)\b"
 )
 # Team-size claims are patterns, not words.
 TEAM_SIZE = re.compile(
@@ -138,12 +134,10 @@ CREDENTIALS: tuple[str, ...] = (
     # Degree and certification notations resumes actually use.
     "b.s.",
     "b.s",
-    "bs",
     "b.a.",
     "b.a",
     "m.s.",
     "m.s",
-    "ms",
     "m.a.",
     "m.a",
     "m.eng",

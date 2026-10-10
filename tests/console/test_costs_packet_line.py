@@ -47,3 +47,22 @@ def test_costs_page_has_a_packet_line_and_scoring_totals_exclude_it(tmp_path):
     assert re.search(r"Scoring spend, 7d</span><span class=\"big\">\$0\.40</span>", html)
     assert re.search(r"Today vs daily cap</span><span class=\"big\">\$0\.40</span>", html)
     assert "CLI runner off." in html and 'id="runner-on"' in html
+
+
+def test_costs_clear_asks_the_same_question_as_the_packet_page(tmp_path):
+    from pathlib import Path
+
+    db_path = tmp_path / "t.db"
+    c = db.connect(db_path)
+    db.migrate(c)
+    c.close()
+    settings = Settings(
+        paths=Paths(db_path=db_path, data_dir=tmp_path / "data", profile_dir=tmp_path)
+    )
+    runner_state.set_overage(settings.paths.data_dir)
+    client = TestClient(create_app(settings, lambda: db.connect(db_path), clock=lambda: NOW))
+    html = client.get("/costs").text
+    m = re.search(r'id="clear-overage" data-confirm="([^"]+)"', html)
+    assert m and "costs.js" in html
+    templates = Path(__file__).parents[2] / "src/jobhunter/console/templates"
+    assert m.group(1) in (templates / "_packet_docs.html").read_text(encoding="utf-8")

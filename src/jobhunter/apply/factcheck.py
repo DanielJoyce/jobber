@@ -153,7 +153,13 @@ _NUM = re.compile(
 )
 _PHONE = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)")
 _SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])")
-_TOKEN = re.compile(r"\.?[A-Za-z0-9][A-Za-z0-9+#&'\-]*[A-Za-z0-9+#]|\.?[A-Za-z0-9]")
+# A name token keeps inner dots ("Node.js", "ASP.NET", "U.S") and a leading one (".NET").
+_TOKEN = re.compile(
+    r"\.?[A-Za-z0-9](?:[A-Za-z0-9+#&'\-]|\.(?=[A-Za-z0-9]))*[A-Za-z0-9+#]|\.?[A-Za-z0-9]"
+)
+_ABBREV = re.compile(r"^(e\.g|i\.e|etc|u\.s|u\.k|vs|a\.m|p\.m|inc|ltd|co|no|dr|mr|ms|mrs)$", re.I)
+# Vendor words allowed before a name the lines do contain ("Amazon EKS", "Apache Kafka").
+_VENDORS = {"amazon", "aws", "microsoft", "azure", "google", "apache", "hashicorp", "red", "oracle"}
 
 
 def _norm(text: str) -> str:
@@ -179,7 +185,7 @@ def _words_in(norm: str, words: Iterable[str]) -> list[str]:
 class Num:
     value: float
     kind: str  # "%", "+", "$" or ""
-    unit: str  # the next word, singular, lowercased ("" when none)
+    units: frozenset[str]  # the next three content words, singular, lowercased
     shown: str
 
     @property
@@ -187,11 +193,43 @@ class Num:
         return self.kind == "" and self.value.is_integer() and 1900 <= self.value <= 2100
 
 
-_UNIT_SKIP = {"of", "in", "to", "and", "or", "the", "a", "an", "per", "across", "for"}
+_UNIT_SKIP = {
+    "of",
+    "in",
+    "to",
+    "and",
+    "or",
+    "the",
+    "a",
+    "an",
+    "per",
+    "across",
+    "for",
+    "on",
+    "with",
+    "at",
+    "from",
+    "by",
+    "over",
+    "than",
+    "more",
+    "about",
+}
+
+
+def _unit_words(after: str) -> frozenset[str]:
+    out = []
+    for w in re.findall(r"[A-Za-z][A-Za-z\-]*", after)[:3]:
+        w = w.casefold()
+        if w in _UNIT_SKIP:
+            continue
+        out.append(w[:-1] if len(w) > 3 and w.endswith("s") else w)
+    return frozenset(out)
 
 
 def _numbers(text: str) -> list[Num]:
     t = _PHONE.sub(" ", text or "")
+    t = re.sub(r"\b24\s*/\s*7\b|\b24x7\b", " around the clock ", t)
     for word, digit in claims.NUMBER_WORDS.items():
         t = re.sub(rf"\b{word}\b", digit, t, flags=re.IGNORECASE)
     out: list[Num] = []
@@ -204,13 +242,10 @@ def _numbers(text: str) -> list[Num]:
         scale = {"k": 1e3, "m": 1e6, "million": 1e6, "billion": 1e9}.get(suffix, 1.0)
         kind = "%" if suffix in ("%", "percent") else "+" if suffix == "+" else ""
         kind = kind or ("$" if dollar else "")
-        u = (unit or "").casefold()
-        if u in _UNIT_SKIP:
-            u = ""
-        if len(u) > 3 and u.endswith("s"):
-            u = u[:-1]
+        start = m.start(4) if unit else m.end()
+        units = _unit_words(t[start : start + 80])
         shown = (m.group(0) if not unit else m.group(0)[: -len(unit)]).strip()
-        out.append(Num(value * scale, kind, u, shown))
+        out.append(Num(value * scale, kind, units, shown))
     return out
 
 
@@ -219,13 +254,13 @@ def _number_reasons(text: str, cited: str) -> list[str]:
     reasons: list[str] = []
     for n in _numbers(text):
         if n.kind == "+":
-            # "40+ services" restates "40 services" (or more), with the same unit; never a year,
-            # a phone number or a number about something else.
+            # "200+ Linux servers" restates "200 RHEL servers" (or more): a shared unit word
+            # within three words. Never a year, a phone number or a number about something else.
             ok = any(
                 not c.is_year
                 and c.kind in ("", "+")
                 and c.value >= n.value
-                and (c.unit == n.unit if n.unit else c.value == n.value and c.kind == "+")
+                and (bool(c.units & n.units) if n.units else c.value == n.value and c.kind == "+")
                 for c in have
             )
         elif n.kind == "%":
@@ -317,21 +352,23 @@ def _named_in_prose(term: str, text: str) -> bool:
 
 
 def _tech_reasons(text: str, resume_norm: str, resume_raw: str) -> tuple[list[str], set[str]]:
+    """Reasons, and every alias of every technology the text names (passing or not), so the
+    name check never re-flags "Postgres" or "K8s" that this check already judged."""
     norm = _norm(text)
     reasons: list[str] = []
-    flagged: set[str] = set()
+    known: set[str] = set()
     seen: set[str] = set()
     for term in (*claims.TECH, *claims.SYNONYMS):
         if not _has_phrase(norm, _norm(term)) or not _named_in_prose(term, text):
             continue
         canon = _canonical(term)
+        known.update(_norm(a) for a in _aliases(canon))
         if canon in seen:
             continue
         seen.add(canon)
         if not _in_resume(canon, resume_norm, resume_raw):
             reasons.append(f"'{term}' is not anywhere in your resume")
-            flagged.update(_norm(a) for a in _aliases(canon))
-    return reasons, flagged
+    return reasons, known
 
 
 def _name_like(tok: str, text: str, pos: int) -> bool:
@@ -355,24 +392,35 @@ def _name_reasons(
     posting_norm: str,
     allowed_norm: str,
     already: set[str],
+    title_case: bool = False,
 ) -> list[str]:
     """Names, products and organisations in prose ("Airflow", "PyTorch", "Google") that are
     in none of the lines this document may cite. A name copied from the posting is the most
     likely tailoring invention; one from nowhere is worse."""
     reasons: list[str] = []
     seen: set[str] = set()
-    for m in _TOKEN.finditer(text):
+    tokens = list(_TOKEN.finditer(text))
+    for idx, m in enumerate(tokens):
         for part in re.split(r"(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])", m.group(0)):
             pos = m.start() + m.group(0).find(part)
             part = part.rstrip("'")
             if part.endswith("'s"):
                 part = part[:-2]
             key = _norm(part)
-            if not key or key in seen or key in NAME_STOP or not _name_like(part, text, pos):
+            if not key or key in seen or key in NAME_STOP or _ABBREV.match(part.strip(".")):
                 continue
+            if not _name_like(part, text, pos):
+                continue
+            plain = part[:1].isupper() and part[1:].islower() and part.isalpha()
+            if title_case and plain:
+                continue  # a heading capitalises ordinary words
             seen.add(key)
             if key in already or _has_phrase(context_norm, key) or _has_phrase(allowed_norm, key):
                 continue
+            if key in _VENDORS and idx + 1 < len(tokens):
+                nxt = _norm(tokens[idx + 1].group(0))
+                if nxt in already or _has_phrase(context_norm, nxt):
+                    continue
             if _has_phrase(posting_norm, key):
                 reasons.append(f"'{part}' comes from the posting, not from your lines")
             else:
@@ -386,10 +434,9 @@ def _name_reasons(
 def _claim_reasons(text: str, cited: str, *, seniority: bool) -> list[str]:
     tn, cn = _norm(text), _norm(cited)
     reasons: list[str] = []
-    classes = dict(claims.CLAIM_CLASSES)
-    if seniority:
-        classes["seniority"] = claims.SENIORITY
-    for cls, words in classes.items():
+    if seniority and (m := claims.SENIORITY_RE.search(tn)) and not claims.SENIORITY_RE.search(cn):
+        reasons.append(f"'{m.group(0)}' claims more (seniority) than any cited line says")
+    for cls, words in claims.CLAIM_CLASSES.items():
         used = _words_in(tn, words)
         if used and not _words_in(cn, words):
             reasons.append(f"'{used[0]}' claims more ({cls}) than any cited line says")
@@ -403,9 +450,19 @@ def _claim_reasons(text: str, cited: str, *, seniority: bool) -> list[str]:
 
 
 def _employer_words(employer: str) -> list[str]:
-    toks = [t for t in employer_tokens(employer or "") if t not in claims.EMPLOYER_STOP]
+    """Words that identify the employer in a sentence. Short names count (3M, GE, HP), but a
+    stopword never does ("AT&T" is matched as a whole name, not as "at")."""
+    toks = [
+        t
+        for t in employer_tokens(employer or "")
+        if t not in claims.EMPLOYER_STOP and t not in STOPWORDS
+    ]
     long = [t for t in toks if len(t) > 2]
-    return long or [t for t in toks if len(t) >= 2]  # 3M, GE, HP
+    words = long or [t for t in toks if len(t) >= 2]
+    whole = _norm(employer).strip()
+    if re.search(r"[&.]", whole) and len(whole) <= 20:
+        words.append(whole)  # "at&t", "j.p. morgan"
+    return words
 
 
 def _meaningful_quote(quote: str, employer: str) -> bool:
@@ -524,6 +581,7 @@ def _prose_reasons(text: str, cited: str, c: _Ctx, role: str, quotes: list[str])
         posting_norm=c.posting_norm,
         allowed_norm=f"{c.allowed_norm} {_norm(verified)}",
         already=flagged,
+        title_case=role == "heading",
     )
     reasons += _claim_reasons(text, cited, seniority=role in RESUME_ROLES)
     return reasons

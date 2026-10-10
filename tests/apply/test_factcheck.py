@@ -481,3 +481,93 @@ def test_confirming_one_line_leaves_the_others_unsupported():
     statuses = {i["text"]: i["status"] for i in rep["items"] if i["role"] == "bullet"}
     assert statuses == {a: "confirmed", b: "unsupported"}
     assert rep["ok"] is False and rep["confirmed"] == [confirm_key(a)]
+
+
+# ─── re-review: verbatim lines must pass, ordinary nouns are not claims ─────
+
+
+def test_a_verbatim_line_with_dotted_names_passes():
+    line = "- Built Node.js and Vue.js services on ASP.NET and AWS for U.S. customers (e.g. banks)"
+    lines = {"L50": line, "L51": "Skills: AWS"}
+    assert reasons_with(lines, line[2:], ["L50"]) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "resume"),
+    [
+        ("Ran Postgres and K8s on AWS", "- Ran PostgreSQL and Kubernetes on Amazon Web Services"),
+        ("Wrote services in Golang", "- Wrote services in Go"),
+        ("Ran 40 services on Amazon EKS", "- Ran 40 services on EKS"),
+    ],
+)
+def test_synonyms_and_vendor_prefixes_of_resume_names_pass(text, resume):
+    assert reasons_with({"L52": resume}, text, ["L52"]) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "cited"),
+    [
+        ("Administered 200+ Linux servers", "- Administered 200 RHEL servers and VMware clusters"),
+        ("Managed Terraform for 30+ accounts", "- Managed Terraform modules for 30+ AWS accounts"),
+        ("Ran 24/7 on-call for the APIs", "- Ran on-call for the APIs"),
+    ],
+)
+def test_n_plus_with_words_between_and_24_7_pass(text, cited):
+    lines = {"L53": cited, "L54": "Skills: Linux, RHEL, Terraform, AWS"}
+    assert not any("number" in r for r in reasons_with(lines, text, ["L53"]))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Cut p99 latency to 200 ms on MS SQL",
+        "Ran staff meetings for the platform group",
+        "Wrote an executive summary of the migration",
+        "Packaged tools for the apt package manager",
+    ],
+)
+def test_ordinary_nouns_are_not_credentials_or_seniority(text):
+    lines = {"L55": f"- {text}"}
+    reasons = reasons_with(lines, text, ["L55"])
+    assert not any("credential" in r or "seniority" in r for r in reasons), reasons
+
+
+def test_seniority_still_needs_a_title_context_to_be_cited():
+    lines = {"L56": "- Platform engineer on the payments team"}
+    reasons = reasons_with(lines, "Staff platform engineer on the payments team", ["L56"])
+    assert any("(seniority)" in r for r in reasons)
+
+
+def test_at_and_t_is_a_name_not_the_word_at():
+    rep = factcheck.check(
+        letter_doc([("I moved 40 services at night to Kubernetes.", ["L6"], [])]),
+        posting=POSTING,
+        employer="AT&T",
+    )
+    assert rep["items"][0]["reasons"] == []
+    rep = factcheck.check(
+        letter_doc([("AT&T is a great place to work.", ["L6"], [])]),
+        posting=POSTING,
+        employer="AT&T",
+    )
+    assert any("about the employer" in r for r in rep["items"][0]["reasons"])
+
+
+@pytest.mark.parametrize(
+    "heading", ["Experience Highlights", "Career History", "Core Competencies"]
+)
+def test_title_case_headings_are_not_names(heading):
+    doc = resume_doc()
+    doc["resume"]["sections"][0]["heading"] = heading
+    (h,) = [i for i in run(doc)["items"] if i["role"] == "heading"]
+    assert h["reasons"] == []
+
+
+def test_an_empty_section_is_neither_rendered_nor_checked():
+    from jobhunter.apply.documents import render_md
+
+    doc = resume_doc()
+    doc["resume"]["sections"].append({"heading": "Certifications: CISSP", "entries": []})
+    rep = run(doc)
+    assert all("CISSP" not in i["text"] for i in rep["items"])
+    assert "CISSP" not in render_md(doc)

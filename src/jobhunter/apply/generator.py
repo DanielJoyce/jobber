@@ -97,8 +97,10 @@ Task: write a cover letter for this posting, three to five short paragraphs.
 - Each paragraph cites, in resume_sources, the resume lines (L*) and employer notes (N*) it
   draws on, and lists in posting_quotes any text it copies verbatim from the posting.
 - Any sentence about the employer, or addressing them ("you", "your", their name), must
-  contain one of its posting_quotes word for word. With no employer notes, say nothing about
-  the employer beyond such quotes.
+  contain one of its posting_quotes word for word, and that quote must be at least four words
+  from the posting with at least two that are not filler or the employer's name (a quote of
+  just the name does not count). With no employer notes, say nothing about the employer beyond
+  such quotes.
 - No contact block, date, address or signature: the candidate adds those.
 - The current resume version is context for what to emphasize; cite the numbered lines.""",
     "question_draft": """\
@@ -107,7 +109,7 @@ Task: draft an answer to the application question below, as a list of sentences.
 - Behavioral question: only structure the story facts (S*) and resume lines; add no events,
   numbers or outcomes. A sentence with no S* or L* source is not allowed.
 - Why-this-employer question: use the employer notes and posting quotes; any sentence about
-  the employer contains a posting quote word for word.
+  the employer contains a posting quote word for word of at least four words.
 - Under 200 words.""",
 }
 
@@ -863,12 +865,7 @@ def _entail(
             if held and not paid_confirmed:
                 detail = "your subscription is on paid extra usage and this run was not confirmed"
                 return {}, {"status": "skipped", "detail": detail}, 0.0
-            if held and remaining_cap(conn, settings, now) < ENTAILMENT_ESTIMATE_USD:
-                return {}, capped, 0.0
-            call, _paid = _run_cli(
-                conn,
-                settings,
-                req,
+            cli_args = dict(
                 model=settings.apply.cli_entailment_model,
                 effort=None,
                 now=now,
@@ -876,6 +873,18 @@ def _entail(
                 environ=environ,
                 allow_overage=paid_confirmed,
             )
+            if held:
+                # A confirmed paid run: the cap check, call and logged spend are one section,
+                # and the CLI's own budget never exceeds what is left of the cap.
+                with inflight.spend_section(settings.paths.data_dir):
+                    left = remaining_cap(conn, settings, now)
+                    if left < ENTAILMENT_ESTIMATE_USD:
+                        return {}, capped, 0.0
+                    call, _paid = _run_cli(
+                        conn, settings, req, max_budget_usd=_budget(left), **cli_args
+                    )
+            else:
+                call, _paid = _run_cli(conn, settings, req, **cli_args)
             equiv = call.equiv_usd
     except (GenerateFailed, ApplyRefused) as exc:
         detail = getattr(exc, "reason", None) or getattr(exc, "message", None) or str(exc)

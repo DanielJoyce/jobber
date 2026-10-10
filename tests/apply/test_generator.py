@@ -579,3 +579,82 @@ def test_a_corrupt_state_file_reads_as_off_and_held(env):
     (d / "apply-runner.json").write_text("{not json")
     state = runner_state.load(d)
     assert state.off and state.overage
+
+
+# ─── re-review: concurrent runs cannot both pass the apply cap ──────────────
+
+
+def _second_packet(env):
+    _gid, pid = paste.create_pasted_packet(
+        env.conn,
+        url=None,
+        text=POSTING,
+        employer="Other Synthetic Co",
+        title="Platform Engineer",
+        now=NOW,
+    )
+    return pid
+
+
+def _race(env, pids, **kw):
+    """Generate on each packet at once, each in its own thread and connection."""
+    import threading
+
+    results: dict[int, object] = {}
+
+    def worker(pid):
+        conn = db.connect(env.settings.paths.db_path)
+        try:
+            results[pid] = generator.generate(
+                conn, env.settings, env.profile, pid, "resume", now=NOW, **kw
+            )
+        except Exception as exc:  # collected and asserted below
+            results[pid] = exc
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=worker, args=(pid,)) for pid in pids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    return results
+
+
+def test_two_api_runs_at_once_cannot_both_pass_the_cap(env, monkeypatch):
+    import time
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
+    env.conn.execute(
+        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 1, 0, 0, 0.80)"
+    )
+    pid2 = _second_packet(env)
+
+    class Slow(FakeClient):
+        def stream(self, **params):
+            time.sleep(0.4)
+            return super().stream(**params)
+
+    outputs = [RESUME_OUT, ENTAIL_OUT, RESUME_OUT, ENTAIL_OUT]
+    client = Slow(outputs)
+    res = _race(env, [env.pid, pid2], runner="api", client_factory=lambda: client)
+    kinds = sorted(type(r).__name__ for r in res.values())
+    assert kinds == ["ApplyRefused", "Outcome"], res
+    assert generator.packet_spent_today(env.conn, NOW) <= env.settings.apply.daily_cap_usd
+
+
+def test_two_confirmed_paid_cli_runs_at_once_cannot_both_pass_the_cap(
+    env, fake_claude, claude_stream
+):
+    runner_state.set_overage(env.settings.paths.data_dir)
+    env.conn.execute(
+        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 1, 0, 0, 0.80)"
+    )
+    pid2 = _second_packet(env)
+    slow = claude_stream(RESUME_OUT, overage=True)
+    slow["steps"].insert(1, {"sleep": 0.6})
+    fake_claude.set([slow, claude_stream(ENTAIL_OUT, overage=True, model="claude-haiku-4-5")])
+    res = _race(env, [env.pid, pid2], runner="cli", confirm_paid=True)
+    kinds = sorted(type(r).__name__ for r in res.values())
+    assert kinds == ["ApplyRefused", "Outcome"], res
+    assert len(fake_claude.calls()) == 2  # the refused run never reached the CLI
