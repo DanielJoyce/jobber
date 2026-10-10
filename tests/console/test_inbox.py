@@ -265,21 +265,21 @@ def test_inbox_page_markup(client):
     r = client.get("/inbox")
     assert r.status_code == 200
     t = r.text
-    assert "A &middot; BULLSEYE" in t and "apply, minimal tailoring" in t
-    assert "Bullseye" in t and "&#9873; on_call_heavy" in t
+    assert "Bullseye &mdash; apply, minimal tailoring" in t and "apply, minimal tailoring" in t
+    assert ">Bullseye</a>" in t and "&#9873; on_call_heavy" in t
     assert "salary not stated" in t and "partial: open to confirm" in t
     assert "unverified evidence" in t
     assert "recent-skills 90" in t
     assert "2 jobs matched on skills you last used 7+ years ago" in t
     assert "VMware (2)" in t
-    assert "Mismatch" not in t  # bucket G rows hidden
+    assert ">Mismatch</a>" not in t  # bucket G rows hidden
     assert "inbox.js" in t and "<kbd>j</kbd>" in t
     assert "Connecting Colorado" in t
 
 
 def test_inbox_bucket_and_state_params(client):
-    assert "Mismatch" in client.get("/inbox?bucket=G").text
-    assert "Bullseye" not in client.get("/inbox?state=TX").text
+    assert ">Mismatch</a>" in client.get("/inbox?bucket=G").text
+    assert ">Bullseye</a>" not in client.get("/inbox?state=TX").text
 
 
 def test_label_and_undo_routes(client):
@@ -287,11 +287,11 @@ def test_label_and_undo_routes(client):
     assert r.status_code == 200
     assert 'id="row-1"' in r.text and "Shortlisted: Bullseye" in r.text
     assert "/inbox/1/undo" in r.text
-    assert "Bullseye" not in client.get("/inbox").text
+    assert ">Bullseye</a>" not in client.get("/inbox").text
     r = client.post("/inbox/1/undo")
     assert r.status_code == 200
-    assert 'id="row-1"' in r.text and "Bullseye" in r.text and "shortlist" in r.text
-    assert "Bullseye" in client.get("/inbox").text
+    assert 'id="row-1"' in r.text and ">Bullseye</a>" in r.text and "shortlist" in r.text
+    assert ">Bullseye</a>" in client.get("/inbox").text
     assert client.post("/inbox/1/label?label=applied").status_code == 422
     assert client.post("/inbox/999/label?label=interesting").status_code == 404
 
@@ -325,12 +325,12 @@ def test_bulk_routes(client):
     assert "Dismissed: Bullseye" in r.text and "Dismissed: Strong" in r.text
     assert 'name="group_id" value="1"' in r.text and "/inbox/bulk/undo" in r.text
     page = client.get("/inbox").text
-    assert "Bullseye" not in page and "Strong" not in page
+    assert ">Bullseye</a>" not in page and ">Strong</a>" not in page
     r = client.post("/inbox/bulk/undo", data={"group_id": [1, 2]})
     assert r.status_code == 200
-    assert 'id="row-1"' in r.text and "Bullseye" in r.text and "Strong" in r.text
+    assert 'id="row-1"' in r.text and ">Bullseye</a>" in r.text and ">Strong</a>" in r.text
     assert "Undone: 2 jobs restored." in r.text
-    assert "Bullseye" in client.get("/inbox").text
+    assert ">Bullseye</a>" in client.get("/inbox").text
 
 
 def test_bulk_shortlist_creates_applications(client, tmp_path):
@@ -372,7 +372,7 @@ def test_no_profile_banner(tmp_path, seeded):
     r = c.get("/inbox")
     assert r.status_code == 200
     assert "preferences.yaml" in r.text
-    assert "Bullseye" not in r.text
+    assert ">Bullseye</a>" not in r.text
 
 
 # ─── Employer rejections ────────────────────────────────────────────────────
