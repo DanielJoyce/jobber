@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791596154,"nonce":"ZcWaoQeiWIEqhT2rk/eExE2IYtE=","message":"Landed in PR #67 (6845a9b). Static URLs carry a content hash so a normal reload gets new CSS/JS; inbox chips, section heads, Sankey and mix chart show bucket names.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791596154,"nonce":"hGjAryeLVc7fi+Pp7d2uhwIPOUI=","status":2}]}
