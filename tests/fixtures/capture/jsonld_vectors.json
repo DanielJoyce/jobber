@@ -1,0 +1,103 @@
+{
+  "_note": "Synthetic JSON-LD JobPosting shapes for apply/capture.py mapping (specs/017 1e). Employers, figures and URLs are made up.",
+  "vectors": [
+    {
+      "name": "plain object, YEAR range, one location",
+      "page": "https://careers.acme.example/jobs/123",
+      "jsonld": {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Platform Engineer",
+        "hiringOrganization": {"@type": "Organization", "name": "Acme Synthetic"},
+        "jobLocation": {"@type": "Place", "address": {"addressLocality": "Denver", "addressRegion": "CO", "addressCountry": "US"}},
+        "baseSalary": {"@type": "MonetaryAmount", "currency": "USD", "value": {"@type": "QuantitativeValue", "minValue": 120000, "maxValue": 150000, "unitText": "YEAR"}},
+        "datePosted": "2026-10-01",
+        "validThrough": "2026-11-01T00:00:00Z",
+        "employmentType": "FULL_TIME",
+        "description": "<p>Run the synthetic platform.</p><ul><li>Terraform</li><li>Go</li></ul>",
+        "url": "https://careers.acme.example/jobs/123"
+      },
+      "expect": {
+        "title": "Platform Engineer",
+        "employer": "Acme Synthetic",
+        "location_raw": "Denver, CO, US",
+        "salary_raw": "USD 120,000-150,000 per YEAR",
+        "posted_at": "2026-10-01",
+        "closes_at": "2026-11-01T00:00:00Z",
+        "employment_type": "full_time",
+        "description_has": ["Run the synthetic platform.", "- Terraform"],
+        "description_lacks": ["<p>", "<li>"]
+      }
+    },
+    {
+      "name": "in an array, HOUR single value, TELECOMMUTE, two locations",
+      "page": "https://jobs.example.org/p/9",
+      "jsonld": [
+        {"@type": "Organization", "name": "Not a posting"},
+        {
+          "@type": "JobPosting",
+          "title": "Support Analyst",
+          "hiringOrganization": "Example Org",
+          "jobLocation": [
+            {"address": {"addressLocality": "Olympia", "addressRegion": "WA"}},
+            {"address": {"addressLocality": "Boise", "addressRegion": "ID"}}
+          ],
+          "jobLocationType": "TELECOMMUTE",
+          "baseSalary": {"currency": "USD", "value": {"value": 45.5, "unitText": "HOUR"}},
+          "employmentType": ["PART_TIME", "TEMPORARY"],
+          "description": "Help synthetic users."
+        }
+      ],
+      "expect": {
+        "title": "Support Analyst",
+        "employer": "Example Org",
+        "location_raw": "Olympia, WA; Boise, ID; Remote",
+        "salary_raw": "USD 45.5 per HOUR",
+        "employment_type": "part_time",
+        "description_has": ["Help synthetic users."]
+      }
+    },
+    {
+      "name": "@graph with an @type list",
+      "page": "https://jobs.example.org/p/10",
+      "jsonld": {
+        "@context": "https://schema.org",
+        "@graph": [
+          {"@type": "WebPage", "name": "page"},
+          {"@type": ["JobPosting", "Thing"], "title": "Data Engineer", "hiringOrganization": {"name": "Graph Co"}, "employmentType": "CONTRACTOR", "description": "Pipelines for synthetic data."}
+        ]
+      },
+      "expect": {"title": "Data Engineer", "employer": "Graph Co", "employment_type": "contract", "description_has": ["Pipelines for synthetic data."]}
+    },
+    {
+      "name": "entity-encoded description with no tags",
+      "page": "https://jobs.example.org/p/11",
+      "jsonld": {"@type": "JobPosting", "title": "QA Engineer", "hiringOrganization": {"name": "Encoded Co"}, "description": "&lt;p&gt;Test synthetic software.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Pytest&lt;/li&gt;&lt;/ul&gt;", "employmentType": "INTERN"},
+      "expect": {"employment_type": "temporary", "description_has": ["Test synthetic software.", "- Pytest"], "description_lacks": ["&lt;", "<p>"]}
+    },
+    {
+      "name": "script and onerror in the description are gone",
+      "page": "https://jobs.example.org/p/12",
+      "jsonld": {"@type": "JobPosting", "title": "Security Engineer", "hiringOrganization": {"name": "Hostile Co"}, "description": "<p>Real text.</p><script>alert('x')</script><img src=x onerror=\"alert(1)\"><style>p{}</style>", "employmentType": "PER_DIEM"},
+      "expect": {"employment_type": "part_time", "description_has": ["Real text."], "description_lacks": ["alert", "onerror", "<img", "<script", "p{}"]}
+    },
+    {
+      "name": "minValue only, MONTH; unknown employment type",
+      "page": "https://jobs.example.org/p/13",
+      "jsonld": {"@type": "JobPosting", "title": "Analyst", "hiringOrganization": {"name": "Month Co"}, "baseSalary": {"currency": "USD", "value": {"minValue": 5000, "unitText": "MONTH"}}, "employmentType": "VOLUNTEER", "description": "x"},
+      "expect": {"salary_raw": "USD 5,000 per MONTH", "employment_type": "unknown"}
+    },
+    {
+      "name": "value as a bare number on baseSalary",
+      "page": "https://jobs.example.org/p/14",
+      "jsonld": {"@type": "JobPosting", "title": "Analyst", "hiringOrganization": {"name": "Bare Co"}, "baseSalary": {"currency": "USD", "value": 90000, "unitText": "YEAR"}, "description": "x"},
+      "expect": {"salary_raw": "USD 90,000 per YEAR"}
+    },
+    {
+      "name": "employmentType list with SEASONAL first",
+      "page": "https://jobs.example.org/p/15",
+      "jsonld": {"@type": "JobPosting", "title": "Ranger", "hiringOrganization": {"name": "Park Co"}, "employmentType": ["SEASONAL", "FULL_TIME"], "description": "x"},
+      "expect": {"employment_type": "seasonal"}
+    }
+  ]
+}

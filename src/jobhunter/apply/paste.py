@@ -33,9 +33,11 @@ from jobhunter.core.fetch import FetchError, RobotsDisallowed
 from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.textnorm import html_to_text
 from jobhunter.pipeline.ats_rules import host_of, is_http_url, match_ats, unwrap
+from jobhunter.pipeline.board_ids import board_key
 from jobhunter.pipeline.dedupe import _refresh_group, normalize_employer
-from jobhunter.pipeline.dedupe_url import normalize_apply_url
+from jobhunter.pipeline.dedupe_url import _identifies_job, normalize_apply_url
 from jobhunter.pipeline.dedupe_xstate import normalize_title
+from jobhunter.pipeline.locations import apply_job_locations
 from jobhunter.pipeline.normalize import normalize_job
 
 SYNTHETIC_PREFIX = "paste:"  # job.url when no URL was given; never shown or opened
@@ -99,17 +101,26 @@ def is_synthetic(url: str | None) -> bool:
 # ─── duplicates ─────────────────────────────────────────────────────────────
 
 
+SAME_URL = "same URL"  # a URL that identifies one posting
+SAME_BOARD_ID = "same board id"  # LinkedIn / Indeed job id (specs/017 1e)
+SAME_SITE_URL = "same URL, not one posting"  # a careers home or board page
+SAME_EMPLOYER_TITLE = "same employer and title"
+_STRONG = (SAME_URL, SAME_BOARD_ID)
+_ORDER = {SAME_BOARD_ID: 0, SAME_URL: 1, SAME_SITE_URL: 2, SAME_EMPLOYER_TITLE: 3}
+
+
 @dataclass
 class Duplicate:
     group_id: int
     title: str
     employer: str
-    why: str  # "same URL" or "same employer and title"
+    why: str  # one of the SAME_* reasons above
     packet_id: int | None = None
 
     @property
     def by_url(self) -> bool:
-        return self.why == "same URL"
+        """The same posting for sure (one-posting URL or board id): no "create anyway"."""
+        return self.why in _STRONG
 
 
 def _key(url: str | None) -> str | None:
@@ -120,26 +131,74 @@ def _key(url: str | None) -> str | None:
         return None
 
 
+def _url_matches(conn: sqlite3.Connection, key: str) -> set[int]:
+    host = host_of(key)
+    rows = conn.execute(
+        "SELECT j.job_group_id AS gid, j.url, j.apply_url, j.page_url FROM job j "
+        "WHERE j.job_group_id IS NOT NULL AND (instr(lower(j.url), ?) > 0 "
+        "OR instr(lower(coalesce(j.apply_url, '')), ?) > 0 "
+        "OR instr(lower(coalesce(j.page_url, '')), ?) > 0) "
+        "UNION ALL SELECT a.job_group_id, a.start_url, a.final_url, NULL FROM apply_link a "
+        "WHERE instr(lower(a.start_url), ?) > 0 "
+        "OR instr(lower(coalesce(a.final_url, '')), ?) > 0",
+        (host, host, host, host, host),
+    ).fetchall()
+    return {int(r[0]) for r in rows if key in (_key(r[1]), _key(r[2]), _key(r[3]))}
+
+
+def board_groups(conn: sqlite3.Connection, key: str) -> list[int]:
+    """Groups holding this board job id: through ``job_board_ref`` (to the job's current
+    group; a job not grouped yet is skipped), then through stored board URLs."""
+    board, _, bid = key.partition(":")
+    found: list[int] = []
+    for r in conn.execute(
+        "SELECT j.job_group_id FROM job_board_ref r JOIN job j ON j.id = r.job_id "
+        "WHERE r.board = ? AND r.board_id = ? AND j.job_group_id IS NOT NULL",
+        (board, bid),
+    ):
+        found.append(int(r[0]))
+    for r in conn.execute(
+        "SELECT job_group_id, url, apply_url, page_url FROM job WHERE job_group_id IS NOT NULL "
+        "AND (instr(url, ?) > 0 OR instr(coalesce(apply_url, ''), ?) > 0 "
+        "OR instr(coalesce(page_url, ''), ?) > 0)",
+        (bid, bid, bid),
+    ):
+        if key in (board_key(r[1]), board_key(r[2]), board_key(r[3])):
+            found.append(int(r[0]))
+    return list(dict.fromkeys(found))
+
+
 def find_duplicates(
-    conn: sqlite3.Connection, url: str | None, employer: str, title: str
+    conn: sqlite3.Connection,
+    url: str | None,
+    employer: str,
+    title: str,
+    *,
+    urls: tuple[str | None, ...] = (),
+    board_keys: tuple[str, ...] = (),
 ) -> list[Duplicate]:
-    """Existing groups for this posting: same normalized URL, or same employer and title."""
+    """Existing groups for this posting, the surest match first.
+
+    By board id (LinkedIn / Indeed, through ``job_board_ref`` and stored board URLs), by
+    normalized URL (``url`` and any ``urls``: a capture's chosen and page URLs; a URL that
+    names no single posting, such as a careers home, is a weaker match), or by employer and
+    title. ``board_keys`` are added to those found in the URLs themselves.
+    """
     found: dict[int, str] = {}
-    key = _key(url)
-    if key:
-        host = host_of(key)
-        rows = conn.execute(
-            "SELECT j.job_group_id AS gid, j.url, j.apply_url FROM job j "
-            "WHERE j.job_group_id IS NOT NULL AND (instr(lower(j.url), ?) > 0 "
-            "OR instr(lower(coalesce(j.apply_url, '')), ?) > 0) "
-            "UNION ALL SELECT a.job_group_id, a.start_url, a.final_url FROM apply_link a "
-            "WHERE instr(lower(a.start_url), ?) > 0 "
-            "OR instr(lower(coalesce(a.final_url, '')), ?) > 0",
-            (host, host, host, host),
-        ).fetchall()
-        for r in rows:
-            if key in (_key(r[1]), _key(r[2])):
-                found.setdefault(int(r[0]), "same URL")
+
+    def note(gid: int, why: str) -> None:
+        if gid not in found or _ORDER[why] < _ORDER[found[gid]]:
+            found[gid] = why
+
+    all_urls = [u for u in (url, *urls) if u]
+    keys = {k for u in all_urls if (k := board_key(u))} | set(board_keys)
+    for k in sorted(keys):
+        for gid in board_groups(conn, k):
+            note(gid, SAME_BOARD_ID)
+    for key in dict.fromkeys(k for u in all_urls if (k := _key(u))):
+        why = SAME_URL if _identifies_job(key) else SAME_SITE_URL
+        for gid in _url_matches(conn, key):
+            note(gid, why)
     emp, tit = normalize_employer(employer), normalize_title(title)
     if emp and tit:
         for r in conn.execute(
@@ -149,7 +208,7 @@ def find_duplicates(
             if normalize_title(r["title"]) == tit and (
                 normalize_employer(r["employer"] or r["agency_raw"]) == emp
             ):
-                found.setdefault(int(r["id"]), "same employer and title")
+                note(int(r["id"]), SAME_EMPLOYER_TITLE)
     out: list[Duplicate] = []
     for gid, why in found.items():
         row = conn.execute(
@@ -168,7 +227,7 @@ def find_duplicates(
                 packets.live_packet_id(conn, gid),
             )
         )
-    out.sort(key=lambda d: (not d.by_url, d.group_id))
+    out.sort(key=lambda d: (_ORDER[d.why], d.group_id))
     return out
 
 
@@ -195,12 +254,23 @@ def insert_pasted_posting(
     employer: str,
     title: str,
     now: datetime,
+    salary_raw: str | None = None,
+    location_raw: str | None = None,
+    posted_at: str | None = None,
+    closes_at: str | None = None,
+    employment_type: str | None = None,
+    page_url: str | None = None,
+    apply_url: str | None = None,
+    locate: bool = False,
 ) -> int:
     """Write the ``paste-manual`` group (no transaction of its own); returns the group id.
 
     The job's ``url`` is the given URL, or a placeholder the caller replaces with
     ``paste:<packet_id>``. An ``apply_link`` row (unresolved: the URL as given, no request
-    made) is written when a URL was given.
+    made) is written when a URL was given; ``apply_url`` (a capture's decoded off-site
+    destination) is preferred for it. The optional fields are a capture's mapped facts
+    (specs/017 1e); ``locate`` writes ``job_locations`` now instead of at the nightly run.
+    The group is scored only on request (``job_group.score_on_request``).
     """
     employer, title = employer.strip(), title.strip()
     if not employer or not title:
@@ -214,8 +284,9 @@ def insert_pasted_posting(
     jid = int(
         conn.execute(
             "INSERT INTO job (source_key, external_id, url, title, employer, description_raw, "
-            "description_completeness, needs_resolve, stage, first_seen_at, last_seen_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'normalized', ?, ?)",
+            "description_completeness, needs_resolve, stage, first_seen_at, last_seen_at, "
+            "salary_raw, location_raw, posted_at, closes_at, employment_type, page_url, "
+            "apply_url) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'normalized', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 PASTE_MANUAL,
                 uuid.uuid4().hex,
@@ -226,11 +297,20 @@ def insert_pasted_posting(
                 "pasted" if text else "partial",
                 at,
                 at,
+                salary_raw,
+                location_raw,
+                posted_at,
+                closes_at,
+                employment_type or "unknown",
+                page_url if page_url and page_url != url else None,
+                apply_url,
             ),
         ).lastrowid
         or 0
     )
     normalize_job(conn, jid)
+    if locate:
+        apply_job_locations(conn, jid)
     # 'manual' keeps the URL and cross-state merges away from it, like the email-manual groups.
     gid = int(
         conn.execute(
@@ -241,12 +321,13 @@ def insert_pasted_posting(
         or 0
     )
     conn.execute("UPDATE job SET job_group_id = ? WHERE id = ?", (gid, jid))
-    if url:
-        rule = match_ats(url)
+    start = apply_url or url
+    if start:
+        rule = match_ats(start)
         conn.execute(
             "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, "
             "employer_host, status, resolved_at) VALUES (?, ?, NULL, '[]', ?, ?, 'unresolved', ?)",
-            (gid, url, rule.name if rule else None, host_of(url), at),
+            (gid, start, rule.name if rule else None, host_of(start), at),
         )
     return gid
 
@@ -279,6 +360,23 @@ def store_posting_text(conn: sqlite3.Connection, group_id: int, text: str, now: 
     Unlike ``detail.paste_description`` it does not bump ``description_rev``: a packet needs the
     text for tailoring, and that must not queue a paid re-score.
     """
+    with db.transaction(conn):
+        store_posting_text_in_txn(conn, group_id, text, now)
+
+
+_FILLABLE = ("salary_raw", "location_raw", "posted_at", "closes_at")
+
+
+def store_posting_text_in_txn(
+    conn: sqlite3.Connection,
+    group_id: int,
+    text: str,
+    now: datetime,
+    fields: dict[str, str | None] | None = None,
+) -> None:
+    """``store_posting_text`` inside the caller's transaction (a capture's Add this description,
+    specs/017 1e). ``fields`` (salary_raw, location_raw, posted_at, closes_at, employment_type)
+    fill only columns that are still empty."""
     text = text.strip()
     if not text:
         raise PasteError("paste the posting text")
@@ -287,14 +385,28 @@ def store_posting_text(conn: sqlite3.Connection, group_id: int, text: str, now: 
     ).fetchone()
     if row is None or row[0] is None:
         raise KeyError(f"no such job group: {group_id}")
-    with db.transaction(conn):
+    jid = row[0]
+    conn.execute(
+        "UPDATE job SET description_raw = ?, description_completeness = 'pasted', "
+        "needs_resolve = 0, last_seen_at = ? WHERE id = ?",
+        (pasted_html(text[:MAX_PASTE_CHARS]), _iso(now), jid),
+    )
+    fields = fields or {}
+    for col in _FILLABLE:
+        if fields.get(col):
+            conn.execute(
+                f"UPDATE job SET {col} = ? WHERE id = ? AND coalesce({col}, '') = ''",
+                (fields[col], jid),
+            )
+    if fields.get("employment_type"):
         conn.execute(
-            "UPDATE job SET description_raw = ?, description_completeness = 'pasted', "
-            "needs_resolve = 0, last_seen_at = ? WHERE id = ?",
-            (pasted_html(text[:MAX_PASTE_CHARS]), _iso(now), row[0]),
+            "UPDATE job SET employment_type = ? WHERE id = ? AND employment_type = 'unknown'",
+            (fields["employment_type"], jid),
         )
-        normalize_job(conn, row[0])
-        _refresh_group(conn, group_id)
+    normalize_job(conn, jid)
+    if fields.get("location_raw"):
+        apply_job_locations(conn, jid)
+    _refresh_group(conn, group_id)
 
 
 # ─── Fetch posting text ─────────────────────────────────────────────────────
