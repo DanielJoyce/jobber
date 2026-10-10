@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791671509,"nonce":"1eRR/9r+GMvHcKxB5oi0QdggHIk=","message":"Merged in PR 88 after Opus xhigh review gate (two rounds plus fix verification). Remaining minors a7a1b40.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791671509,"nonce":"HGC4LXEyEY2UsOzaWqUiWF6SLPM=","status":2}]}
