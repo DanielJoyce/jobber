@@ -28,6 +28,7 @@ class Server:
     url: str
     db_path: Path
     ids: dict[str, int]
+    app: object = None  # the FastAPI app, for tests that inject fakes into app.state
 
     def rows(self, sql: str, params=()):
         return seeding.query(self.db_path, sql, params)
@@ -53,7 +54,9 @@ def server(tmp_path):
                 "db_path": str(db_path),
                 "cache_dir": str(tmp_path / "cache"),
                 "data_dir": str(tmp_path),
-            }
+            },
+            # A name no real provider answers to: a test that reaches a scorer must inject one.
+            "scoring": {"screen_scorer": "test:model"},
         }
     )
     app = create_app(settings, lambda: db.connect(db_path))
@@ -70,7 +73,7 @@ def server(tmp_path):
         if time.monotonic() > deadline:
             raise RuntimeError("uvicorn did not start")
         time.sleep(0.02)
-    yield Server(base, db_path, ids)
+    yield Server(base, db_path, ids, app)
     srv.should_exit = True
     thread.join(timeout=10)
 
