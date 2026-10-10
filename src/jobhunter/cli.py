@@ -128,6 +128,25 @@ def score(
             help="Collect every submitted batch not yet collected (nightly 03:30 timer).",
         ),
     ] = False,
+    rescore_pending: Annotated[
+        bool,
+        typer.Option(
+            "--rescore-pending",
+            help="Run every queued /prefs re-score request (nightly collect timer).",
+        ),
+    ] = False,
+    rescore: Annotated[
+        str | None,
+        typer.Option(
+            "--rescore",
+            metavar="SCOPE",
+            help="Re-score now: 'recent' (open A-E from the last 14 days) or 'all'. "
+            "Shows the estimate and asks first.",
+        ),
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="With --rescore: skip the confirmation prompt.")
+    ] = False,
     limit: Annotated[int, typer.Option(help="Most job groups to submit.", min=1)] = 500,
     deep: Annotated[
         int | None,
@@ -159,12 +178,27 @@ def score(
     ] = None,
 ) -> None:
     """Screen batches (specs/006 Stage 2) or the Opus deep pass (Stage 3)."""
-    modes = [submit, collect is not None, collect_pending, deep is not None, deep_group is not None]
+    modes = [
+        submit,
+        collect is not None,
+        collect_pending,
+        deep is not None,
+        deep_group is not None,
+        rescore_pending,
+        rescore is not None,
+    ]
     if sum(modes) != 1:
         typer.echo(
-            "pass exactly one of --submit, --collect, --collect-pending, --deep or --deep-group",
+            "pass exactly one of --submit, --collect, --collect-pending, --deep, --deep-group, "
+            "--rescore-pending or --rescore",
             err=True,
         )
+        raise typer.Exit(2)
+    if rescore is not None and rescore not in ("recent", "all"):
+        typer.echo("--rescore takes 'recent' or 'all'", err=True)
+        raise typer.Exit(2)
+    if yes and rescore is None:
+        typer.echo("--yes applies to --rescore only", err=True)
         raise typer.Exit(2)
 
     from datetime import UTC, datetime
@@ -183,8 +217,9 @@ def score(
     except ProfileError as exc:
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
-    if scorer_override is not None and not (submit or collect is not None):
-        typer.echo("--scorer applies to --submit and --collect only", err=True)
+    rescoring = rescore_pending or rescore is not None
+    if scorer_override is not None and not (submit or collect is not None or rescoring):
+        typer.echo("--scorer applies to --submit, --collect and re-score runs only", err=True)
         raise typer.Exit(2)
     if jobs_per_request is not None and not submit:
         typer.echo("--jobs-per-request applies to --submit only", err=True)
@@ -199,6 +234,9 @@ def score(
     if jobs_per_request is not None and jobs_per_request > 16 and not decisions_scorer:
         typer.echo("--jobs-per-request is at most 16 for chat scorers", err=True)
         raise typer.Exit(2)
+    if rescoring:
+        _score_rescore(settings, profile, rescore, scorer_override, yes)
+        return
     screening = submit or collect is not None
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
         typer.echo(notice, err=True)
@@ -287,6 +325,88 @@ def score(
                 raise typer.Exit(2)
             result = screen.collect_batch(conn, client, collect, profile, now=now)
             typer.echo(json.dumps(result.as_dict(), indent=2))
+    finally:
+        conn.close()
+
+
+def _score_rescore(settings, profile, scope: str | None, scorer_override: str | None, yes: bool):
+    """``score --rescore SCOPE`` (estimate, confirm, run) or ``--rescore-pending`` (drain)."""
+    from jobhunter.scoring import rescore as rs
+    from jobhunter.scoring.scorers import ScorerError, privacy_notice
+
+    conn = db.connect(settings.paths.db_path)
+    db.migrate(conn)
+    clock = lambda: datetime.now(UTC)  # noqa: E731
+    spec = scorer_override or settings.scoring.screen_scorer
+    try:
+        if scope is None:
+            results = rs.drain_pending(
+                conn, profile, settings.scoring, now=clock, scorer=scorer_override
+            )
+            if not results:
+                typer.echo("no pending re-score requests")
+            failed = False
+            for rid, res in results:
+                if isinstance(res, str):
+                    typer.echo(f"request {rid}: {res}")
+                    continue
+                row = rs.get_request(conn, rid)
+                typer.echo(
+                    f"request {rid}: {row['status']} scored {res.scored} of {res.total}, "
+                    f"errors {res.errored}, ${res.cost_usd:.4f}"
+                    + (f" ({res.note})" if res.note else "")
+                    + (f" error: {row['error']}" if row["error"] else "")
+                )
+                failed = failed or row["status"] == "failed"
+            if failed:
+                raise typer.Exit(1)
+            return
+        now = clock()
+        try:
+            plan = rs.make_plan(conn, profile, settings.scoring, scope, spec, now)
+        except (rs.RescoreError, ScorerError) as exc:
+            typer.echo(f"re-score: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        typer.echo(
+            f"scope {scope}: {plan.total} groups with {spec} "
+            f"({plan.rescored} of {plan.waiting} waiting were scored before); "
+            f"estimated ${plan.estimated_usd:.2f} at ${plan.cost_per_job:.5f}/job "
+            f"({plan.cost_source}); spend cap remaining ${max(plan.remaining_usd, 0):.2f}"
+        )
+        if plan.refusal:
+            typer.echo(f"refused: {plan.refusal}", err=True)
+            raise typer.Exit(1)
+        if plan.total == 0:
+            typer.echo("nothing to re-score")
+            return
+        if notice := privacy_notice(spec, settings.scoring):
+            typer.echo(notice, err=True)
+        if not yes and not typer.confirm("Run it?", default=False):
+            typer.echo("not run")
+            raise typer.Exit(1)
+        rid = rs.create_request(conn, profile, plan, now)
+        try:
+            res = rs.run_request(
+                conn,
+                rid,
+                profile,
+                settings.scoring,
+                scorer=spec,
+                now=clock,
+                prefiltered=plan.prefilter,
+            )
+        except rs.RescoreError as exc:
+            rs.cancel_request(conn, rid, clock())
+            typer.echo(f"re-score: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        row = rs.get_request(conn, rid)
+        typer.echo(
+            f"{row['status']}: scored {res.scored} of {res.total}, errors {res.errored}, "
+            f"${res.cost_usd:.4f}" + (f" ({res.note})" if res.note else "")
+        )
+        if row["error"]:
+            typer.echo(f"error: {row['error']}", err=True)
+            raise typer.Exit(1)
     finally:
         conn.close()
 

@@ -17,7 +17,7 @@
   <p>Preview against the last {{ days }} days ({{ buckets.total }} scored jobs):</p>
   {% if bucket_lines %}
   <ul class="plain deltas">
-    {% for b, before, after, delta in bucket_lines %}<li>Bucket {{ b }} {{ before }} → {{ after }} ({{ signed(delta) }})</li>{% endfor %}
+    {% for b, before, after, delta in bucket_lines %}<li>{{ bucket_title(b) }} <span class="bucket-badge" title="Bucket {{ b }}">{{ b }}</span> {{ before }} → {{ after }} ({{ signed(delta) }})</li>{% endfor %}
   </ul>
   {% else %}<p class="muted">No bucket changes.</p>{% endif %}
   {% if prefilter.reasons %}
@@ -29,7 +29,7 @@
   {% endif %}
   {% if into_ab %}
   <details>
-    <summary>Show the {{ into_ab | length }} job{{ "s" if into_ab | length != 1 }} that would move into A/B</summary>
+    <summary>Show the {{ into_ab | length }} job{{ "s" if into_ab | length != 1 }} that would move into Bullseye or Strong</summary>
     <ul class="plain">
       {% for m in into_ab %}<li><a href="/job/{{ m.job_group_id }}">{{ m.title }}</a> <span class="muted">{{ m.before }} → {{ m.after }}</span></li>{% endfor %}
     </ul>
@@ -49,7 +49,7 @@
     <span class="cost">{% if o.scope == "none" %}$0.00{% else %}≈ ${{ "%.2f" | format(o.cost_usd) }}{% endif %}</span>
   </label>
   {% endfor %}
-  <p class="hint">At ${{ "%.4f" | format(estimate.cost_per_job) }} per job ({% if estimate.cost_source == "default" %}no spend measured yet; assumed{% else %}measured from {{ estimate.cost_source }}{% endif %}). Re-scoring is queued for the next scoring run, goes through the Batch API and counts against the spend cap.</p>
+  <p class="hint">At ${{ "%.4f" | format(estimate.cost_per_job) }} per job ({% if estimate.cost_source == "default" %}no spend measured yet; assumed{% else %}measured from {{ estimate.cost_source }}{% endif %}). Saving queues the re-score; run it from Re-score now on this page (or the nightly timer drains it). It counts against the spend cap.</p>
 </fieldset>
 {% endif %}
 <p class="actions"><a class="button" href="/prefs">Cancel</a> <button type="submit" form="prefs-form" class="button primary">{% if paid %}Save{% else %}Save — free{% endif %}</button></p>

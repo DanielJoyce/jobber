@@ -51,6 +51,7 @@ def register(
 ) -> None:
     Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
     templates.env.globals["signed"] = pf.signed
+    templates.env.globals["bucket_title"] = pf.bucket_title
     templates.env.filters["pref_value"] = pf.display_value
 
     def profile_dir(request: Request) -> Path:
@@ -112,6 +113,7 @@ def register(
             ),
             "weight_keys": pf.WEIGHT_KEYS,
             "threshold_keys": list(bk.DEFAULT_THRESHOLDS),
+            "threshold_groups": pf.threshold_groups(list(bk.DEFAULT_THRESHOLDS)),
             "defaults": bk.DEFAULT_THRESHOLDS,
             "bucket_help": pf.BUCKET_HELP,
             "bucket_rules": pf.BUCKET_RULES,
@@ -120,7 +122,7 @@ def register(
             "spend": settings.scoring,
             "resume": pf.resume_info(conn, profile),
             "history": pf.history(conn),
-            "pending": pf.pending_rescores(conn),
+            "rescore_panel": request.app.state.rescore_panel_context(request, conn),
             "source_file": str(st.prefs_file),
             "st": st,
             "raw_text": raw_text if raw_text is not None else (st.raw_text or ""),
@@ -163,7 +165,7 @@ def register(
         elif saved is not None:
             flash = "No changes to save." if saved == 0 else f"Saved {saved} change(s)."
             if rescore in ("recent", "all"):
-                flash += " Re-score queued for the next scoring run."
+                flash += " Re-score queued; run it from Re-score now below."
         elif reverted is not None:
             flash = f"Reverted change #{reverted}."
         return render_page(request, conn, st, flash=flash)

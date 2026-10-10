@@ -22,10 +22,12 @@ from urllib.parse import parse_qs
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from jobhunter.console.inbox import BUCKET_TITLES
 from jobhunter.core import db, geo
-from jobhunter.core.models import Bucket, EmploymentType
+from jobhunter.core.models import EmploymentType
 from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring import buckets as bk
+from jobhunter.scoring import rescore as rs
 from jobhunter.scoring.prefilter import _CREDENTIAL_PATTERNS, evaluate
 from jobhunter.scoring.profile import (
     Profile,
@@ -47,14 +49,13 @@ PAID_ROOTS = frozenset({"current_focus", "narrative", "resume_path"})
 ATOMIC_PATHS = frozenset({"soft.weights", "hard.home"})
 RESUME_PATH = "resume_sha256"  # pseudo field in snapshots: hand edits to the resume file
 PREVIEW_DAYS = 30
-RECENT_DAYS = 14
+RECENT_DAYS = rs.RECENT_DAYS
 FALLBACK_COST_PER_JOB = 0.002
 WEIGHT_KEYS = ("skills", "seniority", "domain", "comp", "location")
 PERIODS = ("year", "month", "hour")
 EMPLOYMENT_CHOICES = tuple(e.value for e in EmploymentType if e is not EmploymentType.unknown)
 CREDENTIAL_CHOICES = tuple(sorted(_CREDENTIAL_PATTERNS))
 RESCORE_SCOPES = ("none", "recent", "all")
-OPEN_BUCKETS = frozenset({Bucket.A, Bucket.B, Bucket.C, Bucket.D, Bucket.E})
 
 REASON_LABELS = {
     "salary_below_floor": "Filtered out by salary",
@@ -609,20 +610,6 @@ def cost_per_job(conn: sqlite3.Connection) -> tuple[float, str]:
     return FALLBACK_COST_PER_JOB, "default"
 
 
-_OPEN_SCORED_SQL = """
-SELECT fs.*, j.id AS job_id, j.salary_min, j.salary_max, j.salary_period, j.salary_stated,
-       j.location_scope, coalesce(j.posted_at, j.first_seen_at) AS seen_at
-FROM fit_score fs
-JOIN job_group g ON g.id = fs.job_group_id
-JOIN job j ON j.id = g.canonical_job_id
-WHERE (j.closes_at IS NULL OR j.closes_at >= ?)
-  AND fs.id = (
-    SELECT f2.id FROM fit_score f2 WHERE f2.job_group_id = fs.job_group_id
-    ORDER BY (f2.tier = 'deep') DESC, f2.created_at DESC, f2.id DESC LIMIT 1
-  )
-"""
-
-
 @dataclass(frozen=True)
 class RescoreOption:
     scope: str
@@ -634,17 +621,8 @@ class RescoreOption:
 def rescore_estimate(conn: sqlite3.Connection, profile: Profile, now: datetime) -> dict[str, Any]:
     """Re-score options for a paid change: none / open A-E in 14 days / all open."""
     cost, source = cost_per_job(conn)
-    cutoff = (now - timedelta(days=RECENT_DAYS)).isoformat()
-    cur = conn.cursor()
-    cur.row_factory = sqlite3.Row
-    rows = cur.execute(_OPEN_SCORED_SQL, (now.isoformat(),)).fetchall()
-    recent = 0
-    for row in rows:
-        if (row["seen_at"] or "") < cutoff:
-            continue
-        locs = load_job_group_locations(conn, row["job_id"])
-        if bk.compute_row(row, row, locs, profile).bucket in OPEN_BUCKETS:
-            recent += 1
+    open_total, recent_ids = rs.open_scored(conn, profile, now)
+    recent = len(recent_ids)
     options = [
         RescoreOption("none", "No, new jobs only", 0, 0.0),
         RescoreOption(
@@ -653,7 +631,7 @@ def rescore_estimate(conn: sqlite3.Connection, profile: Profile, now: datetime) 
             recent,
             recent * cost,
         ),
-        RescoreOption("all", "All open jobs", len(rows), len(rows) * cost),
+        RescoreOption("all", "All open jobs", open_total, open_total * cost),
     ]
     return {"cost_per_job": cost, "cost_source": source, "options": options}
 
@@ -760,66 +738,101 @@ BUCKET_INTRO = (
 )
 BUCKET_NOTE = "Any stated requirement you don't meet (a blocker) drops a job one bucket."
 
+# Which bucket each threshold controls (the letter is only a lookup key into BUCKET_TITLES).
+THRESHOLD_BUCKET = {
+    "a_overall": "A",
+    "a_recency": "A",
+    "b_overall": "B",
+    "c_skills": "C",
+    "d_skills": "D",
+    "d_domain": "D",
+    "e_comp": "E",
+    "f_recency": "F",
+    "f_raw": "F",
+    "g_skills": "G",
+    "g_domain": "G",
+}
+
+
+def bucket_title(letter: str) -> str:
+    """``"A"`` -> ``"Bullseye"``: the inbox's bucket name, title-cased."""
+    return BUCKET_TITLES[letter][0].title()
+
+
+def threshold_groups(keys: Sequence[str]) -> list[dict[str, Any]]:
+    """Threshold keys grouped under the bucket they control, best bucket first.
+
+    Keys with no bucket (job-card verdict labels, the catch-all) go in a final group.
+    """
+    groups: list[dict[str, Any]] = []
+    for letter in BUCKET_TITLES:
+        mine = [k for k in keys if THRESHOLD_BUCKET.get(k) == letter]
+        if mine:
+            groups.append({"letter": letter, "title": bucket_title(letter), "fields": mine})
+    rest = [k for k in keys if k not in THRESHOLD_BUCKET]
+    if rest:
+        groups.append({"letter": None, "title": "Labels and catch-all", "fields": rest})
+    return groups
+
+
 # (bucket, what it means, threshold keys it uses), in the order the rules are checked.
 BUCKET_RULES: list[tuple[str, str, str]] = [
-    ("G", "Mismatch (G) if skills score is below g_skills. Hidden from the inbox.", "g_skills"),
-    ("G", "Mismatch (G) if the domain fit is below g_domain.", "g_domain"),
+    ("G", "Mismatch if skills score is below g_skills. Hidden from the inbox.", "g_skills"),
+    ("G", "Mismatch if the domain fit is below g_domain.", "g_domain"),
     (
         "F",
-        "Stale match (F): the job matches your older experience (raw skills at least f_raw) "
+        "Stale match: the job matches your older experience (raw skills at least f_raw) "
         "but not your recent work (recent skills below f_recency). This is the "
         "keyword-search trap.",
         "f_recency, f_raw",
     ),
-    ("E", "Downlevel (E): the job is below your level AND pay fit is below e_comp.", "e_comp"),
+    ("E", "Downlevel: the job is below your level AND pay fit is below e_comp.", "e_comp"),
     (
         "C",
-        "Stretch up (C): the job is above your level and your recent skills are at least c_skills.",
+        "Stretch up: the job is above your level and your recent skills are at least c_skills.",
         "c_skills",
     ),
     (
         "D",
-        "Lateral (D): your skills transfer (at least d_skills) but the domain is unfamiliar "
+        "Lateral: your skills transfer (at least d_skills) but the domain is unfamiliar "
         "(below d_domain).",
         "d_skills, d_domain",
     ),
     (
         "A",
-        "Bullseye (A): overall at least a_overall AND recent skills at least a_recency AND "
+        "Bullseye: overall at least a_overall AND recent skills at least a_recency AND "
         "no blockers. Lower these if A stays empty.",
         "a_overall, a_recency",
     ),
-    ("B", "Strong (B): overall at least b_overall.", "b_overall"),
+    ("B", "Strong: overall at least b_overall.", "b_overall"),
 ]
 
 _VERDICT_TAIL = "Display only; it doesn't move jobs between buckets."
 BUCKET_HELP: dict[str, str] = {
-    "g_skills": "Mismatch (G) if skills score is below this. Hidden from the inbox.",
-    "g_domain": "Mismatch (G) if the domain fit is below this.",
-    "f_recency": "Stale match (F) if recent skills are below this while raw skills are high.",
+    "g_skills": "Mismatch if skills score is below this. Hidden from the inbox.",
+    "g_domain": "Mismatch if the domain fit is below this.",
+    "f_recency": "Stale match if recent skills are below this while raw skills are high.",
     "f_raw": (
-        "Stale match (F): the job matches your older experience (raw skills at least this) "
+        "Stale match: the job matches your older experience (raw skills at least this) "
         "but not your recent work."
     ),
-    "e_comp": "Downlevel (E): the job is below your level AND pay fit is below this.",
+    "e_comp": "Downlevel: the job is below your level AND pay fit is below this.",
     "c_skills": (
-        "Stretch up (C): the job is above your level and your recent skills are at least this."
+        "Stretch up: the job is above your level and your recent skills are at least this."
     ),
-    "d_skills": "Lateral (D): your skills transfer (at least this) but the domain is unfamiliar.",
-    "d_domain": "Lateral (D) if the domain fit is below this while your skills transfer.",
-    "b_overall": "Strong (B): overall at least this.",
+    "d_skills": "Lateral: your skills transfer (at least this) but the domain is unfamiliar.",
+    "d_domain": "Lateral if the domain fit is below this while your skills transfer.",
+    "b_overall": "Strong: overall at least this.",
     "a_overall": (
-        "Bullseye (A): overall at least this AND recent skills high enough AND no blockers. "
+        "Bullseye: overall at least this AND recent skills high enough AND no blockers. "
         "Lower it if A stays empty."
     ),
-    "a_recency": (
-        "Bullseye (A) also needs recent skills at least this. Lower it if A stays empty."
-    ),
+    "a_recency": ("Bullseye also needs recent skills at least this. Lower it if A stays empty."),
     "verdict_strong": f"Job card label: overall at least this reads strong. {_VERDICT_TAIL}",
     "verdict_possible": f"Job card label: overall at least this reads possible. {_VERDICT_TAIL}",
     "verdict_weak": f"Job card label: overall at least this reads weak. {_VERDICT_TAIL}",
     "fallback_mismatch_overall": (
-        "Catch-all: a job no rule above matched is Mismatch (G) if its overall score is "
-        "below this, otherwise Lateral (D)."
+        "Catch-all: a job no rule above matched is Mismatch if its overall score is "
+        "below this, otherwise Lateral."
     ),
 }

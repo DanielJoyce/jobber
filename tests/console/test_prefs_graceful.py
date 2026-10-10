@@ -350,7 +350,7 @@ def test_bucket_fields_have_tooltips_and_no_spec_references(client, dirs):
     write_resume(rdir)
     section = buckets_section(client.get("/prefs").text)
     assert "Every scored job lands in one bucket" in section
-    assert "<table" in section and "Bullseye (A)" in section
+    assert "<table" in section and "Bullseye" in section and "Bullseye (A)" not in section
     assert "Any stated requirement you don" in section
     for key in bk.DEFAULT_THRESHOLDS:
         assert re.search(rf'<input[^>]*name="buckets.{key}"[^>]*title="[^"]+"', section)

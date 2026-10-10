@@ -11,6 +11,7 @@
     <p class="muted">Edits <code>{{ source_file }}</code>. Comments and ordering in the file are kept; hand edits are logged below.</p>
     <nav class="prefs-toc" aria-label="Sections">
       {% for id, label in sections %}<a href="#sec-{{ id }}"{% if id == "recency" %} class="paid-link"{% endif %}>{{ label }}</a>{% endfor %}
+      <a href="#sec-rescore">Re-score now</a>
       <a href="#sec-history">History</a>
     </nav>
   </header>
@@ -62,6 +63,12 @@
     {% for k, m in other_errors.items() %}<div><code>{{ k }}</code>: {{ m }}</div>{% endfor %}
   </div>
   {% endif %}
+
+  <section class="panel" id="sec-rescore">
+    <h2>Re-score now {{ help_btn('rescore', 'Re-score now') }}</h2>
+    {% call help_body('rescore', 'Re-score now') %}<p class="hint">Re-scoring asks the model to judge jobs again after you change your resume, current focus or narrative. It <strong>spends credits</strong> (the estimate below is what it expects to cost), never runs unless you start it, and stops at your spend cap. Only one runs at a time. Pick a scorer, press the button and confirm; progress shows here and the results appear in the inbox.</p>{% endcall %}
+    <div id="rescore-panel">{% with rs = rescore_panel %}{% include "_rescore_panel.html" %}{% endwith %}</div>
+  </section>
 
   <div class="prefs-layout">
     <form id="prefs-form" class="prefs-form" method="post" action="/prefs/save"
@@ -150,27 +157,32 @@
 
       <section class="panel" id="sec-buckets">
         <h2>Buckets <span class="kind free">free</span> {{ help_btn('buckets', 'Buckets') }}</h2>
-        {% call help_body('buckets', 'Buckets') %}<p class="hint">Buckets sort scored jobs into A (best) through G (mismatch) for your inbox. Lower a number to let more jobs through that rule; raise it to be pickier.</p>{% endcall %}
+        {% call help_body('buckets', 'Buckets') %}<p class="hint">Buckets sort scored jobs from Bullseye (best) to Mismatch for your inbox. Lower a number to let more jobs through that rule; raise it to be pickier.</p>{% endcall %}
         <p class="hint">{{ bucket_intro }}</p>
         <div class="table-wrap">
           <table class="bucket-rules">
             <thead><tr><th>Bucket</th><th>When</th><th>Fields</th></tr></thead>
             <tbody>
-              {% for b, text, keys in bucket_rules %}<tr><td><strong>{{ b }}</strong></td><td>{{ text }}</td><td><code>{{ keys }}</code></td></tr>{% endfor %}
+              {% for b, text, keys in bucket_rules %}<tr><td><strong>{{ bucket_title(b) }}</strong> <span class="bucket-badge" title="Bucket {{ b }}">{{ b }}</span></td><td>{{ text }}</td><td><code>{{ keys }}</code></td></tr>{% endfor %}
             </tbody>
           </table>
         </div>
         <p class="hint">{{ bucket_note }}</p>
         <p class="hint">The preview panel shows which bucket counts change as you move these numbers.</p>
-        <div class="thresholds">
-          {% for k in threshold_keys %}
-          <label title="{{ bucket_help[k] }}">{{ k | replace('_', ' ') }}
-            <input type="number" step="1" min="0" max="100" name="buckets.{{ k }}" value="{{ v['buckets.' ~ k] }}" title="{{ bucket_help[k] }}" aria-describedby="bh-{{ k }}"{{ inv('buckets.' ~ k) }}>
-            <span class="hint">default {{ defaults[k] | int }}</span>
-            <span class="hint focus-hint" id="bh-{{ k }}">{{ bucket_help[k] }}</span>
-          </label>
-          {% endfor %}
-        </div>
+        {% for g in threshold_groups %}
+        <fieldset class="threshold-group">
+          <legend>{{ g.title }}{% if g.letter %} <span class="bucket-badge" title="Bucket {{ g.letter }}">{{ g.letter }}</span>{% endif %}</legend>
+          <div class="thresholds">
+            {% for k in g.fields %}
+            <label title="{{ bucket_help[k] }}">{{ k | replace('_', ' ') }}
+              <input type="number" step="1" min="0" max="100" name="buckets.{{ k }}" value="{{ v['buckets.' ~ k] }}" title="{{ bucket_help[k] }}" aria-describedby="bh-{{ k }}"{{ inv('buckets.' ~ k) }}>
+              <span class="hint">default {{ defaults[k] | int }}</span>
+              <span class="hint focus-hint" id="bh-{{ k }}">{{ bucket_help[k] }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        {% endfor %}
         {% for k in threshold_keys %}{{ err('buckets.' ~ k) }}{% endfor %}
       </section>
 
@@ -262,15 +274,6 @@
       <div class="panel" id="prefs-preview">
         <p class="muted">Change a setting to preview its effect before saving.</p>
       </div>
-      {% if pending %}
-      <div class="panel">
-        <h2>Queued re-scores</h2>
-        <ul class="plain">
-          {% for r in pending %}<li>{{ r.scope }}: {{ r.job_count }} jobs ≈ ${{ "%.2f" | format(r.estimated_usd) }} <span class="muted">{{ r.requested_at[:10] }}</span></li>{% endfor %}
-        </ul>
-        <p class="hint">Picked up by the next scoring run; counts against the spend cap.</p>
-      </div>
-      {% endif %}
     </aside>
   </div>
 
