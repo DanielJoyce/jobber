@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<link rel="stylesheet" href="{{ url_for('static', path='tracking.css') }}">
+<link rel="stylesheet" href="{{ static_url('tracking.css') }}">
 <div class="followups">
   <h1>Employer rejections ({{ items|length }})</h1>
   <p class="muted">Rejections from employers, read from your mail by <code>jobhunter mail match</code> or added here. A posting you were rejected for is never sent to a scorer and stays out of the inbox; other roles at the same employer show a flag. Not the same as <a href="/rejected">jobs we filtered out</a>.</p>

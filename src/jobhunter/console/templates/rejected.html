@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<link rel="stylesheet" href="{{ url_for('static', path='pages.css') }}">
+<link rel="stylesheet" href="{{ static_url('pages.css') }}">
 <div class="pg">
   <h1>Rejected</h1>
   <p class="muted">What the prefilter dropped under the current filters. Scan this to check it is not hiding jobs you would want.</p>

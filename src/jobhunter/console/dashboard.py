@@ -648,10 +648,10 @@ FUNNEL_STAGES: tuple[tuple[str, str], ...] = (
 FUNNEL_ZOOM = 4  # the last four stages also get their own panel
 # Bucket-mix slots in fixed order: A, B, C+D+E folded, F. G is hidden by design.
 MIX_SLOTS: tuple[tuple[str, str, tuple[Bucket, ...]], ...] = (
-    ("a", "A", (Bucket.A,)),
-    ("b", "B", (Bucket.B,)),
+    ("a", "Bullseye", (Bucket.A,)),
+    ("b", "Strong", (Bucket.B,)),
     ("other", "Other fits", (Bucket.C, Bucket.D, Bucket.E)),
-    ("f", "F stale", (Bucket.F,)),
+    ("f", "Stale match", (Bucket.F,)),
 )
 STATUS_ORDER: tuple[str, ...] = (
     "interested",
@@ -805,7 +805,7 @@ _SANKEY_NODES: tuple[tuple[str, str, int, str, str | None], ...] = (
     ("passed", "Passed prefilter", 1, "flow", None),
     ("unscored", "Not yet scored", 2, "loss", None),
     *(
-        (f"bucket_{b}", f"{b} {title.title()}", 2, "flow", f"/inbox?bucket={b}")
+        (f"bucket_{b}", title.title(), 2, "flow", f"/inbox?bucket={b}")
         for b, (title, _hint) in BUCKET_TITLES.items()
     ),
     ("untriaged", "Untriaged", 3, "loss", "/inbox"),

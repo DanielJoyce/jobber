@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<link rel="stylesheet" href="{{ url_for('static', path='detail.css') }}">
+<link rel="stylesheet" href="{{ static_url('detail.css') }}">
 <div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.job['apply_url'] or d.job['url'] }}">
   <p><a href="/inbox">&larr; inbox</a></p>
 
@@ -113,5 +113,5 @@
     <span><kbd>b</kbd> back to inbox</span>
   </aside>
 </div>
-<script src="{{ url_for('static', path='detail.js') }}" defer></script>
+<script src="{{ static_url('detail.js') }}" defer></script>
 {% endblock %}

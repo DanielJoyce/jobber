@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block head %}
-  <script src="{{ url_for('static', path='vendor/d3-7.9.0.min.js') }}" defer></script>
-  <script src="{{ url_for('static', path='vendor/topojson-client-3.1.0.min.js') }}" defer></script>
-  <script src="{{ url_for('static', path='dashboard.js') }}" defer></script>
-  <script src="{{ url_for('static', path='charts.js') }}" defer></script>
+  <script src="{{ static_url('vendor/d3-7.9.0.min.js') }}" defer></script>
+  <script src="{{ static_url('vendor/topojson-client-3.1.0.min.js') }}" defer></script>
+  <script src="{{ static_url('dashboard.js') }}" defer></script>
+  <script src="{{ static_url('charts.js') }}" defer></script>
 {% endblock %}
 {% block main %}
 <div class="dash-head">
@@ -43,7 +43,7 @@
     </fieldset>
     <label class="check"><input type="checkbox" id="map-status" checked> status</label>
   </div>
-  <div id="map" class="map" data-atlas="{{ url_for('static', path='vendor/us-atlas-3.0.1-states-albers-10m.json') }}"
+  <div id="map" class="map" data-atlas="{{ static_url('vendor/us-atlas-3.0.1-states-albers-10m.json') }}"
        data-api="/api/dash/map" aria-describedby="map-help">
     <p class="muted map-loading">Loading map&hellip;</p>
   </div>

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<link rel="stylesheet" href="{{ url_for('static', path='tracking.css') }}">
+<link rel="stylesheet" href="{{ static_url('tracking.css') }}">
 <div class="pipeline">
   <header class="pipe-head"><h1>Pipeline</h1><span class="muted">amber = past the per-status threshold</span></header>
   {% if proposal_count %}
@@ -37,5 +37,5 @@
     <span><kbd>Esc</kbd> close</span>
   </aside>
 </div>
-<script src="{{ url_for('static', path='tracking.js') }}" defer></script>
+<script src="{{ static_url('tracking.js') }}" defer></script>
 {% endblock %}
