@@ -1,0 +1,42 @@
+{# Export (specs/017 phase 1c): the current resume and cover letter as PDF, text, Markdown. #}
+<section class="card" id="export">
+  <h2>Export</h2>
+  {% if export_msg %}
+  <div class="banner {{ 'banner-ok' if export_msg[0] else 'banner-error' }}" role="status" id="export-msg"><p>{{ export_msg[1] }}</p></div>
+  {% endif %}
+  {% if not export.resume and not export.cover_letter %}
+  <p class="muted" id="export-none">Nothing to export yet: generate a resume (or use the base resume) above.</p>
+  {% endif %}
+  {% for kind, label, slug in [("resume", "Resume", "resume"), ("cover_letter", "Cover letter", "cover-letter")] %}
+  {% set slot = export[kind] %}
+  {% if slot %}
+  {% set exp = slot.exp %}
+  <div class="export-block" id="export-{{ slug }}">
+    <h3>{{ label }} <span class="badge">v{{ exp.version.version }}</span></h3>
+    {% if slot.refusal %}
+    <p class="refusal" id="export-refusal-{{ slug }}">{{ slot.refusal }}</p>
+    {% else %}
+    <form method="post" action="/packet/{{ p.id }}/export" class="inline">
+      <input type="hidden" name="kind" value="{{ kind }}">
+      <button type="submit" class="packet-btn primary" id="export-btn-{{ slug }}">Export files</button>
+      <span class="muted">writes <code>{{ exp.stem }}.pdf</code>, <code>.txt</code>, <code>.md</code> and <code>.html</code> to the data folder under <code>packets/{{ p.id }}/</code></span>
+    </form>
+    {% endif %}
+    <ul class="export-files">
+      {% for fmt, name in [("pdf", "PDF"), ("txt", "Text"), ("md", "Markdown"), ("html", "HTML (print to PDF)")] %}
+      <li>
+        {% if slot.on_disk[fmt] %}
+        <a href="/packet/{{ p.id }}/export/{{ slug }}/{{ fmt }}"{% if fmt == "html" %} target="_blank" rel="noopener"{% endif %} id="dl-{{ slug }}-{{ fmt }}">{{ name }}: {{ exp.download_name(fmt) }}</a>
+        {% else %}
+        <span class="muted">{{ name }}: not exported yet</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <p><button type="button" class="act copy-btn" id="copy-{{ slug }}" data-copy="{{ exp.text }}">Copy as plain text</button>
+       <span class="muted">for "paste your resume" boxes and email</span></p>
+    <details class="export-text"><summary>Show the plain text</summary><pre id="text-{{ slug }}">{{ exp.text }}</pre></details>
+  </div>
+  {% endif %}
+  {% endfor %}
+</section>

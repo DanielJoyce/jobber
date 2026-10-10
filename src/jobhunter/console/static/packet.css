@@ -92,3 +92,10 @@ fieldset.entry legend { font-weight: 600; padding: 0 4px; overflow-wrap: anywher
 @media (max-width: 720px) {
   .item { grid-template-columns: 1fr; }
 }
+.export-block { border-top: 1px solid var(--grid); margin-top: 12px; padding-top: 6px; }
+.export-files { margin: 8px 0; padding-left: 20px; overflow-wrap: anywhere; }
+.export-text pre {
+  white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; box-sizing: border-box;
+  padding: 8px; background: var(--page); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 6px;
+}
