@@ -697,10 +697,13 @@ def cycle_state(ranking: list[str], excluded: list[str], code: str) -> tuple[lis
     return ranking, excluded
 
 
+PICKER_TILES = {**geo.TILE_GRID, **geo.TERRITORY_TILES}
+
+
 def picker(ranking: Sequence[str], excluded: Sequence[str]) -> dict[str, Any]:
     names = {s.usps: s.name for s in geo.STATES}
     tiles = []
-    for code, (row, col) in sorted(geo.TILE_GRID.items(), key=lambda kv: kv[1]):
+    for code, (row, col) in sorted(PICKER_TILES.items(), key=lambda kv: kv[1]):
         if code in ranking:
             state, rank = "ranked", ranking.index(code) + 1
             label = f"{names.get(code, code)}: ranked {rank}"
@@ -722,8 +725,8 @@ def picker(ranking: Sequence[str], excluded: Sequence[str]) -> dict[str, Any]:
         "tiles": tiles,
         "ranking": list(ranking),
         "excluded": list(excluded),
-        "rows": max(r for r, _ in geo.TILE_GRID.values()) + 1,
-        "cols": max(c for _, c in geo.TILE_GRID.values()) + 1,
+        "rows": max(r for r, _ in PICKER_TILES.values()) + 1,
+        "cols": max(c for _, c in PICKER_TILES.values()) + 1,
     }
 
 

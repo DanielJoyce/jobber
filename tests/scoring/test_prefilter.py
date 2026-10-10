@@ -51,6 +51,9 @@ CO = {"states_allowed": ["CO"]}
 CASES = [
     ("state_reject", {}, ["TX"], CO, ["state_not_allowed"]),
     ("state_pass", {}, ["CO"], CO, []),
+    ("territory_excluded", {}, ["PR"], {"states_excluded": ["PR"]}, ["state_not_allowed"]),
+    ("territory_included", {}, ["PR"], {"states_excluded": ["GU"]}, []),
+    ("territory_default", {}, ["PR"], {}, []),
     ("state_multi_any", {"location_scope": "multi_state"}, ["TX", "CO"], CO, []),
     ("state_excluded", {}, ["TX"], {"states_excluded": ["TX"]}, ["state_not_allowed"]),
     ("state_remote_scope", {"location_scope": "remote_us"}, ["TX"], CO, []),

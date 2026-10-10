@@ -255,3 +255,14 @@ def parse_city_state(raw: str) -> tuple[str, str | None]:
     if not city or code is None:
         return raw, None
     return city, code
+
+
+# Territories sit below the state grid on /prefs (row 8). Kept out of TILE_GRID because the
+# dashboard grid map lays territories out on its own.
+TERRITORY_TILES: dict[str, tuple[int, int]] = {
+    "PR": (8, 0),
+    "GU": (8, 1),
+    "VI": (8, 2),
+    "MP": (8, 3),
+    "AS": (8, 4),
+}
