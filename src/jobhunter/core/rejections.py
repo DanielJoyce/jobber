@@ -105,9 +105,18 @@ class Rejection:
         return (self.received_at or "")[:10]
 
     def fact(self) -> str:
-        """The one neutral sentence a scorer sees for a same-employer, different-role job."""
-        role = self.title or "a different role"
-        return f"candidate was rejected by this employer for {role} on {self.day}"
+        """The one neutral sentence a scorer sees for another job at this employer. With no
+        title we cannot tell whether that job is the rejected posting, so it says so rather
+        than claiming "a different role"."""
+        if self.title:
+            return f"candidate was rejected by this employer for {self.title} on {self.day}"
+        return f"candidate was rejected by this employer (role not stated) on {self.day}"
+
+    def flag(self) -> str:
+        """The inbox row / detail page flag for another job at this employer."""
+        if self.title:
+            return f"employer rejected you for {self.title} on {self.day}"
+        return f"employer rejected you (role not stated) on {self.day}"
 
 
 def _row(r: Mapping[str, Any]) -> Rejection:

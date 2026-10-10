@@ -316,7 +316,9 @@ Rows in the `rejection` table ([007](007-console-and-tracking.md#optional-gmail-
   inbox, and its detail page says so. No time window: rejected stays rejected.
 - **Same employer, different role, within `scoring.employer_rejection_days` (default 90)**: the
   job is still scored, and the prompt carries one neutral sentence ("candidate was rejected by
-  this employer for <title> on <date>"): a `Candidate history with this employer` line in the
+  this employer for <title> on <date>", or "(role not stated)" when the email named no title,
+  since then it is unknown whether this job is the rejected posting): a
+  `Candidate history with this employer` line in the
   Haiku/chat posting text, an `employer_history` field in the Jev job state. No question asks
   about it, and pay and location remain Python's job. The bucket is **not** capped: a
   rejection for another role says little about fit for this one, so the inbox row and detail

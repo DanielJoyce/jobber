@@ -195,3 +195,19 @@ def test_migration_0026_marks_loose_phrase_email_rows_pending(monkeypatch):
     db.migrate(c)
     got = dict(c.execute("SELECT COALESCE(gmail_message_id, 'manual'), state FROM rejection"))
     assert got == {"m1": "pending", "m2": "confirmed", "m3": "confirmed", "manual": "confirmed"}
+
+
+def test_title_less_rejection_does_not_claim_a_different_role(conn):
+    # With no title we cannot tell whether a job is the rejected posting, so neither the
+    # scorer fact nor the flag may say "a different role" (bug d28c8de).
+    rec(conn, "Acme", None, received_at="2026-09-01T00:00Z")
+    rows = [{"group_id": 1, "employer": "Acme", "title": "Welder"}]
+    rejections.annotate(conn, rows, now=NOW, days=90)
+    assert rows[0]["prior_rejection"] == (
+        "candidate was rejected by this employer (role not stated) on 2026-09-01"
+    )
+    hit = rejections.RejectionIndex.load(conn, NOW).prior(1, "Acme", "Welder")
+    assert hit.flag() == "employer rejected you (role not stated) on 2026-09-01"
+    rec(conn, "Acme", "Painter", received_at="2026-09-02T00:00Z")
+    hit = rejections.RejectionIndex.load(conn, NOW).prior(1, "Acme", "Welder")
+    assert hit.flag() == "employer rejected you for Painter on 2026-09-02"

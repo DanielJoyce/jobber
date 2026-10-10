@@ -138,7 +138,7 @@ def _employer_flag(index: rejections.RejectionIndex | None, row: sqlite3.Row) ->
     hit = index.prior(row["group_id"], row["employer"] or row["agency_raw"], row["title"])
     if hit is None:
         return None
-    return f"employer rejected you for {hit.title or 'another role'} on {hit.day}"
+    return hit.flag()
 
 
 def _item(

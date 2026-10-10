@@ -525,6 +525,7 @@ _T = r"(?P<t>[^.,!?|\n]{2,80}?)"
 # clause breaks, so only subjects allow them.
 _TS = r"(?P<t>[^.!?|\n]{2,80}?)"
 _E = r"(?P<e>[^.,!?|:\n]{2,60}?)"
+_TN = r"(?P<t>(?:(?!\bthe\b)[^.,!?|\n]){2,80}?)"  # a title with no "the" inside
 _END = r"(?=\s*(?:[.,!?|\n]|$| - ))"
 
 # Subject-only shapes, tried first: subjects are terse and reliable.
@@ -544,6 +545,9 @@ _TITLE_PATTERNS = (
         rf"interest in (?:the )?{_T} (?:position |role |opening )?(?:at|with) {_E}{_END}", re.I
     ),
     re.compile(rf"for the {_T} (?:position|role)\b", re.I),
+    # "...the requirements of the Platform Lead role at Acme": the title is the words after
+    # the last "the" before "role/position at" (it may not contain another "the").
+    re.compile(rf"\bthe {_TN} (?:position|role|opening) (?:at|with) {_E}{_END}", re.I),
 )
 # Words that mean a capture is a sentence fragment, not a name or a job title.
 _NOT_A_NAME = re.compile(

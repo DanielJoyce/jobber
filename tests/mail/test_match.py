@@ -792,7 +792,8 @@ def test_cli_dry_run_lists_employer_rejections(monkeypatch, tmp_path):
             "We've decided to move forward with other candidates whose experience more closely "
             "aligns with the requirements of the Example Platform Lead role at Acmecloud. "
             "After reviewing your application, we've decided to move forward.",
-            ("Acmecloud", None),  # the subject wins over the display name
+            # The subject wins over the display name; the body names the role.
+            ("Acmecloud", "Example Platform Lead"),
         ),
         (
             "no-reply@us.greenhouse-mail.io",
