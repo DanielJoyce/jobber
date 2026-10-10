@@ -129,6 +129,8 @@ what is found.
   from disk on every request, so a half-done edit there breaks the live app. Use a worktree.
 - After merging, the main checkout is fast-forwarded only. Tell the user to restart the
   console when Python changed.
+- Remove a worker's worktree right after its branch merges (worktrees are only auto-removed when
+  unchanged; each holds a full checkout and venv). Keep at most the ones in active use.
 
 ### Verification habits
 

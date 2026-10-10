@@ -26,6 +26,7 @@ Status: **design, awaiting your approval.** No implementation code written yet.
 | [014](014-preferences-console.md) | **Preferences console** | Edit salary, states, weights, queries; live preview; free vs paid changes |
 | [015](015-apply-links.md) | **Apply links** | Button straight to the employer's application, redirects resolved |
 | [016](016-alternative-scorers.md) | Alternative scorers | OpenRouter, Jev Router, local models on this hardware, rollout by measurement |
+| [017](017-assisted-apply.md) | **Assisted apply** | Targeted resume, cover letter and checked custom-question drafts from your own facts for any posting; later, resume-first form help that stops before Submit |
 
 ## Headline decisions
 
@@ -43,6 +44,7 @@ Status: **design, awaiting your approval.** No implementation code written yet.
 | robots.txt | **Respected.** Email alerts cover blocked boards | Decided 2026-10-09 |
 | Build order | **Pass 1:** USAJOBS + open state boards. **Pass 2:** email | Decided 2026-10-09 |
 | Alert address | **`<you>+jobs@gmail.com`**, filtered out of the inbox | One filter catches every board |
+| Applying | **Assisted, never auto-submitted** | You review and press Submit; jobhunter never submits, and form help stops before it ([017](017-assisted-apply.md)) |
 
 **Estimated running cost: ~$28/month** in LLM spend ([006](006-fit-scoring.md#cost)).
 

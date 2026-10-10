@@ -68,6 +68,9 @@ through neutral → ranked → excluded, and ranked states show their rank numbe
 
 Paid sections are visually separated and marked as costing money to re-apply.
 
+A further free section, **Application answers** (reusable links, notice period, saved custom answers; never-store
+labels rejected on save), is specified in [017](017-assisted-apply.md#application-answers).
+
 ## Live preview
 
 Every free change shows its effect **before** saving, recomputed on the stored scores (usually
