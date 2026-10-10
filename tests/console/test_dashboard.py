@@ -1074,7 +1074,7 @@ def test_today_page_wires_the_rejection_table_into_sankey(client, tmp_path):
     rejections.record(
         conn,
         received_at="2026-10-01T12:00:00+00:00",
-        employer="Seeq",
+        employer="Contoso",
         title="Platform Engineer",
         source="email",
         now=datetime(2026, 10, 9, tzinfo=UTC),

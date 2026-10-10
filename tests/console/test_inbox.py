@@ -254,6 +254,37 @@ def test_undo_keeps_progressed_application(seeded):
     assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 1
 
 
+def test_undo_with_manual_rejection_on_the_application(seeded):
+    # Regression: a manual rejection stores application_id; undoing the shortlist label then
+    # deleted the application and failed with "FOREIGN KEY constraint failed" (HTTP 500).
+    from jobhunter.core import rejections
+
+    inbox.set_label(seeded, 1, "interesting")
+    app_id = seeded.execute("SELECT id FROM application").fetchone()[0]
+    rejections.record(
+        seeded, received_at=NOW.isoformat(), employer="Acme", title=None, source="manual",
+        now=NOW, job_group_id=1, application_id=app_id,
+    )  # fmt: skip
+    inbox.undo_label(seeded, 1)
+    assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 0
+    row = seeded.execute("SELECT job_group_id, application_id FROM rejection").fetchone()
+    assert tuple(row) == (1, None)  # the rejection fact stays, on the posting
+
+
+def test_undo_keeps_application_a_mail_proposal_points_at(seeded):
+    inbox.set_label(seeded, 1, "interesting")
+    app_id = seeded.execute("SELECT id FROM application").fetchone()[0]
+    seeded.execute(
+        "INSERT INTO mail_proposal (gmail_message_id, received_at, kind, proposed_action, "
+        "application_id, job_group_id, proposed_status, confidence, evidence, created_at) "
+        "VALUES ('m1', ?, 'rejection', 'add_event', ?, 1, 'rejected', 0.9, '{}', ?)",
+        (NOW.isoformat(), app_id, NOW.isoformat()),
+    )
+    inbox.undo_label(seeded, 1)
+    assert seeded.execute("SELECT COUNT(*) FROM label").fetchone()[0] == 0
+    assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 1
+
+
 # ─── HTTP ───────────────────────────────────────────────────────────────────
 
 
@@ -561,6 +592,46 @@ def test_rejections_form_validation_and_delete(client, seeded):
     assert client.post(f"/rejections/{rid}/delete", follow_redirects=False).status_code == 303
     assert client.post(f"/rejections/{rid}/delete").status_code == 404
     assert 'id="row-1"' in client.get("/inbox").text
+
+
+def test_pending_rejection_needs_confirmation_on_the_page(client, seeded):
+    from jobhunter.core import rejections
+
+    rid = rejections.record(
+        seeded, received_at=NOW.isoformat(), employer="Acme Inc", title="Bullseye",
+        source="email", now=NOW, gmail_message_id="m1", job_group_id=1, state="pending",
+        evidence={"sender": "Acme <no-reply@ashbyhq.com>", "subject": "About your application",
+                  "phrase": "unfortunately"},
+    )  # fmt: skip
+    seeded.commit()
+    assert 'id="row-1"' in client.get("/inbox").text  # pending: not hidden yet
+    page = client.get("/rejections").text
+    assert "needs review" in page and f'action="/rejections/{rid}/confirm"' in page
+    assert "1 rejection email needs review" in page
+    r = client.post(f"/rejections/{rid}/confirm", follow_redirects=False)
+    assert r.status_code == 303
+    assert 'id="row-1"' not in client.get("/inbox").text
+    assert "needs review" not in client.get("/rejections").text
+    assert client.post("/rejections/999/confirm").status_code == 404
+
+
+def test_undo_rerender_honours_employer_rejection_days(tmp_path, profile_dir, seeded):
+    # Regression: the undo re-render loaded the index with the default 90-day window, so a
+    # row could show a flag the full inbox (configured window) did not.
+    _reject(seeded, "Bullseye", gid=1, days_ago=5)
+    inbox.set_label(seeded, 2, "not_interesting")
+    seeded.commit()
+    settings = Settings(
+        paths=Paths(profile_dir=profile_dir, db_path=tmp_path / "t.db"),
+        scoring={"employer_rejection_days": 1},
+    )
+    client = TestClient(create_app(settings, lambda: db.connect(tmp_path / "t.db")))
+    assert "employer rejected you" not in client.get("/inbox").text
+    r = client.post("/inbox/2/undo")
+    assert r.status_code == 200 and 'id="row-2"' in r.text
+    assert "employer rejected you" not in r.text
+    item = inbox.inbox_item(seeded, load_profile(profile_dir), 2)
+    assert item.employer_rejection  # the default window still flags it
 
 
 def test_rejected_page_is_still_the_prefilter_page(client):

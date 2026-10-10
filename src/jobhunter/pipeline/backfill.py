@@ -246,6 +246,7 @@ def _submit(
     chunk_size: int,
     now: datetime,
     out: Callable[[str], None],
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> tuple[list[str], int, float, str]:
     """Submit chunks until the budget or the eligible set runs out. Returns what was done."""
     per = est.per_job.usd
@@ -261,7 +262,13 @@ def _submit(
         limit = min(chunk_size, affordable)
         if scorer.supports_batching:
             batch_id = screen.submit_batch(
-                conn, client, profile, limit=limit, now=now, scorer=scorer.name
+                conn,
+                client,
+                profile,
+                limit=limit,
+                now=now,
+                scorer=scorer.name,
+                rejection_days=rejection_days,
             )
             if batch_id is None:
                 break
@@ -271,7 +278,9 @@ def _submit(
             batch_ids.append(batch_id)
             out(f"  batch {batch_id}: {n} jobs submitted")
         else:
-            res = screen.score_sync(conn, scorer, profile, limit=limit, now=now)
+            res = screen.score_sync(
+                conn, scorer, profile, limit=limit, now=now, rejection_days=rejection_days
+            )
             n = res.submitted
             if n == 0:
                 break
@@ -436,7 +445,15 @@ def run_backfill(
         return BackfillResult(status="budget_exhausted", committed_usd=est.committed_usd)
 
     batch_ids, submitted, committed, stop = _submit(
-        conn, profile, scorer, client, est, chunk_size=chunk_size, now=now, out=out
+        conn,
+        profile,
+        scorer,
+        client,
+        est,
+        chunk_size=chunk_size,
+        now=now,
+        out=out,
+        rejection_days=settings.scoring.employer_rejection_days,
     )
     out(f"Submitted {submitted} jobs in {len(batch_ids)} batch(es): {stop}.")
     result = BackfillResult(

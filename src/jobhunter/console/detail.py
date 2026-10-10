@@ -416,9 +416,7 @@ def load_detail(
         if same is not None:
             d.posting_rejection = f"The employer rejected you for this posting on {same.day}."
         elif (hit := index.prior(group_id, emp, job["title"])) is not None:
-            d.employer_rejection = (
-                f"employer rejected you for {hit.title or 'another role'} on {hit.day}"
-            )
+            d.employer_rejection = hit.flag()
     return d
 
 

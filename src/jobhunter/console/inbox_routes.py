@@ -23,6 +23,11 @@ def load_console_profile(settings: Settings) -> tuple[Profile | None, str | None
         return None, str(exc)
 
 
+def _days(request: Request) -> int:
+    """The configured employer-rejection window (``scoring.employer_rejection_days``)."""
+    return request.app.state.settings.scoring.employer_rejection_days
+
+
 def register(
     app: FastAPI,
     templates: Jinja2Templates,
@@ -120,7 +125,7 @@ def register(
         profile, _ = load_console_profile(request.app.state.settings)
         restored = []
         for g in ids:
-            item = inbox.inbox_item(conn, profile, g) if profile else None
+            item = inbox.inbox_item(conn, profile, g, _days(request)) if profile else None
             restored.append({"group_id": g, "item": item})
         return templates.TemplateResponse(
             request,
@@ -149,7 +154,7 @@ def register(
             raise HTTPException(404, "no such job group")
         inbox.undo_label(conn, group_id)
         profile, _ = load_console_profile(request.app.state.settings)
-        item = inbox.inbox_item(conn, profile, group_id) if profile else None
+        item = inbox.inbox_item(conn, profile, group_id, _days(request)) if profile else None
         if item is None:
             return HTMLResponse(f'<div class="row triaged" id="row-{group_id}">Undone.</div>')
         return templates.TemplateResponse(request, "_inbox_row.html", {"i": item})

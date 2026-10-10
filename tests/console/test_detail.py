@@ -428,3 +428,19 @@ def test_salary_parsed_from_description_is_labelled_visibly(client, conn):
     assert "computed from the salary parsed from the description" in t
     t2 = client.get("/job/2").text
     assert "parsed from the description" not in t2
+
+
+def test_unscored_job_still_shows_the_employer_rejection_flag(client, conn):
+    # Regression: the flag sat inside {% if d.scored %}, so an unscored job at an employer
+    # that recently rejected you showed only "Not scored yet." (specs/006).
+    from jobhunter.core import rejections
+
+    conn.execute("DELETE FROM fit_score WHERE job_group_id = 2")
+    rejections.record(
+        conn, received_at=NOW.isoformat(), employer="Acme", title="Analyst 1", source="manual",
+        now=NOW,
+    )  # fmt: skip
+    conn.commit()
+    t = client.get("/job/2").text
+    assert "Not scored yet." in t
+    assert "employer rejected you for Analyst 1" in t

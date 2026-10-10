@@ -319,3 +319,49 @@ def test_migration_0007_preserves_rows_fks_and_allows_apply_url(monkeypatch):
         c.execute("INSERT INTO label VALUES (9999, 'applied', NULL, ?)", (ISO,))
     assert c.execute("SELECT COUNT(*) FROM label").fetchone()[0] == 1
     c.close()
+
+
+def _mail_rows(conn, gid, app_id):
+    conn.execute(
+        "INSERT INTO rejection (received_at, employer, employer_norm, title, job_group_id, "
+        "application_id, source, created_at) VALUES (?, 'Acme', 'acme', 'Analyst', ?, ?, "
+        "'manual', ?)",
+        (ISO, gid, app_id, ISO),
+    )
+    conn.execute(
+        "INSERT INTO mail_proposal (gmail_message_id, received_at, kind, proposed_action, "
+        "application_id, job_group_id, proposed_status, confidence, evidence, created_at) "
+        "VALUES (?, ?, 'rejection', 'add_event', ?, ?, 'rejected', 0.9, '{}', ?)",
+        (f"m{gid}", ISO, app_id, gid, ISO),
+    )
+
+
+def test_merge_repoints_rejections_and_mail_proposals(conn):
+    # Regression: rejection/mail_proposal FKs to the absorbed group (and to the losing
+    # application) made DELETE FROM job_group / application fail, aborting every ingest.
+    g1, g2 = mkgroup(conn), mkgroup(conn)
+    mkjob(conn, "a", gid=g1, apply_url=GH)
+    mkjob(conn, "b", gid=g2, apply_url=GH)
+    conn.execute(
+        "INSERT INTO application (id, job_group_id, status, created_at, updated_at) "
+        "VALUES (1, ?, 'interview', ?, ?), (2, ?, 'applied', ?, ?)",
+        (g1, ISO, ISO, g2, ISO, ISO),
+    )
+    _mail_rows(conn, g2, 2)
+    res = merge_by_apply_url(conn, now=NOW)
+    assert res.groups_merged == 1 and res.applications_merged == 1
+    rej = conn.execute("SELECT job_group_id, application_id FROM rejection").fetchone()
+    assert tuple(rej) == (g1, 1)
+    prop = conn.execute("SELECT job_group_id, application_id FROM mail_proposal").fetchone()
+    assert tuple(prop) == (g1, 1)
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_merge_repoints_group_only_rejection(conn):
+    g1, g2 = mkgroup(conn), mkgroup(conn)
+    mkjob(conn, "a", gid=g1, apply_url=WD)
+    mkjob(conn, "b", gid=g2, apply_url=WD)
+    _mail_rows(conn, g2, None)
+    assert merge_by_apply_url(conn, now=NOW).groups_merged == 1
+    assert conn.execute("SELECT job_group_id FROM rejection").fetchone()[0] == g1
+    assert conn.execute("SELECT job_group_id FROM mail_proposal").fetchone()[0] == g1

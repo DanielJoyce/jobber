@@ -182,7 +182,9 @@ def _absorb(conn: sqlite3.Connection, s: int, a: int, now: datetime, res: MergeR
         "UPDATE job SET job_group_id = ? WHERE job_group_id = ?", (s, a)
     ).rowcount
     _merge_apply_link(conn, s, a)
-    for table in ("apply_click", "score_batch_item"):
+    # Every table with a job_group FK must be re-pointed, or the DELETE below fails with
+    # foreign_keys=ON (rejection and mail_proposal are facts about the posting, not the group).
+    for table in ("apply_click", "score_batch_item", "rejection", "mail_proposal"):
         conn.execute(f"UPDATE {table} SET job_group_id = ? WHERE job_group_id = ?", (s, a))
     _merge_scores(conn, s, a, res)
     _merge_label(conn, s, a, res)
@@ -266,7 +268,7 @@ def _merge_application(
     res.applications_merged += 1
     # Keep the more advanced application; ties keep the survivor's (the older group's).
     win, lose = (aa, sa) if _APP_RANK[aa["status"]] > _APP_RANK[sa["status"]] else (sa, aa)
-    for table in ("application_event", "contact", "attachment"):
+    for table in ("application_event", "contact", "attachment", "rejection", "mail_proposal"):
         conn.execute(
             f"UPDATE {table} SET application_id = ? WHERE application_id = ?",
             (win["id"], lose["id"]),

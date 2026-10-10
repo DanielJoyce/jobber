@@ -138,7 +138,7 @@ def _employer_flag(index: rejections.RejectionIndex | None, row: sqlite3.Row) ->
     hit = index.prior(row["group_id"], row["employer"] or row["agency_raw"], row["title"])
     if hit is None:
         return None
-    return f"employer rejected you for {hit.title or 'another role'} on {hit.day}"
+    return hit.flag()
 
 
 def _item(
@@ -263,13 +263,20 @@ def inbox_items(
     )
 
 
-def inbox_item(conn: sqlite3.Connection, profile: Profile, group_id: int) -> InboxItem | None:
-    """One group's row (regardless of label), for re-rendering after undo."""
+def inbox_item(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    group_id: int,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+) -> InboxItem | None:
+    """One group's row (regardless of label), for re-rendering after undo. Pass the
+    configured ``scoring.employer_rejection_days`` so the flag matches the full inbox."""
     row = conn.execute(_SQL + " WHERE g.id = ?", (group_id,)).fetchone()
     if not row:
         return None
     now = datetime.now(UTC)
-    return _item(conn, row, profile, now, rejections.RejectionIndex.load(conn, now))
+    index = rejections.RejectionIndex.load(conn, now, rejection_days)
+    return _item(conn, row, profile, now, index)
 
 
 def group_title(conn: sqlite3.Connection, group_id: int) -> str:
@@ -349,9 +356,11 @@ def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
         events = conn.execute(
             "SELECT COUNT(*) FROM application_event WHERE application_id = ?", (app["id"],)
         ).fetchone()[0]
+        # A mail proposal about this application keeps it (accepting it needs the row).
         others = conn.execute(
             "SELECT (SELECT COUNT(*) FROM contact WHERE application_id = :a) + "
-            "(SELECT COUNT(*) FROM attachment WHERE application_id = :a)",
+            "(SELECT COUNT(*) FROM attachment WHERE application_id = :a) + "
+            "(SELECT COUNT(*) FROM mail_proposal WHERE application_id = :a)",
             {"a": app["id"]},
         ).fetchone()[0]
         mine = conn.execute(
@@ -359,6 +368,11 @@ def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
             (app["id"], SHORTLIST_NOTE),
         ).fetchone()[0]
         if events <= 1 and mine == events and not others:
+            # An employer rejection is a fact about the posting (job_group_id), not the
+            # shortlist entry: keep it, unlinked, so the FK does not block the delete.
+            conn.execute(
+                "UPDATE rejection SET application_id = NULL WHERE application_id = ?", (app["id"],)
+            )
             conn.execute("DELETE FROM application_event WHERE application_id = ?", (app["id"],))
             conn.execute("DELETE FROM application WHERE id = ?", (app["id"],))
 

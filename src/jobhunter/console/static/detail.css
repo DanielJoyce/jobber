@@ -1,6 +1,6 @@
 .detail { max-width: 920px; margin: 0 auto; padding: 0 16px 48px; }
 .job-head h1 { margin: 8px 0 4px; }
-.job-sub, .job-score { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0; }
+.job-sub, .job-score, .job-flags { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0; }
 .detail .muted { color: var(--text-secondary); }
 .detail .warn { color: var(--text-primary); }
 .detail .badge, .detail .flag { font-size: 0.78rem; border: 1px solid var(--axis); border-radius: 4px; padding: 0 6px; color: var(--text-primary); }

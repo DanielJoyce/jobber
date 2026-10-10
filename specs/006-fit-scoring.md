@@ -307,14 +307,18 @@ Rows in the `rejection` table ([007](007-console-and-tracking.md#optional-gmail-
 `core/rejections.py`) affect scoring in two ways, both decided in Python:
 
 - **The same posting is never scored.** A group the rejection matched, or a group at the same
-  normalized employer whose title is a near match (rapidfuzz `token_sort_ratio` >= 90 with the
-  same level words and numbers, so "Engineer II" is not "Engineer III"), is excluded from every
+  normalized employer with the same title (the same words in any order, ignoring case,
+  punctuation, plurals, filler words like "and"/"of", and spacing, so "Full Stack" is
+  "Fullstack"; every other word must match, so "Engineer II" is not "Engineer III" and
+  "Engineer, Cloud" is not "Engineer, Core"), is excluded from every
   eligibility query (`screen._ELIGIBLE` for Haiku, chat and Jev scorers, the bench, the
   backfill count, the deep shortlist), so no credits are spent. It is also left out of the
   inbox, and its detail page says so. No time window: rejected stays rejected.
 - **Same employer, different role, within `scoring.employer_rejection_days` (default 90)**: the
   job is still scored, and the prompt carries one neutral sentence ("candidate was rejected by
-  this employer for <title> on <date>"): a `Candidate history with this employer` line in the
+  this employer for <title> on <date>", or "(role not stated)" when the email named no title,
+  since then it is unknown whether this job is the rejected posting): a
+  `Candidate history with this employer` line in the
   Haiku/chat posting text, an `employer_history` field in the Jev job state. No question asks
   about it, and pay and location remain Python's job. The bucket is **not** capped: a
   rejection for another role says little about fit for this one, so the inbox row and detail
