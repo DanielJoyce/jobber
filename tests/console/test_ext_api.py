@@ -840,3 +840,14 @@ def test_job_page_score_and_link_run_off_the_event_loop(client):
     assert len(found) == 2
     for route in found:
         assert not inspect.iscoroutinefunction(route.endpoint), route.path
+
+
+def test_ext_routes_never_go_through_the_same_origin_check(client, token, monkeypatch):
+    # Phase 1d makes cross_site_reason check every browser request, and it would refuse the
+    # extension's chrome-extension:// Origin. /ext/ has its own door and must not depend on it:
+    # refuse everything there, and the extension still works while other pages are refused.
+    from jobhunter.console import app as app_module
+
+    monkeypatch.setattr(app_module, "cross_site_reason", lambda *a, **k: "refused by test")
+    assert post(client, token, "version").status_code == 200
+    assert client.get("/captured", headers={"Sec-Fetch-Site": "none"}).status_code == 403
