@@ -59,6 +59,7 @@ class InboxItem:
     blockers: list[str] = field(default_factory=list)
     stale_skills: list[str] = field(default_factory=list)
     labeled: str | None = None
+    tracked: bool = False  # has an application (applied from the job page, or shortlisted)
     employer_rejection: str | None = None  # "rejected for <title> on <date>" (other role)
 
 
@@ -119,6 +120,7 @@ def _strs(value: Any) -> list[str]:
 _SQL = """
 SELECT fs.dimensions, fs.blockers, fs.shape_flags, fs.evidence_unverified,
        j.*, j.id AS job_id, g.id AS group_id, l.label AS label_value,
+       EXISTS (SELECT 1 FROM application ap WHERE ap.job_group_id = g.id) AS has_app,
        s.name AS source_name, s.class AS source_class
 FROM job_group g
 JOIN job j ON j.id = g.canonical_job_id
@@ -136,7 +138,7 @@ def _employer_flag(index: rejections.RejectionIndex | None, row: sqlite3.Row) ->
     hit = index.prior(row["group_id"], row["employer"] or row["agency_raw"], row["title"])
     if hit is None:
         return None
-    return f"employer rejected you for {hit.title or 'another role'} on {hit.day}"
+    return hit.flag()
 
 
 def _item(
@@ -188,6 +190,7 @@ def _item(
         blockers=fit.blockers,
         stale_skills=_strs(dims.get("stale_skills")),
         labeled=row["label_value"],
+        tracked=bool(row["has_app"]),
         employer_rejection=_employer_flag(index, row),
     )
 
@@ -213,6 +216,7 @@ def inbox_items(
     state: str | None = None,
     bucket: str | None = None,
     include_triaged: bool = False,
+    triaged: bool = False,
     limit: int = 500,
     now: datetime | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
@@ -223,9 +227,12 @@ def inbox_items(
 
     ``counts`` cover every group matching the state filter; ``limit`` caps rows per bucket.
     Postings an employer already rejected you for are left out unless ``include_triaged``.
+    ``triaged`` also lists the groups you already shortlisted or dismissed (marked on their
+    row), still leaving out rejected postings you never acted on: the lists the Today
+    outcomes chart links to.
     """
     now = now or datetime.now(UTC)
-    where = "" if include_triaged else " WHERE l.job_group_id IS NULL"
+    where = "" if (include_triaged or triaged) else " WHERE l.job_group_id IS NULL"
     rows = conn.execute(_SQL + where).fetchall()
     keep = _state_groups(conn, profile, state) if state else None
     index = rejections.RejectionIndex.load(conn, now, rejection_days)
@@ -234,7 +241,8 @@ def inbox_items(
     for row in rows:
         if keep is not None and row["group_id"] not in keep:
             continue
-        if row["group_id"] in rejected:
+        acted = row["label_value"] or row["has_app"]
+        if row["group_id"] in rejected and not (triaged and acted):
             continue
         item = _item(conn, row, profile, now, index)
         buckets[item.bucket].append(item)
@@ -255,13 +263,20 @@ def inbox_items(
     )
 
 
-def inbox_item(conn: sqlite3.Connection, profile: Profile, group_id: int) -> InboxItem | None:
-    """One group's row (regardless of label), for re-rendering after undo."""
+def inbox_item(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    group_id: int,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+) -> InboxItem | None:
+    """One group's row (regardless of label), for re-rendering after undo. Pass the
+    configured ``scoring.employer_rejection_days`` so the flag matches the full inbox."""
     row = conn.execute(_SQL + " WHERE g.id = ?", (group_id,)).fetchone()
     if not row:
         return None
     now = datetime.now(UTC)
-    return _item(conn, row, profile, now, rejections.RejectionIndex.load(conn, now))
+    index = rejections.RejectionIndex.load(conn, now, rejection_days)
+    return _item(conn, row, profile, now, index)
 
 
 def group_title(conn: sqlite3.Connection, group_id: int) -> str:
@@ -285,6 +300,7 @@ def _now() -> str:
 
 BULK_MAX = 500
 LABELS = ("interesting", "not_interesting")
+SHORTLIST_NOTE = "shortlisted from inbox"
 
 
 def _write_label(conn: sqlite3.Connection, group_id: int, label: str, now: str) -> None:
@@ -307,14 +323,31 @@ def _write_label(conn: sqlite3.Connection, group_id: int, label: str, now: str) 
             )
             conn.execute(
                 "INSERT INTO application_event (application_id, at, status, note, source) "
-                "VALUES (?, ?, 'interested', 'shortlisted from inbox', 'manual')",
-                (cur.lastrowid, now),
+                "VALUES (?, ?, 'interested', ?, 'manual')",
+                (cur.lastrowid, now, SHORTLIST_NOTE),
             )
 
 
+def triaged_group_ids(conn: sqlite3.Connection, group_ids: Sequence[int]) -> set[int]:
+    """Groups that already carry a label: not for the inbox to relabel."""
+    if not group_ids:
+        return set()
+    marks = ",".join("?" * len(group_ids))
+    rows = conn.execute(
+        f"SELECT job_group_id FROM label WHERE job_group_id IN ({marks})", tuple(group_ids)
+    )
+    return {r[0] for r in rows}
+
+
 def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
-    """Delete the label, and the application if it never progressed past 'interested'."""
-    conn.execute("DELETE FROM label WHERE job_group_id = ?", (group_id,))
+    """Delete the label, and the application if it never progressed past 'interested'.
+
+    A group with no label has nothing to undo: leave its application alone. An application
+    the shortlist press did not open (applied from the job page first) is also kept.
+    """
+    deleted = conn.execute("DELETE FROM label WHERE job_group_id = ?", (group_id,)).rowcount
+    if not deleted:
+        return
     app = conn.execute(
         "SELECT id FROM application WHERE job_group_id = ? AND status = 'interested'",
         (group_id,),
@@ -323,12 +356,23 @@ def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
         events = conn.execute(
             "SELECT COUNT(*) FROM application_event WHERE application_id = ?", (app["id"],)
         ).fetchone()[0]
+        # A mail proposal about this application keeps it (accepting it needs the row).
         others = conn.execute(
             "SELECT (SELECT COUNT(*) FROM contact WHERE application_id = :a) + "
-            "(SELECT COUNT(*) FROM attachment WHERE application_id = :a)",
+            "(SELECT COUNT(*) FROM attachment WHERE application_id = :a) + "
+            "(SELECT COUNT(*) FROM mail_proposal WHERE application_id = :a)",
             {"a": app["id"]},
         ).fetchone()[0]
-        if events <= 1 and not others:
+        mine = conn.execute(
+            "SELECT COUNT(*) FROM application_event WHERE application_id = ? AND note = ?",
+            (app["id"], SHORTLIST_NOTE),
+        ).fetchone()[0]
+        if events <= 1 and mine == events and not others:
+            # An employer rejection is a fact about the posting (job_group_id), not the
+            # shortlist entry: keep it, unlinked, so the FK does not block the delete.
+            conn.execute(
+                "UPDATE rejection SET application_id = NULL WHERE application_id = ?", (app["id"],)
+            )
             conn.execute("DELETE FROM application_event WHERE application_id = ?", (app["id"],))
             conn.execute("DELETE FROM application WHERE id = ?", (app["id"],))
 

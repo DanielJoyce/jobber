@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -320,6 +321,22 @@ def test_pipeline_page_renders(client, conn):
     assert 'class="pcard stale"' in r.text
     assert 'id="cards-closed"' in r.text
     assert "tracking.js" in r.text and "htmx-2.0.4.min.js" in r.text
+
+
+def test_pipeline_card_shows_source_posted_and_job_link(client, conn):
+    # Lookalike cards (same title and employer) are told apart by this line: pin the markup,
+    # not only the Card dataclass that feeds it.
+    make_app(conn, 1, "applied", ago(2))
+    conn.execute("UPDATE job SET posted_at = '2026-09-30T12:00:00Z' WHERE id = 1")
+    conn.commit()
+    html = client.get("/pipeline").text
+    assert re.search(
+        r'<div class="pcard-src[^"]*">Connecting Colorado &middot; posted 2026-09-30 '
+        r'&middot; <a href="/job/1"[^>]*>job #1</a></div>',
+        html,
+    )
+    moved = client.post("/pipeline/1/move?to=acknowledged", headers=HX).text
+    assert '<a href="/job/1"' in moved  # the re-rendered card keeps the line
 
 
 def test_move_endpoint_appends_event_and_returns_card(client, conn):

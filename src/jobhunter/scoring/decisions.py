@@ -853,9 +853,17 @@ def _write(
     return cur.lastrowid
 
 
-def eligible(conn: sqlite3.Connection, profile: Profile, scorer: str, limit: int) -> list[Any]:
+def eligible(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    scorer: str,
+    limit: int,
+    *,
+    group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
+) -> list[Any]:
     """``screen.eligible_groups`` under the decisions prompt version (rejected postings are
-    never eligible)."""
+    never eligible; ``new_only`` as there)."""
     from jobhunter.scoring import screen
 
     return conn.execute(
@@ -868,6 +876,8 @@ def eligible(conn: sqlite3.Connection, profile: Profile, scorer: str, limit: int
             "scoring_version": profile.scoring_version,
             "limit": limit,
             "rejected": rejections.rejected_json(conn),
+            "only": screen.only_json(group_ids),
+            "new_only": int(new_only),
         },
     ).fetchall()
 
@@ -893,6 +903,8 @@ def score_decisions(
     now: datetime,
     remaining_usd: Callable[[], float] | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+    group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> DecisionsResult:
     """Score up to ``limit`` eligible groups, ``scorer.jobs_per_request`` per request.
 
@@ -904,7 +916,7 @@ def score_decisions(
     from jobhunter.scoring.screen import _record_spend
 
     out = DecisionsResult()
-    groups = eligible(conn, profile, scorer.name, limit)
+    groups = eligible(conn, profile, scorer.name, limit, group_ids=group_ids, new_only=new_only)
     if not groups:
         return out
     by_cid = {f"g{g['group_id']}": g for g in groups}

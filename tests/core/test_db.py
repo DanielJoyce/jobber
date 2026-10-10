@@ -198,3 +198,16 @@ def test_connection_usable_from_another_thread(tmp_path):
     t.start()
     t.join()
     assert errors == []
+
+
+def test_duplicate_migration_versions_name_the_colliding_files(monkeypatch, tmp_path):
+    # Parallel branches can each add a different file with the same number; git merges them
+    # cleanly and migrate fails on every connect. The error must say which files to renumber.
+    for name in ("0001_base.sql", "0002_rescore_plan.sql", "0002_rejection_state.sql"):
+        (tmp_path / name).write_text("SELECT 1;\n")
+    monkeypatch.setattr(db.resources, "files", lambda _pkg: tmp_path)
+    with pytest.raises(RuntimeError) as err:
+        db._load_migrations()
+    msg = str(err.value)
+    assert "0002_rejection_state.sql" in msg and "0002_rescore_plan.sql" in msg
+    assert "0001_base.sql" not in msg

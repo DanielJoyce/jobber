@@ -201,6 +201,7 @@ class RejectedJob:
     location: str
     salary: str
     reasons: list[str]
+    salary_from_text: bool = False
 
 
 @dataclass
@@ -236,6 +237,7 @@ def rejected(conn: sqlite3.Connection, profile: Profile, reason: str | None = No
                     ),
                     salary=salary_text(r),
                     reasons=reasons,
+                    salary_from_text=r["salary_source"] == "text",
                 )
             )
     return Rejected(summary, total, jobs)

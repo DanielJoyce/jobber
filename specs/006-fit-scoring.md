@@ -88,7 +88,8 @@ The profile is hashed into **two versions** ([014](014-preferences-console.md#th
 
 - **`scoring_version`** covers what the model reads: the resume, `current_focus`, `done_with` and
   `narrative`. Every model score records it. Changing these costs money to re-apply, so it never
-  happens automatically.
+  happens automatically: the daily run scores only groups never screened before
+  ([014](014-preferences-console.md#re-score-now)).
 - **`filter_version`** covers everything computed in Python: hard constraints, salary, states,
   ranking, weights and bucket thresholds. Changing these re-applies instantly over stored
   scores, for free.
@@ -307,14 +308,18 @@ Rows in the `rejection` table ([007](007-console-and-tracking.md#optional-gmail-
 `core/rejections.py`) affect scoring in two ways, both decided in Python:
 
 - **The same posting is never scored.** A group the rejection matched, or a group at the same
-  normalized employer whose title is a near match (rapidfuzz `token_sort_ratio` >= 90 with the
-  same level words and numbers, so "Engineer II" is not "Engineer III"), is excluded from every
+  normalized employer with the same title (the same words in any order, ignoring case,
+  punctuation, plurals, filler words like "and"/"of", and spacing, so "Full Stack" is
+  "Fullstack"; every other word must match, so "Engineer II" is not "Engineer III" and
+  "Engineer, Cloud" is not "Engineer, Core"), is excluded from every
   eligibility query (`screen._ELIGIBLE` for Haiku, chat and Jev scorers, the bench, the
   backfill count, the deep shortlist), so no credits are spent. It is also left out of the
   inbox, and its detail page says so. No time window: rejected stays rejected.
 - **Same employer, different role, within `scoring.employer_rejection_days` (default 90)**: the
   job is still scored, and the prompt carries one neutral sentence ("candidate was rejected by
-  this employer for <title> on <date>"): a `Candidate history with this employer` line in the
+  this employer for <title> on <date>", or "(role not stated)" when the email named no title,
+  since then it is unknown whether this job is the rejected posting): a
+  `Candidate history with this employer` line in the
   Haiku/chat posting text, an `employer_history` field in the Jev job state. No question asks
   about it, and pay and location remain Python's job. The bucket is **not** capped: a
   rejection for another role says little about fit for this one, so the inbox row and detail
@@ -449,7 +454,7 @@ A one-time backfill is affordable: 50,000 historical jobs ≈ $100, run once.
 | Scoring the same posting 14 times | Scoring keyed on `job_group`, not `job` or location |
 | Re-scoring everything after a trivial edit | `comp`/`location` computed in Python; `UNIQUE(job_group, tier, prompt_version, scoring_version, model)` |
 | Silent cache failure costing 10x | Assertion on `cache_read_input_tokens` |
-| Runaway spend | Daily cap in config; scoring stops and the console shows a banner |
+| Runaway spend | Daily and weekly caps in config, checked by every scoring run; scoring stops and the console shows a banner |
 | **Jobs matching stale experience** | `recency_weighted_skills` vs `raw_skills` gap → **bucket F** |
 | **Jobs you can do but are done with** | `current_focus.done_with` → `done_with_hits` + flag |
 | Opaque single score | Deterministic **buckets** with a stated action per bucket |

@@ -25,7 +25,7 @@
     {% for j in data.jobs %}
     <tr>
       <td>{% if j.group_id %}<a href="/job/{{ j.group_id }}">{{ j.title }}</a>{% else %}{{ j.title }}{% endif %}</td>
-      <td>{{ j.employer }}</td><td>{{ j.location }}</td><td>{{ j.salary }}</td>
+      <td>{{ j.employer }}</td><td>{{ j.location }}</td><td>{{ j.salary }}{% if j.salary_from_text %} <span class="muted">(parsed from the description)</span>{% endif %}</td>
       <td>{% for r in j.reasons %}<span class="tag">{{ r }}</span>{% endfor %}</td>
     </tr>
     {% endfor %}

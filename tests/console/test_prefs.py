@@ -249,12 +249,13 @@ def test_cost_per_job_sources(conn):
     assert pf.cost_per_job(conn) == (pf.FALLBACK_COST_PER_JOB, "default")
     add_job(conn, 1, cost=0.004)
     assert pf.cost_per_job(conn) == (0.004, "fit_score")
+    # One packed request of 8 jobs is one llm_spend call: cost per call is not cost per job.
     conn.execute(
         "INSERT INTO llm_spend (day, model, tier, calls, cost_usd) "
-        "VALUES ('2026-10-01', 'm', 'screen', 10, 0.05)"
+        "VALUES ('2026-10-01', 'm', 'screen', 1, 0.032)"
     )
     cost, source = pf.cost_per_job(conn)
-    assert source == "llm_spend" and cost == pytest.approx(0.005)
+    assert source == "fit_score" and cost == pytest.approx(0.004)
 
 
 def test_preview_validation_errors(client, pdir):

@@ -122,6 +122,37 @@ eligibility joins on the filter version. It refuses when the estimate exceeds th
 daily or weekly spend cap. The Anthropic batch path only submits; `score --collect-pending`
 finishes it.
 
+What runs is what was confirmed. A plan is the exact list of job groups (for "recent", only
+the recent open A-E groups that are waiting, not the Mismatch or Stale groups between them),
+the estimate at the measured cost per job (`fit_score.cost_usd`, which is per job; `llm_spend`
+counts one call per packed or Jev request), and a spend ceiling (`max_usd`, the estimate plus
+25% and a cent). The confirm dialog shows the count, the estimate and the ceiling; the form
+posts the plan's token back, and nothing runs if the plan built at click time differs (new
+jobs, a new profile): the panel shows the new numbers and asks again. The plan is stored on
+the request (`group_ids`, `max_usd`), so a run sends each listed group at most once, never
+sends another group, and stops before its own spend would pass the ceiling. A group that errors
+stays waiting for a later run; the note says how many errored and how many planned groups were
+not sent. A queued request's Run button first shows its real plan and confirm. A run that
+finishes `done` closes the queued requests it covers (queued before it started, scope
+included; status `canceled`, note `superseded by re-score #N`), so the nightly drain cannot
+pay a second scorer for the same groups. A heartbeat thread keeps a slow run from being taken
+for dead, and a run that was marked interrupted stops instead of overwriting that status.
+
+The daily `jobhunter run` never re-scores. Its score stage takes only groups with no screen
+score at their current description revision under any model, prompt or `scoring_version` (new
+jobs, plus a pasted description), and skips any group listed in the plan of a pending or running
+re-score. Why: choosing "No, new jobs only" must cost nothing for existing jobs, and a planned
+group is left to its plan because the plan checks eligibility per scorer, so a daily score with
+the default scorer would not stop the plan paying a second model for the same group. A running
+request with a stale heartbeat is marked failed first, so a dead run does not hold its groups.
+The daily run, like re-scores and `score --submit`, stops at the tighter of the daily and weekly
+caps (uncollected batches count against both); before, it checked only the daily cap.
+
+The console refuses state-changing requests (POST, PUT, PATCH, DELETE) that a browser sends
+cross-site or under a non-loopback `Host` (DNS rebinding), with 403; `--allow-remote` drops
+the loopback requirement but not same-origin. Requests without `Origin` or `Sec-Fetch-Site`
+(curl, the CLI, tests) are not from a web page and pass.
+
 ## History and undo
 
 Every save appends to a `profile_change` table: timestamp, field path, old value, new value, and

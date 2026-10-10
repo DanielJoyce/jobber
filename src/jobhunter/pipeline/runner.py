@@ -423,11 +423,31 @@ def _score_stage(
     except ImportError:
         report.messages.append("score: screen stage not installed; skipped")
         return
+    from jobhunter.scoring import rescore
     from jobhunter.scoring.scorers import privacy_notice, scorer_from_string
 
+    # new_only: the daily run scores new jobs (and pasted descriptions) only. Re-scoring jobs
+    # already scored under another scoring_version, model or prompt costs money, so it runs only
+    # as a re-score the user confirmed on /prefs (specs/006, specs/014). Groups a pending or
+    # running re-score plan lists are left to that plan.
     spec = settings.scoring.screen_scorer
     if notice := privacy_notice(spec, settings.scoring):
         report.messages.append(notice)
+    # A re-score that died without finishing must not hold its groups back forever: this marks
+    # a running request with a stale heartbeat failed, so only live plans exclude groups.
+    rescore.running_request(conn, now)
+    conn.commit()
+
+    def remaining() -> float:
+        return screen.remaining_budget(conn, settings.scoring, now)
+
+    if remaining() <= 0:
+        report.messages.append(
+            "score: daily or weekly spend cap reached (scoring.daily_cap_usd / weekly_cap_usd); "
+            "new jobs stay queued"
+        )
+        report.counts["score"] = "0"
+        return
     if not spec.startswith("anthropic:"):
         try:
             sync = screen.score_sync(
@@ -436,10 +456,9 @@ def _score_stage(
                 profile,
                 limit=DEFAULT_SCORE_LIMIT,
                 now=now,
-                remaining_usd=lambda: screen.remaining_daily_budget(
-                    conn, settings.scoring.daily_cap_usd, now
-                ),
+                remaining_usd=remaining,
                 rejection_days=settings.scoring.employer_rejection_days,
+                new_only=True,
             )
         except Exception as exc:  # scoring trouble must not fail the ingest exit code
             logger.warning("score failed: %s", exc)
@@ -455,7 +474,6 @@ def _score_stage(
         report.messages.append(f"score: no Anthropic client ({exc}); skipped")
         return
     try:
-        cap = settings.scoring.daily_cap_usd
         result = screen.submit_batch(
             conn,
             client,
@@ -463,8 +481,9 @@ def _score_stage(
             limit=DEFAULT_SCORE_LIMIT,
             now=now,
             scorer=settings.scoring.screen_scorer,
-            remaining_usd=lambda: screen.remaining_daily_budget(conn, cap, now),
+            remaining_usd=remaining,
             rejection_days=settings.scoring.employer_rejection_days,
+            new_only=True,
         )
     except Exception as exc:  # scoring trouble must not fail the ingest exit code
         logger.warning("score submit failed: %s", exc)

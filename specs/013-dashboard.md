@@ -194,10 +194,22 @@ all time, from `dashboard.sankey()`, embedded in the page as one JSON payload
   proposal for a job the pipeline never saw (their group's job is on the `email-manual`
   source). It feeds Applied directly.
 - Each group takes one path, so flow is conserved (a node's in equals its out); tested. Zero
-  nodes are hidden. `sankey(..., extra_rejected=...)` lets a later change move groups known to
-  be rejected from other evidence (employer rejection emails) onto the Rejected node.
-- All seven buckets are shown rather than merged, so every node links to an exact list
-  (`/inbox?bucket=X`, `/tracking`).
+  nodes are hidden. Groups not yet grouped (listed, resolved, normalized postings) count as
+  Fetched and Awaiting prefilter. A group never scored and never triaged ends at Not yet
+  scored, because the inbox does not list it either.
+- Employer rejections (`core/rejections`) land on Rejected. One rejection is one application:
+  it is matched to a tracked application (by group, else by employer and title, a blank title
+  matching any), and only one that matches none is "applied elsewhere" (Applied elsewhere ->
+  Applied -> Rejected). A posting listed in several places (several groups with one title)
+  is not several applications. A shortlisted job withdrawn or closed before any applied event
+  stays Not applied yet.
+- All seven buckets are shown rather than merged, so every node links to a list that holds
+  what it counts: bucket nodes to `/inbox?bucket=X&triaged=1` (shortlisted and dismissed
+  groups included, marked with a badge), Untriaged to the inbox with every bucket,
+  application nodes to `/pipeline?node=<id>` (a banner names the node; for Applied elsewhere,
+  Applied and Rejected it also counts the rejection emails that have no application here and
+  links to Employer rejections). Nodes with no list (Fetched, Prefilter, Dismissed) are not
+  links. The inbox caps each bucket at 500 rows and says so. The tests request every href.
 - Layout is a small deterministic routine in `charts.js` (one column per stage, heights
   proportional to value, cubic-bezier bands), not d3-sankey: it avoids a pinned vendor file and
   lets us place direct labels and keep a 3px floor for single-group nodes. Nodes are colored by

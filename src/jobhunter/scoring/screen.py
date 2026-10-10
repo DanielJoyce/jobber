@@ -19,11 +19,12 @@ import sqlite3
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from pydantic import ValidationError
 
+from jobhunter.config import Scoring
 from jobhunter.core import rejections
 from jobhunter.core.models import LocationScope, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
@@ -353,13 +354,30 @@ WHERE NOT EXISTS (
       AND b.model = :model AND b.prompt_version = :prompt_version
       AND b.scoring_version = :scoring_version)
   AND g.id NOT IN (SELECT value FROM json_each(:rejected))
+  AND (:only IS NULL OR g.id IN (SELECT value FROM json_each(:only)))
+  AND (NOT :new_only OR (
+    NOT EXISTS (
+      SELECT 1 FROM fit_score f
+      WHERE f.job_group_id = g.id AND f.tier = :tier AND f.input_rev = g.description_rev)
+    AND NOT EXISTS (
+      SELECT 1 FROM score_batch_item i JOIN score_batch b ON b.id = i.batch_id
+      WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier)
+    AND g.id NOT IN (
+      SELECT c.value FROM rescore_request r, json_each(r.group_ids) c
+      WHERE r.status IN ('pending', 'running') AND r.group_ids IS NOT NULL)))
 ORDER BY j.posted_at IS NULL, j.posted_at DESC, g.id
 LIMIT :limit
 """
 
 
 def eligible_groups(
-    conn: sqlite3.Connection, profile: Profile, *, scorer: str, limit: int
+    conn: sqlite3.Connection,
+    profile: Profile,
+    *,
+    scorer: str,
+    limit: int,
+    group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> list[sqlite3.Row]:
     """Groups whose canonical job passed the current prefilter and have no screen yet.
 
@@ -368,6 +386,15 @@ def eligible_groups(
     score stays. A job with no prefilter_result row is not yet eligible. Groups already in an
     uncollected batch for the same key are skipped so they are never submitted twice. A
     posting the candidate was rejected for (``core/rejections``) is never eligible.
+    ``group_ids`` narrows the result to those groups (a re-score runs only its confirmed plan).
+
+    ``new_only`` is the daily run's rule: only groups with no screen score at all for their
+    current description revision (under any model, prompt or ``scoring_version``), none in
+    an uncollected batch, and none listed in the confirmed plan of a pending or running
+    re-score. Re-scoring an already scored group costs money, so it happens only through a
+    confirmed re-score, never automatically (specs/006, specs/014). A group a plan covers is
+    left to that plan: the plan checks eligibility per scorer, so a daily score with another
+    model would not stop the plan paying for the same group again.
     """
     return conn.execute(
         _ELIGIBLE,
@@ -379,8 +406,23 @@ def eligible_groups(
             "scoring_version": profile.scoring_version,
             "limit": limit,
             "rejected": rejections.rejected_json(conn),
+            "only": only_json(group_ids),
+            "new_only": int(new_only),
         },
     ).fetchall()
+
+
+def only_json(group_ids: Sequence[int] | None) -> str | None:
+    """The ``:only`` parameter of ``_ELIGIBLE``: None means every group."""
+    return None if group_ids is None else json.dumps([int(g) for g in group_ids])
+
+
+def _pending_batch_usd(conn: sqlite3.Connection) -> float:
+    """Estimated cost of submitted batches not yet collected (not in ``llm_spend`` yet)."""
+    pending = conn.execute(
+        "SELECT coalesce(sum(request_count), 0) FROM score_batch WHERE collected_at IS NULL"
+    ).fetchone()[0]
+    return pending * ESTIMATED_COST_PER_REQUEST_USD
 
 
 def remaining_daily_budget(conn: sqlite3.Connection, cap_usd: float, now: datetime) -> float:
@@ -388,10 +430,25 @@ def remaining_daily_budget(conn: sqlite3.Connection, cap_usd: float, now: dateti
     spent = conn.execute(
         "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ?", (to_iso(now)[:10],)
     ).fetchone()[0]
-    pending = conn.execute(
-        "SELECT coalesce(sum(request_count), 0) FROM score_batch WHERE collected_at IS NULL"
+    return cap_usd - spent - _pending_batch_usd(conn)
+
+
+def weekly_remaining(conn: sqlite3.Connection, cap_usd: float, now: datetime) -> float:
+    """``cap_usd`` minus the last seven days' spend and an estimate for uncollected batches."""
+    since = (now - timedelta(days=6)).date().isoformat()
+    spent = conn.execute(
+        "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day >= ?", (since,)
     ).fetchone()[0]
-    return cap_usd - spent - pending * ESTIMATED_COST_PER_REQUEST_USD
+    return cap_usd - spent - _pending_batch_usd(conn)
+
+
+def remaining_budget(conn: sqlite3.Connection, scoring: Scoring, now: datetime) -> float:
+    """The tighter of the daily and weekly spend caps (``scoring.daily_cap_usd`` and
+    ``scoring.weekly_cap_usd``). Every automatic or confirmed scoring run checks this."""
+    return min(
+        remaining_daily_budget(conn, scoring.daily_cap_usd, now),
+        weekly_remaining(conn, scoring.weekly_cap_usd, now),
+    )
 
 
 def _summary_for(conn: sqlite3.Connection, job: Mapping[str, Any]) -> str:
@@ -443,6 +500,8 @@ def submit_batch(
     scorer: str = DEFAULT_SCORER,
     remaining_usd: Callable[[], float] | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+    group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> str | None:
     """Submit one Message Batch for eligible groups. Returns the batch id, or None.
 
@@ -456,7 +515,9 @@ def submit_batch(
         limit = min(limit, affordable)
     if limit <= 0:
         return None
-    groups = eligible_groups(conn, profile, scorer=scorer, limit=limit)
+    groups = eligible_groups(
+        conn, profile, scorer=scorer, limit=limit, group_ids=group_ids, new_only=new_only
+    )
     if not groups:
         return None
 
@@ -758,6 +819,8 @@ def score_sync(
     now: datetime,
     remaining_usd: Callable[[], float] | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+    group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> SyncResult:
     """Screen eligible groups through a non-batching scorer and write fit_score rows now.
 
@@ -777,6 +840,8 @@ def score_sync(
             now=now,
             remaining_usd=remaining_usd,
             rejection_days=rejection_days,
+            group_ids=group_ids,
+            new_only=new_only,
         )
     out = SyncResult()
     if int(getattr(scorer, "jobs_per_request", 1) or 1) > 1:
@@ -788,6 +853,8 @@ def score_sync(
             now=now,
             remaining_usd=remaining_usd,
             rejection_days=rejection_days,
+            group_ids=group_ids,
+            new_only=new_only,
         )
     if remaining_usd is not None:
         affordable = math.floor(max(remaining_usd(), 0.0) / ESTIMATED_COST_PER_REQUEST_USD)
@@ -796,7 +863,9 @@ def score_sync(
         limit = min(limit, affordable)
     if limit <= 0:
         return out
-    groups = eligible_groups(conn, profile, scorer=scorer.name, limit=limit)
+    groups = eligible_groups(
+        conn, profile, scorer=scorer.name, limit=limit, group_ids=group_ids, new_only=new_only
+    )
     if not groups:
         return out
     by_id = {f"g{g['group_id']}": g for g in groups}
@@ -1037,6 +1106,8 @@ def _score_sync_packed(
     now: datetime,
     remaining_usd: Callable[[], float] | None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+    group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> SyncResult:
     """``score_sync`` with several jobs per request.
 
@@ -1047,7 +1118,14 @@ def _score_sync_packed(
     """
     out = SyncResult()
     groups = sorted(
-        eligible_groups(conn, profile, scorer=scorer.name, limit=max(limit, 0)),
+        eligible_groups(
+            conn,
+            profile,
+            scorer=scorer.name,
+            limit=max(limit, 0),
+            group_ids=group_ids,
+            new_only=new_only,
+        ),
         key=lambda g: g["group_id"],
     )
     if not groups:

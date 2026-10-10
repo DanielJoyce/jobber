@@ -208,3 +208,123 @@ def test_space_toggles_and_s_x_apply_to_selection(inbox, server):
     expect(inbox.locator(f"article#row-{gids[0]}")).to_be_visible()
     expect(inbox.locator(f"article#row-{gids[2]}")).to_be_visible()
     assert not server.rows("SELECT 1 FROM label")
+
+
+# ─── bulk triage: mouse-selected, repeated, accessible ─────────────────────
+
+
+def labelled(server) -> set[int]:
+    return {r[0] for r in server.rows("SELECT job_group_id FROM label")}
+
+
+def test_keys_work_after_clicking_a_checkbox(inbox, server):
+    # Mouse-select, then press a key: focus stays on the checkbox just clicked.
+    a, b = visible_gids(inbox)[:2]
+    inbox.locator(f"#row-{a} input.sel").click()
+    inbox.locator(f"#row-{b} input.sel").click()
+    assert inbox.evaluate("document.activeElement.className") == "sel"
+    inbox.keyboard.press("x")
+    for g in (a, b):
+        expect(inbox.locator(f"#row-{g}")).to_contain_text("Dismissed")
+    assert labelled(server) == {a, b}
+
+
+def test_keys_work_after_select_all_click(inbox, server):
+    gids = visible_gids(inbox)
+    inbox.locator("#select-all").click()
+    inbox.keyboard.press("s")
+    expect(inbox.locator(f"#row-{gids[-1]}")).to_contain_text("Shortlisted")
+    assert labelled(server) == set(gids)
+
+
+def test_navigation_keys_work_with_a_checkbox_focused(inbox):
+    gids = visible_gids(inbox)
+    inbox.locator(f"#row-{gids[0]} input.sel").click()
+    inbox.keyboard.press("j")
+    assert selected_gid(inbox) == gids[1]
+    inbox.keyboard.press("k")
+    assert selected_gid(inbox) == gids[0]
+
+
+def test_space_on_a_focused_checkbox_toggles_only_that_box(inbox):
+    gids = visible_gids(inbox)
+    box = inbox.locator(f"#row-{gids[1]} input.sel")
+    box.focus()
+    inbox.keyboard.press(" ")
+    expect(box).to_be_checked()
+    expect(inbox.locator("#bulk-count")).to_have_text("1 selected")  # not also the current row
+    inbox.keyboard.press(" ")
+    expect(box).not_to_be_checked()
+
+
+def test_two_bulk_batches_undo_one_at_a_time(inbox, server):
+    gids = visible_gids(inbox)
+    for g in gids[:2]:  # batch 1: first row; batch 2: second row
+        inbox.locator(f"#row-{g} input.sel").click()
+        inbox.keyboard.press("x")
+        expect(inbox.locator(f"#row-{g}")).to_contain_text("Dismissed")
+    assert labelled(server) == set(gids[:2])
+    inbox.keyboard.press("u")
+    expect(inbox.locator(f"article#row-{gids[1]}")).to_be_visible()
+    assert labelled(server) == {gids[0]}
+    inbox.keyboard.press("u")
+    expect(inbox.locator(f"article#row-{gids[0]}")).to_be_visible()
+    assert not labelled(server)
+    assert not inbox.errors
+
+
+def test_mouse_undo_all_leaves_no_stale_undo_entry(inbox, server):
+    gids = visible_gids(inbox)
+    inbox.locator(f"#row-{gids[0]} input.sel").click()
+    inbox.keyboard.press("x")
+    expect(inbox.locator(f"#row-{gids[0]}")).to_contain_text("Dismissed")
+    inbox.get_by_role("button", name="undo all").click()
+    expect(inbox.locator(f"article#row-{gids[0]}")).to_be_visible()
+    assert not labelled(server)
+    inbox.keyboard.press("x")  # a single dismiss of the focused row
+    expect(inbox.locator(".row.triaged")).to_have_count(1)
+    assert len(labelled(server)) == 1
+    # htmx wires the new row's undo button when the swap settles (20ms); let it.
+    inbox.wait_for_function("!document.querySelector('.htmx-settling, .htmx-swapping')")
+    inbox.keyboard.press("u")  # the first u must undo this dismissal, not a spent bulk entry
+    expect(inbox.locator(".row.triaged")).to_have_count(0)
+    assert not labelled(server)
+
+
+def test_bulk_toast_is_a_standing_live_region(inbox):
+    gid = visible_gids(inbox)[0]
+    inbox.evaluate("document.getElementById('bulk-toast').dataset.mark = 'same-node'")
+    inbox.locator(f"#row-{gid} input.sel").click()
+    inbox.keyboard.press("x")
+    toast = inbox.locator("#bulk-toast")
+    expect(toast).to_contain_text("Dismissed 1 job")
+    assert toast.get_attribute("role") == "status"
+    assert toast.get_attribute("data-mark") == "same-node"  # content swapped, node kept
+    inbox.get_by_role("button", name="undo all").click()
+    expect(toast).to_contain_text("Undone: 1 job restored")
+    assert toast.get_attribute("data-mark") == "same-node"
+
+
+def test_k_scrolls_the_selected_row_clear_of_the_sticky_bar(page, server):
+    page.set_viewport_size({"width": 1000, "height": 350})
+    page.goto(f"{server.url}/inbox")
+    page.wait_for_selector("article.row.selected")
+    for _ in range(8):
+        page.keyboard.press("j")
+    for _ in range(5):
+        page.keyboard.press("k")
+    top = page.evaluate(
+        "document.querySelector('article.row.selected').getBoundingClientRect().top"
+    )
+    bar = page.evaluate("document.getElementById('bulk-bar').getBoundingClientRect().bottom")
+    assert top >= bar - 1, f"selected row top {top} is under the bulk bar (bottom {bar})"
+
+
+def test_phone_header_keeps_the_first_job_near_the_top(page, server):
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{server.url}/inbox")
+    head = page.evaluate("document.querySelector('.inbox-head').getBoundingClientRect().height")
+    assert head <= 150, f"header is {head}px tall: chips are one per row"
+    h1 = page.evaluate("document.querySelector('.inbox-head h1').getBoundingClientRect().bottom")
+    chip = page.evaluate("document.querySelector('.chips').getBoundingClientRect().top")
+    assert chip >= h1 - 1  # the chips sit under the title, not squeezed beside it

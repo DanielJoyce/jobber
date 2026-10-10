@@ -72,20 +72,33 @@ ATS_SENDER_DOMAINS = (
 
 # Order matters: first kind with a hit wins. A rejection often also says "thank you for
 # applying", and a confirmation often says "if selected for an interview", so the strong,
-# specific kinds are tested first and the loose ones last.
+# specific kinds are tested first and the loose ones last. Every rejection phrase here is
+# specific; the loose rejection words are in WEAK_REJECTION (see there).
 PHRASES: dict[str, tuple[str, ...]] = {
     "rejection": (
-        "unfortunately",
         "not moving forward",
         "not be moving forward",
+        "won't be moving forward",
+        "not move forward",
+        "not to move forward",
         "will not be proceeding",
         "decided to pursue other candidates",
         "decided to move forward with other",
+        "move forward with other candidates",
+        "moving forward with other candidates",
         "no longer under consideration",
         "position has been filled",
-        "not selected",
         "regret to inform",
         "unable to offer you",
+        # Negated offers, read before the offer phrases they contain.
+        "unable to extend an offer",
+        "not be extending an offer",
+        "not extend an offer",
+        "with another candidate",
+        "chosen another candidate",
+        "selected another candidate",
+        "decided not to proceed",
+        "not be advancing",
     ),
     "offer": (
         "pleased to offer",
@@ -131,6 +144,22 @@ PHRASES: dict[str, tuple[str, ...]] = {
 }
 # Too loose to count unless the sender is a known ATS.
 WEAK_PHRASES = {"thank you for your interest", "application status", "your availability"}
+# Loose rejection words. Rejections usually open with a thank-you line that names the stage
+# ("thank you for applying", "thanks for the phone screen"), so a loose word beats every
+# non-rejection phrase; it is skipped only in a sentence that WEAK_REJECTION_BENIGN marks as
+# confirmation or scheduling talk (bug d28c8de: "unfortunately we are unable to respond to
+# every applicant", "if you are not selected", "unfortunately the interviewer is out; please
+# select a time"). A hit is a *weak* rejection, recorded pending until the user confirms it
+# on /rejections, so a misread hides nothing.
+WEAK_REJECTION = ("unfortunately", "not selected")
+WEAK_REJECTION_BENIGN = re.compile(
+    r"respond (?:to )?(?:every|each|all)|respond (?:individually|personally)|"
+    r"(?:individually|personally) respond|(?:unable|not able|cannot|can't|can not) (?:to )?"
+    r"(?:respond|reply)|reschedul|(?:select|pick|choose|find) (?:a|another|a new|a "
+    r"different) time|(?:new|another|different) time|your availability|times? that works?|"
+    r"\b(?:if|should|unless|whether|who|whom)\b[^.!?]*\bnot selected",
+)
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 URL_RE = re.compile(r"https?://[^\s<>\")\]]+", re.I)
 _WS = re.compile(r"\s+")
@@ -170,6 +199,9 @@ class Classification:
     in_subject: bool
     phrase: str | None = None
     source: str = "rules"
+    # For a rejection: matched a specific phrase (not only a loose word like "unfortunately").
+    # Only strong rejections become a rejection fact without the user's confirmation.
+    strong: bool = True
 
 
 # Hook for an optional LLM classifier later (a separate bug). Called only when the rules say
@@ -203,6 +235,9 @@ class RejectionRecord:
     evidence: dict
     job_group_id: int | None = None
     application_id: int | None = None
+    # False for a rejection read from a loose word only: stored 'pending', so it hides no
+    # posting until the user confirms it on /rejections.
+    confirmed: bool = True
 
 
 @dataclass
@@ -214,6 +249,7 @@ class ScanResult:
     stored: int = 0
     rejections_stored: int = 0
     thread_duplicates: int = 0
+    rematched: int = 0  # stored rejections proposed for an application created since
 
 
 # --- classification ------------------------------------------------------------------------
@@ -228,6 +264,16 @@ def _norm_text(s: str) -> str:
     return _WS.sub(" ", s.lower().replace(chr(0x2019), "'")).strip()
 
 
+def _weak_rejection(subject: str, body: str) -> tuple[bool, str] | None:
+    """(in_subject, word) for the first loose rejection word outside a benign sentence."""
+    for where, text in ((True, subject), (False, body)):
+        for sentence in _SENTENCE_END.split(text):
+            for p in WEAK_REJECTION:
+                if p in sentence and not WEAK_REJECTION_BENIGN.search(sentence):
+                    return where, p
+    return None
+
+
 def classify(msg: Message, fallback: Classifier | None = None) -> Classification:
     """Deterministic classification; ``fallback`` (optional LLM hook) only sees 'other'."""
     subject = _norm_text(msg.subject)
@@ -240,6 +286,8 @@ def classify(msg: Message, fallback: Classifier | None = None) -> Classification
         for p in phrases:
             if p in body and not (p in WEAK_PHRASES and not ats):
                 return Classification(kind, ats, False, p)
+        if kind == "rejection" and (weak := _weak_rejection(subject, body)) is not None:
+            return Classification("rejection", ats, weak[0], weak[1], strong=False)
     if fallback is not None:
         out = fallback(msg)
         if out is not None and out.kind in KINDS:
@@ -255,7 +303,7 @@ def build_query(settings: Settings, days: int) -> str:
     words = "application OR applying OR applied OR interview OR candidacy OR position OR offer"
     label = settings.mail.label.strip().replace("/", "-").replace(" ", "-")
     return (
-        f"newer_than:{days}d -label:{label} -in:spam -in:trash "
+        f"newer_than:{days}d -label:{label} -in:spam -in:trash -in:sent "
         f"(from:({domains}) OR subject:({words}))"
     )
 
@@ -506,6 +554,7 @@ _T = r"(?P<t>[^.,!?|\n]{2,80}?)"
 # clause breaks, so only subjects allow them.
 _TS = r"(?P<t>[^.!?|\n]{2,80}?)"
 _E = r"(?P<e>[^.,!?|:\n]{2,60}?)"
+_TN = r"(?P<t>(?:(?!\bthe\b)[^.,!?|\n]){2,80}?)"  # a title with no "the" inside
 _END = r"(?=\s*(?:[.,!?|\n]|$| - ))"
 
 # Subject-only shapes, tried first: subjects are terse and reliable.
@@ -513,7 +562,7 @@ _SUBJECT_PATTERNS = (
     re.compile(rf"^(?:update|re|fwd?)\s*[-:]\s*{_TS} at {_E}{_END}", re.I),
     re.compile(rf"application (?:to|with|at) {_E}{_END}", re.I),
     re.compile(rf"applying (?:to|with|at) {_E}{_END}", re.I),
-    re.compile(rf"^{_E}\s*:\s*(?:your )?application", re.I),
+    re.compile(rf"^{_E}\s*:\s*(?:your application|application|thank you|thanks)\b", re.I),
     re.compile(rf"^{_E} application (?:update|status)", re.I),
 )
 _TITLE_PATTERNS = (
@@ -525,6 +574,9 @@ _TITLE_PATTERNS = (
         rf"interest in (?:the )?{_T} (?:position |role |opening )?(?:at|with) {_E}{_END}", re.I
     ),
     re.compile(rf"for the {_T} (?:position|role)\b", re.I),
+    # "...the requirements of the Platform Lead role at Acme": the title is the words after
+    # the last "the" before "role/position at" (it may not contain another "the").
+    re.compile(rf"\bthe {_TN} (?:position|role|opening) (?:at|with) {_E}{_END}", re.I),
 )
 # Words that mean a capture is a sentence fragment, not a name or a job title.
 _NOT_A_NAME = re.compile(
@@ -532,51 +584,85 @@ _NOT_A_NAME = re.compile(
     r"experience|unfortunately|reviewing|review|process|this role|time and effort)\b",
     re.I,
 )
-_SENDER_TEAM = re.compile(r"\b(?:hiring|recruiting|talent|careers?|people)\b(?: team)?", re.I)
+_SENDER_TEAM = re.compile(
+    r"\b(?:talent acquisition|hiring|recruiting|recruitment|talent|careers?|people)\b", re.I
+)
+# "Talent at Acme", "Recruiting @ Acme", "Careers from Acme": the employer follows.
+_SENDER_AT = re.compile(
+    r"^(?:the )?(?:talent acquisition|hiring|recruiting|recruitment|talent|careers?|people)"
+    r"(?: team)?\s+(?:at|@|from|with)\s+(?P<e>.+)$",
+    re.I,
+)
+# Trailing words that are a careers site or team, not part of the employer's name.
+_EMPLOYER_SUFFIX = re.compile(
+    r"(?:\s+(?:talent acquisition|hiring|recruiting|recruitment|talent|careers?|jobs|team|"
+    r"people))+$",
+    re.I,
+)
+# A title never starts with an article or a pronoun: "applying for a career at Acme".
+_NOT_A_TITLE = re.compile(r"^(?:a|an|any|this|that|these|those|our|your|one|some)\b", re.I)
 
 
 def _clean(value: str | None, max_words: int) -> str | None:
-    v = (value or "").strip(" -:\"'")
+    v = _WS.sub(" ", (value or "")).strip(" -:\"'")
     if not v or len(v.split()) > max_words or _NOT_A_NAME.search(v):
         return None
     return v
 
 
+def _clean_employer(value: str | None) -> str | None:
+    return _clean(_EMPLOYER_SUFFIX.sub("", (value or "").strip(" -:|,\"'")), 6)
+
+
+def _clean_title(value: str | None) -> str | None:
+    v = _clean(value, 12)
+    return None if v is None or _NOT_A_TITLE.match(v) else v
+
+
 def _sender_employer(msg: Message) -> str | None:
-    """ "Acme Hiring Team" or "Acme Careers" from the display name; None for ATS-only names."""
-    name = msg.sender_name.strip().strip('"')
-    if not name or not _SENDER_TEAM.search(name):
+    """ "Acme Hiring Team", "Acme Talent Acquisition" or "Talent at Acme" from the display
+    name: the words before the team word, or after "at". None for ATS-only names."""
+    name = _WS.sub(" ", msg.sender_name.strip().strip('"'))
+    if not name:
         return None
-    return _clean(_GENERIC_NAMES.sub("", name).strip(" -:|,"), 6)
+    at = _SENDER_AT.match(name)
+    if at:
+        return _clean_employer(at["e"])
+    team = _SENDER_TEAM.search(name)
+    if team is None:
+        return None
+    return _clean_employer(name[: team.start()])
 
 
 def parse_employer_title(msg: Message) -> tuple[str | None, str | None]:
     """Best-effort employer and title for mail that matched no known job.
 
-    Order: the sender's "X Hiring Team" name, then terse subject shapes, then body sentences.
-    Every capture is validated as a short name or title, never a sentence fragment.
+    Order: terse subject shapes, then the sender's "X Hiring Team" name, then body
+    sentences. A clean subject employer ("Thank you for your application to Acme") wins over
+    the display name, which is often a team name ("Acme Talent Acquisition"). Every capture
+    is validated as a short name or title, never a sentence fragment.
     """
-    employer = _sender_employer(msg)
-    title = None
+    employer = title = None
     for pat in _SUBJECT_PATTERNS:
         m = pat.search(msg.subject)
         if m:
             gd = m.groupdict()
-            employer = employer or _clean(gd.get("e"), 6)
-            title = title or _clean(gd.get("t"), 12)
+            employer = employer or _clean_employer(gd.get("e"))
+            title = title or _clean_title(gd.get("t"))
+    employer = employer or _sender_employer(msg)
     for text in (msg.subject, (msg.body or msg.snippet)[:1500]):
         if employer and title:
             break
         for pat in _TITLE_PATTERNS:
             for m in pat.finditer(text):
                 gd = m.groupdict()
-                t, e = _clean(gd.get("t"), 12), _clean(gd.get("e"), 6)
+                t, e = _clean_title(gd.get("t")), _clean_employer(gd.get("e"))
                 if gd.get("t") is not None and t is None:
                     continue  # a fragment: skip this match entirely
                 title = title or t
                 employer = employer or e
     if not employer:
-        employer = _clean(_GENERIC_NAMES.sub("", msg.sender_name).strip(" -:|,"), 6)
+        employer = _clean_employer(_GENERIC_NAMES.sub("", msg.sender_name).strip(" -:|,"))
     return employer, title
 
 
@@ -689,7 +775,8 @@ def build_proposal(
 
 def build_rejection(msg: Message, cls: Classification, found: Match | None) -> RejectionRecord:
     """Every rejection email is recorded, matched or not. Employer and title come from the
-    matched job when there is one, else from the email itself."""
+    matched job when there is one, else from the email itself. One read from a loose word
+    only ("unfortunately") is recorded unconfirmed: a misread must not hide a posting."""
     employer, title = parse_employer_title(msg)
     evidence = {
         "sender": msg.sender[:200],
@@ -704,6 +791,7 @@ def build_rejection(msg: Message, cls: Classification, found: Match | None) -> R
         employer=employer,
         title=title,
         evidence=evidence,
+        confirmed=cls.strong,
     )
     if found is not None:
         rec.job_group_id = found.group.group_id
@@ -756,6 +844,7 @@ def store_rejections(
             source="email",
             evidence=r.evidence,
             now=now,
+            state="confirmed" if r.confirmed else "pending",
         )
         n += int(new is not None)
     conn.commit()
@@ -795,6 +884,81 @@ def store(conn: sqlite3.Connection, proposals: list[Proposal], now: datetime) ->
         n += cur.rowcount
     conn.commit()
     return n
+
+
+def rematch_rejections(conn: sqlite3.Connection, app_id: int, now: datetime) -> int:
+    """Link stored, unmatched rejection emails to an application created after them, and
+    propose each as a 'rejected' event (accept/dismiss as usual). Returns proposals stored.
+
+    A rejection row is never fetched from Gmail again, so without this an application that
+    appears later (the user accepts its confirmation) would never learn it was rejected. A
+    rejection qualifies when it is at the same normalized employer, not older than the
+    application (one day of slack, as in ``_recent_enough``), and either names the same
+    title or names none while this is the user's only application at that employer.
+    """
+    app = conn.execute(
+        "SELECT a.id, a.job_group_id, a.status, COALESCE(a.applied_at, a.created_at) AS since, "
+        "j.title, COALESCE(j.employer, j.agency_raw, '') AS employer "
+        "FROM application a JOIN job_group g ON g.id = a.job_group_id "
+        "JOIN job j ON j.id = g.canonical_job_id WHERE a.id = ?",
+        (app_id,),
+    ).fetchone()
+    if app is None or app["status"] in ("rejected", "withdrawn", "closed"):
+        return 0
+    norm = rej.employer_norm(app["employer"])
+    if not norm:
+        return 0
+    cands = conn.execute(
+        "SELECT * FROM rejection WHERE source = 'email' AND gmail_message_id IS NOT NULL "
+        "AND job_group_id IS NULL AND application_id IS NULL AND employer_norm = ? "
+        "ORDER BY received_at, id",
+        (norm,),
+    ).fetchall()
+    if not cands:
+        return 0
+    others = conn.execute(
+        "SELECT COALESCE(j.employer, j.agency_raw, '') FROM application a "
+        "JOIN job_group g ON g.id = a.job_group_id JOIN job j ON j.id = g.canonical_job_id "
+        "WHERE a.id != ?",
+        (app_id,),
+    ).fetchall()
+    sole = not any(rej.employer_norm(r[0]) == norm for r in others)
+    since = rej.parse_time(app["since"])
+    props: list[Proposal] = []
+    for r in cands:
+        when = rej.parse_time(r["received_at"])
+        if since is not None and (when is None or when < since - timedelta(days=1)):
+            continue
+        if r["title"] and not rej.same_title(r["title"], app["title"]):
+            continue
+        if not r["title"] and not sole:
+            continue
+        conn.execute(
+            "UPDATE rejection SET job_group_id = ?, application_id = ? WHERE id = ?",
+            (app["job_group_id"], app_id, r["id"]),
+        )
+        try:
+            evidence = json.loads(r["evidence"] or "{}")
+        except ValueError:
+            evidence = {}
+        evidence["matched"] = ["employer", "title"] if r["title"] else ["employer"]
+        evidence["job"] = {"title": app["title"], "employer": app["employer"]}
+        evidence["rematched"] = True
+        props.append(
+            Proposal(
+                gmail_message_id=r["gmail_message_id"],
+                thread_id=r["thread_id"] or "",
+                received_at=r["received_at"],
+                kind="rejection",
+                proposed_action="add_event",
+                proposed_status="rejected",
+                confidence=0.6 if r["title"] else 0.5,
+                evidence=evidence,
+                application_id=app_id,
+                job_group_id=app["job_group_id"],
+            )
+        )
+    return store(conn, props, now)
 
 
 def scan(
@@ -840,4 +1004,9 @@ def scan(
     if not dry_run:
         result.stored = store(conn, result.proposals, now)
         result.rejections_stored = store_rejections(conn, result.rejections, now)
+        live = conn.execute(
+            "SELECT id FROM application WHERE status NOT IN ('rejected', 'withdrawn', 'closed')"
+        ).fetchall()
+        result.rematched = sum(rematch_rejections(conn, r[0], now) for r in live)
+        result.stored += result.rematched
     return result

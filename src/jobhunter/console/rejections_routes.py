@@ -2,7 +2,8 @@
 
 Not ``/rejected``, which lists jobs *we* filtered out. Rows come from ``jobhunter mail match``
 (source 'email') or the form here (source 'manual'). A rejected posting is never scored and is
-left out of the inbox; other roles at the same employer get a flag (specs/006).
+left out of the inbox; other roles at the same employer get a flag (specs/006). An email read
+from a loose word only is 'pending' and does nothing until confirmed here.
 """
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
@@ -70,6 +71,7 @@ def register(
                 "active": "/rejections",
                 "nav": nav,
                 "items": rejections.listing(conn),
+                "pending": rejections.pending_count(conn),
                 "error": error,
                 "form": form or {},
                 "today": now().date().isoformat(),
@@ -104,6 +106,12 @@ def register(
             job_group_id=group_id,
             application_id=app_row["id"] if app_row else None,
         )
+        return RedirectResponse("/rejections", status_code=303)
+
+    @app.post("/rejections/{rid}/confirm")
+    def confirm(conn: Conn, rid: int) -> Response:
+        if not rejections.confirm(conn, rid):
+            raise HTTPException(404, "no such rejection")
         return RedirectResponse("/rejections", status_code=303)
 
     @app.post("/rejections/{rid}/delete")

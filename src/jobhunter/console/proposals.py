@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from jobhunter.console import tracking as t
+from jobhunter.mail import match
 
 MANUAL_SOURCE = "email-manual"
 
@@ -90,7 +91,14 @@ def _decide(conn: sqlite3.Connection, pid: int, state: str, now: datetime) -> No
 
 
 def dismiss(conn: sqlite3.Connection, pid: int, now: datetime) -> None:
-    _get_pending(conn, pid)
+    row = _get_pending(conn, pid)
+    if row["kind"] == "rejection":
+        # The user says this email did not reject them: drop the rejection row read from it,
+        # so it stops hiding the posting (bug d28c8de). Manual rows are never touched.
+        conn.execute(
+            "DELETE FROM rejection WHERE gmail_message_id = ? AND source = 'email'",
+            (row["gmail_message_id"],),
+        )
     _decide(conn, pid, "dismissed", now)
 
 
@@ -134,6 +142,11 @@ def accept(
     if row["proposed_action"] == "add_event":
         app_id = row["application_id"]
         t.add_event(conn, app_id, row["proposed_status"], note, at, source="email")
+        if row["kind"] == "rejection":  # accepting it confirms the rejection row too
+            conn.execute(
+                "UPDATE rejection SET state = 'confirmed' WHERE gmail_message_id = ?",
+                (row["gmail_message_id"],),
+            )
     else:
         gid = row["job_group_id"]
         if gid is None:
@@ -159,5 +172,7 @@ def accept(
             app_id = int(cur.lastrowid or 0)
         conn.commit()
         t.add_event(conn, app_id, "applied", note, at, source="email")
+        # A rejection email stored before this application existed is proposed now.
+        match.rematch_rejections(conn, int(app_id), now)
     _decide(conn, pid, "accepted", now)
     return int(app_id)

@@ -11,7 +11,7 @@
   function rows() {
     return Array.prototype.filter.call(document.querySelectorAll(".inbox article.row"), function (r) {
       var d = r.closest("details");
-      return !r.classList.contains("triaged") && (!d || d.open);
+      return !r.classList.contains("triaged") && !r.classList.contains("readonly") && (!d || d.open);
     });
   }
 
@@ -110,14 +110,22 @@
     select(next);
   }
 
+  function gidsOf(boxes) {
+    return Array.prototype.map.call(boxes, function (b) { return b.closest("article.row").dataset.gid; });
+  }
+
+  // Undo one bulk batch from the stack. Each batch keeps its own ids (the toast only ever
+  // shows the latest), so a second `u` reaches the batch before it.
+  function undoBulk(ids) {
+    if (!ids || !ids.length || !window.htmx) return;
+    window.htmx.ajax("POST", "/inbox/bulk/undo", { values: { group_id: ids }, swap: "none" });
+  }
+
   function undo() {
-    var gid = undoStack.pop();
-    if (!gid) return;
-    if (gid === "bulk") {
-      var ub = document.querySelector("#bulk-toast .bulk-undo");
-      if (ub) ub.click();
-      return;
-    }
+    var entry = undoStack.pop();
+    if (!entry) return;
+    if (typeof entry === "object") return undoBulk(entry.bulk);
+    var gid = entry;
     var el = document.getElementById("row-" + gid);
     var btn = el && el.querySelector(".undo");
     if (!btn) return;
@@ -140,7 +148,7 @@
     var d = sec.querySelector("details");
     if (d) d.open = true;
     sec.scrollIntoView({ block: "start" });
-    var first = sec.querySelector("article.row:not(.triaged)");
+    var first = sec.querySelector("article.row:not(.triaged):not(.readonly)");
     if (first) select(first, false);
   }
 
@@ -182,7 +190,19 @@
     if (ev.target.closest && ev.target.closest(".bulk-bar")) {
       var bb = ev.target.closest(".bulk-act");
       if (bb) rememberNext();
-      if (bb && undoStack[undoStack.length - 1] !== "bulk") undoStack.push("bulk");
+      if (bb) undoStack.push({ bulk: gidsOf(checked()) });
+      // Mouse "undo all" undoes the batch the toast shows; drop it so `u` does not spend a
+      // press on it (or undo it twice).
+      var bu = ev.target.closest(".bulk-undo");
+      if (bu) {
+        var ids = Array.prototype.map.call(bu.form.querySelectorAll('input[name="group_id"]'), function (i) { return i.value; }).join();
+        for (var k = undoStack.length - 1; k >= 0; k--) {
+          if (typeof undoStack[k] === "object" && undoStack[k].bulk.join() === ids) {
+            undoStack.splice(k, 1);
+            break;
+          }
+        }
+      }
       if (ev.target.closest("#bulk-clear")) setAll(false);
       return;
     }

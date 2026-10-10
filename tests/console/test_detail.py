@@ -414,3 +414,33 @@ def test_decisions_score_shows_probabilities_not_quotes(client, conn):
     assert "Decision probabilities" in t and "Pure Windows shops" in t and "0.12" in t
     assert "typesafe/jev-1.13-20260917" in t
     assert "unverified evidence" not in t
+
+
+def test_salary_parsed_from_description_is_labelled_visibly(client, conn):
+    conn.execute(
+        "UPDATE job SET salary_stated = 1, salary_min = 170000, salary_max = 195000, "
+        "salary_period = 'year', salary_source = 'text' WHERE id = 1"
+    )
+    t = client.get("/job/1").text
+    assert "$170k\u2013$195k" in t
+    # visible text, not only a hover title: phones have no hover
+    assert '<span class="muted">(parsed from the description)</span>' in t
+    assert "computed from the salary parsed from the description" in t
+    t2 = client.get("/job/2").text
+    assert "parsed from the description" not in t2
+
+
+def test_unscored_job_still_shows_the_employer_rejection_flag(client, conn):
+    # Regression: the flag sat inside {% if d.scored %}, so an unscored job at an employer
+    # that recently rejected you showed only "Not scored yet." (specs/006).
+    from jobhunter.core import rejections
+
+    conn.execute("DELETE FROM fit_score WHERE job_group_id = 2")
+    rejections.record(
+        conn, received_at=NOW.isoformat(), employer="Acme", title="Analyst 1", source="manual",
+        now=NOW,
+    )  # fmt: skip
+    conn.commit()
+    t = client.get("/job/2").text
+    assert "Not scored yet." in t
+    assert "employer rejected you for Analyst 1" in t

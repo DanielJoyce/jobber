@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from jobhunter.config import Settings
+from jobhunter.config import Paths, Settings
 from jobhunter.console import dashboard as dash
 from jobhunter.console.app import create_app
 from jobhunter.core import db, geo
 from jobhunter.core.models import Bucket
-from jobhunter.scoring.profile import Profile
+from jobhunter.scoring.profile import Profile, load_profile
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
 PROFILE = Profile()
@@ -664,6 +664,16 @@ def test_series_not_enough_data():
     c.close()
 
 
+def test_mix_chart_slots_are_named_not_lettered(conn):
+    s = dash.series(conn, PROFILE, 7, NOW)
+    assert [(x["key"], x["label"]) for x in s["mix"]["slots"]] == [
+        ("a", "Bullseye"),
+        ("b", "Strong"),
+        ("other", "Other fits"),
+        ("f", "Stale match"),
+    ]
+
+
 def test_series_enough_flag_needs_three_points(conn):
     s = dash.series(conn, PROFILE, 7, NOW)
     assert s["line"]["enough"] is True  # 3 days with A+B
@@ -713,6 +723,26 @@ def test_dark_sequential_ramp_tokens(client):
         lum = [_luminance(ramp[k]) for k in sorted(ramp, key=int)]
         assert lum == sorted(lum)  # dark ramp climbs: low recedes, high is brightest
         assert _contrast(ramp["700"], surface) > 8
+
+
+def test_link_tokens_are_readable_in_every_theme(client):
+    css = client.get("/static/app.css").text
+    # light :root, the dark media-query block, and the forced-dark block
+    dark_at = css.index("@media (prefers-color-scheme: dark)")
+    forced_at = css.index(':root[data-theme="dark"]')
+    scopes = {
+        "light": css[:dark_at],
+        "dark": css[dark_at:forced_at],
+        "forced dark": css[forced_at : css.index("* { box-sizing")],
+    }
+    for name, scope in scopes.items():
+        tokens = dict(re.findall(r"--([\w-]+): (#[0-9a-f]{6});", scope))
+        for link in ("link", "link-visited"):
+            for ground in ("surface-1", "page"):
+                assert _contrast(tokens[link], tokens[ground]) >= 4.5, (name, link, ground)
+    # Bare links use the tokens; the browser default is what was unreadable in dark mode.
+    assert re.search(r"^a \{ color: var\(--link\); \}", css, re.M)
+    assert "a:where(:visited) { color: var(--link-visited); }" in css
 
 
 # ─── outcomes Sankey ───────────────────────────────────────────────────────
@@ -794,16 +824,41 @@ def test_sankey_counts_and_conservation(conn):
     assert "offer" not in node_ids and "closed" not in node_ids  # zero-value nodes hidden
 
 
-def test_sankey_extra_rejected_hook_moves_to_rejected(conn):
+def _reject(conn, employer, title=None, gid=None, msg=None):
+    from jobhunter.core import rejections
+
+    rid = rejections.record(
+        conn,
+        received_at="2026-10-01T12:00:00+00:00",
+        employer=employer,
+        title=title,
+        source="email",
+        now=NOW,
+        gmail_message_id=msg or f"m{next(_seq)}",
+        job_group_id=gid,
+    )
+    conn.commit()
+    return rid
+
+
+def _describe(conn, gid, employer, title):
+    conn.execute(
+        "UPDATE job SET employer = ?, title = ? WHERE job_group_id = ?", (employer, title, gid)
+    )
+
+
+def test_sankey_rejection_of_a_tracked_application_moves_it_to_rejected(conn):
     base = _links(dash.sankey(conn, PROFILE))
     gid = conn.execute(
         "SELECT job_group_id FROM application WHERE status = 'acknowledged'"
     ).fetchone()[0]
-    sk = dash.sankey(conn, PROFILE, extra_rejected={gid})
+    _reject(conn, "Acme", gid=gid)
+    sk = dash.sankey(conn, PROFILE)
     _assert_conserved(sk)
     links = _links(sk)
     assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
     assert links[("applied", "awaiting")] == base[("applied", "awaiting")] - 1
+    assert links.get(("elsewhere", "applied"), 0) == base.get(("elsewhere", "applied"), 0)
 
 
 def test_sankey_empty_database():
@@ -814,9 +869,192 @@ def test_sankey_empty_database():
 
 def test_sankey_node_links_point_at_real_lists(conn):
     nodes = {n["id"]: n for n in dash.sankey(conn, PROFILE)["nodes"]}
-    assert nodes["applied"]["href"] == "/pipeline"
+    assert nodes["applied"]["href"] == "/pipeline?node=applied"
     assert nodes["fetched"]["href"] is None
-    assert any(n["href"] == "/inbox?bucket=A" for n in nodes.values())
+    assert nodes["bucket_A"]["href"] == "/inbox?bucket=A&triaged=1"
+    assert nodes["untriaged"]["href"] == "/inbox?bucket=A,B,C,D,E,F,G"
+    pipeline_ids = {n["id"] for n in nodes.values() if (n["href"] or "").startswith("/pipeline?")}
+    assert pipeline_ids <= dash.PIPELINE_NODES
+
+
+def test_sankey_rejected_without_application_was_applied_elsewhere(conn):
+    base = _links(dash.sankey(conn, PROFILE))
+    gid = add_job(conn, states=["CO"])
+    _reject(conn, "Acme", gid=gid)
+    sk = dash.sankey(conn, PROFILE)
+    _assert_conserved(sk)
+    links = _links(sk)
+    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 1
+    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
+    # the rejected posting itself leaves the pipeline of postings: it is not also "Fetched"
+    assert links[("fetched", "passed")] == base[("fetched", "passed")]
+
+
+def test_sankey_unmatched_rejection_email_counts_once(conn):
+    base = _links(dash.sankey(conn, PROFILE))
+    _reject(conn, "Nowhere Inc", "Site Reliability Engineer")
+    _reject(conn, "Nowhere Inc", "Site Reliability Engineer")  # a second email, same job
+    _reject(conn, "Nowhere Inc", None)  # and one that does not say which job
+    links = _links(dash.sankey(conn, PROFILE))
+    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 1
+    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
+    _reject(conn, "Elsewhere Corp", "Data Engineer")  # a different employer is another job
+    links = _links(dash.sankey(conn, PROFILE))
+    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 2
+
+
+def test_sankey_one_rejection_is_not_one_application_per_matching_group(conn):
+    # A posting listed in many places is many groups with one title; one rejection email
+    # (matched to none of them) is one application.
+    base = _links(dash.sankey(conn, PROFILE))
+    gids = [add_job(conn, states=["CO"], dims=DIMS_B) for _ in range(5)]
+    for g in gids:
+        _describe(conn, g, "Oracle", "Principal Platform Software Engineer")
+    _reject(conn, "Oracle", "Principal Platform Software Engineer")
+    sk = dash.sankey(conn, PROFILE)
+    _assert_conserved(sk)
+    links = _links(sk)
+    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 1
+    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
+    assert links[("fetched", "passed")] == base[("fetched", "passed")]  # the five are left out
+
+
+def test_sankey_rejection_email_for_a_job_tracked_by_hand_is_not_counted_twice(conn):
+    # Accepting a mail proposal made a manual group with an applied application; the
+    # rejection email has no job id (or arrived first). One application, one outcome.
+    gid = _manual_app(conn)
+    _describe(conn, gid, "FluidStack", "Member of Technical Staff")
+    base = _links(dash.sankey(conn, PROFILE))
+    _reject(conn, "Fluidstack", None)  # an email with no title
+    sk = dash.sankey(conn, PROFILE)
+    _assert_conserved(sk)
+    links = _links(sk)
+    assert links[("elsewhere", "applied")] == base[("elsewhere", "applied")]
+    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
+    assert links[("applied", "awaiting")] == base[("applied", "awaiting")] - 1
+    # ...and the same when the rejection names the job
+    _reject(conn, "Fluidstack", "Member of Technical Staff")
+    assert _links(dash.sankey(conn, PROFILE)) == links  # same employer and job: still one
+
+
+def test_sankey_withdrawn_before_applying_is_not_an_application(conn):
+    gid = add_job(conn, states=["CO"], dims=DIMS_A)
+    base = _links(dash.sankey(conn, PROFILE))
+    add_app(
+        conn, gid, "withdrawn", None, [("2026-10-02", "interested"), ("2026-10-03", "withdrawn")]
+    )
+    links = _links(dash.sankey(conn, PROFILE))
+    assert links[("shortlisted", "not_applied")] == base[("shortlisted", "not_applied")] + 1
+    assert links.get(("shortlisted", "applied")) == base.get(("shortlisted", "applied"))
+    assert ("applied", "closed") not in links
+    fact = next(a for a in dash.application_facts(conn) if a.group_id == gid)
+    assert fact.applied_on is None
+    # but a status that can only follow applying still dates the application
+    other = add_job(conn, states=["CO"], dims=DIMS_A)
+    add_app(conn, other, "rejected", None, [])
+    assert next(a for a in dash.application_facts(conn) if a.group_id == other).applied_on
+
+
+def test_sankey_counts_postings_not_grouped_yet_as_awaiting_prefilter(conn):
+    base = _links(dash.sankey(conn, PROFILE))
+    for stage in ("listed", "resolved", "normalized"):
+        conn.execute(
+            "INSERT INTO job (source_key, external_id, url, title, stage, first_seen_at, "
+            "last_seen_at) VALUES ('co-src', ?, 'https://example.invalid/u', 'New', ?, ?, ?)",
+            (f"u-{stage}", stage, ts("2026-10-09"), ts("2026-10-09")),
+        )
+    sk = dash.sankey(conn, PROFILE)
+    _assert_conserved(sk)
+    links = _links(sk)
+    assert (
+        links[("fetched", "awaiting_prefilter")]
+        == base.get(("fetched", "awaiting_prefilter"), 0) + 3
+    )
+    assert "awaiting_prefilter" in {n["id"] for n in sk["nodes"]}
+
+
+def test_sankey_unscored_groups_end_at_not_yet_scored(conn):
+    links = _links(dash.sankey(conn, PROFILE))
+    assert links[("passed", "unscored")] >= 1
+    assert ("unscored", "untriaged") not in links  # not in the inbox, so not "untriaged"
+
+
+def _page_client(tmp_path, profile_dir):
+    path = tmp_path / "t.db"
+    c = db.connect(path)
+    db.migrate(c)
+    return c, TestClient(
+        create_app(
+            Settings(paths=Paths(profile_dir=profile_dir, db_path=path)),
+            lambda: db.connect(path),
+            lambda: load_profile(profile_dir),
+            lambda: NOW,
+        )
+    )
+
+
+@pytest.fixture
+def linked(tmp_path):
+    """The seeded database behind an app whose inbox can load a profile."""
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir()
+    (profile_dir / "preferences.yaml").write_text(
+        "hard:\n  states_allowed: [CO, WA]\n  remote_ok: true\nsoft:\n  state_ranking: [CO, WA]\n"
+        "resume_path: resume.md\n",
+        encoding="utf-8",
+    )
+    (profile_dir / "resume.md").write_text("Synthetic Person\n- ran hosts\n", encoding="utf-8")
+    c, client = _page_client(tmp_path, profile_dir)
+    seed(c)
+    # Shortlisting from the inbox labels the group; the seed made applications without labels.
+    c.execute(
+        "INSERT OR IGNORE INTO label (job_group_id, label, labeled_at) "
+        "SELECT job_group_id, 'interesting', ? FROM application",
+        (ts("2026-10-06"),),
+    )
+    c.execute(
+        "INSERT INTO application (job_group_id, status, created_at, updated_at) "
+        "SELECT l.job_group_id, 'interested', l.labeled_at, l.labeled_at FROM label l "
+        "WHERE l.label = 'interesting' AND NOT EXISTS "
+        "(SELECT 1 FROM application a WHERE a.job_group_id = l.job_group_id)"
+    )
+    # a rejection email with no job, one for a tracked application, one for an untracked posting
+    gid = c.execute(
+        "SELECT job_group_id FROM application WHERE status = 'acknowledged'"
+    ).fetchone()[0]
+    _reject(c, "Acme", gid=gid)
+    _reject(c, "Nowhere Inc", "Site Reliability Engineer")
+    c.commit()
+    return c, client, load_profile(profile_dir)
+
+
+def test_every_sankey_link_resolves_and_lists_what_its_node_counts(linked):
+    conn, client, profile = linked
+    sk = dash.sankey(conn, profile)
+    assert sk["nodes"]
+    emailed = dash.emailed_count(conn)
+    assert emailed == 1
+    checked = set()
+    for node in sk["nodes"]:
+        href = node["href"]
+        if not href:
+            continue
+        r = client.get(href)
+        assert r.status_code == 200, href
+        checked.add(node["id"])
+        if href.startswith("/pipeline?"):
+            cards = len(re.findall(r'<article class="pcard', r.text))
+            extra = emailed if node["id"] in dash.EMAILED_NODES else 0
+            assert cards + extra == node["value"], (node["id"], cards, node["value"])
+            assert ("rejection email" in r.text) == bool(extra), node["id"]
+        elif node["id"].startswith("bucket_"):
+            rows = len(re.findall(r'<article class="row\b', r.text))
+            assert rows == node["value"], (node["id"], rows, node["value"])
+        elif node["id"] == "untriaged":
+            assert len(re.findall(r'<article class="row\b', r.text)) == node["value"]
+    # every kind of link is exercised: application nodes, bucket nodes, untriaged
+    assert {"applied", "shortlisted", "bucket_A", "untriaged"} <= checked
+    assert any(c.startswith("bucket_") for c in checked)
 
 
 def test_today_page_embeds_sankey_payload(client):
@@ -829,25 +1067,6 @@ def test_today_page_embeds_sankey_payload(client):
     assert 'id="chart-sankey"' in html
 
 
-def test_sankey_rejected_without_application_was_applied_elsewhere(conn):
-    base = _links(dash.sankey(conn, PROFILE))
-    gid = add_job(conn, states=["CO"])
-    sk = dash.sankey(conn, PROFILE, extra_rejected={gid})
-    _assert_conserved(sk)
-    links = _links(sk)
-    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 1
-    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
-
-
-def test_sankey_unmatched_email_rejections_flow_from_elsewhere(conn):
-    base = _links(dash.sankey(conn, PROFILE))
-    sk = dash.sankey(conn, PROFILE, elsewhere_rejected=3)
-    _assert_conserved(sk)
-    links = _links(sk)
-    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 3
-    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 3
-
-
 def test_today_page_wires_the_rejection_table_into_sankey(client, tmp_path):
     from jobhunter.core import rejections
 
@@ -855,7 +1074,7 @@ def test_today_page_wires_the_rejection_table_into_sankey(client, tmp_path):
     rejections.record(
         conn,
         received_at="2026-10-01T12:00:00+00:00",
-        employer="Seeq",
+        employer="Contoso",
         title="Platform Engineer",
         source="email",
         now=datetime(2026, 10, 9, tzinfo=UTC),

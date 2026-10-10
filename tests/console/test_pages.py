@@ -336,3 +336,9 @@ def test_all_pages_render_without_profile(tmp_path, conn):
     c = TestClient(app)
     for path in ("/sources", "/rejected", "/search?q=x", "/costs"):
         assert c.get(path).status_code == 200
+
+
+def test_rejected_marks_salary_parsed_from_description(client, rejected_seed):
+    rejected_seed.execute("UPDATE job SET salary_source = 'text' WHERE id = 1")
+    t = client.get("/rejected").text
+    assert "$40k" in t and "(parsed from the description)" in t

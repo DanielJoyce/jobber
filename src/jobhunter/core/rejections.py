@@ -7,7 +7,7 @@ email (``jobhunter mail match``) or entered by hand on ``/rejections``.
 Two uses in scoring, both decided in Python with no model call:
 
 * **Same posting** (``RejectionIndex.same_posting``): the group the rejection matched, or a
-  group at the same normalized employer whose title is a near-identical match. Such a group is
+  group at the same normalized employer with the same title (``same_title``). Such a group is
   never sent to a scorer (no credits spent) and is kept out of the inbox.
 * **Same employer, different role, within N days** (``RejectionIndex.prior``): the job is
   still scored, and the prompt carries one neutral sentence of context. Pay and location stay
@@ -25,10 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from rapidfuzz import fuzz
-
 DEFAULT_WINDOW_DAYS = 90
-TITLE_MATCH = 90  # rapidfuzz token_sort_ratio on normalized titles: "the same posting"
 
 _NONWORD = re.compile(r"[^a-z0-9]+")
 CORP_WORDS = {"inc", "llc", "corp", "corporation", "co", "company", "ltd", "the", "plc", "lp"}
@@ -45,7 +42,7 @@ def employer_tokens(name: str) -> list[str]:
 
 
 def employer_norm(name: str | None) -> str:
-    """``"Seeq Corporation"`` -> ``"seeq"``. Empty string when there is nothing to match on."""
+    """``"Contoso Corporation"`` -> ``"contoso"``; empty when there is nothing to match on."""
     return " ".join(employer_tokens(name or ""))
 
 
@@ -53,29 +50,35 @@ def title_norm(title: str | None) -> str:
     return " ".join(tokens(title or ""))
 
 
-# Tokens that make two otherwise identical titles different roles: "Engineer II" is not
-# "Engineer III", and "Senior Analyst" is not "Analyst". They must agree exactly.
-LEVEL_WORDS = {
-    "i", "ii", "iii", "iv", "v", "vi", "senior", "sr", "junior", "jr", "lead", "staff",
-    "principal", "chief", "head", "intern", "associate", "manager", "director", "trainee",
-}  # fmt: skip
+# Words that never distinguish two postings. Everything else must match: a team, specialty
+# or level word ("Cloud" vs "Core", "Search" vs "Research", "Engineer II" vs "III", "Leader")
+# makes a different role. A fuzzy ratio (token_sort_ratio >= 90) was too loose on short
+# titles and hid different roles at the same employer for good (bug d28c8de).
+FILLER_WORDS = {"a", "an", "and", "at", "for", "in", "of", "on", "the", "to", "with"}
 
 
-def _level_key(title: str) -> frozenset[str]:
-    return frozenset(t for t in title.split() if t.isdigit() or t in LEVEL_WORDS)
+def _title_words(title: str) -> list[str]:
+    out = []
+    for t in title.split():
+        if t in FILLER_WORDS:
+            continue
+        if len(t) > 3 and t.endswith("s") and not t.endswith("ss"):
+            t = t[:-1]  # "Engineers" is "Engineer"
+        out.append(t)
+    return out
 
 
 def same_title(a: str | None, b: str | None) -> bool:
-    """Near-identical titles (fuzzy) with exactly the same level words and numbers."""
+    """The same posting title: the same words in any order, ignoring case, punctuation,
+    plurals, filler words and spacing ("Full Stack" is "Fullstack")."""
     ta, tb = title_norm(a), title_norm(b)
     if not ta or not tb:
         return False
-    if ta == tb:
-        return True
-    return _level_key(ta) == _level_key(tb) and fuzz.token_sort_ratio(ta, tb) >= TITLE_MATCH
+    wa, wb = _title_words(ta), _title_words(tb)
+    return sorted(wa) == sorted(wb) or "".join(wa) == "".join(wb)
 
 
-def _parse(ts: str | None) -> datetime | None:
+def parse_time(ts: str | None) -> datetime | None:
     if not ts:
         return None
     try:
@@ -95,15 +98,25 @@ class Rejection:
     job_group_id: int | None
     application_id: int | None
     source: str
+    state: str = "confirmed"
 
     @property
     def day(self) -> str:
         return (self.received_at or "")[:10]
 
     def fact(self) -> str:
-        """The one neutral sentence a scorer sees for a same-employer, different-role job."""
-        role = self.title or "a different role"
-        return f"candidate was rejected by this employer for {role} on {self.day}"
+        """The one neutral sentence a scorer sees for another job at this employer. With no
+        title we cannot tell whether that job is the rejected posting, so it says so rather
+        than claiming "a different role"."""
+        if self.title:
+            return f"candidate was rejected by this employer for {self.title} on {self.day}"
+        return f"candidate was rejected by this employer (role not stated) on {self.day}"
+
+    def flag(self) -> str:
+        """The inbox row / detail page flag for another job at this employer."""
+        if self.title:
+            return f"employer rejected you for {self.title} on {self.day}"
+        return f"employer rejected you (role not stated) on {self.day}"
 
 
 def _row(r: Mapping[str, Any]) -> Rejection:
@@ -116,12 +129,30 @@ def _row(r: Mapping[str, Any]) -> Rejection:
         job_group_id=r["job_group_id"],
         application_id=r["application_id"],
         source=r["source"],
+        state=r["state"],
     )
 
 
+STATES = ("pending", "confirmed")
+
+
 def load(conn: sqlite3.Connection) -> list[Rejection]:
-    rows = conn.execute("SELECT * FROM rejection ORDER BY received_at DESC, id DESC").fetchall()
+    """Confirmed rejections only: a pending one (read from a loose phrase) hides nothing,
+    flags nothing and reaches no scorer until the user confirms it on /rejections."""
+    rows = conn.execute(
+        "SELECT * FROM rejection WHERE state = 'confirmed' ORDER BY received_at DESC, id DESC"
+    ).fetchall()
     return [_row(r) for r in rows]
+
+
+def confirm(conn: sqlite3.Connection, rid: int) -> bool:
+    """Mark a pending rejection confirmed; False when there is no such row."""
+    cur = conn.execute("UPDATE rejection SET state = 'confirmed' WHERE id = ?", (rid,))
+    return bool(cur.rowcount)
+
+
+def pending_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM rejection WHERE state = 'pending'").fetchone()[0]
 
 
 def record(
@@ -137,16 +168,19 @@ def record(
     job_group_id: int | None = None,
     application_id: int | None = None,
     evidence: Mapping[str, Any] | None = None,
+    state: str = "confirmed",
 ) -> int | None:
     """Insert one rejection; None when this Gmail message already has a row."""
     if source not in ("email", "manual"):
         raise ValueError(f"bad rejection source {source!r}")  # OR IGNORE would hide the CHECK
+    if state not in STATES:
+        raise ValueError(f"bad rejection state {state!r}")
     employer = (employer or "").strip() or None
     title = (title or "").strip() or None
     cur = conn.execute(
         "INSERT OR IGNORE INTO rejection (gmail_message_id, thread_id, received_at, employer, "
-        "employer_norm, title, job_group_id, application_id, source, evidence, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "employer_norm, title, job_group_id, application_id, source, evidence, created_at, state) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             gmail_message_id,
             thread_id,
@@ -159,6 +193,7 @@ def record(
             source,
             json.dumps(dict(evidence or {})),
             now.astimezone(UTC).isoformat(),
+            state,
         ),
     )
     return cur.lastrowid if cur.rowcount else None
@@ -208,7 +243,7 @@ class RejectionIndex:
             return None
         since = self.now - timedelta(days=self.days)
         for r in self.by_employer.get(employer_norm(employer), ()):  # newest first
-            when = _parse(r.received_at)
+            when = parse_time(r.received_at)
             if when is not None and since <= when <= self.now + timedelta(days=1):
                 return r
         return None
@@ -229,7 +264,7 @@ def rejected_group_ids(conn: sqlite3.Connection, index: RejectionIndex | None = 
     """Groups that are a posting the candidate was rejected for (never scored, not in inbox).
 
     Directly matched groups, plus groups at a rejecting employer whose canonical title is a
-    near match. A ``LIKE`` on the employer's longest token narrows the scan in SQL first.
+    ``same_title`` match. A ``LIKE`` on the employer's longest token narrows the scan in SQL first.
     """
     index = index if index is not None else RejectionIndex.load(conn)
     out = set(index.direct)
@@ -282,17 +317,19 @@ def annotate(
 def unmatched_email_count(conn: sqlite3.Connection) -> int:
     """Rejection emails that matched no job group (applied for outside jobhunter)."""
     return conn.execute(
-        "SELECT COUNT(*) FROM rejection WHERE source = 'email' AND job_group_id IS NULL"
+        "SELECT COUNT(*) FROM rejection WHERE source = 'email' AND job_group_id IS NULL "
+        "AND state = 'confirmed'"
     ).fetchone()[0]
 
 
 def listing(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Rows for the /rejections page, newest first, with the matched job's title if any."""
+    """Rows for the /rejections page: pending (needs review) first, then newest first, with
+    the matched job's title if any."""
     rows = conn.execute(
         "SELECT r.*, j.title AS job_title FROM rejection r "
         "LEFT JOIN job_group g ON g.id = r.job_group_id "
         "LEFT JOIN job j ON j.id = g.canonical_job_id "
-        "ORDER BY r.received_at DESC, r.id DESC"
+        "ORDER BY r.state = 'confirmed', r.received_at DESC, r.id DESC"
     ).fetchall()
     out = []
     for r in rows:

@@ -101,8 +101,33 @@ def test_cli_refuses_remote():
     assert "--allow-remote" in res.output
 
 
+def test_static_version_follows_file_content(tmp_path, monkeypatch):
+    # An edited stylesheet must get a new ?v= without a restart (stale-CSS bug).
+    import os
+
+    from jobhunter.console import app as app_mod
+
+    monkeypatch.setattr(app_mod, "STATIC_DIR", tmp_path)
+    monkeypatch.setattr(app_mod, "_static_versions", {})
+    css = tmp_path / "x.css"
+    css.write_text("a { color: red; }")
+    first = static_url("x.css")
+    assert static_url("x.css") == first  # unchanged file, same URL
+    css.write_text("a { color: blue; }")
+    stat = css.stat()
+    os.utime(css, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    assert static_url("x.css") != first
+
+
+@pytest.mark.parametrize(
+    "path", ["/", "/inbox", "/pipeline", "/followups", "/job/1", "/api/dash/kpis", "/healthz"]
+)
+def test_pages_are_never_cached(client, path):
+    # Back must re-fetch every page (Pipeline card positions go stale like the inbox rows do).
+    assert client.get(path).headers["cache-control"] == "no-store", path
+
+
 def test_pages_are_never_cached_but_static_files_are(client):
-    # Back must re-fetch /inbox, or rows triaged since look untriaged again.
     assert client.get("/inbox").headers["cache-control"] == "no-store"
     assert "no-store" not in client.get(static_url("app.css")).headers.get("cache-control", "")
 

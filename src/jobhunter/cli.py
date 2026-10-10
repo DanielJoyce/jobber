@@ -263,9 +263,7 @@ def score(
                         gid,
                         now=now,
                         scorer=deep_scorer,
-                        remaining_usd=lambda: screen.remaining_daily_budget(
-                            conn, settings.scoring.daily_cap_usd, now
-                        ),
+                        remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                         rejection_days=settings.scoring.employer_rejection_days,
                     )
                 except anthropic.APIError as exc:
@@ -286,9 +284,7 @@ def score(
                     profile,
                     limit=limit,
                     now=now,
-                    remaining_usd=lambda: screen.remaining_daily_budget(
-                        conn, settings.scoring.daily_cap_usd, now
-                    ),
+                    remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                     rejection_days=settings.scoring.employer_rejection_days,
                 )
             except ScorerError as exc:
@@ -303,9 +299,7 @@ def score(
                 limit=limit,
                 now=now,
                 scorer=scorer,
-                remaining_usd=lambda: screen.remaining_daily_budget(
-                    conn, settings.scoring.daily_cap_usd, now
-                ),
+                remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                 rejection_days=settings.scoring.employer_rejection_days,
             )
             typer.echo(f"submitted batch {batch_id}" if batch_id else "nothing to submit")
@@ -592,7 +586,7 @@ def console(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
-    uvicorn.run(create_app(settings), host=bind_host, port=bind_port)
+    uvicorn.run(create_app(settings, allow_remote=allow_remote), host=bind_host, port=bind_port)
 
 
 @app.command(name="eval")
@@ -838,9 +832,10 @@ def mail_match(
         )
     for r in result.rejections:
         where = f"job group {r.job_group_id}" if r.job_group_id else "no known job"
+        review = "" if r.confirmed else " | needs review on /rejections"
         typer.echo(
             f"employer rejection: {r.employer or 'employer unknown'} | "
-            f"{r.title or 'title unknown'} | {r.received_at[:10]} | {where}"
+            f"{r.title or 'title unknown'} | {r.received_at[:10]} | {where}{review}"
         )
     verb = "would store" if dry_run else "stored"
     n = len(result.proposals) if dry_run else result.stored
