@@ -24,7 +24,7 @@
     <div class="job-sub">
       <span>{{ d.employer }}</span>
       <span>{{ d.location }}</span>
-      {% if d.salary_stated %}<span>{{ d.salary }}</span>{% else %}<span class="warn">salary not stated</span>{% endif %}
+      {% if d.salary_stated %}<span>{{ d.salary }}{% if d.salary_from_text %} <span class="muted">(parsed from the description)</span>{% endif %}</span>{% else %}<span class="warn">salary not stated</span>{% endif %}
       <span class="muted">{{ d.source_name }}</span>
     </div>
     {% if d.locations %}<div class="muted">locations: {{ d.locations | join("; ") }}</div>{% endif %}
@@ -55,7 +55,7 @@
       <tr><th>{{ name }}</th><td>{{ score }}</td><td>{{ why }}</td></tr>
       {% endfor %}
       <tr><th>skills (recency-weighted)</th><td>{{ d.recency_skills }}</td><td class="muted">raw skills {{ d.raw_skills }}{% if d.stale_skills %}; stale: {{ d.stale_skills | join(", ") }}{% endif %}</td></tr>
-      <tr><th>comp</th><td>{{ d.comp if d.comp is not none else "n/a" }}</td><td class="muted">computed from posted salary and your floor</td></tr>
+      <tr><th>comp</th><td>{{ d.comp if d.comp is not none else "n/a" }}</td><td class="muted">computed from {% if d.salary_from_text %}the salary parsed from the description{% else %}posted salary{% endif %} and your floor</td></tr>
       <tr><th>location</th><td>{{ d.location_fit }}</td><td class="muted">computed from job locations and your states</td></tr>
     </table>
     {% if d.blockers %}<h3>Blockers</h3><ul>{% for x in d.blockers %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}

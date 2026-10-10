@@ -4,6 +4,9 @@ Pure and deterministic. Structured salary fields always win; this only runs when
 nothing. Precision over recall: a figure is returned only when pay context, a period or a
 currency tag backs it up, the magnitude is sane for the period, and it is not a bonus, a
 funding figure or a benefit amount.
+
+Placeholders lose: some boards fill a fixed "Compensation" field with the federal minimum wage
+($7.25/hr) on every posting, so that figure is never taken as pay.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 CONFIDENT = 0.6  # extract_salary_from_text only returns results at or above this
+FEDERAL_MIN_WAGE = 7.25  # a placeholder, never the posting's real pay
 
 # Sanity bounds on a stated amount per period (USD).
 BOUNDS: dict[str, tuple[float, float]] = {
@@ -24,7 +28,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
 
 _NUM = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
 _CUR = r"\$|USD\s*\$?"
-_SEP = r"\s*(?:-|–|—|to)\s*"  # noqa: RUF001
+_SEP = r"\s*(?:--|-|–|—|to)\s*"  # noqa: RUF001
 _CAND = re.compile(
     rf"(?<![\w.,])(?:(?P<c1>{_CUR})\s*)?(?P<n1>{_NUM})\s*(?P<k1>[kK](?![A-Za-z]))?"
     rf"(?:{_SEP}(?:(?P<c2>{_CUR})\s*)?(?P<n2>{_NUM})\s*(?P<k2>[kK](?![A-Za-z]))?)?"
@@ -32,8 +36,8 @@ _CAND = re.compile(
 )
 # "Min USD $130,000.00/Yr. Max USD $160,000.00/Yr."
 _MINMAX = re.compile(
-    rf"\bmin(?:imum)?\.?\s*:?\s*(?:{_CUR})?\s*(?P<a>{_NUM})\s*(?P<ka>[kK])?[^\n]{{0,30}}?"
-    rf"\bmax(?:imum)?\.?\s*:?\s*(?:{_CUR})?\s*(?P<b>{_NUM})\s*(?P<kb>[kK])?",
+    rf"\bmin(?:imum)?\.?\s*:?\s*(?P<ca>{_CUR})?\s*(?P<a>{_NUM})\s*(?P<ka>[kK])?[^\n]{{0,30}}?"
+    rf"\bmax(?:imum)?\.?\s*:?\s*(?P<cb>{_CUR})?\s*(?P<b>{_NUM})\s*(?P<kb>[kK])?",
     re.I,
 )
 
@@ -72,17 +76,22 @@ _CTX = re.compile(
 _STRONG = re.compile(r"\b(?:salary|pay|compensation|base|range|wage)\b", re.I)
 _BAD_PRE = re.compile(
     r"(?:sign-?on|signing|referral|relocation|retention|bonus|tuition|stipend|reimbursement|"
-    r"raised|funding|valuation|revenue|matching|match|incentive)[^.\n]{0,25}$",
+    r"raised|funding|valuation|revenue|matching|match|incentive|overtime|differential|"
+    r"equity|rsus?)[^.\n]{0,25}$",
     re.I,
 )
 _BAD_WORD = (
     r"sign-?on|signing|bonus|funding|financing|revenue|reimbursement|tuition|stipend|relocation|"
     r"referral|raised|investment|valuation|match|allowance|budget|arr|retention|incentive|"
+    r"equity|rsus?|stock|shares|"
     r"in\s+(?:sales|assets|capital|savings|grants?|contracts?)"
 )
+# The figure itself is a bonus/funding/equity amount: "$5,000 sign-on bonus", "$25,000/yr bonus".
+# "plus bonus" or "and equity" adds to the figure, so those joining words stop the match.
 _BAD_POST = re.compile(
     r"^\s*(?:usd\s*)?(?:in|of|for|as|toward|towards|to)?\s*(?:an?\s+|the\s+|our\s+)?"
-    rf"(?:[\w-]+\s+){{0,2}}?(?:{_BAD_WORD})\b",
+    r"(?:(?!(?:plus|and|with|or|excluding|including|not)\b)[\w-]+\s+){0,2}?"
+    rf"(?:{_BAD_WORD})\b",
     re.I,
 )
 _SCALE_POST = re.compile(r"^\s*(?:million|billion|mm|bn|m\b|b\b)", re.I)
@@ -165,7 +174,8 @@ def _candidates(text: str) -> list[tuple[int, int, TextSalary]]:
         # "$94,900 - $135,600 Bonus eligible: No" is a salary range followed by another field,
         # unlike "$5,000 sign-on bonus": a range right after a strong pay word keeps going.
         strong_range = n2 is not None and _STRONG.search(pre_clean[-40:])
-        if not explicit and not strong_range and _BAD_POST.search(after):
+        # Look past any period words: "$25,000/yr bonus" is a bonus, not a salary.
+        if not strong_range and _BAD_POST.search(text[raw_end : raw_end + 60]):
             continue
         if period is None:
             for name, pat in _PERIOD_PRE:
@@ -189,6 +199,8 @@ def _candidates(text: str) -> list[tuple[int, int, TextSalary]]:
             lo, hi = hi, lo
         if not _in_bounds(period, lo, hi):
             continue
+        if period == "hour" and hi == FEDERAL_MIN_WAGE:
+            continue  # "Compensation $7.25 / hourly": a board placeholder, not the pay
         if lo and hi and hi / lo > 4:
             continue
         is_range = n2 is not None
@@ -206,7 +218,37 @@ def _candidates(text: str) -> list[tuple[int, int, TextSalary]]:
             # even when the sentence before it has no pay word.
             + (0.1 if explicit and has_cur else 0.0)
         )
-        out.append((start, end, TextSalary(lo, hi, period, text[start:raw_end].strip(), score)))
+        out.append((start, raw_end, TextSalary(lo, hi, period, text[start:raw_end].strip(), score)))
+    return _join_halves(text, out)
+
+
+_HALF_SEP = re.compile(rf"^{_SEP}$")
+
+
+def _join_halves(
+    text: str, cands: list[tuple[int, int, TextSalary]]
+) -> list[tuple[int, int, TextSalary]]:
+    """Join "USD $202,000 per year - USD $224,000 per year": each side carries its own period."""
+    out: list[tuple[int, int, TextSalary]] = []
+    for s, e, sal in cands:
+        if out:
+            ps, pe, prev = out[-1]
+            if (
+                prev.period == sal.period
+                and prev.min == prev.max
+                and sal.min == sal.max
+                and prev.min is not None
+                and sal.min is not None
+                and prev.min < sal.min
+                and _HALF_SEP.match(text[pe:s])
+            ):
+                joined = TextSalary(
+                    prev.min, sal.max, sal.period, text[ps:e].strip(),
+                    max(prev.confidence, sal.confidence),
+                )  # fmt: skip
+                out[-1] = (ps, e, joined)
+                continue
+        out.append((s, e, sal))
     return out
 
 
@@ -215,55 +257,115 @@ def _minmax(text: str) -> list[tuple[int, int, TextSalary]]:
     for m in _MINMAX.finditer(text):
         lo = _amount(m.group("a"), m.group("ka"))
         hi = _amount(m.group("b"), m.group("kb"))
-        period = _period_after(text, m.end("a") + 8) or ("year" if hi >= 15_000 else None)
+        period = _period_after(text, m.end("a")) or _period_after(text, m.end("b"))
+        if not (m.group("ca") or m.group("cb")):
+            continue  # "a minimum 20,000 to a maximum 50,000 users": not money
+        if period is None:
+            ctx = text[max(0, m.start() - 100) : m.end()]
+            if not _CTX.search(ctx):
+                continue
+            period = "year" if hi >= 15_000 else None
         if period is None or lo > hi or not _in_bounds(period, lo, hi):
             continue
         out.append((m.start(), m.end(), TextSalary(lo, hi, period, m.group(0).strip(), 0.9)))
     return out
 
 
-def _location_patterns(location: str | None) -> list[re.Pattern[str]]:
+_STATE = re.compile(r"[A-Z]{2}")
+# A tier label ends at a sentence, a line, a ";" or a closing parenthesis.
+_LABEL_CUT = re.compile(r"\.\s|\n|;|\)")
+
+
+def _location_patterns(location: str | None) -> tuple[list[re.Pattern[str]], list[re.Pattern[str]]]:
+    """(place-name patterns, two-letter state patterns) for a job location."""
     if not location:
-        return []
-    pats = []
+        return [], []
+    places, states = [], []
     for tok in re.split(r"[,;/()|]+", location):
         tok = tok.strip()
         if len(tok) < 2 or tok.lower() in {"us", "usa", "united states", "remote"}:
             continue
-        flags = 0 if len(tok) == 2 else re.I  # "OH" must be capitalized: not "oh"
-        pats.append(re.compile(rf"(?<![A-Za-z]){re.escape(tok)}(?![A-Za-z])", flags))
-    return pats
+        if _STATE.fullmatch(tok):  # "OH" must be capitalized: not "oh"
+            states.append(re.compile(rf"(?<![A-Za-z]){tok}(?![A-Za-z])"))
+        else:
+            places.append(re.compile(rf"(?<![A-Za-z]){re.escape(tok)}(?![A-Za-z])", re.I))
+    return places, states
+
+
+def _by_location(
+    text: str, found: list[tuple[int, int, TextSalary]], location: str | None
+) -> TextSalary | None:
+    """The range whose tier label names the job's location, if any.
+
+    Labels usually come before their range ("Austin: $150,000 - $190,000"), so the text between
+    the previous range and this one is checked first, cut at the last sentence, line, ";" or ")"
+    so a label belonging to the previous range does not count. A label after the range
+    ("$150,000 - $200,000 (For Beavercreek, OH Only)") is tried only when no range has one
+    before it. A city or county name beats a state code: "Santa Monica, CA" takes the Santa
+    Monica tier, not the first California one.
+    """
+    places, states = _location_patterns(location)
+    leads, tails = [], []
+    for i, (s, e, _) in enumerate(found):
+        lo_edge = found[i - 1][1] if i else 0
+        hi_edge = found[i + 1][0] if i + 1 < len(found) else len(text)
+        leads.append(_LABEL_CUT.split(text[max(lo_edge, s - 100) : s])[-1])
+        tails.append(_LABEL_CUT.split(text[e : min(hi_edge, e + 40)])[0])
+    for pats in (places, states):
+        for windows in (leads, tails):
+            for (_, _, sal), window in zip(found, windows, strict=True):
+                if any(p.search(window) for p in pats):
+                    return sal
+    return None
+
+
+def _group_strength(group: list[tuple[int, int, TextSalary]]) -> tuple[bool, float, int, int]:
+    """Sort key for a period group: annual first, then confidence, more ranges, earliest.
+
+    Confidence alone is not comparable across periods: "$15 per hour" earns the explicit-period
+    bonus while "Salary range: $120,000 - $150,000" has no period word to earn it, yet the
+    hourly figure is an on-call or intern side rate. A confident annual candidate already needs
+    an annual period word, labelled min/max, a USD tag, or a range after a pay word (a lone
+    "Salary: $130,000" scores below CONFIDENT), so it is the stated salary and wins over any
+    other period.
+    """
+    annual = group[0][2].period == "year"
+    best = max(f[2].confidence for f in group)
+    ranges = sum(1 for f in group if f[2].min != f[2].max)
+    return annual, best, ranges, -group[0][0]
 
 
 def extract_salary_from_text(text: str | None, location: str | None = None) -> TextSalary | None:
     """Best pay range found in a description, or None when nothing is confidently pay.
 
-    Several ranges (location tiers): one whose surrounding text names the job's location wins;
-    otherwise the widest min..max across ranges sharing the first range's period.
+    Candidates are grouped by period. A confident annual group always wins; otherwise the
+    strongest group wins (highest confidence, then more ranges, then earliest). So an hourly
+    on-call, overtime or intern rate, or a placeholder, before or after it, cannot displace a
+    stated annual range. Within that group, several ranges (location tiers): the one
+    labelled with the job's location wins; otherwise the widest min..max across the group.
     """
     if not text:
         return None
-    text = re.sub(r"\bUS\$", "$", text.replace("\xa0", " "))
+    text = re.sub(r"\bUS\$", "$", text.replace("\xa0", " ").replace("\\$", "$"))
     found = _minmax(text)
     spans = [(s, e) for s, e, _ in found]
     for s, e, sal in _candidates(text):
-        if not any(s >= a and e <= b for a, b in spans):
+        if not any(a <= s < b for a, b in spans):
             found.append((s, e, sal))
     found = [f for f in found if f[2].confidence >= CONFIDENT]
     if not found:
         return None
     found.sort(key=lambda f: f[0])
+    groups: dict[str, list[tuple[int, int, TextSalary]]] = {}
+    for f in found:
+        groups.setdefault(f[2].period, []).append(f)
+    found = max(groups.values(), key=_group_strength)
     if len(found) > 1:
-        pats = _location_patterns(location)
-        for i, (s, e, sal) in enumerate(found):
-            lo_edge = found[i - 1][1] if i else 0
-            hi_edge = found[i + 1][0] if i + 1 < len(found) else len(text)
-            tail = re.split(r"\.\s|\n", text[e : min(hi_edge, e + 40)])[0]
-            window = text[max(lo_edge, s - 60) : e] + tail
-            if pats and any(p.search(window) for p in pats):
-                return sal
-    first = found[0][2]
-    same = [f[2] for f in found if f[2].period == first.period]
+        hit = _by_location(text, found, location)
+        if hit is not None:
+            return hit
+    same = [f[2] for f in found]
+    first = same[0]
     if len(same) == 1:
         return first
     los = [s.min for s in same if s.min is not None]

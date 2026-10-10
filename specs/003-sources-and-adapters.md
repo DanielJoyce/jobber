@@ -294,10 +294,18 @@ wyoming, new york, kentucky, montana) have no structured pay field, yet the pay 
 description ("$225,000 - $260,000 / yearly", "$70-$90/hr"), so postings showed "salary not
 stated" and comp fit was dropped. Normalize now falls back to a precision-first extractor when
 the structured field yields no numbers: it needs pay context, an explicit period or a USD tag,
-sane magnitude per period, and rejects bonuses, funding, benefits and minimum-wage blurbs.
-Several ranges (location tiers): the one near the job's location, else the widest min..max over
-ranges sharing the first period. `job.salary_source` is `structured` or `text`; for `text`,
-`salary_raw` holds the matched snippet and is re-derived on every normalize. Free backfill:
+sane magnitude per period, and rejects bonuses, funding, equity, benefits and minimum-wage
+blurbs, including the $7.25/hr federal-minimum placeholder some boards put in every posting's
+Compensation field. Candidates are grouped by period; a confident annual group always wins,
+else the strongest group (confidence, then ranges). Confidence is not compared across periods,
+since "$15 per hour" earns an explicit-period bonus that "Salary range: $120,000 - $150,000"
+cannot, so an hourly on-call, intern or placeholder figure, before or after it, cannot displace
+a stated annual range.
+Several ranges (location tiers): the one whose label (before the range, else after it; a city
+before a state code) names the job's location, else the widest min..max over the group.
+`job.salary_source` is `structured` or `text`; for `text`, `salary_raw` holds the matched
+snippet and is re-derived on every normalize, and the source's own value (e.g. "DOE") is kept in
+`salary_raw_original` and restored if the description stops yielding pay. Free backfill:
 `jobhunter backfill-salary`.
 
 **As built** (`sources/adapters/htmlconfig.py`, milestone M3). Beyond the sketch above the adapter

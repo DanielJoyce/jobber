@@ -102,3 +102,29 @@ def test_comp_fit_uses_text_salary(conn):
         r["salary_min"], r["salary_max"], r["salary_period"], bool(r["salary_stated"]), profile
     )
     assert got == 100  # $90/hr = $187k annual, above the 1.2x target
+
+
+def test_text_salary_never_loses_the_structured_raw(conn):
+    # A board's own "DOE" yields no numbers, so pay comes from the description; "DOE" must
+    # survive later re-normalizes and come back when the description no longer states pay.
+    add(conn, "1", salary_raw="DOE")
+    normalize_pending(conn)
+    r = row(conn, "1")
+    assert (r["salary_source"], r["salary_min"]) == ("text", 70)
+    normalize_pending(conn, force=True)
+    assert row(conn, "1")["salary_source"] == "text"
+    conn.execute("UPDATE job SET description_raw = '<p>Great role.</p>' WHERE external_id = '1'")
+    normalize_pending(conn, force=True)
+    r = row(conn, "1")
+    assert (r["salary_raw"], r["salary_source"], r["salary_min"]) == ("DOE", None, None)
+
+
+def test_backfill_keeps_the_structured_raw(conn):
+    add(conn, "1", salary_raw="Competitive")
+    normalize_pending(conn)
+    backfill_salary(conn)
+    assert row(conn, "1")["salary_source"] == "text"
+    conn.execute("UPDATE job SET description_text = 'Great role.' WHERE external_id = '1'")
+    backfill_salary(conn)
+    r = row(conn, "1")
+    assert (r["salary_raw"], r["salary_source"]) == ("Competitive", None)

@@ -536,3 +536,10 @@ def test_pages_show_bucket_names_not_letters(client, path):
     r = client.get(path)
     assert r.status_code == 200, path
     assert stray_letters(r.text) == [], path
+
+
+def test_text_salary_hint_is_announced_to_screen_readers(client, seeded):
+    seeded.execute("UPDATE job SET salary_source = 'text' WHERE id = 1")
+    t = client.get("/inbox").text
+    assert '<span aria-hidden="true">~</span>' in t
+    assert '<span class="sr-only">(parsed from the description)</span>' in t

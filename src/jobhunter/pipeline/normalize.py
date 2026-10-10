@@ -45,34 +45,42 @@ def _norm_date(value: str | None, tz: str, label: str, warnings: list[str]) -> s
 
 
 def resolve_salary(
-    raw: str | None, source: str | None, text: str, location: str | None
+    raw: str | None,
+    source: str | None,
+    text: str,
+    location: str | None,
+    original: str | None = None,
 ) -> dict[str, object]:
     """Salary columns for one job. Structured pay always wins; description text is the fallback.
 
-    ``source == 'text'`` means ``raw`` is a snippet we extracted earlier, so it is ignored here
-    and the description is searched again (idempotent, follows description changes).
+    ``source == 'text'`` means ``raw`` is a snippet we extracted earlier, so it is ignored here,
+    the source's own value is read from ``original`` (``salary_raw_original``) and the
+    description is searched again (idempotent, follows description changes). The source's value
+    is never lost: it moves to ``salary_raw_original`` while a snippet is shown and comes back to
+    ``salary_raw`` when the description no longer yields pay.
     """
     warnings: list[str] = []
-    structured = None if source == "text" else raw
+    structured = original if source == "text" else raw
     sal = parse_salary(structured)
     warnings.extend(sal.warnings)
     if sal.min is not None or sal.max is not None:
         return {
             "salary_raw": structured, "salary_min": sal.min, "salary_max": sal.max,
             "salary_period": sal.period, "salary_stated": 1 if sal.stated else 0,
-            "salary_source": "structured", "warnings": warnings,
+            "salary_source": "structured", "salary_raw_original": None, "warnings": warnings,
         }  # fmt: skip
     found = extract_salary_from_text(text, location)
     if found is not None:
         return {
             "salary_raw": found.raw, "salary_min": found.min, "salary_max": found.max,
             "salary_period": found.period, "salary_stated": 1, "salary_source": "text",
+            "salary_raw_original": structured,
             "warnings": [*warnings, f"salary taken from description text: {found.raw[:60]!r}"],
         }  # fmt: skip
     return {
         "salary_raw": structured, "salary_min": None, "salary_max": None,
         "salary_period": None, "salary_stated": 1 if sal.stated else 0,
-        "salary_source": None, "warnings": warnings,
+        "salary_source": None, "salary_raw_original": None, "warnings": warnings,
     }  # fmt: skip
 
 
@@ -82,7 +90,10 @@ def _normalize_row(row: sqlite3.Row, tz: str) -> dict[str, object]:
     if not text:
         warnings.append(f"{WARNING_PREFIX}description empty after html_to_text")
 
-    sal = resolve_salary(row["salary_raw"], row["salary_source"], text, row["location_raw"])
+    sal = resolve_salary(
+        row["salary_raw"], row["salary_source"], text, row["location_raw"],
+        row["salary_raw_original"],
+    )  # fmt: skip
     warnings.extend(f"{WARNING_PREFIX}{w}" for w in sal["warnings"])  # type: ignore[attr-defined]
 
     employer = row["employer"] or row["agency_raw"]
@@ -105,6 +116,7 @@ def _normalize_row(row: sqlite3.Row, tz: str) -> dict[str, object]:
         "salary_period": sal["salary_period"],
         "salary_stated": sal["salary_stated"],
         "salary_source": sal["salary_source"],
+        "salary_raw_original": sal["salary_raw_original"],
         "remote": detect_remote(row["title"], row["location_raw"], text),
         "employment_type": emp,
         "employer": employer,
@@ -119,7 +131,7 @@ _UPDATE = """
 UPDATE job SET
   description_text = :description_text, salary_min = :salary_min,
   salary_max = :salary_max, salary_period = :salary_period, salary_raw = :salary_raw,
-  salary_source = :salary_source,
+  salary_source = :salary_source, salary_raw_original = :salary_raw_original,
   salary_stated = :salary_stated, remote = :remote,
   employment_type = :employment_type, employer = :employer,
   posted_at = :posted_at, closes_at = :closes_at,
@@ -189,21 +201,24 @@ def backfill_salary(conn: sqlite3.Connection) -> tuple[dict[str, int], dict[str,
     """
     before = _salary_counts(conn)
     rows = conn.execute(
-        "SELECT id, salary_raw, salary_source, description_text, location_raw FROM job "
+        "SELECT id, salary_raw, salary_source, salary_raw_original, description_text, "
+        "location_raw FROM job "
         "WHERE description_text IS NOT NULL AND description_text != '' "
         "AND (salary_source IS NULL OR salary_source = 'text')"
     ).fetchall()
     with _txn(conn):
         for r in rows:
             sal = resolve_salary(
-                r["salary_raw"], r["salary_source"], r["description_text"], r["location_raw"]
-            )
+                r["salary_raw"], r["salary_source"], r["description_text"], r["location_raw"],
+                r["salary_raw_original"],
+            )  # fmt: skip
             sal.pop("warnings")
             sal["id"] = r["id"]
             conn.execute(
                 "UPDATE job SET salary_raw = :salary_raw, salary_min = :salary_min, "
                 "salary_max = :salary_max, salary_period = :salary_period, "
-                "salary_stated = :salary_stated, salary_source = :salary_source WHERE id = :id",
+                "salary_stated = :salary_stated, salary_source = :salary_source, "
+                "salary_raw_original = :salary_raw_original WHERE id = :id",
                 sal,
             )
     return before, _salary_counts(conn)
