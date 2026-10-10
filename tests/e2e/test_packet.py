@@ -83,3 +83,95 @@ def test_packet_page_fits_a_phone_and_links_are_readable(browser, server, scheme
         assert btn.evaluate(CONTRAST_JS) >= 4.5
     finally:
         ctx.close()
+
+
+# ─── phase 1b: documents ────────────────────────────────────────────────────
+
+E2E_OUT = {
+    "resume": {
+        "header": ["L1"],
+        "summary": {"text": "Runs synthetic hosts.", "sources": ["L2"]},
+        "sections": [
+            {
+                "heading": "Experience",
+                "entries": [
+                    {
+                        "source_line": "L1",
+                        "employer": "",
+                        "title": "",
+                        "dates": "",
+                        "bullets": [{"text": "Led the synthetic hosts", "sources": ["L2"]}],
+                    }
+                ],
+            }
+        ],
+        "skills": [],
+        "omitted": [],
+        "change_notes": ["Kept it short."],
+    }
+}
+
+
+def _new_packet(page, server):
+    page.goto(f"{server.url}/apply/new")
+    page.fill("#new-text", TEXT)
+    page.fill("#new-employer", "Synthetic Co")
+    page.fill("#new-title", "Fleet Engineer")
+    page.click("#create-btn")
+    page.wait_for_url(re.compile(r"/packet/\d+$"))
+
+
+def test_generate_confirm_and_mark_ready_in_a_browser(page, server, fake_claude, claude_stream):
+    fake_claude.set([claude_stream(E2E_OUT), claude_stream({"lines": []})])
+    _new_packet(page, server)
+    page.click("#resume button[data-runner=cli]")
+    page.wait_for_url(re.compile(r"/packet/\d+#resume$"))
+    expect(page.locator("#resume-editor .chk.bad").first).to_be_visible()
+    expect(page.locator("#mark-ready")).to_be_disabled()
+    page.click("#resume-editor .confirm-btn")
+    page.wait_for_load_state()
+    expect(page.locator("#mark-ready")).to_be_enabled()
+    page.click("#mark-ready")
+    expect(page.locator("#ready .chk.ok")).to_have_text("ready")
+    assert [r[0] for r in server.rows("SELECT status FROM application_packet")] == ["ready"]
+    assert not page.errors
+
+
+def test_api_button_asks_first_and_dismissing_runs_nothing(page, server, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
+    server.app.state.packet_api_client_factory = lambda: pytest.fail("dismissed: no API call")
+    _new_packet(page, server)
+    seen = []
+
+    def on_dialog(d):
+        seen.append(d.message)
+        d.dismiss()
+
+    page.on("dialog", on_dialog)
+    page.click("#resume button[data-runner=api]")
+    page.wait_for_timeout(300)
+    assert seen and "Run on the API? About $" in seen[0]
+    assert server.rows("SELECT count(*) FROM packet_document")[0][0] == 0
+    assert not page.errors
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_documents_fit_a_phone_and_badges_are_readable(
+    browser, server, fake_claude, claude_stream, scheme
+):
+    fake_claude.set([claude_stream(E2E_OUT), claude_stream({"lines": []})])
+    ctx = browser.new_context(viewport={"width": 375, "height": 800}, color_scheme=scheme)
+    ctx.route("**/*", lambda r: r.continue_() if "127.0.0.1" in r.request.url else r.abort())
+    pg = ctx.new_page()
+    try:
+        _new_packet(pg, server)
+        pg.click("#resume button[data-runner=cli]")
+        pg.wait_for_url(re.compile(r"#resume$"))
+        overflow = pg.evaluate(
+            "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        assert overflow <= 1, f"packet documents scroll sideways by {overflow}px"
+        for sel in ("#resume-editor .chk.bad", "#resume-editor .src", ".reasons li", "#use-base"):
+            assert pg.locator(sel).first.evaluate(CONTRAST_JS) >= 4.5, sel
+    finally:
+        ctx.close()

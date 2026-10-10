@@ -22,6 +22,10 @@ MODULES = [
     "jobhunter.apply",
     "jobhunter.apply.paste",
     "jobhunter.apply.score",
+    "jobhunter.apply.cli_runner",
+    "jobhunter.apply.generator",
+    "jobhunter.apply.factcheck",
+    "jobhunter.apply.review",
 ]
 
 

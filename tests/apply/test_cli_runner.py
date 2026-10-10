@@ -253,14 +253,12 @@ def test_guard_hides_any_real_claude_on_path(tmp_path, monkeypatch):
 
 
 def test_guard_refuses_to_launch_anything_but_the_fake(tmp_path):
-    from conftest import RealClaudeBlocked
-
     exe = tmp_path / "claude"
     exe.write_text("#!/bin/sh\ntouch ran\n")
     exe.chmod(0o755)
-    with pytest.raises(RealClaudeBlocked):
+    with pytest.raises(RuntimeError, match="fake_claude fixture"):
         cli_runner._spawn([str(exe), "-p"], cwd=str(tmp_path))
-    with pytest.raises(RealClaudeBlocked):
+    with pytest.raises(RuntimeError, match="fake_claude fixture"):
         cli_runner.check_auth(str(exe), tmp_path)
     assert not (tmp_path / "ran").exists()
 

@@ -28,6 +28,8 @@ app.add_typer(applylinks_app, name="applylinks")
 llm_app = typer.Typer(help="Local model server: status and benchmark.", no_args_is_help=True)
 app.add_typer(schedule_app, name="schedule")
 app.add_typer(llm_app, name="llm")
+apply_app = typer.Typer(help="Assisted apply: packet drafts (specs/017).", no_args_is_help=True)
+app.add_typer(apply_app, name="apply")
 
 NOT_IMPLEMENTED = "not implemented yet"
 
@@ -1312,3 +1314,132 @@ def llm_bench(
 
 if __name__ == "__main__":
     app()
+
+
+@apply_app.command("draft")
+def apply_draft(
+    packet_id: Annotated[int, typer.Argument(help="The packet id (/packet/<id> in the console).")],
+    letter: Annotated[bool, typer.Option("--letter", help="Draft the cover letter.")] = False,
+    question: Annotated[
+        str | None, typer.Option("--question", help="Draft an answer to this custom question.")
+    ] = None,
+    story: Annotated[
+        list[str] | None,
+        typer.Option("--story", help="A story fact for a behavioral question (up to 3)."),
+    ] = None,
+    instruction: Annotated[
+        str, typer.Option("--instruction", help='One-line instruction, e.g. "shorter".')
+    ] = "",
+    runner: Annotated[
+        str | None,
+        typer.Option("--runner", help="cli (subscription) or api; default: config apply.runner."),
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Do not ask before a run that spends money.")
+    ] = False,
+) -> None:
+    """Draft a targeted resume (default), a cover letter or a question answer for a packet.
+
+    Writes the same packet_document versions as the console. The CLI runner uses your Claude
+    subscription; the API runs only with --runner api, after showing its estimate. A failed
+    subscription run never switches to the API by itself.
+    """
+    from jobhunter.apply import answers, documents, generator, labels, runner_state
+    from jobhunter.scoring.profile import ProfileError, load_profile_for
+
+    if letter and question:
+        typer.echo("error: pick one of --letter and --question", err=True)
+        raise typer.Exit(2)
+    kind = "cover_letter" if letter else "question_draft" if question else "resume"
+    settings = load_settings()
+    run_on = runner or settings.apply.runner
+    if run_on not in ("cli", "api"):
+        typer.echo("error: --runner is cli or api", err=True)
+        raise typer.Exit(2)
+    try:
+        profile = load_profile_for(settings)
+    except ProfileError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    conn = db.connect(settings.paths.db_path)
+    db.migrate(conn)
+    now = datetime.now(UTC)
+    try:
+        if question is not None:
+            if labels.never_store(question) is not None:
+                typer.echo(labels.YOURS, err=True)
+                raise typer.Exit(1)
+            if labels.question_kind(question) == "numeric":
+                typer.echo("A years-of-experience question gets resume evidence, never a number:")
+                lines = documents.numbered_resume(profile.resume_text)
+                for lid, text in generator.numeric_evidence(lines, question) or [("", "none")]:
+                    typer.echo(f"  {lid} {text}".rstrip())
+                return
+            if story:
+                facts = answers.clean_lines(story)
+                answers.save_packet_answer(
+                    conn, packet_id, answers.story_key(question), question, "\n".join(facts)
+                )
+        confirm_paid = False
+        ctx = generator.load_context(conn, profile, packet_id)
+        req = generator.build_request(
+            conn, ctx, kind, question=question or "", instruction=instruction
+        )
+        est = generator.estimate(conn, settings, kind, req.chars)
+        left = generator.remaining_cap(conn, settings, now)
+        if run_on == "api":
+            typer.echo(
+                f"API run: about ${est.usd:.2f} ({est.source}); "
+                f"apply cap ${max(left, 0):.2f} left of ${settings.apply.daily_cap_usd:.2f} today"
+            )
+            if not yes and not typer.confirm("Run it? This spends API credit.", default=False):
+                typer.echo("not run")
+                raise typer.Exit(1)
+        elif runner_state.load(settings.paths.data_dir).overage:
+            typer.echo(
+                f"Your subscription is on paid extra usage: this run is charged (about "
+                f"${est.usd:.2f}) against the apply cap (${max(left, 0):.2f} left)."
+            )
+            if not yes and not typer.confirm("Run it anyway?", default=False):
+                typer.echo("not run")
+                raise typer.Exit(1)
+            confirm_paid = True
+        out = generator.generate(
+            conn,
+            settings,
+            profile,
+            packet_id,
+            kind,
+            runner=run_on,
+            now=now,
+            question=question or "",
+            instruction=instruction,
+            confirm_paid=confirm_paid,
+        )
+    except generator.ApplyRefused as exc:
+        typer.echo(f"not run: {exc.message}", err=True)
+        if exc.offer_api:
+            typer.echo(_api_hint(packet_id, letter, question), err=True)
+        raise typer.Exit(1) from exc
+    except generator.GenerateFailed as exc:
+        typer.echo(f"failed, nothing saved: {exc.reason}", err=True)
+        if exc.offer_api:
+            typer.echo(_api_hint(packet_id, letter, question), err=True)
+        raise typer.Exit(1) from exc
+    except (answers.NeverStore, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        conn.close()
+    where = "subscription" if out.runner == "cli" else f"API, ${out.cost_usd:.3f}"
+    check = "all lines checked" if out.ok else "has unsupported lines to fix or confirm"
+    typer.echo(
+        f"{kind.replace('_', ' ')} v{out.version} written ({where}); {check}; "
+        f"entailment {out.entailment}. Review it at /packet/{packet_id}"
+    )
+
+
+def _api_hint(packet_id: int, letter: bool, question: str | None) -> str:
+    extra = " --letter" if letter else f" --question {json.dumps(question)}" if question else ""
+    command = f"jobhunter apply draft {packet_id}{extra} --runner api"
+    return f"To run it on the API instead (shows the cost first): {command}"
