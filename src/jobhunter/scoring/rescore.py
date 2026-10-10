@@ -206,6 +206,26 @@ def eligible_rows(
     return screen.eligible_groups(conn, profile, scorer=spec, limit=limit, group_ids=group_ids)
 
 
+def without_on_request(conn: sqlite3.Connection, group_ids: Sequence[int]) -> list[int]:
+    """``group_ids`` minus groups scored only on request (``job_group.score_on_request``).
+
+    A re-score plan carries its own id list and the run passes it as ``:only``, which
+    ``screen._ELIGIBLE`` treats as the user naming those groups. A group flagged after the plan
+    was built (a capture, a paste) must still never be paid for by a plan (specs/017).
+    """
+    if not group_ids:
+        return []
+    flagged = {
+        int(r[0])
+        for r in conn.execute(
+            "SELECT id FROM job_group WHERE score_on_request = 1 "
+            "AND id IN (SELECT value FROM json_each(?))",
+            (json.dumps([int(g) for g in group_ids]),),
+        )
+    }
+    return [int(g) for g in group_ids if int(g) not in flagged]
+
+
 def ensure_prefilter(conn: sqlite3.Connection, profile: Profile, now: datetime) -> dict[str, int]:
     """Prefilter jobs with no result for the current ``filter_version`` (free, local).
 
@@ -234,7 +254,9 @@ def make_plan(
     if scope not in SCOPES:
         raise RescoreRefused(f"unknown scope {scope!r}")
     pre = ensure_prefilter(conn, profile, now)
-    ids = [int(r["group_id"]) for r in eligible_rows(conn, profile, spec, EVERYTHING)]
+    ids = without_on_request(
+        conn, [int(r["group_id"]) for r in eligible_rows(conn, profile, spec, EVERYTHING)]
+    )
     if scope == "all":
         planned = ids
     else:
@@ -603,7 +625,8 @@ def _execute(
     def remaining() -> float:
         return remaining_budget(conn, scoring, now())
 
-    ids = plan.group_ids
+    ids = without_on_request(conn, plan.group_ids)
+    st.gone += len(plan.group_ids) - len(ids)
     if not ids:
         st.notes.append("nothing waiting to be scored")
         return
@@ -674,9 +697,9 @@ def _execute(
             break
     if stop:
         st.notes.append(stop)
-    not_sent = len(ids) - st.attempted - st.gone
+    not_sent = len(plan.group_ids) - st.attempted - st.gone
     if not_sent > 0:
-        st.notes.append(f"{not_sent} of {len(ids)} planned groups were not sent")
+        st.notes.append(f"{not_sent} of {len(plan.group_ids)} planned groups were not sent")
     if st.errored:
         st.notes.append(
             f"{st.errored} errored or came back unusable; each was sent once and stays waiting"

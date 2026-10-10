@@ -16,7 +16,6 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.apply import paste
 from jobhunter.console import detail
-from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.models import ApplyStatus
 from jobhunter.pipeline import applylink
 from jobhunter.pipeline.ats_rules import is_http_url
@@ -117,8 +116,8 @@ def register(
         text = (form.get("text") or [""])[-1]
         if not text.strip():
             raise HTTPException(422, "paste the posting's description text")
-        if job["source_key"] == PASTE_MANUAL:
-            # A pasted posting (specs/017) is scored only on request: store, never queue.
+        if job["score_on_request"]:
+            # A group scored only on request (specs/017): store, never queue a re-score.
             paste.store_posting_text(conn, group_id, text, now())
         else:
             detail.paste_description(conn, group_id, text, now())

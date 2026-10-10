@@ -57,7 +57,10 @@ def test_sankey_node_counts_match_the_pipeline_lists(client, conn, pdir):  # noq
     assert "Systems Engineer" in client.get("/pipeline?node=applied").text
 
 
-def test_ingested_copy_never_joins_a_pasted_group(client, conn):  # noqa: F811
+def test_ingested_copy_joins_a_pasted_group_that_stays_on_request(client, conn):  # noqa: F811
+    # Phase 1e (specs/017 "A later ingest of a captured posting") replaces 1a's "never joins":
+    # the copy joins, becomes canonical (full text), and the group flag, not the canonical
+    # job's source, keeps the nightly run off it because the group has a packet.
     pid = new_packet(client, text=TEXT, employer="Acme", title="Systems Engineer")
     gid = packet_group(conn, pid)
     pasted = job_of(conn, gid)
@@ -69,10 +72,12 @@ def test_ingested_copy_never_joins_a_pasted_group(client, conn):  # noqa: F811
         (pasted["description_text"], pasted["content_hash"], ISO, ISO),
     )
     res = group_pending(conn, now=NOW)
-    assert res.joined == 0 and res.created == 1
-    assert job_of(conn, gid)["source_key"] == "paste-manual"
-    count = conn.execute("SELECT member_count FROM job_group WHERE id = ?", (gid,)).fetchone()[0]
-    assert count == 1
+    assert (res.joined, res.created, res.on_request_kept) == (1, 0, 1)
+    assert job_of(conn, gid)["source_key"] == "co"  # canonical picks content
+    g = conn.execute(
+        "SELECT member_count, score_on_request FROM job_group WHERE id = ?", (gid,)
+    ).fetchone()
+    assert tuple(g) == (2, 1)
 
 
 def test_prepare_on_an_applied_job_writes_no_shortlist_label(client, conn):  # noqa: F811

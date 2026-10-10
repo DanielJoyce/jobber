@@ -16,7 +16,6 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.models import JobLocation, LocationScope
 from jobhunter.core.textnorm import annualize
 from jobhunter.pipeline.listing import _txn
@@ -219,14 +218,15 @@ def run_prefilter(
         "SELECT j.* FROM job_group g JOIN job j ON j.id = g.canonical_job_id "
         "LEFT JOIN prefilter_result p ON p.job_id = j.id AND p.filter_version = ? "
         f"WHERE j.stage IN ({marks})"
-        # A pasted posting passes because the user chose it (Score this group now, specs/017);
-        # a later rule run must not overturn that.
-        " AND j.source_key != ?"
+        # A group scored only on request (a pasted or captured posting, specs/017 "Scored on
+        # request: a group flag") passes because the user chose it (Score this group now); a
+        # later rule run must not overturn that, whichever member is canonical.
+        " AND g.score_on_request = 0"
     )
     if not force:
         sql += " AND p.job_id IS NULL"
     sql += " ORDER BY j.id"
-    params: list[Any] = [version, *_EVALUATE_STAGES, PASTE_MANUAL]
+    params: list[Any] = [version, *_EVALUATE_STAGES]
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)

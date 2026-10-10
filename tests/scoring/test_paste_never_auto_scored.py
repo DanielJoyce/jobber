@@ -45,7 +45,11 @@ def manual(conn, gid, source):
         "WHERE id = ?)",
         (source, gid),
     )
-    conn.execute("UPDATE job_group SET method = 'manual' WHERE id = ?", (gid,))
+    # As paste.insert_pasted_posting and the email-manual creation do (specs/017 1e: the
+    # group flag, not the source, is what every nightly site checks).
+    conn.execute(
+        "UPDATE job_group SET method = 'manual', score_on_request = 1 WHERE id = ?", (gid,)
+    )
 
 
 def eligible(conn, profile, **kw):  # noqa: F811

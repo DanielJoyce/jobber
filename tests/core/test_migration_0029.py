@@ -63,7 +63,8 @@ def test_0029_adds_packet_tables_and_keeps_every_row(monkeypatch):
     before = {t: c.execute(f"SELECT * FROM {t} ORDER BY rowid").fetchall() for t in COUNTED}
     before = {t: [tuple(r) for r in rows] for t, rows in before.items()}
 
-    monkeypatch.setattr(db, "_load_migrations", real)
+    # Only 0029: later migrations add columns of their own (0031, 0032).
+    monkeypatch.setattr(db, "_load_migrations", lambda: [m for m in real() if m[0] <= 29])
     assert 29 in db.migrate(c)
 
     after = {

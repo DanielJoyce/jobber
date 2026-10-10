@@ -234,8 +234,8 @@ def insert_pasted_posting(
     # 'manual' keeps the URL and cross-state merges away from it, like the email-manual groups.
     gid = int(
         conn.execute(
-            "INSERT INTO job_group (canonical_job_id, member_count, method, created_at) "
-            "VALUES (?, 1, 'manual', ?)",
+            "INSERT INTO job_group (canonical_job_id, member_count, method, created_at, "
+            "score_on_request) VALUES (?, 1, 'manual', ?, 1)",
             (jid, at),
         ).lastrowid
         or 0
