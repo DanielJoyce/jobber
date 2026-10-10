@@ -53,6 +53,18 @@ class PasteError(ValueError):
 
 
 def direct_board_url(url: str) -> str:
+    """See ``_direct_board_url``; any malformed URL becomes a PasteError for the form."""
+    try:
+        out = _direct_board_url(url)
+        urlsplit(out).port  # noqa: B018  (raises on an out-of-range port)
+    except PasteError:
+        raise
+    except ValueError as exc:
+        raise PasteError(f"that URL is not valid ({exc})") from exc
+    return out
+
+
+def _direct_board_url(url: str) -> str:
     """The URL to store and fetch: tracking wrappers unwrapped, embed URLs made direct.
 
     Greenhouse ``/embed/job_app?for=<board>&token=<id>`` becomes ``/<board>/jobs/<id>`` (robots
@@ -100,12 +112,20 @@ class Duplicate:
         return self.why == "same URL"
 
 
+def _key(url: str | None) -> str | None:
+    """``normalize_apply_url``, or None for a URL it cannot parse (an out-of-range port)."""
+    try:
+        return normalize_apply_url(url) if url else None
+    except ValueError:
+        return None
+
+
 def find_duplicates(
     conn: sqlite3.Connection, url: str | None, employer: str, title: str
 ) -> list[Duplicate]:
     """Existing groups for this posting: same normalized URL, or same employer and title."""
     found: dict[int, str] = {}
-    key = normalize_apply_url(url) if url else None
+    key = _key(url)
     if key:
         host = host_of(key)
         rows = conn.execute(
@@ -118,7 +138,7 @@ def find_duplicates(
             (host, host, host, host),
         ).fetchall()
         for r in rows:
-            if key in (normalize_apply_url(r[1]), normalize_apply_url(r[2])):
+            if key in (_key(r[1]), _key(r[2])):
                 found.setdefault(int(r[0]), "same URL")
     emp, tit = normalize_employer(employer), normalize_title(title)
     if emp and tit:
@@ -317,7 +337,12 @@ def _json_ld_posting(tree: LexborHTMLParser) -> dict[str, Any] | None:
             data = json.loads(node.text() or "")
         except ValueError:
             continue
-        items = data if isinstance(data, list) else data.get("@graph", [data])
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = data.get("@graph", [data])
+        else:
+            continue  # a scalar (null, a string): a site bug, not a posting
         for item in items if isinstance(items, list) else []:
             if isinstance(item, dict) and item.get("@type") == "JobPosting":
                 return item

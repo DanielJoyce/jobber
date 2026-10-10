@@ -81,5 +81,6 @@
   </aside>
   {% endif %}
 </div>
-{% if data %}<script src="{{ static_url('inbox.js') }}" defer></script>{% endif %}
+{# Always loaded: n (New packet) works even when no profile is set up yet. #}
+<script src="{{ static_url('inbox.js') }}" defer></script>
 {% endblock %}

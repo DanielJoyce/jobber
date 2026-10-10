@@ -59,15 +59,34 @@ def application_exists(conn: sqlite3.Connection, app_id: int) -> bool:
 # --- events and derived status -------------------------------------------------------------
 
 
+# Notes of the early-stage events jobhunter writes as a side effect of a press (shortlist in the
+# inbox, an Apply click, Prepare packet). They are stamped now, so a backdated event accepted
+# later (a confirmation email's 'applied') would sort before them; they never outrank a status
+# past 'preparing'. SHORTLIST_NOTE must equal inbox.SHORTLIST_NOTE.
+SHORTLIST_NOTE = "shortlisted from inbox"
+APPLY_CLICK_NOTE = "opened apply link"
+PREPARE_NOTE = "packet started"
+AUTO_NOTES = (SHORTLIST_NOTE, APPLY_CLICK_NOTE, PREPARE_NOTE)
+
+
 def rebuild_status(conn: sqlite3.Connection, application_id: int) -> str:
-    """Set application.status (and applied_at) from the event log; returns the status."""
-    row = conn.execute(
-        "SELECT status FROM application_event WHERE application_id = ? "
-        "ORDER BY at DESC, id DESC LIMIT 1",
+    """Set application.status (and applied_at) from the event log; returns the status.
+
+    The latest event wins, except that an automatic early-stage event (``AUTO_NOTES``) is
+    skipped when the log also holds a status past 'preparing'.
+    """
+    evs = conn.execute(
+        "SELECT status, note FROM application_event WHERE application_id = ? "
+        "ORDER BY at DESC, id DESC",
         (application_id,),
-    ).fetchone()
-    if row is None:
+    ).fetchall()
+    if not evs:
         raise TrackingError(f"application {application_id} has no events")
+    past_preparing = any(e["status"] not in ("interested", "preparing") for e in evs)
+    row = next(
+        (e for e in evs if not (past_preparing and e["note"] in AUTO_NOTES)),
+        evs[0],
+    )
     applied = conn.execute(
         "SELECT MIN(at) FROM application_event WHERE application_id = ? AND status = 'applied'",
         (application_id,),

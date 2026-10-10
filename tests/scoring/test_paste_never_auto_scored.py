@@ -189,3 +189,63 @@ def test_score_group_over_cap_is_refused(env):
 def test_score_group_rejects_other_modes(env):
     _, _, gid, _ = env
     assert cli.invoke(app, ["score", "--group", str(gid), "--submit"]).exit_code == 2
+
+
+# ─── concurrent confirms ───────────────────────────────────────────────────
+
+
+def test_two_concurrent_score_now_confirms_pay_once(tmp_path, profile):  # noqa: F811
+    import threading
+    import time
+
+    from jobhunter.apply import score as group_score
+
+    path = tmp_path / "race.db"
+    c = db.connect(path)
+    db.migrate(c)
+    c.execute(
+        "INSERT INTO source (key, class, name, family, tier, entry, policy) VALUES "
+        "('wa', 'B', 'WA', 'neogov', 'http', 'https://example.com', 'enabled'), "
+        "('paste-manual', 'C', 'Pasted posting', 'manual', 'manual', 'console', 'manual')"
+    )
+    gid = add_group(c, 1, profile, passed=None)
+    manual(c, gid, "paste-manual")
+    c.execute("UPDATE job SET stage = 'normalized' WHERE job_group_id = ?", (gid,))
+    scoring = Scoring(screen_scorer=SPEC)
+    token = group_score.estimate(c, profile, scoring, gid, NOW).token
+    calls: list[int] = []
+
+    class Slow(FakeScorer):
+        def submit(self, requests):
+            calls.append(1)
+            time.sleep(0.5)
+            return super().submit(requests)
+
+    outcomes: list[str] = []
+    start = threading.Barrier(2)
+
+    def press() -> None:
+        conn = db.connect(path)
+        try:
+            start.wait()
+            out = group_score.score_now(
+                conn, profile, scoring, gid, token=token, now=NOW,
+                scorer_factory=lambda spec: Slow(),
+            )  # fmt: skip
+            outcomes.append(out.status)
+        except group_score.ScoreRefused as exc:
+            outcomes.append(f"refused: {exc}")
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=press) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert len(calls) == 1, outcomes
+    assert sorted(o.split(":")[0] for o in outcomes) == ["refused", "scored"], outcomes
+    assert c.execute("SELECT COUNT(*) FROM fit_score").fetchone()[0] == 1
+    reasons = c.execute("SELECT reasons FROM prefilter_result").fetchone()[0]
+    assert json.loads(reasons) == ["user-requested"]  # the winner's row survives
+    c.close()

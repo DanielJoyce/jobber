@@ -1059,6 +1059,7 @@ def _walk(conn: sqlite3.Connection, facts: dict[int, GroupFact]) -> _Walk:
             "LEFT JOIN prefilter_result p ON p.job_id = j.id"
         )
     }
+    scored_ids = {r[0] for r in conn.execute("SELECT DISTINCT job_group_id FROM fit_score")}
     links: dict[tuple[str, str], int] = defaultdict(int)
     members: dict[str, set[int]] = defaultdict(set)
 
@@ -1081,9 +1082,11 @@ def _walk(conn: sqlite3.Connection, facts: dict[int, GroupFact]) -> _Walk:
         elif m["source_key"] == PASTE_MANUAL:
             # A pasted posting skips fetch and prefilter (the user chose it). Scored, it flows
             # through the buckets like an ingested group; unscored, it is only in the pipeline.
-            if fact.bucket is None:
+            # Whether it is scored comes from fit_score, not ``facts``: pipeline_node_apps
+            # walks with no facts and must list the same applications the chart counts.
+            if gid not in scored_ids:
                 continue
-            scored = f"bucket_{fact.bucket.value}"
+            scored = f"bucket_{fact.bucket.value}" if fact.bucket else "unscored"
             links[("pasted", scored)] += 1
         else:
             touched = fact.scored or shortlisted or label is not None

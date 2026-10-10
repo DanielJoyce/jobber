@@ -17,6 +17,7 @@ from markupsafe import Markup, escape
 from jobhunter.apply.packets import live_packet_id
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
 from jobhunter.core import rejections
+from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline.applylink import get_apply_link
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
@@ -278,6 +279,11 @@ class Detail:
     packet_id: int | None = None  # the live assisted-apply packet (specs/017)
 
     @property
+    def pasted_posting(self) -> bool:
+        """Pasted on New packet (specs/017): not from an email alert, scored only on request."""
+        return self.job["source_key"] == PASTE_MANUAL
+
+    @property
     def posting_href(self) -> str | None:
         """The posting's web page, or None (a pasted posting with no URL has none)."""
         url = posting_url(self.job)
@@ -411,7 +417,8 @@ def load_detail(
             {
                 "title": m["title"],
                 "employer": m["employer"] or m["agency_raw"],
-                "url": m["apply_url"] or m["url"],
+                # None for a pasted job's ``paste:<id>`` placeholder: never shown as a link
+                "url": u if is_http_url(u := m["apply_url"] or m["url"]) else None,
                 "source": sources.get(m["source_key"], m["source_key"]),
             }
         )

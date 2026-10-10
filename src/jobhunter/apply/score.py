@@ -20,12 +20,12 @@ import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from jobhunter.config import Scoring
 from jobhunter.core import db
-from jobhunter.pipeline.listing import to_iso
+from jobhunter.pipeline.listing import from_iso, to_iso
 from jobhunter.scoring import rescore, screen
 from jobhunter.scoring.profile import Profile
 from jobhunter.scoring.scorers import FitScorer, scorer_from_string
@@ -33,6 +33,7 @@ from jobhunter.scoring.scorers import FitScorer, scorer_from_string
 logger = logging.getLogger(__name__)
 
 USER_REQUESTED = "user-requested"
+CLAIM_TTL = timedelta(minutes=15)
 _BEFORE_PREFILTERED = ("listed", "resolved", "normalized", "grouped")
 
 ScorerFactory = Callable[[str], FitScorer]
@@ -161,6 +162,24 @@ class Outcome:
     cost_usd: float = 0.0
 
 
+def _claimed(conn: sqlite3.Connection, job_id: int, now: datetime) -> bool:
+    """A Score now for this job started less than ``CLAIM_TTL`` ago and has not finished.
+
+    Its ``user-requested`` prefilter row is the marker; a run that died leaves one behind, which
+    stops counting as a claim after ``CLAIM_TTL``.
+    """
+    row = conn.execute(
+        "SELECT reasons, evaluated_at FROM prefilter_result WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    if row is None or json.loads(row["reasons"] or "[]") != [USER_REQUESTED]:
+        return False
+    try:
+        started = from_iso(row["evaluated_at"])
+    except ValueError:
+        return False
+    return now - started < CLAIM_TTL
+
+
 def _snapshot(conn: sqlite3.Connection, job_id: int) -> tuple[sqlite3.Row | None, str]:
     pre = conn.execute("SELECT * FROM prefilter_result WHERE job_id = ?", (job_id,)).fetchone()
     stage = conn.execute("SELECT stage FROM job WHERE id = ?", (job_id,)).fetchone()[0]
@@ -205,8 +224,16 @@ def score_now(
         raise EstimateChanged(est)
     job = _canonical(conn, group_id)
     assert job is not None
-    snap = _snapshot(conn, job["id"])
     with db.transaction(conn):
+        # The claim: under the write lock, re-check and mark the group as being scored, so a
+        # second confirm (another tab, the CLI) cannot pay for the same group in parallel.
+        if is_scored(conn, group_id):
+            raise ScoreRefused("this posting is already scored")
+        if in_open_batch(conn, group_id):
+            raise ScoreRefused("this posting is in a submitted batch")
+        if _claimed(conn, job["id"], now):
+            raise ScoreRefused("this posting is being scored right now; reload in a minute")
+        snap = _snapshot(conn, job["id"])
         conn.execute(
             "INSERT OR REPLACE INTO prefilter_result (job_id, passed, reasons, filter_version, "
             "evaluated_at) VALUES (?, 1, ?, ?, ?)",
@@ -258,7 +285,7 @@ def score_now(
                 group_ids=[group_id],
                 rejection_days=scoring.employer_rejection_days,
             )
-            if res.written:
+            if res.written or res.duplicate:
                 return Outcome("scored", f"scored with {spec}", res.cost_usd)
             why = (
                 "the scorer returned no usable score"

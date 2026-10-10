@@ -9,6 +9,15 @@
     <a href="/job/{{ p.group_id }}">job page</a>
   </p>
 
+  {% if d and d.prompt %}
+  <div class="banner did-apply" id="did-apply" role="status">
+    <strong>Did you apply?</strong>
+    <button type="button" class="act" hx-post="/job/{{ p.group_id }}/applied?choice=yes" hx-target="#did-apply" hx-swap="outerHTML">Yes</button>
+    <button type="button" class="act" hx-post="/job/{{ p.group_id }}/applied?choice=not_yet" hx-target="#did-apply" hx-swap="outerHTML">Not yet</button>
+    <button type="button" class="act" hx-post="/job/{{ p.group_id }}/applied?choice=not_interested" hx-target="#did-apply" hx-swap="outerHTML">Not interested</button>
+  </div>
+  {% endif %}
+
   <header class="packet-head">
     <h1>{{ p.title }}</h1>
     <div class="packet-sub">

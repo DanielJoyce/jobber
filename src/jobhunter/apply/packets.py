@@ -15,10 +15,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from jobhunter.console.tracking import PREPARE_NOTE
 from jobhunter.core import db
 from jobhunter.core.manual_sources import PASTE_MANUAL
 
-PREPARE_NOTE = "packet started"
 # Application statuses Prepare moves to 'preparing'; later ones are left where they are.
 _BEFORE_PREPARING = ("interested",)
 
@@ -78,13 +78,16 @@ def prepare_in_txn(conn: sqlite3.Connection, group_id: int, now: datetime) -> in
             (app_id, at, PREPARE_NOTE),
         )
     # Preparing a packet is a shortlist: the row leaves the inbox like a pressed `s`. A
-    # dismissal is overridden (the user chose this job after all); 'applied' is kept.
-    conn.execute(
-        "INSERT INTO label (job_group_id, label, labeled_at) VALUES (?, 'interesting', ?) "
-        "ON CONFLICT (job_group_id) DO UPDATE SET label = 'interesting', "
-        "labeled_at = excluded.labeled_at WHERE label.label = 'not_interesting'",
-        (group_id, at),
-    )
+    # dismissal is overridden (the user chose this job after all); 'applied' is kept. A job
+    # already applied to (or further) is not newly shortlisted: no label is written for it.
+    shortlisting = app is None or app["status"] in ("interested", "preparing")
+    if shortlisting:
+        conn.execute(
+            "INSERT INTO label (job_group_id, label, labeled_at) VALUES (?, 'interesting', ?) "
+            "ON CONFLICT (job_group_id) DO UPDATE SET label = 'interesting', "
+            "labeled_at = excluded.labeled_at WHERE label.label = 'not_interesting'",
+            (group_id, at),
+        )
     live = live_packet_for_application(conn, app_id)
     if live is not None:
         return live
