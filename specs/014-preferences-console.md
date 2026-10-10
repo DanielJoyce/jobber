@@ -138,6 +138,16 @@ included; status `canceled`, note `superseded by re-score #N`), so the nightly d
 pay a second scorer for the same groups. A heartbeat thread keeps a slow run from being taken
 for dead, and a run that was marked interrupted stops instead of overwriting that status.
 
+The daily `jobhunter run` never re-scores. Its score stage takes only groups with no screen
+score at their current description revision under any model, prompt or `scoring_version` (new
+jobs, plus a pasted description), and skips any group listed in the plan of a pending or running
+re-score. Why: choosing "No, new jobs only" must cost nothing for existing jobs, and a planned
+group is left to its plan because the plan checks eligibility per scorer, so a daily score with
+the default scorer would not stop the plan paying a second model for the same group. A running
+request with a stale heartbeat is marked failed first, so a dead run does not hold its groups.
+The daily run, like re-scores and `score --submit`, stops at the tighter of the daily and weekly
+caps (uncollected batches count against both); before, it checked only the daily cap.
+
 The console refuses state-changing requests (POST, PUT, PATCH, DELETE) that a browser sends
 cross-site or under a non-loopback `Host` (DNS rebinding), with 403; `--allow-remote` drops
 the loopback requirement but not same-origin. Requests without `Origin` or `Sec-Fetch-Site`

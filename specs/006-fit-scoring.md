@@ -88,7 +88,8 @@ The profile is hashed into **two versions** ([014](014-preferences-console.md#th
 
 - **`scoring_version`** covers what the model reads: the resume, `current_focus`, `done_with` and
   `narrative`. Every model score records it. Changing these costs money to re-apply, so it never
-  happens automatically.
+  happens automatically: the daily run scores only groups never screened before
+  ([014](014-preferences-console.md#re-score-now)).
 - **`filter_version`** covers everything computed in Python: hard constraints, salary, states,
   ranking, weights and bucket thresholds. Changing these re-applies instantly over stored
   scores, for free.
@@ -453,7 +454,7 @@ A one-time backfill is affordable: 50,000 historical jobs ≈ $100, run once.
 | Scoring the same posting 14 times | Scoring keyed on `job_group`, not `job` or location |
 | Re-scoring everything after a trivial edit | `comp`/`location` computed in Python; `UNIQUE(job_group, tier, prompt_version, scoring_version, model)` |
 | Silent cache failure costing 10x | Assertion on `cache_read_input_tokens` |
-| Runaway spend | Daily cap in config; scoring stops and the console shows a banner |
+| Runaway spend | Daily and weekly caps in config, checked by every scoring run; scoring stops and the console shows a banner |
 | **Jobs matching stale experience** | `recency_weighted_skills` vs `raw_skills` gap → **bucket F** |
 | **Jobs you can do but are done with** | `current_focus.done_with` → `done_with_hits` + flag |
 | Opaque single score | Deterministic **buckets** with a stated action per bucket |
