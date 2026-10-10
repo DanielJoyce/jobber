@@ -219,12 +219,37 @@ class Console(BaseModel):
     port: int = 8808
 
 
+class Apply(BaseModel):
+    """Assisted apply drafting (specs/017 "Targeted resume", "CLI runner").
+
+    ``runner`` picks what a Generate click runs: ``cli`` (the Claude Code CLI on the user's
+    subscription, the default) or ``api`` (the ``anthropic`` SDK on ``ANTHROPIC_API_KEY``).
+    With ``cli``, a failed run only *offers* the API run; it never switches by itself.
+    Two model keys because a CLI alias and an API model id are different names.
+    ``daily_cap_usd`` caps packet API spend only and is separate from ``[scoring]``'s caps.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    runner: Literal["cli", "api"] = "cli"
+    cli_model: str = "opus"
+    api_model: str = "claude-opus-5"
+    effort: Literal["low", "medium", "high"] = "medium"
+    daily_cap_usd: float = Field(default=1.00, ge=0)
+    # Advisory Haiku pass: do the cited lines support each generated line? (never clears a
+    # badge). Haiku gets no effort setting on either runner: it rejects one.
+    entailment_check: bool = True
+    cli_entailment_model: str = "haiku"
+    api_entailment_model: str = "claude-haiku-4-5"
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     paths: Paths = Field(default_factory=Paths)
     fetch: Fetch = Field(default_factory=Fetch)
     scoring: Scoring = Field(default_factory=Scoring)
+    apply: Apply = Field(default_factory=Apply)
     mail: Mail = Field(default_factory=Mail)
     console: Console = Field(default_factory=Console)
 

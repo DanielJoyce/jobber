@@ -260,3 +260,186 @@ def old_layout(tmp_path: Path):
         return build_old_layout(root)
 
     return make
+
+
+# ─── The real `claude` binary is never run ──────────────────────────────────
+#
+# Packet drafting runs the Claude Code CLI on the user's subscription (specs/017 "CLI runner").
+# A test that executed the real binary would spend the user's subscription allowance (or, if
+# the environment were wrong, API credit), and would send test data to Anthropic. So the
+# runner's only binary lookup (``cli_runner._lookup``) sees nothing but fake binaries a test
+# installed with the ``fake_claude`` fixture, and its only process launch
+# (``cli_runner._spawn``) refuses any executable outside those fake directories. A route test
+# that forgets the fake therefore finds no CLI and cannot exec one. ``live`` tests are exempt
+# (they are deselected and need JOBHUNTER_LIVE_TESTS=1). Do not weaken this guard.
+
+
+class RealClaudeBlocked(RuntimeError):
+    """Raised when a test tries to launch a `claude` that is not the test's fake."""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claude(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    import shutil
+
+    from jobhunter.apply import cli_runner
+
+    allowed: list[Path] = []
+    if request.node.get_closest_marker("live"):
+        yield allowed
+        return
+    real_spawn = cli_runner._spawn
+
+    def lookup(name: str) -> str | None:
+        for d in allowed:
+            found = shutil.which(name, path=str(d))
+            if found:
+                return found
+        return None
+
+    def spawn(argv, **kwargs):
+        exe = Path(os.path.realpath(argv[0]))
+        if not any(exe.is_relative_to(os.path.realpath(d)) for d in allowed):
+            raise RealClaudeBlocked(
+                f"test tried to launch {argv[0]!r}; install the fake_claude fixture "
+                "(tests/conftest.py). The real claude CLI is never run by tests"
+            )
+        return real_spawn(argv, **kwargs)
+
+    monkeypatch.setattr(cli_runner, "_lookup", lookup)
+    monkeypatch.setattr(cli_runner, "_spawn", spawn)
+    cli_runner.reset_auth_cache()
+    yield allowed
+    cli_runner.reset_auth_cache()
+
+
+_FAKE_CLAUDE = r"""#!{python}
+# Fake `claude` for tests (tests/conftest.py, fake_claude fixture). Records each invocation
+# (argv, cwd, environment, stdin) and replays a scenario written by the test.
+import json, os, pathlib, sys, time
+
+here = pathlib.Path(__file__).resolve().parent
+scen = json.loads((here / "scenario.json").read_text())
+args = sys.argv[1:]
+record = {{"argv": args, "cwd": os.getcwd(), "env": dict(os.environ)}}
+if args[:2] == ["auth", "status"]:
+    record["stdin"] = ""
+    with open(here / "calls.jsonl", "a") as fh:
+        fh.write(json.dumps(record) + "\n")
+    print(json.dumps(scen["auth"]), flush=True)
+    sys.exit(scen.get("auth_exit", 0))
+record["stdin"] = sys.stdin.read()
+counter = here / "counter"
+n = int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(n + 1))
+with open(here / "calls.jsonl", "a") as fh:
+    fh.write(json.dumps(record) + "\n")
+runs = scen["runs"]
+run = runs[min(n, len(runs) - 1)]
+for step in run["steps"]:
+    if "sleep" in step:
+        time.sleep(step["sleep"])
+    elif "touch" in step:
+        (here / step["touch"]).write_text("reached")
+    elif "raw" in step:
+        print(step["raw"], flush=True)
+    else:
+        print(json.dumps(step["line"]), flush=True)
+if run.get("stderr"):
+    print(run["stderr"], file=sys.stderr, flush=True)
+sys.exit(run.get("exit", 0))
+"""
+
+AUTH_OK = {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}
+
+
+class FakeClaude:
+    """A fake ``claude`` first on ``PATH``. ``runs`` is a list of runs, each
+    ``{"steps": [{"line": {...}} | {"sleep": s} | {"touch": name} | {"raw": text}],
+    "exit": code}``; call n replays ``runs[n]`` (the last one repeats)."""
+
+    def __init__(self, root: Path) -> None:
+        self.dir = root
+        self.path = root / "claude"
+        self.auth: dict = dict(AUTH_OK)
+        self.runs: list[dict] = []
+
+    def set(self, runs: list[dict] | None = None, auth: dict | None = None) -> FakeClaude:
+        import json
+        import sys
+
+        if runs is not None:
+            self.runs = runs
+        if auth is not None:
+            self.auth = auth
+        self.path.write_text(_FAKE_CLAUDE.format(python=sys.executable), encoding="utf-8")
+        self.path.chmod(0o755)
+        (self.dir / "scenario.json").write_text(
+            json.dumps({"runs": self.runs or [{"steps": []}], "auth": self.auth}),
+            encoding="utf-8",
+        )
+        return self
+
+    def calls(self, *, auth: bool | None = False) -> list[dict]:
+        """Recorded invocations; ``auth`` False skips `auth status`, True keeps only those."""
+        import json
+
+        log = self.dir / "calls.jsonl"
+        if not log.exists():
+            return []
+        out = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        if auth is None:
+            return out
+        return [c for c in out if (c["argv"][:2] == ["auth", "status"]) == auth]
+
+    def reached(self, marker: str) -> bool:
+        return (self.dir / marker).exists()
+
+
+@pytest.fixture
+def fake_claude(
+    _no_real_claude: list[Path], tmp_path_factory: pytest.TempPathFactory, monkeypatch
+) -> FakeClaude:
+    root = tmp_path_factory.mktemp("fakebin")
+    fake = FakeClaude(root).set()
+    _no_real_claude.append(root)
+    monkeypatch.setenv("PATH", f"{root}{os.pathsep}{os.environ.get('PATH', '')}")
+    return fake
+
+
+# The recorded shape of `claude -p --output-format stream-json --verbose --json-schema` output
+# (init, rate_limit_event, assistant, user, result) with "__STRUCTURED__" where the structured
+# output goes. Built by hand in the shape Claude Code 2.1.x emits: capturing a real transcript
+# is a model call on the user's subscription, which no test or agent makes unasked. The opt-in
+# live smoke test (tests/apply/test_cli_live.py) checks the same envelope against the real CLI.
+CLAUDE_STREAM = Path(__file__).parent / "fixtures" / "claude_cli" / "stream_ok.jsonl"
+
+
+def claude_run(
+    structured,
+    *,
+    overage: bool = False,
+    init: dict | None = None,
+    result: dict | None = None,
+    exit: int = 0,
+) -> dict:
+    """One fake-claude run replaying the recorded transcript with ``structured`` as output."""
+    import json
+
+    lines = [json.loads(x) for x in CLAUDE_STREAM.read_text(encoding="utf-8").splitlines()]
+    for line in lines:
+        if line["type"] == "system":
+            line.update(init or {})
+        if line["type"] == "rate_limit_event" and overage:
+            line["rate_limit_info"]["isUsingOverage"] = True
+        if line["type"] == "assistant":
+            line["message"]["content"][0]["input"] = structured
+        if line["type"] == "result":
+            line["structured_output"] = structured
+            line.update(result or {})
+    return {"steps": [{"line": line} for line in lines], "exit": exit}
+
+
+@pytest.fixture
+def claude_stream():
+    return claude_run
