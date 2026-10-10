@@ -1048,10 +1048,10 @@ def test_every_sankey_link_resolves_and_lists_what_its_node_counts(linked):
             assert cards + extra == node["value"], (node["id"], cards, node["value"])
             assert ("rejection email" in r.text) == bool(extra), node["id"]
         elif node["id"].startswith("bucket_"):
-            rows = len(re.findall(r'<article class="row"', r.text))
+            rows = len(re.findall(r'<article class="row\b', r.text))
             assert rows == node["value"], (node["id"], rows, node["value"])
         elif node["id"] == "untriaged":
-            assert len(re.findall(r'<article class="row"', r.text)) == node["value"]
+            assert len(re.findall(r'<article class="row\b', r.text)) == node["value"]
     # every kind of link is exercised: application nodes, bucket nodes, untriaged
     assert {"applied", "shortlisted", "bucket_A", "untriaged"} <= checked
     assert any(c.startswith("bucket_") for c in checked)

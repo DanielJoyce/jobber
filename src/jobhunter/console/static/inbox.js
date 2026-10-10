@@ -11,7 +11,7 @@
   function rows() {
     return Array.prototype.filter.call(document.querySelectorAll(".inbox article.row"), function (r) {
       var d = r.closest("details");
-      return !r.classList.contains("triaged") && (!d || d.open);
+      return !r.classList.contains("triaged") && !r.classList.contains("readonly") && (!d || d.open);
     });
   }
 
@@ -148,7 +148,7 @@
     var d = sec.querySelector("details");
     if (d) d.open = true;
     sec.scrollIntoView({ block: "start" });
-    var first = sec.querySelector("article.row:not(.triaged)");
+    var first = sec.querySelector("article.row:not(.triaged):not(.readonly)");
     if (first) select(first, false);
   }
 

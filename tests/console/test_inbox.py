@@ -420,9 +420,67 @@ def test_triaged_param_lists_shortlisted_and_dismissed_groups_with_a_badge(clien
     plain = client.get("/inbox?bucket=A,B").text
     assert "badge-triaged" not in plain  # untriaged lists show no triage badges
     t = client.get("/inbox?bucket=A,B&triaged=1").text
-    assert re.search(r'<article class="row" id="row-1".*?badge-triaged"[^>]*>shortlisted<', t, re.S)
-    assert re.search(r'<article class="row" id="row-2".*?badge-triaged"[^>]*>dismissed<', t, re.S)
+    shortlisted = r'<article class="row readonly" id="row-1".*?badge-triaged"[^>]*>shortlisted<'
+    dismissed = r'<article class="row readonly" id="row-2".*?badge-triaged"[^>]*>dismissed<'
+    assert re.search(shortlisted, t, re.S)
+    assert re.search(dismissed, t, re.S)
     assert "badge-triaged" in t and t.count("badge-triaged") == 2
+
+
+def _row_html(page: str, gid: int) -> str:
+    return re.search(rf'<article[^>]*id="row-{gid}".*?</article>', page, re.S).group(0)
+
+
+def test_triaged_rows_are_read_only_but_untriaged_rows_keep_their_controls(client):
+    client.post("/inbox/1/label?label=interesting")
+    client.post("/inbox/2/label?label=not_interesting")
+    t = client.get("/inbox?bucket=A,B&triaged=1").text
+    for gid in (1, 2):
+        row = _row_html(t, gid)
+        assert 'class="sel"' not in row and "/label?label=" not in row
+        assert "shortlist (s)" not in row and "dismiss (x)" not in row
+        assert "posting (o)" in row
+    # an untriaged row in the same kind of list still has them
+    other = client.get("/inbox?bucket=F&triaged=1").text
+    assert re.findall(r'<article class="row" id="row-(\d+)"', other)
+    plain = _row_html(other, int(re.findall(r'<article class="row" id="row-(\d+)"', other)[0]))
+    assert 'class="sel"' in plain and "shortlist (s)" in plain
+
+
+def test_relabel_and_bulk_relabel_refuse_triaged_groups_and_keep_the_application(client, seeded):
+    client.post("/inbox/1/label?label=interesting")
+    r = client.post("/inbox/1/label?label=not_interesting")
+    assert r.status_code == 409
+    r = client.post("/inbox/bulk", data={"label": "not_interesting", "group_id": [1, 2]})
+    assert r.status_code == 409
+    assert seeded.execute("SELECT label FROM label WHERE job_group_id = 1").fetchone()[0] == (
+        "interesting"
+    )
+    assert seeded.execute("SELECT COUNT(*) FROM label WHERE job_group_id = 2").fetchone()[0] == 0
+
+
+def test_undo_keeps_an_application_the_shortlist_press_did_not_open(client, seeded):
+    seeded.execute(
+        "INSERT INTO application (job_group_id, status, created_at, updated_at) "
+        "VALUES (1, 'interested', 'x', 'x')"
+    )
+    seeded.execute(
+        "INSERT INTO application_event (application_id, at, status, note, source) "
+        "SELECT id, 'x', 'interested', 'added from job page', 'manual' FROM application"
+    )
+    assert client.post("/inbox/1/label?label=interesting").status_code == 200
+    assert client.post("/inbox/1/undo").status_code == 200
+    assert seeded.execute("SELECT COUNT(*) FROM application WHERE job_group_id = 1").fetchone()[0]
+    assert seeded.execute("SELECT COUNT(*) FROM label WHERE job_group_id = 1").fetchone()[0] == 0
+
+
+def test_undo_without_a_label_keeps_the_application(client, seeded):
+    client.post("/inbox/1/label?label=interesting")
+    seeded.execute("DELETE FROM label WHERE job_group_id = 1")  # e.g. a stale second undo
+    assert client.post("/inbox/1/undo").status_code == 200
+    assert client.post("/inbox/bulk/undo", data={"group_id": [1]}).status_code == 200
+    apps = seeded.execute("SELECT status FROM application WHERE job_group_id = 1").fetchall()
+    assert [a[0] for a in apps] == ["interested"]
 
 
 def test_triaged_param_still_hides_rejected_postings_you_never_acted_on(client, seeded):

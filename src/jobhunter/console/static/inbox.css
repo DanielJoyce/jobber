@@ -38,6 +38,7 @@ summary.bucket-head { cursor: pointer; }
 .row-actions { display: flex; gap: 6px; margin-top: 6px; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .row-check { display: flex; align-items: flex-start; padding-top: 4px; cursor: pointer; }
+.row.readonly .row-check { width: 1rem; cursor: default; }
 .row-check input, .bulk-all input { width: 1rem; height: 1rem; cursor: pointer; }
 .row:has(.sel:checked) { background: var(--grid); }
 .bulk-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: var(--text-primary); }

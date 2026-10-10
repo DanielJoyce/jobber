@@ -293,6 +293,7 @@ def _now() -> str:
 
 BULK_MAX = 500
 LABELS = ("interesting", "not_interesting")
+SHORTLIST_NOTE = "shortlisted from inbox"
 
 
 def _write_label(conn: sqlite3.Connection, group_id: int, label: str, now: str) -> None:
@@ -315,14 +316,31 @@ def _write_label(conn: sqlite3.Connection, group_id: int, label: str, now: str) 
             )
             conn.execute(
                 "INSERT INTO application_event (application_id, at, status, note, source) "
-                "VALUES (?, ?, 'interested', 'shortlisted from inbox', 'manual')",
-                (cur.lastrowid, now),
+                "VALUES (?, ?, 'interested', ?, 'manual')",
+                (cur.lastrowid, now, SHORTLIST_NOTE),
             )
 
 
+def triaged_group_ids(conn: sqlite3.Connection, group_ids: Sequence[int]) -> set[int]:
+    """Groups that already carry a label: not for the inbox to relabel."""
+    if not group_ids:
+        return set()
+    marks = ",".join("?" * len(group_ids))
+    rows = conn.execute(
+        f"SELECT job_group_id FROM label WHERE job_group_id IN ({marks})", tuple(group_ids)
+    )
+    return {r[0] for r in rows}
+
+
 def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
-    """Delete the label, and the application if it never progressed past 'interested'."""
-    conn.execute("DELETE FROM label WHERE job_group_id = ?", (group_id,))
+    """Delete the label, and the application if it never progressed past 'interested'.
+
+    A group with no label has nothing to undo: leave its application alone. An application
+    the shortlist press did not open (applied from the job page first) is also kept.
+    """
+    deleted = conn.execute("DELETE FROM label WHERE job_group_id = ?", (group_id,)).rowcount
+    if not deleted:
+        return
     app = conn.execute(
         "SELECT id FROM application WHERE job_group_id = ? AND status = 'interested'",
         (group_id,),
@@ -336,7 +354,11 @@ def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
             "(SELECT COUNT(*) FROM attachment WHERE application_id = :a)",
             {"a": app["id"]},
         ).fetchone()[0]
-        if events <= 1 and not others:
+        mine = conn.execute(
+            "SELECT COUNT(*) FROM application_event WHERE application_id = ? AND note = ?",
+            (app["id"], SHORTLIST_NOTE),
+        ).fetchone()[0]
+        if events <= 1 and mine == events and not others:
             conn.execute("DELETE FROM application_event WHERE application_id = ?", (app["id"],))
             conn.execute("DELETE FROM application WHERE id = ?", (app["id"],))
 
