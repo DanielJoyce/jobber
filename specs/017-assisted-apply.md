@@ -1,11 +1,13 @@
 # 017 — Assisted apply: targeted resume, cover letter, resume-first fill
 
-Status: **design, revision 7, awaiting your approval.** Your open-question decisions of 2026-10-10 are folded in. Bug `7fa29db`. Proposed as a new
-milestone M10 ([Deviations](#deviations-from-earlier-specs)). Phase 1a is in progress; no other
-code yet. Revisions 2 to 7 and why are at the end ([History](#history)). Revision 5 replaced
+Status: **design, revision 8, awaiting your approval.** Your open-question decisions of 2026-10-10 are folded in. Bug `7fa29db`. Proposed as a new
+milestone M10 ([Deviations](#deviations-from-earlier-specs)). Phase 1a is merged (#85); no other
+code yet. Revisions 2 to 8 and why are at the end ([History](#history)). Revision 5 replaced
 phase 2's Claude in Chrome design with jobhunter's own Chrome extension and recorded your
 drafting, export and cap decisions in phase 1; revision 6 takes the review of revision 5;
-revision 7 takes the check of revision 6 and your answers, including coexistence with Jobright.
+revision 7 takes the check of revision 6 and your answers, including coexistence with Jobright;
+revision 8 adds [phase 1e, Capture](#phase-1e-capture-from-any-job-page): a **Send to
+jobhunter** button in the extension, built first, which also carries the extension's plumbing.
 
 You asked: *"Is there any way to automate the application part of the process? Filling out web
 forms?"* Then you added that most sites now parse an uploaded resume and fill themselves, that
@@ -17,6 +19,7 @@ step:
 | Phase | What you get | Works on |
 |---|---|---|
 | **1. Packet** | For any posting (a jobhunter job, a pasted URL, or pasted text): a **targeted resume** built only from facts in your resume, with the source line shown beside every line; a **cover letter** when you ask for one; checked drafts for custom questions; saved custom answers you can reuse; checklists; export | Every posting, with no browser automation at all |
+| **1e. Capture** | jobhunter's own **Chrome extension**, first slice. On a job page you are viewing, click **Send to jobhunter**: it reads that one page (structured job data first), and the console shows whether the job is already in jobhunter or adds it. **Score it** shows the estimate and runs only on your confirm; **Prepare packet** opens phase 1 | Any site, only the tab you clicked, only when you click |
 | **2. Resume-first fill** (gated) | jobhunter's own **Chrome extension** talks to the local console. On your click it snapshots the form, attaches your targeted resume, lets the site parse it, then diffs the form against the packet: it fills the empty gaps it knows on your click, offers drafts for the unknown questions, and lists what is yours. It **never clicks Submit** and marks where it stops | Public no-account ATS forms (Greenhouse, Lever, Ashby, Workable) first; Workday and NEOGOV later, after you sign in. Built only if the [gate](#phase-2-gate) passes |
 
 **jobhunter never submits an application**, in any phase, behind any flag. You read the form and
@@ -460,6 +463,314 @@ Tests: URL merge and cross-state merge with a packet on the absorbed side, on th
 and on both (winner's stays live, loser's `abandoned`, no FK error, daily run completes);
 shortlist undo keeps an application that has a packet.
 
+## Phase 1e: Capture from any job page
+
+You asked (2026-10-10): *"for the chrome plugin it might nice if I am on a job site viewing a job
+and it's not in my system I can click a button to get the job description sent to jobhunter and
+score it."* Phase 1e is that button. It is the first slice of the extension, needs no gate, and is
+the plumbing spike for phase 2: the manifest, pinned ID, pairing, `/ext/v1/` security, versions
+and the Playwright harness all land here, on a feature with no form writes, so phase 2 starts
+from a working, tested channel.
+
+### What it does
+
+```
+ Any job page (your tab)          Extension                         Console (127.0.0.1:8808)
+ ───────────────────────          ─────────                         ────────────────────────
+ you click the icon, the    ──►   activeTab granted for this tab
+ context menu, or Alt+Shift+J     executeScript(capture/*.js) ──►   (page read, in the tab)
+                                  ◄── one plain object, no HTML DOM
+                                  worker: POST /ext/v1/capture ──►  sanitize, dedupe
+                                                                    ├ found  → "Already in jobhunter"
+                                                                    └ new    → paste-manual group
+                                  popup shows the result     ◄──      at normalized (never scored)
+ [Score it] → estimate → [Confirm, spend ≈ $0.002]  ──────────────► score.py, token + claim
+ [Prepare packet]  ───────────────────────────────────────────────► packets.prepare → /packet/{id}
+```
+
+| # | Step | Writes |
+|---|---|---|
+| 1 | You click **Send to jobhunter**: the toolbar icon (opens the popup), the right-click menu item on a page or a selection, or the shortcut (`Alt+Shift+J`, changeable in `chrome://extensions/shortcuts`). Each is a user gesture, so Chrome grants `activeTab` for this tab only | nothing |
+| 2 | The worker injects the capture files into the tab's top frame once ([Extraction](#extraction)); they return one plain object and leave nothing behind | nothing |
+| 3 | `POST /ext/v1/capture`. The console sanitizes, then looks for the job ([Dedupe](#dedupe-on-capture)). **Structured capture** (JSON-LD, microdata or a site extractor, with at least 200 characters of description) and **selection capture** are sent with `commit = true` and added at once: one click. **Page-text capture** (the fallback) is sent with `commit = false` first, and the popup shows the console's cleaned text for you to check, edit the title and employer, then **Add** | a `paste-manual` group, `capture_log` |
+| 4 | The popup shows what was captured: title, employer, location, salary as stated, posted date, description length and its first lines, the method (`structured`, `page text`, `selection`) and one of **Already in jobhunter → Open** (with its bucket when scored), **Added → Open**, or **Looks like #123 → Open, or Add as new** | nothing |
+| 5 | **Score it** (only on a group that is not scored): the popup fetches the estimate and shows the scorer, cost, remaining cap and whether it runs as a batch. **Confirm** posts the estimate's token back ([Score it](#score-it)) | as Score this group now |
+| 6 | **Prepare packet**: `packets.prepare` on the group, then the packet page opens in a new tab | `application` at `preparing`, `application_packet` |
+
+**Never automatic.** Capture adds; it never scores, prepares, fetches or re-scores anything.
+Scoring is step 5 only, behind an estimate and your confirm, exactly as **Score this group now**
+on the packet page. A captured posting sits at stage `normalized` like any pasted one, so the
+nightly prefilter and screen never pick it up (1a's guarantee, unchanged).
+
+### Permissions: `activeTab` is now allowed
+
+| Permission | 1e | Why |
+|---|---|---|
+| `activeTab` | **yes (new)** | The narrowest way to read a page on *any* site: access to **the one tab you acted on**, granted by your click, icon, menu or shortcut, and **gone when the tab navigates or closes**. No install warning, no standing access, nothing on page load. The alternative, `<all_urls>`, would let the extension read every page at any time |
+| `scripting` | yes | `chrome.scripting.executeScript` into that tab, under the `activeTab` grant |
+| `storage` | yes | The pairing token (trusted contexts only) and the per-tab popup state in `storage.session` |
+| `contextMenus` | yes | The right-click **Send to jobhunter** item (contexts `page` and `selection`; **no `link` context**, so capture never follows a link) |
+| `host_permissions` | `http://127.0.0.1/*` only | The console. No site hosts in 1e |
+| `content_scripts` | **none** | No script runs on any site except the one injection after your click |
+| Still forbidden | | `<all_urls>` and any host wildcard, `tabs`, `webNavigation`, `cookies`, `webRequest`, `declarativeNetRequest`, `debugger`, `tabCapture`, `desktopCapture`, `downloads`, `history`, `clipboardRead`, `notifications`, `externally_connectable`, `web_accessible_resources`. The manifest lint checks the exact list |
+
+`activeTab` also makes that tab's URL and title readable through `chrome.tabs.query`, without
+the `tabs` permission, until it navigates. Phase 2 adds `sidePanel`, the ATS hosts and their
+content scripts on top of this list ([Phase 2 architecture](#architecture)).
+
+### Extraction
+
+Injected with `chrome.scripting.executeScript({target: {tabId}, files: ["capture/sites.js",
+"capture/extract.js"]})`, top frame only, in the isolated world (page scripts cannot see or call
+it). The files are read-only by construction: no DOM writes, no listeners, no timers, no network,
+no reading of form field values. The extension lint enforces it ([Tests](#tests-1e)). In order,
+first one that yields a posting wins:
+
+| # | Method | Reads |
+|---|---|---|
+| 1 | **JSON-LD** `JobPosting` | Every `script[type="application/ld+json"]`, parsed in a `try`; arrays, `@graph`, and `@type` as a string or a list. Fields: `title`, `hiringOrganization` (`name`, `sameAs`), `jobLocation` (each `address`: locality, region, country), `jobLocationType` (`TELECOMMUTE`), `applicantLocationRequirements`, `baseSalary` (currency, `value` or `minValue`/`maxValue`, `unitText`), `datePosted`, `validThrough`, `employmentType`, `description` (HTML), `url`, `identifier` (a string or `PropertyValue`), `directApply`. Several postings on one page: the one whose `url` matches the page or canonical URL, else the first, and the count is reported |
+| 2 | **Microdata** `itemtype` `schema.org/JobPosting` | The same fields from `itemprop` |
+| 3 | **Site extractor** (`capture/sites.js`) | A small table of host suffix → CSS selectors for title, employer, location and description. **Empty at launch.** A row is added only for a site you capture from that has no structured data, with a fixture page and a test. No rows for LinkedIn or Indeed ([Compliance](#capture-compliance)) |
+| 4 | **Page text** | `main`, else `article`, else `[role=main]`, else `body`, as `innerText` (what is rendered; hidden text and input values are not included), with `nav`, `header`, `footer`, `aside`, `form`, `dialog`, `script`, `style` and `template` subtrees skipped. Title and employer from `og:title`, `og:site_name` and `document.title` |
+| — | **Selection override** | If you selected text (at least 40 characters, not inside an editable field) before clicking, **that text is the description**, whatever methods 1-4 found; their title, employer, location and salary still fill the other fields |
+
+Always reported with it: the page URL (`location.href`), `link[rel=canonical]` when it is an
+absolute http(s) URL, the JSON-LD `url`, the `src` of any iframe whose host `ats_rules.py` knows
+(an embedded Greenhouse or Ashby form), and the method used.
+
+**Size limits in the extension**, before sending: description HTML 400,000 characters, text
+100,000 (`detail.MAX_PASTE_CHARS`), title 300, employer 200, location 500, any other string 1,000,
+at most 20 locations; anything cut is flagged `truncated`. The console enforces the same limits
+again and refuses a body over 1 MB with 413.
+
+**Pages it cannot read**: `chrome://`, the Chrome Web Store, Chrome's PDF viewer (many government
+postings are PDFs) and other restricted pages make `executeScript` fail. The popup says so and
+offers **Open New packet** with the tab's URL filled in (`/apply/new?url=...`, a GET that only
+pre-fills the form; 1e adds the parameter).
+
+**Embedded forms**: on an employer page whose posting sits in an ATS iframe, `activeTab` covers
+only the top frame's origin, so the iframe is not read. When the top page gave fewer than 200
+characters and an ATS iframe was reported, the popup offers **Fetch from job-boards.greenhouse.io**.
+That is 1a's **Fetch posting text** (`paste.fetch_posting`) on the direct board URL
+(`paste.direct_board_url`), through `FetchContext` and its robots.txt check, on your click
+(`POST /ext/v1/capture/fetch`). Ashby's robots.txt disallows it, so for Ashby the popup asks you
+to select the text and click again.
+
+### Console side
+
+`apply/capture.py`, with pydantic request and response models (`extra = "forbid"`, the limits
+above as field constraints) exported to `extension/api/v1.schema.json`:
+
+1. **Sanitize to text.** The JSON-LD description is HTML (sometimes entity-encoded once more,
+   `&lt;p&gt;`, which is decoded once when the string holds no tags). It goes through
+   `core/textnorm.html_to_text` (selectolax parsing, no rendering) and is stored the way 1a
+   stores pasted text, `detail.pasted_html(text)`: escaped paragraphs that the console renders
+   with Jinja autoescape. **Captured HTML is never stored and never rendered**, in the console or
+   in the popup (which uses `textContent` only).
+2. **Pick the URL.** The JSON-LD `url`, else the canonical URL when its host is the page's host
+   or a known ATS host, else the page URL; then `paste.direct_board_url` (unwraps tracking
+   redirectors, makes embeds direct) and the board-id rule below. Query parameters other than
+   the posting's id are dropped before storing, so search terms and tracking tokens in the page
+   URL are not kept.
+3. **Map fields.** `salary_raw` is the stated range as text ("USD 120,000-150,000 per YEAR" style,
+   built from `baseSalary`) so `normalize_job`'s existing salary parser reads it;
+   `location_raw` joins the locations (`TELECOMMUTE` adds "Remote"); `posted_at` and `closes_at`
+   from `datePosted` and `validThrough`; `employment_type`. 1e adds these keyword arguments to
+   `paste.insert_pasted_posting` (default `None`, so `/apply/new` is unchanged).
+4. **Dedupe**, below. Then, with `commit = true` and no match: `insert_pasted_posting` in one
+   transaction with a `capture_log` row. No application, no packet, no score.
+
+#### Dedupe on capture
+
+`paste.find_duplicates` (normalized URL, or `employer_norm` + normalized title), extended with a
+**board id** key in `apply/capture.py::board_key(url)`:
+
+| Board | Forms recognized | Key |
+|---|---|---|
+| LinkedIn (`*.linkedin.com`) | `/jobs/view/<id>`, `/jobs/view/<slug>-<id>`, `/comm/jobs/view/<id>`, `currentJobId=<id>` on `/jobs/search`, `/jobs/collections` | `linkedin:<id>` |
+| Indeed (`*.indeed.com`, country hosts) | `jk=<id>` or `vjk=<id>` on any path | `indeed:<id>` |
+| ATSs | as `normalize_apply_url` already does (`gh_jid`, Lever and Ashby posting ids) | its normalized URL |
+
+`board_key` is applied to **both sides** inside `find_duplicates`, so a stored
+`.../jobs/view/123?trk=...` and a captured `...search?currentJobId=123` match.
+`dedupe_url.normalize_apply_url` is **not** changed, so nightly URL merges keep their keys. The
+JSON-LD `identifier` is compared too when the stored job came from the same host.
+
+| Match | Response | Writes |
+|---|---|---|
+| Same URL or board id | `existing`: the group, its title and employer, its bucket and one-line verdict when scored, its live packet if any | `capture_log` only |
+| Same employer and title only | `possible`: the candidate groups. The popup offers **Open** or **Add as new** (which re-sends with `force_new = true`) | nothing until you choose |
+| Several groups | the URL matches first, as `/apply/new` lists them | |
+| An existing **manual** group (`paste-manual` or `email-manual`) with no description, and the capture has one | `existing` with **Add this description** | on your click, `paste.store_posting_text` (no `description_rev` bump, so no re-score) |
+| An existing ingested group with a partial description | `existing`; the popup links to its job page, where pasting queues the usual nightly re-score (012). Capture never does that itself, because it would spend | nothing |
+
+#### Score it
+
+Reuses `apply/score.py` unchanged, through two routes:
+
+- `POST /ext/v1/groups/{id}/estimate` returns `score.estimate(...)`: scorer, cost per job and
+  its source, the estimate, the remaining scoring cap, whether it is a batch, the `refusal` if
+  any (already scored, in an open batch, a Score now in progress, no description, over the cap),
+  and the estimate **token**.
+- `POST /ext/v1/groups/{id}/score` with that token calls `score.score_now(...)`. A changed
+  estimate returns 409 with the new one (`EstimateChanged`), and the popup asks again. The claim
+  in `score_now` stops a second confirm (popup, packet page or CLI) from paying twice.
+
+The popup's confirm button names the amount ("Confirm, spend ≈ $0.0021"), and there is no
+"don't ask again". With the default batch scorer the result reads "Submitted; scored when the
+batch is collected (nightly at 03:30, or `jobhunter score --collect-pending`)". Charged to the
+scoring caps, like any Score this group now. **Prepare packet** is
+`POST /ext/v1/groups/{id}/prepare` (`packets.prepare`), and a pasted group with no description
+asks for the text first, as in 1a.
+
+#### Where captured jobs show
+
+A captured group has no score and no application until you act, so the inbox (which lists scored
+groups) does not show it yet. 1e adds:
+
+- **`/job/{id}`** for a `paste-manual` group gets **Score this group now** (same estimate and
+  confirm partial as the packet page) and **Prepare**, so a capture you did not score in the
+  popup can be scored later;
+- **`/captured`**, linked from the inbox toolbar beside New packet: `paste-manual` groups from
+  capture and New packet, newest first, with title, employer, host, captured date, and bucket or
+  "not scored". Once scored, a group also appears in the inbox and flows through the dashboard's
+  **Pasted** node, as in 1a.
+
+#### Data
+
+`NNNN_capture_log.sql`:
+
+```sql
+CREATE TABLE capture_log (
+  id            INTEGER PRIMARY KEY,
+  job_group_id  INTEGER,          -- no REFERENCES: an 'existing' match may be an ingested group
+                                  -- that a nightly merge later deletes (see #78); a log may dangle
+  captured_at   TEXT NOT NULL,
+  host          TEXT NOT NULL,    -- page host only, never the full URL
+  method        TEXT NOT NULL CHECK (method IN ('jsonld', 'microdata', 'site', 'page', 'selection')),
+  outcome       TEXT NOT NULL CHECK (outcome IN ('added', 'existing', 'description_added')),
+  ext_version   TEXT
+);
+```
+
+It tells which sites need a site extractor (many `page` captures from one host) and feeds
+`apply stats`. It stores no page text.
+
+### Extension in 1e
+
+```
+extension/
+  manifest.json          permissions above, pinned key, no content_scripts
+  background.js          service worker: context menu, injection, every console request, badge
+  capture/sites.js       site extractor table (empty at launch)
+  capture/extract.js     the extraction above; returns one object
+  popup/                 index.html, popup.js: result, Score it, Prepare packet; textContent only
+  options/               pairing code, console port
+  api/v1.schema.json     generated from the console's models; a test keeps it current
+```
+
+- **The popup is the toolbar action.** Opening it is the gesture. It asks the worker to capture
+  the active tab (`chrome.tabs.query({active: true, currentWindow: true})`, readable under
+  `activeTab`). The worker does the injection and every console request, so closing the popup
+  mid-request loses nothing: the result goes to `chrome.storage.session` under the tab id, the
+  badge shows ✓ or !, and reopening the popup shows it.
+- **The context menu** captures the same way (selection first) and sets the badge. It then
+  tries `chrome.action.openPopup()`. Whether Chrome allows that from a menu click is a spike
+  item; if not, you click the icon to see the result.
+- **Opening the console**: **Open** uses `chrome.tabs.create` with a console URL
+  (`http://127.0.0.1:<port>/job/{id}` or `/packet/{id}`), which needs no `tabs` permission.
+- **Phase 2 coexistence**: the action stays the popup. On a page with a supported ATS frame,
+  phase 2 adds **Fill this form** to the popup, which opens the side panel for the tab
+  (`chrome.sidePanel.open` from the popup's click).
+
+**Shared with phase 2, built here**: pairing, token storage with `setAccessLevel`, the `/ext/v1/`
+checks (POST only, bearer token, exact `Origin`, loopback `Host` even with `--allow-remote`),
+CORS only if a preflight shows up, the middleware branch that sends `/ext/` to these checks
+instead of `same_origin_writes`, versions with `X-Jobhunter-Ext` and 426, the pinned `key` and
+its gitleaks allowlist line, load unpacked, and the lint over HTML sinks and external messaging.
+All of it is specified in phase 2's [Local API security](#local-api-security) and
+[Distribution and versions](#distribution-and-versions) and lands in 1e unchanged. The 1e routes
+are `pair`, `version`, `capture`, `capture/fetch`, `groups/{id}/estimate`, `groups/{id}/score`
+and `groups/{id}/prepare`. 1e does not depend on 1d's loopback-Host check for the other routes;
+the `/ext/` branch has its own.
+
+### What leaves the machine (1e)
+
+| Data | Goes to | When |
+|---|---|---|
+| The captured object (fields, description, URLs, method) | the console on 127.0.0.1 only | on your click |
+| The description | the Stage 2 scorer, as for any posting | only on **Score it**, after you confirm |
+| Page HTML, screenshots, other tabs, form values, cookies, history | nowhere; never read | never |
+
+Page-text capture can pick up page furniture: a "Hi, <name>" header outside `header`, or
+recommended jobs. The preview with `commit = false` exists for that; you see the cleaned text
+before it is stored or scored. Structured capture reads only the posting's own data.
+
+### Capture compliance
+
+- **Not crawling.** You open the page; you click; the extension reads that one page once. It
+  never follows a link (no `link` menu context), paginates, opens or reloads tabs, scrolls,
+  expands "show more", or calls the site's APIs, and nothing runs in the background or on a
+  schedule. jobhunter's Python makes no request to the site, except **Fetch from** an embedded
+  ATS on your click, through `FetchContext` and robots.txt ([008](008-compliance.md)).
+  robots.txt governs crawlers, not a page you are reading in your own browser.
+- **No page changes.** The capture script writes nothing to the DOM, so there is nothing for a
+  site to detect beyond the extension's existence, and there are no `web_accessible_resources`
+  for a site to probe.
+- **LinkedIn and Indeed.** As we read them (to recheck before 1e ships), LinkedIn's User
+  Agreement forbids software "including ... browser plugins and add-ons" that scrape or copy its
+  data, and Indeed's terms forbid automated means of collecting its content. A click that copies
+  the one posting you are reading, for your own use, is close to copy and paste, but it is a
+  plugin reading their page, and the risk is to your account. So: **no site extractors for
+  either**; capture there uses whatever structured data or page text the page has, or your
+  selection; the first capture on each of those hosts shows a one-time notice; and
+  `[capture] disabled_hosts` (default empty) turns it off per host. Whether those hosts are on
+  by default is [open question 1](#open-questions). Better still, when the posting links to the
+  employer's own page or ATS, capture that page.
+- **001 non-goal** "Private-sector job boards" is about ingesting from them; see the revision 8
+  [deviation](#deviations-from-earlier-specs) row.
+
+### Tests (1e)
+
+All offline, as in [Testing](#testing). No test scores for real; the scorer and client factories
+are fakes that fail a test if called when they should not be.
+
+| Area | How |
+|---|---|
+| Sanitize and map | Vector file `tests/fixtures/capture/jsonld_vectors.json`: arrays, `@graph`, `@type` lists, an entity-encoded description, a `<script>` and an `onerror` inside the description (gone in the stored text), each `baseSalary` shape (`value`, `minValue`/`maxValue`, `unitText` HOUR/YEAR), several locations, `TELECOMMUTE`, `identifier` as string and `PropertyValue`; oversized fields refused with 413/422 |
+| Board ids | `board_key` vectors for every LinkedIn and Indeed form above, plus non-matches (`/jobs/search` with no id, a profile URL) |
+| Dedupe | existing by URL, by board id (stored `/jobs/view/123?trk=x`, captured `currentJobId=123`), by employer and title (`possible`, nothing written), `force_new`, Add this description on a manual group (no `description_rev` change), an ingested partial group (no write); `normalize_apply_url` output unchanged on its existing vectors |
+| Never auto-score | After every capture outcome: no `fit_score`, no `prefilter_result`, no `llm_spend`, job at `normalized`, scorer factory not called; a daily run afterwards leaves the group unscored |
+| Score it | estimate then score through `/ext/v1/` with the token; a stale token gives 409 and nothing written; each refusal; a second confirm while the first holds the claim is refused; the batch outcome message |
+| API contract | Rev 7's list ([Testing](#testing), *API contract*) on every 1e route; the schema file matches the models |
+| Extension lint | Manifest permissions and hosts exactly as in [Permissions](#permissions-activetab-is-now-allowed), pinned `key`, no `content_scripts`, no `link` menu context; in `capture/`: no DOM writes (`appendChild`, `append(`, `insertBefore`, `replaceWith`, `remove(`, `setAttribute`, `.textContent =`, `.innerText =`, `.value =`, `classList`, `style.`), no `addEventListener`, `setTimeout`, `setInterval`, `MutationObserver`, `.click(`, `dispatchEvent`, `fetch`, `XMLHttpRequest`, `WebSocket`, `sendBeacon`, `window.open`, `location =`, no reads of `.value` or `.checked`; plus rev 7's sink and external-messaging rules everywhere |
+| Extraction | `capture/extract.js` evaluated with Playwright `page.evaluate` (no extension needed) on hand-written fixture pages under `tests/fixtures/capture/`: JSON-LD posting, `@graph` posting, microdata posting, no structured data (page text, `nav` and a "Hi, Pat" header excluded), a page with a selected paragraph (selection wins), a selection inside a `textarea` (ignored), a form with typed values (not captured), an employer page with a Greenhouse iframe (iframe URL reported), a 2 MB description (truncated), two postings on one page. Synthetic employers and figures only; the fixture lint applies |
+| Extension e2e (`e2e` marker) | Rev 7's harness: `launch_persistent_context`, `--load-extension`, `--host-resolver-rules` blocking every non-loopback host, `context.route` serving the fixtures, the console in-process on a loopback port, paired through the options page. A test cannot click the toolbar, so `activeTab` cannot be granted; the e2e loads **a test copy of the manifest** written to a temp dir with the fixture hosts added to `host_permissions`, and sends the worker the popup's capture message; the lint test confirms the real manifest has no such hosts. Covers capture added, capture existing, the preview path, Score it with confirm (mock scorer), Prepare packet, the popup closed mid-request (result in `storage.session`), the worker stopped mid-request, and a restricted page. The real `activeTab` grant is checked in the live check |
+
+**Acceptance (live, with you, no spend):** on postings you are viewing, one each from Greenhouse,
+Lever or Ashby, Workday, an employer careers page without structured data, a selection capture,
+and LinkedIn and Indeed if you enable them: the popup's fields match the page, a second click
+says **Already in jobhunter**, and nothing was scored. Score it once only if you choose to.
+
+### Spike at the start of 1e
+
+The offline plumbing part of the old 2a spike moves here, minus what needs content scripts. It
+proves, before the feature work: the unpacked extension loads with its pinned ID; pairing works;
+the console records the request headers the service worker sends on a POST and on a GET
+(`Origin`, `Sec-Fetch-Site`) and whether Chrome sends a preflight; whether Local Network Access
+asks before the worker reaches loopback; whether `setAccessLevel` hides the token on
+`storage.local`; that an ordinary page on another origin cannot reach any `/ext/` route; whether
+`chrome.action.openPopup()` works after a context-menu click; and whether Playwright's keyboard
+can fire the `_execute_action` shortcut in a headed browser (if so, the e2e grants `activeTab`
+for real and the test manifest goes). **If a page can reach the API, 1e does not ship.**
+
+### Effort
+
+**≈ 2-2.5 d**: spike 0.25 d; console (`apply/capture.py`, routes, pairing, `/ext/` middleware
+branch, versions, `capture_log`, `/captured`, Score on `/job/{id}`, API tests) 0.75-1 d;
+extension (manifest, worker, extraction, popup, options) 0.5-0.75 d; fixtures, lint and e2e
+0.5 d. It depends on 1a only, so it can run alongside 1b ([open question 2](#open-questions)).
+
 ## Phase 2 gate
 
 Phase 2 is built only when both hold:
@@ -467,16 +778,19 @@ Phase 2 is built only when both hold:
 1. **Use.** After 4 weeks of phase 1, `jobhunter apply stats` shows at least **8 packets marked
    ready** for postings on the four public ATSs (threshold confirmed 2026-10-10), and you say the remainder after the resume parse and your fill helpers still
    costs real time. Per-ATS support is built in order of count.
-2. **Spike** (2a below), in two parts.
-   - **Offline, plumbing only**, on hand-written pages served by `context.route` on real ATS
-     URLs (no network). It proves: the unpacked extension loads with its pinned ID; pairing works;
-     the console **records the request headers the service worker sends on a GET and on a POST**
-     (Origin, Sec-Fetch-Site) and whether Chrome sends a preflight; whether Chrome's Local Network
-     Access asks before the service worker reaches loopback; whether
-     `chrome.storage.local.setAccessLevel` hides the token from content scripts; an ordinary page
-     on another origin cannot reach any `/ext/` route; the content script runs inside an
-     embedded Greenhouse iframe on another host and reports its frame URL; the resume arrives in
-     the frame byte-identical; the vetted dispatch helper refuses every submit-like target on the
+2. **Spike** (2a below), in two parts. Phase 1e has already proved the channel: the pinned ID,
+   pairing, the headers Chrome sends on a GET and a POST and any preflight, Local Network
+   Access, `setAccessLevel`, that a page cannot reach `/ext/`, versions and 426, and the
+   Playwright harness with the network blocked ([1e spike](#spike-at-the-start-of-1e)). 2a
+   covers only what content scripts and form writes add.
+   - **Offline**, on hand-written pages served by `context.route` on real ATS URLs (no
+     network). It proves: the declared content scripts run on the ATS hosts, including inside an
+     embedded Greenhouse iframe on another host, and report their frame URL; that with 1e's
+     `activeTab` grant from the popup click, re-injection with `allFrames` reaches both the
+     employer's top frame and the ATS iframe after an extension reload; `setAccessLevel` hides
+     the token from those content scripts (1e had none to test against); the popup's
+     **Fill this form** opens the side panel for the tab; the resume arrives in the frame
+     byte-identical; the vetted dispatch helper refuses every submit-like target on the
      fixtures. Hand-written pages encode our own model of an ATS, so this part decides nothing
      about real ATS behavior.
    - **Live, with you**, on real postings you mean to apply to, stopping before Submit. Per ATS,
@@ -549,26 +863,32 @@ content script handles them on any employer page; the employer's own top page is
 Workday (`*.myworkdayjobs.com`, `*.myworkdaysite.com`) and NEOGOV (`governmentjobs.com`,
 `www.governmentjobs.com`, `schooljobs.com`, `www.schooljobs.com`) are
 `optional_host_permissions`, granted later by your click on **Enable for this site** after you
-have signed in yourself. Permissions are `sidePanel`, `storage` and `scripting` (to register
-content scripts for granted optional hosts, and to re-inject into open tabs after a reload). No
-`<all_urls>`, `tabs`, `activeTab`, `webNavigation`, `cookies`, `webRequest`, `debugger`,
-`tabCapture`, `downloads` or `externally_connectable`, and no `web_accessible_resources`.
+have signed in yourself. Permissions are 1e's `activeTab`, `scripting`, `storage` and
+`contextMenus` ([1e permissions](#permissions-activetab-is-now-allowed)), plus `sidePanel`;
+`scripting` also registers content scripts for granted optional hosts and re-injects into open
+tabs after a reload. Phase 2 adds the ATS `host_permissions` and their `content_scripts`, and
+nothing from 1e's forbidden list: no `<all_urls>`, `tabs`, `webNavigation`, `cookies`,
+`webRequest`, `debugger`, `tabCapture`, `downloads` or `externally_connectable`, and no
+`web_accessible_resources`.
 
 ### Flow
 
 1. **Open application** on the packet page (through `/apply/{id}`, so 015's click log and "Did
    you apply?" work), or open the posting yourself.
-2. Click the extension's icon. The side panel opens for this tab. Each ATS frame's content script
+2. Click the extension's icon. The popup (1e) shows **Fill this form** when an ATS frame
+   answered; that click opens the side panel for this tab. Each ATS frame's content script
    announces itself with `chrome.runtime.sendMessage`, so the worker learns its `frameId`,
-   `documentId` and frame URL from `sender`. The tab's own URL is not readable on an employer
-   page (no `tabs` permission), so the packet is matched on **the ATS frame URLs**, normalized as
-   in 015 (an embed's `for` and `token`, or a `gh_jid`), against `apply_link` and `job.url`; with
-   no match, your `ready` packets are offered to pick. No ATS frame answers (for example after
-   the extension was reloaded): the worker injects the content script into the tab's frames with
-   `chrome.scripting.executeScript({allFrames: true})` and asks again. On an employer page that
-   embeds the form, the extension has no access to the top frame, so this may not reach the
-   iframe; if no frame answers after injection, the panel says **Reload this page to continue**
-   (before anything was typed, nothing is lost; the panel warns that typed values may be).
+   `documentId` and frame URL from `sender`. The packet is matched on **the ATS frame URLs**,
+   normalized as in 015 (an embed's `for` and `token`, or a `gh_jid`), against `apply_link` and
+   `job.url`, and also on the tab's URL, which the icon click's `activeTab` grant makes readable
+   (no `tabs` permission; the top page's content is not read in phase 2); with no match, your
+   `ready` packets are offered to pick. No ATS frame answers (for example after the extension
+   was reloaded): the worker injects the content script into the tab's frames with
+   `chrome.scripting.executeScript({allFrames: true})` and asks again. The `activeTab` grant
+   should let this reach an employer page's top frame and so its ATS iframe (the 2a spike
+   confirms); if no frame answers after injection, the panel says **Reload this page to
+   continue** (before anything was typed, nothing is lost; the panel warns that typed values
+   may be).
 3. **Start.** The console opens a `fill_session` only if the packet is `ready` with a rendered
    resume PDF ([Resume attach](#resume-attach)), the posting is not `expired`, and today's count
    is under the cap (10, hard cap 25). An earlier session still open (a crash, a closed panel, a
@@ -772,7 +1092,8 @@ any other way.
 
 ### Local API security
 
-The console has no auth today. `same_origin_writes` refuses cross-site writes: a state-changing
+**Built in phase 1e** ([1e](#phase-1e-capture-from-any-job-page)); phase 2 adds routes, not
+controls. The console has no auth today. `same_origin_writes` refuses cross-site writes: a state-changing
 request from a browser must name a loopback `Host` and come from the console's own origin. GETs
 are not checked, so a DNS-rebinding page (a hostile name that resolves to 127.0.0.1) can read
 any console page today. 017 adds packets, letters, notes and story facts to those pages, so
@@ -844,13 +1165,15 @@ changes.
 
 ### Distribution and versions
 
+**Built in phase 1e**, as below.
+
 - **Load unpacked** from `extension/` at the repo root (`chrome://extensions`, Developer mode).
   No Web Store. Updates are `git pull` and **Reload**. Reloading orphans the content scripts in
   open ATS tabs; Start re-injects them (Flow step 2), so a reload does not cost you the form.
 - **Pinned ID:** `manifest.json` carries a public `key`, so the extension ID is the same in every
   clone and path and pairing survives a move. The key pair is generated in a scratch directory
   and the private half discarded: nothing is packed or signed. gitleaks flags the public key as
-  `generic-api-key` (verified by the review); the 2a worker allowlists exactly that file and
+  `generic-api-key` (verified by the review); the 1e worker allowlists exactly that file and
   line in `.gitleaks.toml` with a comment saying it is a public key that pins the extension ID.
 - **Versions:** the manifest `version` follows the extension; the API path is `/ext/v1/`.
   `POST /ext/v1/version` returns the API version, the console version and `min_extension`. The
@@ -931,6 +1254,9 @@ as "ready, not applied?".
   1d extends its loopback-`Host` check to GETs, so a DNS-rebinding page cannot read packets. Only
   `/ext/v1/` accepts the paired extension, with its own token, Origin and Host checks
   ([Local API security](#local-api-security)); no other route sends `Access-Control-Allow-*`.
+- **Capture (1e)** reads only the tab you clicked, once, under `activeTab`, with read-only code
+  in the isolated world; what it captures goes to 127.0.0.1 and reaches a scorer only when you
+  confirm **Score it** ([What leaves the machine (1e)](#what-leaves-the-machine-1e)).
 - **No credentials** stored or seen. You sign in; the extension stops at login pages. The
   pairing token is the one secret: hashed on the console side, never in a page, URL or log.
 - **The CLI runner** gets no tools, no MCP servers, no settings, no session saved, an empty
@@ -955,6 +1281,7 @@ as "ready, not applied?".
 | Claude Code telemetry | off for the CLI runner (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`) | — | — |
 | Employer notes, story facts | yes (letter, drafts) | no | in the letter or answer |
 | Never-store list | not stored, never sent | not stored; values never leave the tab (the console clears fields before values are sent, and drops any that slip through) | when you type them |
+| A captured posting (1e) | its description, only on **Score it** after you confirm | to 127.0.0.1 on your click; stored as text | — |
 | Screenshots | never | never taken | — |
 | OpenRouter, Jev, a local scorer | never | | |
 
@@ -967,6 +1294,7 @@ as "ready, not applied?".
 | No login automation or credential storage | None; Workday and login.gov are yours |
 | robots.txt; only `FetchContext` does network I/O | Generation fetches nothing. **Fetch posting text** goes through `FetchContext` per host robots. jobhunter's Python makes no ATS request in phase 2. robots.txt governs crawlers, not a page you open in your own browser, so it does not apply to the extension; it still never fetches ATS URLs itself, and Greenhouse `/embed/` is touched only when an employer page you opened embeds it |
 | Honest identity | The extension acts in your browser as you; no UA tricks or proxies |
+| No crawling (1e capture) | Capture reads the one page you are viewing, once, on your click; it never follows links, paginates, opens tabs or runs in the background, and makes no DOM changes. jobhunter's Python fetches nothing from the site except **Fetch from** an embedded ATS on your click, through `FetchContext` and robots.txt. LinkedIn and Indeed terms: [Capture compliance](#capture-compliance) |
 
 **ATS terms.** We found no candidate-facing terms from the four ATSs about autofill in a
 candidate's own browser; their terms and spam defenses target automated and bulk submission.
@@ -984,10 +1312,10 @@ first needs each):
 | Spec | Today | Proposed | Why |
 |---|---|---|---|
 | [001](001-goals-and-scope.md#non-goals) | "Resume generation: ... It does not write your resume." | "No resume written from scratch. Tailored variants of your own resume, limited by the no-fabrication checker and your review (017), are in scope." | You asked for it; the checker and line-by-line evidence address the fabrication risk the non-goal guarded |
-| [001](001-goals-and-scope.md#non-goals) | "Private-sector job boards (Indeed, LinkedIn, Greenhouse): ..." | "No *ingest* from private-sector boards. 017 may fetch one posting you paste and, after its gate, help with one form you chose in your own browser, never submitting." | That non-goal is about crawling for jobs; 017 crawls nothing |
+| [001](001-goals-and-scope.md#non-goals) | "Private-sector job boards (Indeed, LinkedIn, Greenhouse): ..." | "No *ingest* from private-sector boards. 017 may fetch one posting you paste, record one posting you are viewing when you click **Send to jobhunter** (1e), and, after its gate, help with one form you chose in your own browser, never submitting." | That non-goal is about crawling for jobs; 017 crawls nothing. **The capture clause is new in revision 8 and needs your approval** |
 | [015](015-apply-links.md) | "It never fills it in or submits it" | "The Apply button never fills or submits. Form help is a separate extension action (017, phase 2), and nothing in jobhunter submits." | The button keeps its behavior |
-| [009](009-roadmap.md#m9--remainder-and-ops) | M9 "Remainder and ops", 0.5-1.5 agent-days; the whole roadmap 5.75-11 d | New **M10 Assisted apply** after M9: phase 1 ≈ 5.5-7 d, phase 2 ≈ 6-8 d after its gate | 017 alone is about the size of the original roadmap; folding it into M9 would hide that |
-| [002](002-architecture.md#repository-layout) | Python package, tests, specs; no JavaScript outside console static files | Adds `extension/` at the repo root: a Manifest V3 extension in plain JS modules, no build step, loaded unpacked | It runs in Chrome, not in the Python process; keeping it outside `src/` keeps it out of the wheel |
+| [009](009-roadmap.md#m9--remainder-and-ops) | M9 "Remainder and ops", 0.5-1.5 agent-days; the whole roadmap 5.75-11 d | New **M10 Assisted apply** after M9: phase 1 ≈ 7.5-9.5 d (with 1e), phase 2 ≈ 5-7 d after its gate | 017 alone is about the size of the original roadmap; folding it into M9 would hide that |
+| [002](002-architecture.md#repository-layout) | Python package, tests, specs; no JavaScript outside console static files | Adds `extension/` at the repo root: a Manifest V3 extension in plain JS modules, no build step, loaded unpacked. It now lands in phase 1e, not phase 2 | It runs in Chrome, not in the Python process; keeping it outside `src/` keeps it out of the wheel |
 | `CLAUDE.md` "official `anthropic` SDK only" | SDK for every model call | Packet drafting calls `claude -p` on your subscription first, the SDK as fallback; scoring is unchanged | Your decision (2026-10-10); recorded on `7fa29db`. The CLI runs with no tools, MCP, settings or session, in a scrubbed environment |
 | [008](008-compliance.md#personal-data) | The resume goes "to the configured provider and nowhere else"; "No analytics, no telemetry, no outbound reporting" | "...the configured provider, which for 017 packet drafting may be your Claude subscription through the Claude Code CLI, under its consumer terms. The CLI runs with non-essential traffic (telemetry, error reporting, auto-update) turned off." | The CLI is a different channel and terms from the API; telemetry is off by environment, but the terms difference needs your approval |
 
@@ -1016,6 +1344,15 @@ The 008 row above is new in revision 6 and is about the CLI runner, not the exte
 | Fetch refused by robots or page empty | Paste the text |
 | Playwright missing | HTML for print-to-PDF |
 | Already applied to this employer and title | Warning before Generate |
+| *1e:* page has no structured data | Page-text capture, shown for your check before it is stored; or select the description and click again |
+| *1e:* restricted page (`chrome://`, Web Store, PDF viewer) | Popup says Chrome does not allow reading it and offers New packet with the URL filled in |
+| *1e:* posting is in an embedded ATS iframe | Popup offers **Fetch from** the ATS on your click (robots.txt decides), or a selection capture |
+| *1e:* no title or employer found | Popup asks you to type them before Add |
+| *1e:* the job is already in jobhunter | **Already in jobhunter → Open**; nothing written (a `capture_log` row only) |
+| *1e:* same employer and title as an existing job, different URL | **Open** or **Add as new**; nothing written until you choose |
+| *1e:* popup closed or worker stopped mid-request | The worker finishes; the result waits in `storage.session` and the badge; reopening the popup shows it |
+| *1e:* Score it estimate changed before confirm | 409 with the new estimate; nothing run; confirm again |
+| *1e:* a hostile page's JSON-LD (huge, script in the description, false employer) | Size limits and 413; text only, never rendered; you see the fields in the popup before scoring; no write is possible without the token |
 | *Phase 2:* extension not paired, token revoked, or console down | Panel says so and links to pairing or `jobhunter console`; the page is untouched |
 | *Phase 2:* extension older than `min_extension` | 426; panel asks you to reload it from your checkout |
 | *Phase 2:* request from a web page, wrong Origin or Host | Refused and logged; no data returned |
@@ -1036,7 +1373,9 @@ The 008 row above is new in revision 6 and is about the CLI runner, not the exte
 
 ## Testing
 
-All offline; `tests/conftest.py`'s network guard stays as is. The Anthropic client is always
+All offline; `tests/conftest.py`'s network guard stays as is. Phase 1e's tests are in
+[Tests (1e)](#tests-1e); the API contract, extension lint and e2e harness rows below are built in
+1e and extended in phase 2. The Anthropic client is always
 mocked. No test runs the real `claude` binary: the CLI runner is tested against a fake `claude`
 script put first on `PATH` in a temp dir, and an autouse guard makes the binary lookup raise
 otherwise ([CLI runner](#cli-runner)). The Python socket guard does not cover the Chromium
@@ -1082,14 +1421,16 @@ Agent-effort estimates, in the style of [009](009-roadmap.md):
 | **1b** | Generator: CLI runner (env allowlist, `--safe-mode`, `auth status` check, `stream-json` parsing with init-line kill and overage handling, runner-off state, autouse guard, recorded transcript, live smoke test, `apply draft` command) and API fallback on click (schema validation, effort, caching, own cap), `packet_runner` migration, two model keys, separate resume and letter calls, measured estimate per kind; factcheck with claim strength and employer claims; structured cited-line editor; versions; cover letter on request; employer notes; question drafts with story facts; entailment pass on by default; packet tiers excluded at every scoring-cap site; `/costs` lines | **3-3.5 d** |
 | **1c** | Export: PDF, text, Markdown | **0.5 d** |
 | **1d** | Never-store table (word-boundary matcher, vector file) and its enforcement, `Answers` model loaded apart from `Profile`, saved answers with reuse, the `/prefs` Application answers section, checklists, `attach_sent_packet` on every applied path including `answer_prompt`, loopback-Host check on every method, Workable rule in `ats_rules.py`, `/followups` item, `apply stats` | **1-1.5 d** |
+| **1e** | **Capture** ([above](#phase-1e-capture-from-any-job-page)): plumbing spike; extension skeleton (pinned key, manifest with `activeTab`, worker, popup, options, context menu, shortcut); extraction (JSON-LD, microdata, site table, page text, selection); pairing on `/prefs` and CLI, `/ext/v1/` security and middleware branch, versions and 426; `apply/capture.py` (sanitize, map, board ids, dedupe), `capture`, `capture/fetch`, `estimate`, `score` and `prepare` routes; `capture_log`; `/captured`; Score this group now on `/job/{id}`; API contract tests, extension lint, extraction fixtures, Playwright e2e harness; live check with you | **2-2.5 d** |
 | | *Gate: 4 weeks of use, plus the spike* | |
-| **2a** | **Extension spike**: offline plumbing (pinned key, pairing, headers on GET and POST, Local Network Access, `setAccessLevel`, iframe injection and frame URL, base64 transfer, `safeDispatch` refusals), then the live check with you on Lever or Ashby and `job-boards.greenhouse.io` | **1-1.5 d** |
-| **2b** | Console side: `/ext/v1/` routes (POST only), pairing on `/prefs` and CLI, versioning, `fill_session` with idle close, two-step snapshot held in memory, `fill_classify`, base resume parse, `ats_forms.py` mappings, attach methods and signals, Draft for row-8 fields, API contract tests | **2-2.5 d** |
-| **2c** | Extension: stateless worker, panel-held session bound to its tab, content scripts across frames with re-injection and the reload fallback, stable field keys, `act.js` helpers and `safeDispatch`, attach with fallbacks, settle observers, `documentId`-bound writes, Submit outline, corner buttons beside Jobright's, optional hosts | **2-2.5 d** |
-| **2d** | Fixture capture and mimic pages, fixture and extension lint, Playwright e2e with submit counters; supervised dry run per ATS | **1-1.5 d** |
-| | **Total** | **≈ 11.5-15 d** (phase 1 ≈ 5.5-7 d, phase 2 ≈ 6-8 d) |
+| **2a** | **Extension spike**, what 1e did not prove: content scripts on ATS hosts and in iframes, frame URL, re-injection under the `activeTab` grant, `setAccessLevel` against content scripts, side panel from the popup, base64 transfer, `safeDispatch` refusals; then the live check with you on Lever or Ashby and `job-boards.greenhouse.io` | **0.5-1 d** |
+| **2b** | Console side: fill routes on 1e's `/ext/v1/`, `fill_session` with idle close, two-step snapshot held in memory, `fill_classify`, base resume parse, `ats_forms.py` mappings, attach methods and signals, Draft for row-8 fields, API contract tests for the new routes | **1.5-2 d** |
+| **2c** | Extension: panel-held session bound to its tab, **Fill this form** in the popup, content scripts across frames with re-injection and the reload fallback, stable field keys, `act.js` helpers and `safeDispatch`, attach with fallbacks, settle observers, `documentId`-bound writes, Submit outline, corner buttons beside Jobright's, optional hosts | **2-2.5 d** |
+| **2d** | Fixture capture and mimic pages, fixture lint, extension lint for content scripts, e2e with submit counters on 1e's harness; supervised dry run per ATS | **1-1.5 d** |
+| | **Total** | **≈ 12.5-16.5 d** (phase 1 ≈ 7.5-9.5 d, phase 2 ≈ 5-7 d) |
 
-Phase 1 is finished before any phase 2 work starts (your decision). Workday support comes
+Phase 1 is finished before any phase 2 work starts (your decision). 1e needs only 1a, so it can
+be built alongside 1b; the order within phase 1 is [open question 2](#open-questions). Workday support comes
 after the four public ATSs, then NEOGOV (your decision), each as its own bug after the
 multi-step design, once you have signed in and a fixture can be captured. The per-ATS order is
 recounted from `apply_link` once packets resolve real apply URLs: today's database holds
@@ -1229,6 +1570,41 @@ aggregator URLs only, so it cannot rank them yet.
     are listed and `chrome.debugger` stays out; Workday before NEOGOV, recounted once packets hold
     real apply URLs; pairing by one-time code; phase 1 finished before phase 2; gate of 8 ready
     packets in 4 weeks; the deviations approved.
+- **Revision 8, phase 1e Capture (2026-10-10):**
+  - **A Send to jobhunter button, built in phase 1 without a gate, as the extension's first
+    slice.** Reason: you asked for it; it needs no form writes, and it carries the pairing,
+    `/ext/v1/` security, pinned ID, versions and Playwright harness that phase 2 would otherwise
+    build in its spike, so those are proven on a low-risk feature first.
+  - **`activeTab` allowed; still no `<all_urls>`, `tabs`, `debugger` or standing content
+    scripts.** Reason: reading a job page on any site needs host access to it; `activeTab` gives
+    exactly the clicked tab, only after your click, only until it navigates, with no install
+    warning. `contextMenus` added for right-click capture, with no `link` context.
+  - **Extraction order JSON-LD, microdata, a site table (empty at launch), page text; your
+    selection overrides the description.** Reason: most ATSs and many career pages publish
+    `JobPosting` data for search engines; selectors are added only where measured.
+  - **Structured and selection captures add in one click; page-text captures are previewed
+    first.** Reason: one click is what you asked for, and page text may carry page furniture
+    (your name in a header) that should not be stored or sent to a scorer unseen.
+  - **Captured HTML is converted to text on the console and never stored or rendered.**
+    Reason: page content is untrusted.
+  - **Reuse `apply/paste.py` (`paste-manual` at `normalized`) and `apply/score.py` (estimate
+    token and claim) unchanged; capture never scores, prepares or queues a re-score.** Reason:
+    1a already guarantees a pasted posting is scored only on request; a capture is the same kind
+    of row.
+  - **No application or packet on capture; `/captured` and Score on `/job/{id}` so an unscored
+    capture is findable.** Reason: you want to collect and score, not necessarily to apply; an
+    application at `preparing` would clutter the pipeline.
+  - **LinkedIn and Indeed ids as dedupe keys inside `find_duplicates` only; nightly
+    `normalize_apply_url` unchanged.** Reason: a LinkedIn page you view carries `currentJobId`
+    while a stored link has `/jobs/view/<id>`; changing nightly keys would risk merges.
+  - **No site extractors for LinkedIn or Indeed, a one-time notice there, and a per-host
+    off switch.** Reason: their terms restrict plugins and automated collection; the click-only,
+    one-page design is the most defensible posture, and the call is yours (open question 1).
+  - **`capture_log` without a foreign key.** Reason: an `existing` match may be an ingested
+    group a nightly merge later deletes (#78).
+  - **Phase 2's spike shrinks to what content scripts and form writes add; phase 2 adds
+    `sidePanel`, ATS hosts and content scripts to 1e's manifest, and opens its panel from the
+    popup.** Reason: 1e proves the channel; one action, one popup.
 - Carried: salary, EEO and self-ID never stored or filled; New packet standalone; Opus for
   generation; claim-strength and employer-claims checks with the cited line beside every line;
   `paste-manual` source; USAJOBS evidence lines only; Open application through `/apply/{id}`;
@@ -1236,11 +1612,27 @@ aggregator URLs only, so it cannot rank them yet.
 
 ## Open questions
 
-None for you right now. Everything revision 6 asked was answered on 2026-10-10 (see the revision
-7 decisions). What remains is for the phase 2 spike to measure, listed in the
-[Phase 2 gate](#phase-2-gate): the headers Chrome sends, Local Network Access, `setAccessLevel`
-on `storage.local`, `--safe-mode` with the subscription login, `--json-schema` with
-`--tools ''`, Ashby's file controls, and where the corner buttons sit beside Jobright's.
+Revision 6's questions were answered on 2026-10-10 (see the revision 7 decisions). Revision 8
+asks four, each with the default the spec uses until you answer:
+
+1. **LinkedIn and Indeed.** Their terms restrict browser plugins and automated collection.
+   Capture there is one page, on your click, with no site-specific code, but it is still a plugin
+   reading their page, and the risk is to your account. Enable on those hosts after a one-time
+   notice (**default**), or keep them off (`[capture] disabled_hosts`) and capture the employer's
+   own posting instead?
+2. **Order.** Build 1e right after 1a, alongside 1b (**default**; it needs only 1a), or after
+   1b-1d?
+3. **Immediate scoring.** Score it uses your configured screen scorer, so with the batch default
+   the result arrives when the batch is collected (nightly, or `jobhunter score
+   --collect-pending`). Offer an immediate, non-batch score from the popup at about twice the
+   per-job cost? **Default: no**, same as the packet page.
+4. **001 wording.** Approve the revision 8 capture clause in the 001 deviation row?
+
+Still for the spikes to measure: in 1e, the headers Chrome sends, Local Network Access,
+`setAccessLevel` on `storage.local`, `action.openPopup()` after a menu click, and whether the
+shortcut can grant `activeTab` in a test; in 1b, `--safe-mode` with the subscription login and
+`--json-schema` with `--tools ''`; in 2a, iframe re-injection under `activeTab`, Ashby's file
+controls, and where the corner buttons sit beside Jobright's.
 
 ## History
 
@@ -1318,3 +1710,19 @@ remaining questions were settled on the defaults: fill from `/prefs` answers on 
 suggestions on click, Workday before NEOGOV, a one-time pairing code, phase 1 before phase 2, a
 gate of 8 packets in 4 weeks, and the deviations approved. The estimate is unchanged at
 ≈ 11.5-15 d. The multi-step design for Workday and NEOGOV is new work outside that figure.
+
+### Revision 8: phase 1e, Capture
+
+On 2026-10-10 you asked: *"for the chrome plugin it might nice if I am on a job site viewing a
+job and it's not in my system I can click a button to get the job description sent to jobhunter
+and score it."* Revision 8 adds [phase 1e](#phase-1e-capture-from-any-job-page): a **Send to
+jobhunter** toolbar button, right-click item and shortcut that read the tab you clicked under
+`activeTab` (structured `JobPosting` data first, then page text, or your selection), send it to
+the console, and show whether the job is already in jobhunter or add it as a `paste-manual`
+posting through 1a's `apply/paste.py`. **Score it** goes through 1a's `apply/score.py` estimate
+and confirm; **Prepare packet** opens phase 1. Nothing is scored automatically. The extension's
+manifest, pinned ID, pairing, `/ext/v1/` security, versions and test harness now land in 1e, so
+phase 2's spike and console work shrink. `activeTab` and `contextMenus` join the allowed
+permissions; the rest of the forbidden list stands. New open questions cover LinkedIn and Indeed
+terms, build order, immediate scoring and the 001 wording. Estimate ≈ 12.5-16.5 d (was
+11.5-15 d): +2-2.5 d for 1e, -1 d in phase 2 for what 1e already builds.
