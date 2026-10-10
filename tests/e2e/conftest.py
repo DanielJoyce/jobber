@@ -90,11 +90,18 @@ def server(tmp_path):
 
 
 @pytest.fixture(scope="session")
-def browser():
+def pw():
+    """One Playwright driver per session: a second sync_playwright() in the same process fails
+    while the first is running (the extension tests launch their own browsers from it)."""
     with sync_playwright() as p:
-        b = p.chromium.launch()
-        yield b
-        b.close()
+        yield p
+
+
+@pytest.fixture(scope="session")
+def browser(pw):
+    b = pw.chromium.launch()
+    yield b
+    b.close()
 
 
 @pytest.fixture

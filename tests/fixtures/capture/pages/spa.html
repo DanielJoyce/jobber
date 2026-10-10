@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Search jobs - SPA Synthetic</title>
+<script type="application/ld+json">
+{"@type": "JobPosting", "title": "Network Engineer", "hiringOrganization": {"name": "SPA Synthetic"},
+ "url": "https://jobs.example-employer.test/search?jobId=501",
+ "description": "Run the synthetic campus network: switches, firewalls and the wireless survey. Keep diagrams current and plan the yearly refresh with the facilities team. Some evening maintenance windows each quarter."}
+</script>
+</head>
+<body>
+<main>
+  <h1 id="title">Network Engineer</h1>
+  <p id="body">Run the synthetic campus network: switches, firewalls and the wireless survey.</p>
+  <button type="button" id="next">Next job</button>
+</main>
+<script>
+  // A single-page board: choosing another job changes the URL by pushState and swaps the
+  // details, but keeps the first job's JSON-LD (stale).
+  document.getElementById("next").addEventListener("click", function () {
+    history.pushState({}, "", "/search?jobId=502");
+    document.getElementById("title").textContent = "Storage Engineer";
+    document.getElementById("body").textContent = "Run the synthetic storage arrays and backups.";
+  });
+</script>
+</body>
+</html>

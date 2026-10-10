@@ -654,6 +654,11 @@
             "PostingChoice": {
               "additionalProperties": false,
               "properties": {
+                "description": {
+                  "default": "",
+                  "title": "Description",
+                  "type": "string"
+                },
                 "employer": {
                   "title": "Employer",
                   "type": "string"
@@ -1561,6 +1566,11 @@
             "PostingChoice": {
               "additionalProperties": false,
               "properties": {
+                "description": {
+                  "default": "",
+                  "title": "Description",
+                  "type": "string"
+                },
                 "employer": {
                   "title": "Employer",
                   "type": "string"

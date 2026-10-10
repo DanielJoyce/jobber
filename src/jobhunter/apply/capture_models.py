@@ -200,6 +200,7 @@ class PostingChoice(Strict):
     employer: str
     url: str | None = None
     first_line: str = ""
+    description: str = ""
 
 
 class Preview(Strict):

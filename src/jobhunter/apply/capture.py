@@ -839,6 +839,7 @@ def _preview(a: Analysis) -> Preview:
                 employer=p.employer,
                 url=p.url,
                 first_line=_first_lines(p.description, 1, 160),
+                description=p.description,
             )
             for i, p in enumerate(a.postings)
         ]
@@ -1024,6 +1025,7 @@ def _decide(
             "same_job",
             "This board posting and the employer's posting are both in jobhunter: link them?",
             candidates=cards([board_hits[0], dest_strong[0]]),
+            preview=_preview(a),
         )
         return resp, None, None
     if board_hits:
@@ -1051,6 +1053,7 @@ def _decide(
                 "same_job",
                 "The Apply button goes to a posting jobhunter has; is it this job?",
                 candidates=cards(dest_weak[:3]),
+                preview=_preview(a),
             ),
             None,
             None,
@@ -1064,6 +1067,7 @@ def _decide(
                 "possible",
                 "Looks like a posting already in jobhunter",
                 candidates=cards(weak[:5]),
+                preview=_preview(a),
             ),
             None,
             None,
