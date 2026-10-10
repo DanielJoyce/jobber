@@ -691,3 +691,44 @@ def test_today_page_embeds_sankey_payload(client):
     assert payload["nodes"] and payload["links"]
     _assert_conserved(payload)
     assert 'id="chart-sankey"' in html
+
+
+def test_sankey_rejected_without_application_was_applied_elsewhere(conn):
+    base = _links(dash.sankey(conn, PROFILE))
+    gid = add_job(conn, states=["CO"])
+    sk = dash.sankey(conn, PROFILE, extra_rejected={gid})
+    _assert_conserved(sk)
+    links = _links(sk)
+    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 1
+    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
+
+
+def test_sankey_unmatched_email_rejections_flow_from_elsewhere(conn):
+    base = _links(dash.sankey(conn, PROFILE))
+    sk = dash.sankey(conn, PROFILE, elsewhere_rejected=3)
+    _assert_conserved(sk)
+    links = _links(sk)
+    assert links[("elsewhere", "applied")] == base.get(("elsewhere", "applied"), 0) + 3
+    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 3
+
+
+def test_today_page_wires_the_rejection_table_into_sankey(client, tmp_path):
+    from jobhunter.core import rejections
+
+    conn = db.connect(tmp_path / "t.db")
+    rejections.record(
+        conn,
+        received_at="2026-10-01T12:00:00+00:00",
+        employer="Seeq",
+        title="Platform Engineer",
+        source="email",
+        now=datetime(2026, 10, 9, tzinfo=UTC),
+        gmail_message_id="m1",
+    )
+    conn.commit()
+    conn.close()
+    html = client.get("/").text
+    payload = json.loads(re.search(r'id="sankey-data">(.*?)</script>', html, re.S).group(1))
+    links = {(x["source"], x["target"]): x["value"] for x in payload["links"]}
+    assert links[("elsewhere", "applied")] >= 1
+    _assert_conserved(payload)

@@ -279,6 +279,13 @@ def annotate(
             row["prior_rejection"] = hit.fact()
 
 
+def unmatched_email_count(conn: sqlite3.Connection) -> int:
+    """Rejection emails that matched no job group (applied for outside jobhunter)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM rejection WHERE source = 'email' AND job_group_id IS NULL"
+    ).fetchone()[0]
+
+
 def listing(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Rows for the /rejections page, newest first, with the matched job's title if any."""
     rows = conn.execute(
