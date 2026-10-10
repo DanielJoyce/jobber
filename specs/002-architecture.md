@@ -71,7 +71,7 @@ Every HTTP response — listing page, detail page, JSON payload, CSV export — 
 content-addressed and gzipped:
 
 ```
-data/cache/ab/cd/abcdef…sha256.gz
+~/.cache/jobhunter/ab/cd/abcdef…sha256.gz
 ```
 
 with a `fetch_log` row recording URL, source, timestamp, status, content hash, and the
@@ -97,12 +97,6 @@ Cache is never auto-evicted. Text compresses ~8x; a year of 50 states is single-
 jobhunter/
 ├── pyproject.toml
 ├── specs/                        ← these documents
-├── profile/                      ← YOUR data. gitignored.
-│   ├── resume.md
-│   └── preferences.yaml
-├── data/                         ← gitignored
-│   ├── jobhunter.db
-│   └── cache/
 ├── src/jobhunter/
 │   ├── cli.py                    Typer entrypoint
 │   ├── config.py                 settings, paths, policy flags
@@ -139,14 +133,58 @@ jobhunter/
     └── fixtures/<source>/        frozen HTML/JSON per adapter
 ```
 
+### Where files live
+
+Your files are **not** in the checkout. Defaults follow the XDG base directory spec
+(`src/jobhunter/xdg.py`); `jobhunter paths` prints the resolved value, its source and whether
+it exists.
+
+```
+$XDG_CONFIG_HOME/jobhunter/        (~/.config/jobhunter)
+├── config.toml                    machine settings
+├── google_client_secret.json      Gmail OAuth client (optional)
+└── gmail_token.json               fallback token store when no keyring
+$XDG_DATA_HOME/jobhunter/          (~/.local/share/jobhunter)   user data, mode 0700
+├── jobhunter.db
+├── profile/preferences.yaml       edited by the console; dated backups beside it
+├── resume/                        one .md; older versions in .previous/
+└── backups/                       timestamped sqlite backups (migrate-paths writes the first)
+$XDG_CACHE_HOME/jobhunter/         (~/.cache/jobhunter)
+├── ab/cd/<sha256>.gz              the raw cache (still never auto-evicted by jobhunter)
+└── openrouter_models.json
+```
+
+Decisions: `profile/preferences.yaml` stays with the resume under the data directory rather than
+in the config directory. It is rewritten by the console (with backups and content-hash
+snapshots) and its relative `resume_path` resolves against the profile directory's parent, so
+keeping `profile/` and `resume/` side by side preserves both. The raw cache moved to the cache
+directory as asked; it is still permanent as far as jobhunter is concerned, but a cache-cleaning
+tool may remove `~/.cache`, which only costs re-fetching.
+
+Precedence for each `[paths]` key: caller overrides, then `JOBHUNTER_DATA_DIR`,
+`JOBHUNTER_CACHE_DIR`, `JOBHUNTER_DB_PATH`, `JOBHUNTER_PROFILE_DIR`, `JOBHUNTER_RESUME_PATH`,
+then `config.toml`, then the XDG default. `db_path`, `profile_dir` and `resume_path` default to
+names inside `data_dir`, so setting `data_dir` moves all three. Relative explicit paths still
+resolve against the working directory.
+
+**Compatibility with the old layout.** The previous defaults were `./data`, `./profile` and
+`./resume`, relative to the working directory. For each of the database, profile, resume and
+cache that has no explicit path: if the old location exists and the new one does not, the old
+one is used and a single warning says to run `jobhunter migrate-paths`. Nothing silently starts
+an empty database. `migrate-paths` is a dry run by default; `--apply` takes a timestamped
+sqlite backup of the database, copies (never moves) the database, profile, resume and cache,
+and leaves a `MOVED.txt` in each old directory. It refuses when a destination exists and
+differs. `--apply --remove-old` deletes only originals whose copy is identical. The tests'
+isolation guard (`tests/conftest.py`) blocks the real XDG locations as well as the repo-relative ones.
+
 ## Configuration
 
 Three layers, most specific wins:
 
 1. `src/jobhunter/config.py` — defaults in code.
-2. `~/.config/jobhunter/config.toml` — machine settings: paths, rate limits, model choice,
+2. `$XDG_CONFIG_HOME/jobhunter/config.toml` (`~/.config/jobhunter/config.toml`) — machine settings: paths, rate limits, model choice,
    spend cap, `respect_robots`, contact email for the User-Agent.
-3. `profile/preferences.yaml` — what you want in a job. Versioned by content hash so scores
+3. `<data dir>/profile/preferences.yaml` — what you want in a job. Versioned by content hash so scores
    record which profile produced them.
 
 Secrets: `ANTHROPIC_API_KEY` from the environment, or an `ant auth login` profile — the SDK

@@ -570,6 +570,86 @@ def backfill_salary_cmd() -> None:
         typer.echo(f"{label}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
 
 
+@app.command(name="paths")
+def paths_cmd(
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Show each path, where it came from (default, config file, env) and whether it exists."""
+    from jobhunter.config import config_file, config_file_source
+
+    settings = load_settings()
+    config_file_path = config_file(None)
+    sources = settings.paths.sources
+    router = settings.scoring.openrouter
+    catalog_source = (
+        "config file" if "catalog_cache" in router.model_fields_set else "under cache_dir"
+    )
+    rows = [
+        ("config_file", config_file_path, config_file_source()),
+        ("data_dir", settings.paths.data_dir, sources["data_dir"]),
+        ("db_path", settings.paths.db_path, sources["db_path"]),
+        ("profile_dir", settings.paths.profile_dir, sources["profile_dir"]),
+        ("resume_path", settings.paths.resume_path, sources["resume_path"]),
+        ("cache_dir", settings.paths.cache_dir, sources["cache_dir"]),
+        ("openrouter_catalog", router.catalog_cache, catalog_source),
+    ]
+    resolved = [(name, resolve_path(path), source) for name, path, source in rows]
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    name: {"path": str(path), "source": source, "exists": path.exists()}
+                    for name, path, source in resolved
+                },
+                indent=2,
+            )
+        )
+        return
+    for name, path, source in resolved:
+        mark = "exists" if path.exists() else "missing"
+        typer.echo(f"{name:<19} {mark:<8} {path}  [{source}]")
+    if any(src == "legacy" for src in sources.values()):
+        typer.echo(
+            "legacy: some files are still in the old repo-relative location; "
+            "run `jobhunter migrate-paths` to move them."
+        )
+
+
+@app.command(name="migrate-paths")
+def migrate_paths_cmd(
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Perform the moves (default: dry run).")
+    ] = False,
+    remove_old: Annotated[
+        bool,
+        typer.Option(
+            "--remove-old",
+            help="With --apply: delete originals whose copy is identical. Never implied.",
+        ),
+    ] = False,
+) -> None:
+    """Move ./data, ./profile and ./resume to the XDG locations (dry run unless --apply)."""
+    from jobhunter.ops import migrate_paths as mp
+
+    settings = load_settings(legacy_fallback=False)
+    plan = mp.plan(settings)
+    for line in mp.render_plan(plan, apply=apply, remove_old=remove_old):
+        typer.echo(line)
+    if plan.conflicts:
+        raise typer.Exit(1)
+    if not apply:
+        return
+    try:
+        for line in mp.apply(plan):
+            typer.echo(line)
+        if remove_old:
+            for line in mp.remove_old(plan):
+                typer.echo(line)
+    except mp.MigrateError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
 @app.command()
 def console(
     host: Annotated[str | None, typer.Option(help="Bind host (default: config).")] = None,

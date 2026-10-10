@@ -1,33 +1,131 @@
 """Settings, paths and policy flags (specs/002-architecture.md#configuration).
 
-Three layers, most specific wins: defaults in code, then the TOML file
-(``$JOBHUNTER_CONFIG`` or ``~/.config/jobhunter/config.toml``), then the ``overrides``
+Four layers, most specific wins: defaults in code, then the TOML file
+(``$JOBHUNTER_CONFIG`` or ``$XDG_CONFIG_HOME/jobhunter/config.toml``), then the
+``JOBHUNTER_*_DIR``/``_PATH`` environment variables for ``[paths]``, then the ``overrides``
 mapping passed by the caller. Nested sections are deep-merged, so overriding one key
 leaves its siblings alone. Lists are replaced wholesale, not concatenated.
+
+Default locations follow the XDG base directory spec (``jobhunter.xdg``): user data below
+``$XDG_DATA_HOME/jobhunter``, the fetch cache below ``$XDG_CACHE_HOME/jobhunter``. The old
+repo-relative locations (``./data``, ``./profile``, ``./resume``) are still used, with a
+one-time warning, when they exist and the new location does not, until ``jobhunter
+migrate-paths`` moves them.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationInfo, model_validator
+
+from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
+
+logger = logging.getLogger(__name__)
 
 CONFIG_ENV_VAR = "JOBHUNTER_CONFIG"
-DEFAULT_CONFIG_PATH = Path("~/.config/jobhunter/config.toml")
+CONFIG_FILE_NAME = "config.toml"
+
+PATH_FIELDS = ("data_dir", "cache_dir", "db_path", "profile_dir", "resume_path")
+PATH_ENV_VARS = {
+    "data_dir": "JOBHUNTER_DATA_DIR",
+    "cache_dir": "JOBHUNTER_CACHE_DIR",
+    "db_path": "JOBHUNTER_DB_PATH",
+    "profile_dir": "JOBHUNTER_PROFILE_DIR",
+    "resume_path": "JOBHUNTER_RESUME_PATH",
+}
+DB_FILE_NAME = "jobhunter.db"
+# Where each default lived before the XDG move, relative to the directory jobhunter was run from.
+LEGACY_RELATIVE = {
+    "data_dir": Path("data"),
+    "cache_dir": Path("data/cache"),
+    "db_path": Path("data/jobhunter.db"),
+    "profile_dir": Path("profile"),
+    "resume_path": Path("resume"),
+}
+LEGACY = "legacy"  # the source label of a field that fell back to the old location
+LEGACY_CONTEXT = "legacy_fallback"  # validation-context key; False turns the fallback off
+
+
+def default_config_path() -> Path:
+    return config_home() / CONFIG_FILE_NAME
+
+
+def legacy_locations(base: Path | None = None) -> dict[str, Path]:
+    """The pre-XDG default locations, absolute, relative to ``base`` (default: the cwd)."""
+    root = base if base is not None else Path.cwd()
+    return {k: root / v for k, v in LEGACY_RELATIVE.items()}
 
 
 class Paths(BaseModel):
+    """Where user files live. Unset fields get XDG defaults (see the module docstring).
+
+    ``data_dir`` holds the database, ``profile_dir``, ``resume_path`` and backups; the three
+    derive from it unless set. ``cache_dir`` (the raw fetch cache) is separate, under
+    ``$XDG_CACHE_HOME``. ``sources`` says where each value came from.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    data_dir: Path = Path("data")
-    cache_dir: Path = Path("data/cache")
-    db_path: Path = Path("data/jobhunter.db")
-    profile_dir: Path = Path("profile")
-    resume_path: Path = Path("resume")
+    data_dir: Path = Field(default_factory=data_home)
+    cache_dir: Path = Field(default_factory=cache_home)
+    db_path: Path = Field(default_factory=lambda: data_home() / DB_FILE_NAME)
+    profile_dir: Path = Field(default_factory=lambda: data_home() / "profile")
+    resume_path: Path = Field(default_factory=lambda: data_home() / "resume")
+
+    _sources: dict[str, str] = PrivateAttr(default_factory=dict)
+
+    @property
+    def sources(self) -> dict[str, str]:
+        """Field -> where its value came from: "explicit", "default", "default (XDG_...)",
+        "under data_dir" or "legacy"; ``load_settings`` refines "explicit" to "config file",
+        "env JOBHUNTER_..." or "override"."""
+        return dict(self._sources)
+
+    @model_validator(mode="after")
+    def _resolve_defaults(self, info: ValidationInfo) -> Paths:
+        context = info.context if isinstance(info.context, dict) else {}
+        legacy_ok = bool(context.get(LEGACY_CONTEXT, True))
+        explicit = set(self.model_fields_set)
+        sources: dict[str, str] = {}
+
+        def put(field: str, value: Path, source: str) -> None:
+            object.__setattr__(self, field, value)
+            sources[field] = source
+
+        for field in PATH_FIELDS:
+            if field in explicit:
+                put(field, Path(getattr(self, field)).expanduser(), "explicit")
+        if "data_dir" not in explicit:
+            put("data_dir", data_home(), xdg_source("data"))
+        data_dir = self.data_dir
+        derived = sources["data_dir"] if "data_dir" not in explicit else "under data_dir"
+        for field, name in (
+            ("db_path", DB_FILE_NAME),
+            ("profile_dir", "profile"),
+            ("resume_path", "resume"),
+        ):
+            if field not in explicit:
+                put(field, data_dir / name, derived)
+        if "cache_dir" not in explicit:
+            put("cache_dir", cache_home(), xdg_source("cache"))
+
+        if legacy_ok and "data_dir" not in explicit:
+            old = legacy_locations()
+            for field in ("db_path", "profile_dir", "resume_path", "cache_dir"):
+                if field in explicit:
+                    continue
+                if not getattr(self, field).exists() and old[field].exists():
+                    put(field, old[field], LEGACY)
+            if sources["db_path"] == LEGACY:
+                put("data_dir", old["data_dir"], LEGACY)
+        self._sources = sources
+        return self
 
 
 class Fetch(BaseModel):
@@ -88,7 +186,8 @@ class OpenRouter(BaseModel):
     # A pack is split when its estimated input tokens (chars / 4) would exceed this.
     max_input_tokens_per_request: int = Field(default=40_000, ge=1000)
     est_cost_per_request_usd: float = Field(default=0.04, ge=0)  # spend-cap estimate
-    catalog_cache: Path = Path("data/openrouter_models.json")
+    # Empty: <paths.cache_dir>/openrouter_models.json (filled in by Settings).
+    catalog_cache: Path = Path()
 
 
 class Local(BaseModel):
@@ -139,7 +238,9 @@ class Mail(BaseModel):
     fallback_sender_domains: list[str] = Field(default_factory=list)
     # Google OAuth client secrets JSON (Desktop app), kept outside the repo. The env var
     # JOBHUNTER_GOOGLE_CLIENT_SECRETS overrides it.
-    client_secrets_path: Path = Path("~/.config/jobhunter/google_client_secret.json")
+    client_secrets_path: Path = Field(
+        default_factory=lambda: config_home() / "google_client_secret.json"
+    )
 
 
 class Console(BaseModel):
@@ -158,6 +259,14 @@ class Settings(BaseModel):
     mail: Mail = Field(default_factory=Mail)
     console: Console = Field(default_factory=Console)
 
+    @model_validator(mode="after")
+    def _derive_catalog_cache(self) -> Settings:
+        router = self.scoring.openrouter
+        if "catalog_cache" not in router.model_fields_set:
+            catalog = self.paths.cache_dir / "openrouter_models.json"
+            object.__setattr__(router, "catalog_cache", catalog)
+        return self
+
     @property
     def user_agent(self) -> str:
         return f"jobhunter/0.1 (personal job search; {self.fetch.user_agent_contact})"
@@ -171,13 +280,20 @@ def resolve_path(path: str | Path, base: Path | None = None) -> Path:
     return (base if base is not None else Path.cwd()) / p
 
 
-def _config_file(config_path: Path | None) -> Path:
+def config_file(config_path: Path | None) -> Path:
     if config_path is not None:
         return Path(config_path).expanduser()
     env_value = os.environ.get(CONFIG_ENV_VAR)
     if env_value:
         return Path(env_value).expanduser()
-    return DEFAULT_CONFIG_PATH.expanduser()
+    return default_config_path()
+
+
+def config_file_source() -> str:
+    """Where the config file location came from, for ``jobhunter paths``."""
+    if os.environ.get(CONFIG_ENV_VAR):
+        return f"env {CONFIG_ENV_VAR}"
+    return xdg_source("config")
 
 
 def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
@@ -223,20 +339,58 @@ def load_env_files() -> list[Path]:
     return loaded
 
 
+_warned_legacy: set[str] = set()
+
+
+def _warn_legacy_once(paths: Paths) -> None:
+    old = sorted(str(getattr(paths, f)) for f, src in paths.sources.items() if src == LEGACY)
+    key = "\n".join(old)
+    if not old or key in _warned_legacy:
+        return
+    _warned_legacy.add(key)
+    logger.warning(
+        "using the old repo-relative location(s): %s. Defaults moved to %s and %s; "
+        "run `jobhunter migrate-paths` (a dry run) to see how to move them.",
+        ", ".join(old),
+        data_home(),
+        cache_home(),
+    )
+
+
 def load_settings(
     config_path: Path | None = None,
     overrides: Mapping[str, Any] | None = None,
+    *,
+    legacy_fallback: bool = True,
 ) -> Settings:
-    """Build Settings from code defaults, the TOML file, then ``overrides``.
+    """Build Settings from code defaults, the TOML file, the environment, then ``overrides``.
 
     An explicit ``config_path`` wins over ``$JOBHUNTER_CONFIG``, which wins over the
     default location. A missing file is not an error. Unknown keys raise
-    ``pydantic.ValidationError`` naming the key (e.g. ``fetch.bogus``).
+    ``pydantic.ValidationError`` naming the key (e.g. ``fetch.bogus``). The ``[paths]``
+    keys can also come from ``JOBHUNTER_DATA_DIR`` and friends (``PATH_ENV_VARS``), which
+    beat the file. ``legacy_fallback=False`` ignores the old repo-relative locations
+    (``migrate-paths`` uses it to find where files should go).
     """
-    path = _config_file(config_path)
+    path = config_file(config_path)
     file_data: dict[str, Any] = {}
     if path.is_file():
         with path.open("rb") as fh:
             file_data = tomllib.load(fh)
-    merged = _deep_merge(file_data, overrides or {})
-    return Settings.model_validate(merged)
+    env_paths = {f: v for f, var in PATH_ENV_VARS.items() if (v := os.environ.get(var))}
+    merged = _deep_merge(file_data, {"paths": env_paths} if env_paths else {})
+    merged = _deep_merge(merged, overrides or {})
+    # Validated (not default-factory built) so the legacy_fallback context reaches Paths.
+    merged.setdefault("paths", {})
+    settings = Settings.model_validate(merged, context={LEGACY_CONTEXT: legacy_fallback})
+    labels = settings.paths._sources
+    for field in PATH_FIELDS:
+        if field in ((overrides or {}).get("paths") or {}):
+            labels[field] = "override"
+        elif field in env_paths:
+            labels[field] = f"env {PATH_ENV_VARS[field]}"
+        elif field in (file_data.get("paths") or {}):
+            labels[field] = "config file"
+    if legacy_fallback:
+        _warn_legacy_once(settings.paths)
+    return settings

@@ -15,8 +15,10 @@ mark a test `live` if it truly needs the real service.
 
 User files: no test may read the developer's real profile, resume, data or config either.
 Those files live in the repo (profile/, resume/, data/, config.toml, .env: all gitignored),
-in ~/.config/jobhunter and in ~/.env. Code under test resolves its defaults against the
-working directory and the home directory, so an unisolated test silently reads them. That
+in the XDG locations ($XDG_CONFIG_HOME, $XDG_DATA_HOME and $XDG_CACHE_HOME below
+``jobhunter``, by default ~/.config, ~/.local/share and ~/.cache) and in ~/.env. Code under
+test resolves its defaults against the working directory and the home directory, so an
+unisolated test silently reads them. That
 is how console tests passed locally on the developer's real resume and failed in CI, where
 no such file exists. Tests that read the real resume or profile both leaked personal data
 into test behavior and made CI and local results diverge, which hid that CI failure
@@ -32,6 +34,7 @@ import io
 import ipaddress
 import os
 import socket
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -108,6 +111,22 @@ def _main_checkout() -> Path:
     return Path(common).resolve().parent
 
 
+def _real_xdg_dirs() -> set[str]:
+    """The developer's real config, data and cache dirs: the defaults below the real home and
+    wherever $XDG_*_HOME pointed at import time (before any fixture patches the environment)."""
+    dirs: set[str] = set()
+    for var, fallback in (
+        ("XDG_CONFIG_HOME", ".config"),
+        ("XDG_DATA_HOME", ".local/share"),
+        ("XDG_CACHE_HOME", ".cache"),
+    ):
+        dirs.add(os.path.realpath(_REAL_HOME / fallback / "jobhunter"))
+        value = os.environ.get(var, "")
+        if value and os.path.isabs(value):
+            dirs.add(os.path.realpath(os.path.join(value, "jobhunter")))
+    return dirs
+
+
 _PROTECTED = tuple(
     sorted(
         {
@@ -116,12 +135,13 @@ _PROTECTED = tuple(
             for name in _USER_FILE_NAMES
         }
         | {
-            os.path.realpath(_REAL_HOME / ".config" / "jobhunter"),
             os.path.realpath(_REAL_HOME / ".env"),
         }
+        | _real_xdg_dirs()
     )
 )
 _REAL_IO_OPEN = io.open
+_REAL_SQLITE_CONNECT = sqlite3.connect
 
 
 class UserFileAccess(RuntimeError):
@@ -144,6 +164,20 @@ def _guarded_open(file: object, *args: object, **kwargs: object) -> object:
     return _REAL_IO_OPEN(file, *args, **kwargs)  # type: ignore[call-overload]
 
 
+def _guarded_sqlite_connect(database: object, *args: object, **kwargs: object) -> object:
+    # sqlite opens files in C, bypassing io.open, so the real database needs its own check.
+    if isinstance(database, str | bytes | os.PathLike):
+        target = os.fsdecode(database)
+        if target.startswith("file:"):
+            target = target[len("file:") :].split("?", 1)[0]
+        if target and target != ":memory:" and _is_protected(target):
+            raise UserFileAccess(
+                f"test tried to open the developer's real user file {target!r}; "
+                "use a tmp_path copy instead (see tests/conftest.py)"
+            )
+    return _REAL_SQLITE_CONNECT(database, *args, **kwargs)  # type: ignore[arg-type]
+
+
 @pytest.fixture(autouse=True)
 def _isolate_user_files(
     monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
@@ -151,9 +185,25 @@ def _isolate_user_files(
     # A fresh dir outside tmp_path, so it cannot collide with a test's own tmp_path/"home".
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
+    # The old defaults (./data, ./profile, ./resume) are relative to the cwd, and a checkout
+    # that holds the developer's real ones would otherwise be picked up as a legacy fallback.
+    monkeypatch.chdir(home)
     monkeypatch.delenv("JOBHUNTER_CONFIG", raising=False)
     monkeypatch.delenv("JOBHUNTER_ENV_FILE", raising=False)
+    # Defaults resolve below HOME (a tmp dir) unless a test sets these on purpose.
+    for var in (
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "JOBHUNTER_DATA_DIR",
+        "JOBHUNTER_CACHE_DIR",
+        "JOBHUNTER_DB_PATH",
+        "JOBHUNTER_PROFILE_DIR",
+        "JOBHUNTER_RESUME_PATH",
+    ):
+        monkeypatch.delenv(var, raising=False)
     # Path.open, read_text and read_bytes all reach io.open; builtins.open is a separate
     # name for the same function, so both are patched.
     monkeypatch.setattr(io, "open", _guarded_open)
     monkeypatch.setattr(builtins, "open", _guarded_open)
+    monkeypatch.setattr(sqlite3, "connect", _guarded_sqlite_connect)

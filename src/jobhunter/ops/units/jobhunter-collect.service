@@ -5,6 +5,8 @@ OnFailure=jobhunter-notify@%n.service
 
 [Service]
 Type=oneshot
+# The checkout is the working directory for .env (and the legacy ./data fallback). The
+# database, profile and cache live under XDG_DATA_HOME / XDG_CACHE_HOME (jobhunter paths).
 WorkingDirectory=@REPO@
 ExecStart=@EXEC@ score --collect-pending
 ExecStart=@EXEC@ score --rescore-pending

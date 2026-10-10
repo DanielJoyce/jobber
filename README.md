@@ -12,9 +12,32 @@ local web console.
 | Path | What |
 |---|---|
 | `specs/` | Design documents, read in numbered order |
-| `resume/` | The resume the fit scorer reads. **Local only, gitignored** (contact details) |
-| `profile/` | Your preferences (salary, states, narrative). **Local only, gitignored** |
-| `data/` | SQLite database and raw HTTP cache. **Local only, gitignored** |
+
+Your files live outside the checkout, in the XDG directories (`jobhunter paths` shows each one,
+where it came from and whether it exists):
+
+| Default location | What |
+|---|---|
+| `~/.config/jobhunter/` (`$XDG_CONFIG_HOME`) | `config.toml`, the Gmail token and client secret |
+| `~/.local/share/jobhunter/` (`$XDG_DATA_HOME`) | `resume/`, `profile/` (with `preferences.yaml`), `jobhunter.db`, `backups/` |
+| `~/.cache/jobhunter/` (`$XDG_CACHE_HOME`) | the raw HTTP cache and the model price catalog |
+
+Paths set in `config.toml` (`[paths]`) win over the defaults, and the environment variables
+`JOBHUNTER_DATA_DIR`, `JOBHUNTER_CACHE_DIR`, `JOBHUNTER_DB_PATH`, `JOBHUNTER_PROFILE_DIR` and
+`JOBHUNTER_RESUME_PATH` win over the file. The repo's `resume/`, `profile/` and `data/` are gitignored
+and no longer the default.
+
+**Moving from the old layout** (`./data`, `./profile`, `./resume` in the checkout): until you
+migrate, jobhunter keeps using them and warns once. Then:
+
+```bash
+jobhunter migrate-paths                # dry run: lists every move, changes nothing
+jobhunter migrate-paths --apply        # sqlite-backs-up the DB, copies resume/profile/cache, leaves MOVED.txt
+jobhunter migrate-paths --apply --remove-old   # later, once you have checked: delete identical originals
+```
+
+It refuses when a destination already exists and differs, and never deletes originals unless
+you pass `--remove-old`.
 
 ## Setup
 

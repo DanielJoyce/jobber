@@ -38,7 +38,7 @@ class ScheduleError(Exception):
 @dataclass(frozen=True)
 class Install:
     jobhunter: Path  # absolute path to the jobhunter executable (the project venv's)
-    repo: Path  # WorkingDirectory: holds data/, profile/, .env and pyproject.toml
+    repo: Path  # WorkingDirectory: holds .env and pyproject.toml; user data is under XDG, not here
     path: str  # PATH for the units: the venv bin first, then the system dirs
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -56,3 +57,47 @@ def test_home_is_a_tmp_dir(tmp_path_factory):
 def test_jobhunter_env_vars_are_unset():
     assert "JOBHUNTER_CONFIG" not in os.environ
     assert "JOBHUNTER_ENV_FILE" not in os.environ
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        ".local/share/jobhunter/profile/preferences.yaml",
+        ".local/share/jobhunter/resume/me.md",
+        ".cache/jobhunter/ab/cd/x.gz",
+        ".config/jobhunter/google_client_secret.json",
+    ],
+)
+def test_real_xdg_locations_raise(rel):
+    with pytest.raises(RuntimeError, match="real user file"):
+        open(_real_home() / rel, "rb")  # noqa: SIM115
+
+
+def test_real_xdg_database_cannot_be_opened_through_sqlite():
+    db = _real_home() / ".local" / "share" / "jobhunter" / "jobhunter.db"
+    with pytest.raises(RuntimeError, match="real user file"):
+        sqlite3.connect(db)
+    with pytest.raises(RuntimeError, match="real user file"):
+        sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    with pytest.raises(RuntimeError, match="real user file"):
+        sqlite3.connect(REPO / "data" / "jobhunter.db")
+
+
+def test_sqlite_in_tmp_and_memory_is_fine(tmp_path):
+    sqlite3.connect(":memory:").close()
+    sqlite3.connect(tmp_path / "t.db").close()
+
+
+def test_xdg_and_jobhunter_path_env_vars_are_unset():
+    for var in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "JOBHUNTER_DB_PATH"):
+        assert var not in os.environ
+
+
+def test_default_locations_resolve_below_the_tmp_home():
+    from jobhunter.config import load_settings
+
+    s = load_settings()
+    home = Path(os.environ["HOME"])
+    assert s.paths.db_path.is_relative_to(home)
+    assert s.paths.cache_dir.is_relative_to(home)
+    assert Path.cwd() == home
