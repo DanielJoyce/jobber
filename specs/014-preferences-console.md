@@ -102,6 +102,26 @@ done_with: added "Java enterprise"
 The estimate uses the measured cost per job from `llm_spend`, not the spec's assumed figure.
 Re-scoring goes through the Batch API like everything else and counts against the spend cap.
 
+### Re-score now
+
+Saving a paid change only records a `rescore_request` row (a note of what you asked for, with
+its UTC `requested_at`, not a schedule). That used to be a dead end: nothing ever read the
+table. `/prefs` now has a **Re-score now** section that shows how many job groups are waiting
+under the current `scoring_version`, lets you pick the scorer (the configured default, plus
+Jev when `OPENROUTER_API_KEY` is set, plus the Anthropic batch when `ANTHROPIC_API_KEY` is set;
+keys are never shown) and the scope (recent open A-E, or all), and shows the estimate. The
+Run button asks for confirmation, then runs on a background thread in the console process,
+one at a time, with polled progress (scored N of M, cost so far, errors) and a link to the
+inbox when done. Queued requests get Run and Dismiss buttons in the same section.
+
+The same service (`scoring/rescore.py`) backs `jobhunter score --rescore {recent,all}`
+(estimate, confirm, run) and `jobhunter score --rescore-pending` (drains the queue; the
+nightly 03:30 collect unit runs it). A run first re-prefilters jobs lacking a result for the
+current `filter_version` (free, local), because a prefs edit can change both versions and
+eligibility joins on the filter version. It refuses when the estimate exceeds the remaining
+daily or weekly spend cap. The Anthropic batch path only submits; `score --collect-pending`
+finishes it.
+
 ## History and undo
 
 Every save appends to a `profile_change` table: timestamp, field path, old value, new value, and

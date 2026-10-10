@@ -26,6 +26,7 @@ from jobhunter.console import (
     prefs_routes,
     proposals_routes,
     rejections_routes,
+    rescore_routes,
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
@@ -276,6 +277,7 @@ def create_app(
         return templates.TemplateResponse(request, "_state_table.html", ctx)
 
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
+    rescore_routes.register(app, templates, get_conn, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
     proposals_routes.register(app, templates, get_conn, NAV, now)
     rejections_routes.register(app, templates, get_conn, NAV, now)
