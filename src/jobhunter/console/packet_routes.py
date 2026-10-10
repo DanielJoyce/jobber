@@ -88,8 +88,14 @@ def register(
         )
 
     @app.get("/apply/new", response_class=HTMLResponse)
-    def new_packet(request: Request) -> HTMLResponse:
-        return new_page(request)
+    def new_packet(request: Request, url: str | None = None) -> HTMLResponse:
+        # ?url= only pre-fills the form (the extension's offer on a page Chrome does not let
+        # it read, specs/017 1e); nothing is fetched or written.
+        fields = None
+        if url and paste.is_http_url(url.strip()):
+            fields = {"url": url.strip()[:2048]}
+            fields["employer"] = paste.guess_employer_from_url(fields["url"]) or ""
+        return new_page(request, fields)
 
     @app.post("/apply/new/fetch", response_class=HTMLResponse)
     def new_packet_fetch(request: Request, conn: Conn, form: Form) -> HTMLResponse:

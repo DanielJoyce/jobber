@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from jobhunter.apply import paste
-from jobhunter.console import detail
+from jobhunter.console import capture_routes, detail
 from jobhunter.core.models import ApplyStatus
 from jobhunter.pipeline import applylink
 from jobhunter.pipeline.ats_rules import is_http_url
@@ -51,10 +51,11 @@ def register(
         d = detail.load_detail(conn, get_profile(), group_id, now(), rejection_days=days)
         if d is None:
             raise HTTPException(404, "no such job group")
+        extras = capture_routes.job_extras(request, conn, d, now())
         return templates.TemplateResponse(
             request,
             "job.html",
-            {"title": d.job["title"], "active": "/inbox", "nav": nav, "d": d},
+            {"title": d.job["title"], "active": "/inbox", "nav": nav, "d": d, **extras},
         )
 
     @app.get("/job/{group_id}/apply-button", response_class=HTMLResponse)

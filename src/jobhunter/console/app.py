@@ -18,10 +18,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.apply import ext_pairing
 from jobhunter.config import Settings
 from jobhunter.console import (
     alerts_routes,
+    capture_routes,
     detail_routes,
+    ext_routes,
     inbox_routes,
     packet_routes,
     pages_routes,
@@ -179,11 +182,14 @@ def create_app(
     profile_loader: ProfileLoader | None = None,
     clock: Clock | None = None,
     allow_remote: bool = False,
+    ext_port: int | None = None,
 ) -> FastAPI:
     """Build the console. ``conn_factory`` defaults to opening ``settings.paths.db_path``.
 
     ``allow_remote`` (``console --allow-remote``) accepts a non-loopback ``Host``; requests
-    must still be same-origin.
+    must still be same-origin. ``ext_port`` is the port the browser extension connects to
+    (default ``console.public_port``, else ``console.port``); ``/ext/`` requests must name a
+    loopback ``Host`` on it, even with ``allow_remote``.
     """
     factory: ConnFactory = conn_factory or (lambda: db.connect(settings.paths.db_path))
     get_profile: ProfileLoader = profile_loader or default_profile_loader(settings)
@@ -209,11 +215,24 @@ def create_app(
 
     app.state.conn_factory = factory
     app.state.allow_remote = allow_remote
+    app.state.ext_port = ext_port or settings.console.public_port or settings.console.port
+    pairing_file = ext_pairing.state_path(settings.paths.data_dir)
 
     @app.middleware("http")
     async def same_origin_writes(request: Request, call_next):
         # Why: a cross-site POST could start a paid re-score (or edit prefs) with no prompt;
         # hx-confirm only runs in our own page. See cross_site_reason.
+        if request.url.path.startswith("/ext/"):
+            # The extension API has its own, stricter door (token, exact Origin, loopback
+            # Host even with --allow-remote), replacing the same-origin check: specs/017.
+            refusal = ext_routes.ext_refusal(
+                request.method,
+                request.url.path,
+                request.headers,
+                port=request.app.state.ext_port,
+                token_ok=lambda token: ext_pairing.verify(pairing_file, token),
+            )
+            return refusal if refusal is not None else await call_next(request)
         reason = cross_site_reason(request.method, request.headers, request.app.state.allow_remote)
         if reason is not None:
             logger.warning("refused %s %s: %s", request.method, request.url.path, reason)
@@ -389,12 +408,14 @@ def create_app(
 
     # Before detail_routes: /apply/new must not be read as /apply/{group_id}.
     packet_routes.register(app, templates, get_conn, NAV, get_profile, now)
+    capture_routes.register(app, templates, get_conn, NAV, get_profile, now)
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     rescore_routes.register(app, templates, get_conn, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
     proposals_routes.register(app, templates, get_conn, NAV, now)
     rejections_routes.register(app, templates, get_conn, NAV, now)
     alerts_routes.register(app, templates, get_conn, NAV, now)
+    ext_routes.register(app, get_profile, now)
 
     # Placeholders last, only for nav pages no module has claimed yet. New pages need no
     # edit here (this list used to conflict on every parallel console branch).

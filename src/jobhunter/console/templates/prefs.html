@@ -277,6 +277,15 @@
     </aside>
   </div>
 
+  <section class="panel" id="sec-extension">
+    <h2>Browser extension</h2>
+    <p class="muted">The jobhunter Chrome extension sends the job page you are viewing here when you click <strong>Send to jobhunter</strong>. Load it unpacked from <code>extension/</code> in your checkout, then pair it once: make a code here (or run <code>jobhunter ext pair</code>) and type it on the extension's options page. It reads a page only when you click, and nothing is scored until you confirm.</p>
+    <form method="post" action="/prefs/ext/pair" hx-post="/prefs/ext/pair" hx-target="#ext-pair-result" hx-swap="outerHTML" class="inline-form">
+      <button type="submit" class="button" id="ext-pair">Pair browser extension</button>
+    </form>
+    <div id="ext-pair-result"></div>
+  </section>
+
   <section class="panel" id="sec-history">
     <h2>History</h2>
     {% if history %}

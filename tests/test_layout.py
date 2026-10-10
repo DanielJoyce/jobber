@@ -26,6 +26,12 @@ MODULES = [
     "jobhunter.apply.generator",
     "jobhunter.apply.factcheck",
     "jobhunter.apply.review",
+    "jobhunter.apply.capture",
+    "jobhunter.apply.capture_models",
+    "jobhunter.apply.ext_pairing",
+    "jobhunter.console.ext_routes",
+    "jobhunter.console.capture_routes",
+    "jobhunter.pipeline.board_ids",
 ]
 
 

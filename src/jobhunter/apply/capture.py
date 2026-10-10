@@ -34,7 +34,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from rapidfuzz import fuzz
 
-from jobhunter.apply import paste
+from jobhunter.apply import packets, paste
 from jobhunter.apply.capture_models import (
     MAX_POSTINGS,
     MAX_TEXT,
@@ -1219,6 +1219,8 @@ def _busy(conn: sqlite3.Connection, gid: int, now: datetime) -> bool:
         (gid,),
     ).fetchone():
         return True
+    if _scored(conn, gid):
+        return False  # a finished Score now keeps its user-requested pass; that is no claim
     for r in conn.execute(
         "SELECT p.evaluated_at FROM prefilter_result p JOIN job j ON j.id = p.job_id "
         "WHERE j.job_group_id = ? AND p.reasons = ?",
@@ -1434,3 +1436,54 @@ def fetch(
 def facts_from_dict(data: dict[str, Any]) -> Facts:
     """For tests and the CLI: validate a facts object."""
     return Facts.model_validate(data)
+
+
+def same_job_candidates(conn: sqlite3.Connection, group_id: int) -> list[paste.Duplicate]:
+    """Other groups that are surely the same posting as this one (a shared board id, or a
+    one-posting URL among its jobs' URLs, apply links and decoded board destinations): what
+    ``/job/{id}`` offers to **Link them**. Employer and title alone are never offered."""
+    urls: list[str | None] = []
+    keys: list[str] = []
+    for r in conn.execute(
+        "SELECT url, apply_url, page_url FROM job WHERE job_group_id = ?", (group_id,)
+    ):
+        urls += [r[0], r[1], r[2]]
+    for r in conn.execute(
+        "SELECT r.board, r.board_id, r.apply_url FROM job_board_ref r JOIN job j "
+        "ON j.id = r.job_id WHERE j.job_group_id = ?",
+        (group_id,),
+    ):
+        keys.append(f"{r[0]}:{r[1]}")
+        urls.append(r[2])
+    link = conn.execute(
+        "SELECT start_url, final_url FROM apply_link WHERE job_group_id = ?", (group_id,)
+    ).fetchone()
+    if link is not None:
+        urls += [link[0], link[1]]
+    real = tuple(u for u in urls if u and is_http_url(u))
+    if not real and not keys:
+        return []
+    dups = paste.find_duplicates(conn, None, "", "", urls=real, board_keys=tuple(keys))
+    out = [d for d in dups if d.by_url and d.group_id != group_id]
+    # The other direction: a board posting whose decoded Apply destination is this posting.
+    mine = {k for u in real if (k := _key(u)) and _identifies_job(k)}
+    seen = {d.group_id for d in out}
+    for r in conn.execute(
+        "SELECT j.job_group_id, j.title, j.employer, j.agency_raw, r.apply_url "
+        "FROM job_board_ref r JOIN job j ON j.id = r.job_id "
+        "WHERE r.apply_url IS NOT NULL AND j.job_group_id IS NOT NULL"
+    ):
+        gid = int(r[0])
+        if gid == group_id or gid in seen or _key(r[4]) not in mine:
+            continue
+        seen.add(gid)
+        out.append(
+            paste.Duplicate(
+                gid,
+                r[1],
+                r[2] or r[3] or "employer not stated",
+                paste.SAME_BOARD_ID,
+                packets.live_packet_id(conn, gid),
+            )
+        )
+    return out

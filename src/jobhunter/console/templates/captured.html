@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ static_url('detail.css') }}">
+<div class="detail captured">
+  <p class="crumbs"><a href="/inbox">&larr; inbox</a></p>
+  <h1>Captured</h1>
+  <p class="muted">Postings you added yourself: sent from the browser extension or made on <a href="/apply/new">New packet</a>, newest first. They are never scored by the nightly run; open one to score it or prepare a packet. Once scored, a posting also shows in the inbox.</p>
+  {% if items %}
+  <div class="table-wrap">
+    <table class="captured-list" id="captured-list">
+      <thead><tr><th>Title</th><th>Employer</th><th>Site</th><th>Added</th><th>Fit</th></tr></thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td><a href="/job/{{ it.group_id }}">{{ it.title }}</a></td>
+          <td>{{ it.employer }}</td>
+          <td class="muted">{{ it.host }}</td>
+          <td class="nowrap">{{ it.captured }}</td>
+          <td>{% if it.bucket %}<span class="badge" title="Bucket {{ it.bucket }}">{{ bucket_name(it.bucket) }} <span class="bucket-badge">{{ it.bucket }}</span></span>{% else %}<span class="muted">not scored</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted" id="captured-empty">Nothing captured yet. On a job page, click the jobhunter extension's icon (or press Alt+Shift+J) to send the posting here.</p>
+  {% endif %}
+</div>
+{% endblock %}

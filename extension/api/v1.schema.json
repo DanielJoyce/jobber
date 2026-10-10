@@ -1,0 +1,3262 @@
+{
+  "max_body_bytes": 1000000,
+  "routes": {
+    "/ext/v1/capture": {
+      "method": "POST",
+      "request": {
+        "$defs": {
+          "ApplyControl": {
+            "additionalProperties": false,
+            "description": "LinkedIn and Indeed only: the Apply control, read, never clicked.",
+            "properties": {
+              "href": {
+                "anyOf": [
+                  {
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Href"
+              },
+              "kind": {
+                "enum": [
+                  "easy_apply",
+                  "offsite",
+                  "unknown"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "label": {
+                "default": "",
+                "maxLength": 1000,
+                "title": "Label",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "ApplyControl",
+            "type": "object"
+          },
+          "BoardCapture": {
+            "additionalProperties": false,
+            "description": "Click-through: the most recent off-site LinkedIn / Indeed capture the worker holds for\nthis window or opener tab (at most 30 minutes old).",
+            "properties": {
+              "board_key": {
+                "maxLength": 100,
+                "title": "Board Key",
+                "type": "string"
+              },
+              "employer": {
+                "default": "",
+                "maxLength": 1000,
+                "title": "Employer",
+                "type": "string"
+              },
+              "group_id": {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "title": "Group Id",
+                "type": "integer"
+              },
+              "job_id": {
+                "anyOf": [
+                  {
+                    "maximum": 9007199254740992,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Job Id"
+              },
+              "minutes_ago": {
+                "default": 0,
+                "maximum": 30,
+                "minimum": 0,
+                "title": "Minutes Ago",
+                "type": "integer"
+              },
+              "title": {
+                "default": "",
+                "maxLength": 1000,
+                "title": "Title",
+                "type": "string"
+              }
+            },
+            "required": [
+              "group_id",
+              "board_key"
+            ],
+            "title": "BoardCapture",
+            "type": "object"
+          },
+          "Facts": {
+            "additionalProperties": false,
+            "description": "What ``capture/extract.js`` read from the one page: raw facts, no decisions.",
+            "properties": {
+              "apply_control": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ApplyControl"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "canonical": {
+                "anyOf": [
+                  {
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Canonical"
+              },
+              "document_title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Document Title"
+              },
+              "iframes": {
+                "items": {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "title": "Iframes",
+                "type": "array"
+              },
+              "jsonld": {
+                "items": {
+                  "maxLength": 400000,
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "title": "Jsonld",
+                "type": "array"
+              },
+              "jsonld_dropped": {
+                "default": 0,
+                "maximum": 1000,
+                "minimum": 0,
+                "title": "Jsonld Dropped",
+                "type": "integer"
+              },
+              "microdata": {
+                "items": {
+                  "$ref": "#/$defs/MicroProp"
+                },
+                "maxItems": 100,
+                "title": "Microdata",
+                "type": "array"
+              },
+              "og_site_name": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Og Site Name"
+              },
+              "og_title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Og Title"
+              },
+              "page_text": {
+                "default": "",
+                "maxLength": 100000,
+                "title": "Page Text",
+                "type": "string"
+              },
+              "selection": {
+                "default": "",
+                "maxLength": 100000,
+                "title": "Selection",
+                "type": "string"
+              },
+              "site": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SiteFacts"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "trigger": {
+                "default": "popup",
+                "enum": [
+                  "menu-selection",
+                  "menu-page",
+                  "popup"
+                ],
+                "title": "Trigger",
+                "type": "string"
+              },
+              "truncated": {
+                "items": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "title": "Truncated",
+                "type": "array"
+              },
+              "url": {
+                "maxLength": 2048,
+                "title": "Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "title": "Facts",
+            "type": "object"
+          },
+          "MicroProp": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 100,
+                "title": "Name",
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 100000,
+                "title": "Value",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "title": "MicroProp",
+            "type": "object"
+          },
+          "SiteFacts": {
+            "additionalProperties": false,
+            "description": "A site-table row's fields (``capture/extract.js``; empty table at launch).",
+            "properties": {
+              "description": {
+                "anyOf": [
+                  {
+                    "maxLength": 100000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              },
+              "employer": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Employer"
+              },
+              "location": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Location"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Title"
+              }
+            },
+            "title": "SiteFacts",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "board_capture": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BoardCapture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "facts": {
+            "$ref": "#/$defs/Facts"
+          }
+        },
+        "required": [
+          "action_id",
+          "facts"
+        ],
+        "title": "CaptureRequest",
+        "type": "object"
+      },
+      "responses": {
+        "CaptureResponse": {
+          "$defs": {
+            "BoardInfo": {
+              "additionalProperties": false,
+              "properties": {
+                "apply_mode": {
+                  "enum": [
+                    "easy_apply",
+                    "offsite",
+                    "unknown"
+                  ],
+                  "title": "Apply Mode",
+                  "type": "string"
+                },
+                "apply_url": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Apply Url"
+                },
+                "board": {
+                  "title": "Board",
+                  "type": "string"
+                },
+                "destination_host": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Destination Host"
+                },
+                "key": {
+                  "title": "Key",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "board",
+                "apply_mode"
+              ],
+              "title": "BoardInfo",
+              "type": "object"
+            },
+            "FetchOffer": {
+              "additionalProperties": false,
+              "properties": {
+                "host": {
+                  "title": "Host",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "fetch",
+                    "select"
+                  ],
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "url": {
+                  "title": "Url",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url",
+                "host",
+                "kind"
+              ],
+              "title": "FetchOffer",
+              "type": "object"
+            },
+            "GroupCard": {
+              "additionalProperties": false,
+              "properties": {
+                "bucket": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Bucket"
+                },
+                "bucket_name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Bucket Name"
+                },
+                "description_chars": {
+                  "default": 0,
+                  "title": "Description Chars",
+                  "type": "integer"
+                },
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "first_lines": {
+                  "default": "",
+                  "title": "First Lines",
+                  "type": "string"
+                },
+                "group_id": {
+                  "title": "Group Id",
+                  "type": "integer"
+                },
+                "has_description": {
+                  "default": false,
+                  "title": "Has Description",
+                  "type": "boolean"
+                },
+                "host": {
+                  "default": "",
+                  "title": "Host",
+                  "type": "string"
+                },
+                "job_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Job Id"
+                },
+                "location": {
+                  "default": "",
+                  "title": "Location",
+                  "type": "string"
+                },
+                "manual": {
+                  "default": false,
+                  "title": "Manual",
+                  "type": "boolean"
+                },
+                "packet_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Packet Id"
+                },
+                "partial": {
+                  "default": false,
+                  "title": "Partial",
+                  "type": "boolean"
+                },
+                "path": {
+                  "title": "Path",
+                  "type": "string"
+                },
+                "posted_at": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Posted At"
+                },
+                "salary": {
+                  "default": "",
+                  "title": "Salary",
+                  "type": "string"
+                },
+                "score_on_request": {
+                  "default": false,
+                  "title": "Score On Request",
+                  "type": "boolean"
+                },
+                "scored": {
+                  "default": false,
+                  "title": "Scored",
+                  "type": "boolean"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Verdict"
+                },
+                "why": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Why"
+                }
+              },
+              "required": [
+                "group_id",
+                "title",
+                "employer",
+                "path"
+              ],
+              "title": "GroupCard",
+              "type": "object"
+            },
+            "LinkOffer": {
+              "additionalProperties": false,
+              "properties": {
+                "board_key": {
+                  "title": "Board Key",
+                  "type": "string"
+                },
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "group_id": {
+                  "title": "Group Id",
+                  "type": "integer"
+                },
+                "message": {
+                  "title": "Message",
+                  "type": "string"
+                },
+                "minutes_ago": {
+                  "title": "Minutes Ago",
+                  "type": "integer"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "group_id",
+                "board_key",
+                "title",
+                "employer",
+                "minutes_ago",
+                "message"
+              ],
+              "title": "LinkOffer",
+              "type": "object"
+            },
+            "PostingChoice": {
+              "additionalProperties": false,
+              "properties": {
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "first_line": {
+                  "default": "",
+                  "title": "First Line",
+                  "type": "string"
+                },
+                "index": {
+                  "title": "Index",
+                  "type": "integer"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "url": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Url"
+                }
+              },
+              "required": [
+                "index",
+                "title",
+                "employer"
+              ],
+              "title": "PostingChoice",
+              "type": "object"
+            },
+            "Preview": {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "title": "Description",
+                  "type": "string"
+                },
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "location": {
+                  "default": "",
+                  "title": "Location",
+                  "type": "string"
+                },
+                "method": {
+                  "title": "Method",
+                  "type": "string"
+                },
+                "page_description": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Page Description"
+                },
+                "posting_index": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Posting Index"
+                },
+                "postings": {
+                  "items": {
+                    "$ref": "#/$defs/PostingChoice"
+                  },
+                  "title": "Postings",
+                  "type": "array"
+                },
+                "reasons": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Reasons",
+                  "type": "array"
+                },
+                "salary": {
+                  "default": "",
+                  "title": "Salary",
+                  "type": "string"
+                },
+                "selection": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Selection"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "url": {
+                  "title": "Url",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "employer",
+                "description",
+                "method",
+                "url"
+              ],
+              "title": "Preview",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "board": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoardInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "candidates": {
+              "items": {
+                "$ref": "#/$defs/GroupCard"
+              },
+              "title": "Candidates",
+              "type": "array"
+            },
+            "describe": {
+              "items": {
+                "type": "integer"
+              },
+              "title": "Describe",
+              "type": "array"
+            },
+            "fetch": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FetchOffer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "group": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GroupCard"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "method": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Method"
+            },
+            "offer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LinkOffer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "outcome": {
+              "enum": [
+                "added",
+                "existing",
+                "possible",
+                "previewed",
+                "linked",
+                "same_job"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "preview": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Preview"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "replayed": {
+              "default": false,
+              "title": "Replayed",
+              "type": "boolean"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Url"
+            }
+          },
+          "required": [
+            "outcome",
+            "message"
+          ],
+          "title": "CaptureResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/capture/add": {
+      "method": "POST",
+      "request": {
+        "$defs": {
+          "ApplyControl": {
+            "additionalProperties": false,
+            "description": "LinkedIn and Indeed only: the Apply control, read, never clicked.",
+            "properties": {
+              "href": {
+                "anyOf": [
+                  {
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Href"
+              },
+              "kind": {
+                "enum": [
+                  "easy_apply",
+                  "offsite",
+                  "unknown"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "label": {
+                "default": "",
+                "maxLength": 1000,
+                "title": "Label",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "ApplyControl",
+            "type": "object"
+          },
+          "Facts": {
+            "additionalProperties": false,
+            "description": "What ``capture/extract.js`` read from the one page: raw facts, no decisions.",
+            "properties": {
+              "apply_control": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ApplyControl"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "canonical": {
+                "anyOf": [
+                  {
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Canonical"
+              },
+              "document_title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Document Title"
+              },
+              "iframes": {
+                "items": {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "title": "Iframes",
+                "type": "array"
+              },
+              "jsonld": {
+                "items": {
+                  "maxLength": 400000,
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "title": "Jsonld",
+                "type": "array"
+              },
+              "jsonld_dropped": {
+                "default": 0,
+                "maximum": 1000,
+                "minimum": 0,
+                "title": "Jsonld Dropped",
+                "type": "integer"
+              },
+              "microdata": {
+                "items": {
+                  "$ref": "#/$defs/MicroProp"
+                },
+                "maxItems": 100,
+                "title": "Microdata",
+                "type": "array"
+              },
+              "og_site_name": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Og Site Name"
+              },
+              "og_title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Og Title"
+              },
+              "page_text": {
+                "default": "",
+                "maxLength": 100000,
+                "title": "Page Text",
+                "type": "string"
+              },
+              "selection": {
+                "default": "",
+                "maxLength": 100000,
+                "title": "Selection",
+                "type": "string"
+              },
+              "site": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SiteFacts"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "trigger": {
+                "default": "popup",
+                "enum": [
+                  "menu-selection",
+                  "menu-page",
+                  "popup"
+                ],
+                "title": "Trigger",
+                "type": "string"
+              },
+              "truncated": {
+                "items": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "title": "Truncated",
+                "type": "array"
+              },
+              "url": {
+                "maxLength": 2048,
+                "title": "Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "title": "Facts",
+            "type": "object"
+          },
+          "MicroProp": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 100,
+                "title": "Name",
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 100000,
+                "title": "Value",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "title": "MicroProp",
+            "type": "object"
+          },
+          "SiteFacts": {
+            "additionalProperties": false,
+            "description": "A site-table row's fields (``capture/extract.js``; empty table at launch).",
+            "properties": {
+              "description": {
+                "anyOf": [
+                  {
+                    "maxLength": 100000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              },
+              "employer": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Employer"
+              },
+              "location": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Location"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Title"
+              }
+            },
+            "title": "SiteFacts",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "**Add** after a preview (edited fields), or **Add as new** (``force_new``).",
+        "properties": {
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 100000,
+            "title": "Description",
+            "type": "string"
+          },
+          "employer": {
+            "maxLength": 1000,
+            "title": "Employer",
+            "type": "string"
+          },
+          "facts": {
+            "$ref": "#/$defs/Facts"
+          },
+          "force_new": {
+            "default": false,
+            "title": "Force New",
+            "type": "boolean"
+          },
+          "posting_index": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 5,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Posting Index"
+          },
+          "source": {
+            "default": "edited",
+            "enum": [
+              "structured",
+              "page",
+              "selection",
+              "fetch",
+              "edited"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 1000,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "facts",
+          "title",
+          "employer",
+          "description"
+        ],
+        "title": "AddRequest",
+        "type": "object"
+      },
+      "responses": {
+        "CaptureResponse": {
+          "$defs": {
+            "BoardInfo": {
+              "additionalProperties": false,
+              "properties": {
+                "apply_mode": {
+                  "enum": [
+                    "easy_apply",
+                    "offsite",
+                    "unknown"
+                  ],
+                  "title": "Apply Mode",
+                  "type": "string"
+                },
+                "apply_url": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Apply Url"
+                },
+                "board": {
+                  "title": "Board",
+                  "type": "string"
+                },
+                "destination_host": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Destination Host"
+                },
+                "key": {
+                  "title": "Key",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "board",
+                "apply_mode"
+              ],
+              "title": "BoardInfo",
+              "type": "object"
+            },
+            "FetchOffer": {
+              "additionalProperties": false,
+              "properties": {
+                "host": {
+                  "title": "Host",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "fetch",
+                    "select"
+                  ],
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "url": {
+                  "title": "Url",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url",
+                "host",
+                "kind"
+              ],
+              "title": "FetchOffer",
+              "type": "object"
+            },
+            "GroupCard": {
+              "additionalProperties": false,
+              "properties": {
+                "bucket": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Bucket"
+                },
+                "bucket_name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Bucket Name"
+                },
+                "description_chars": {
+                  "default": 0,
+                  "title": "Description Chars",
+                  "type": "integer"
+                },
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "first_lines": {
+                  "default": "",
+                  "title": "First Lines",
+                  "type": "string"
+                },
+                "group_id": {
+                  "title": "Group Id",
+                  "type": "integer"
+                },
+                "has_description": {
+                  "default": false,
+                  "title": "Has Description",
+                  "type": "boolean"
+                },
+                "host": {
+                  "default": "",
+                  "title": "Host",
+                  "type": "string"
+                },
+                "job_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Job Id"
+                },
+                "location": {
+                  "default": "",
+                  "title": "Location",
+                  "type": "string"
+                },
+                "manual": {
+                  "default": false,
+                  "title": "Manual",
+                  "type": "boolean"
+                },
+                "packet_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Packet Id"
+                },
+                "partial": {
+                  "default": false,
+                  "title": "Partial",
+                  "type": "boolean"
+                },
+                "path": {
+                  "title": "Path",
+                  "type": "string"
+                },
+                "posted_at": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Posted At"
+                },
+                "salary": {
+                  "default": "",
+                  "title": "Salary",
+                  "type": "string"
+                },
+                "score_on_request": {
+                  "default": false,
+                  "title": "Score On Request",
+                  "type": "boolean"
+                },
+                "scored": {
+                  "default": false,
+                  "title": "Scored",
+                  "type": "boolean"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Verdict"
+                },
+                "why": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Why"
+                }
+              },
+              "required": [
+                "group_id",
+                "title",
+                "employer",
+                "path"
+              ],
+              "title": "GroupCard",
+              "type": "object"
+            },
+            "LinkOffer": {
+              "additionalProperties": false,
+              "properties": {
+                "board_key": {
+                  "title": "Board Key",
+                  "type": "string"
+                },
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "group_id": {
+                  "title": "Group Id",
+                  "type": "integer"
+                },
+                "message": {
+                  "title": "Message",
+                  "type": "string"
+                },
+                "minutes_ago": {
+                  "title": "Minutes Ago",
+                  "type": "integer"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "group_id",
+                "board_key",
+                "title",
+                "employer",
+                "minutes_ago",
+                "message"
+              ],
+              "title": "LinkOffer",
+              "type": "object"
+            },
+            "PostingChoice": {
+              "additionalProperties": false,
+              "properties": {
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "first_line": {
+                  "default": "",
+                  "title": "First Line",
+                  "type": "string"
+                },
+                "index": {
+                  "title": "Index",
+                  "type": "integer"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "url": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Url"
+                }
+              },
+              "required": [
+                "index",
+                "title",
+                "employer"
+              ],
+              "title": "PostingChoice",
+              "type": "object"
+            },
+            "Preview": {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "title": "Description",
+                  "type": "string"
+                },
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "location": {
+                  "default": "",
+                  "title": "Location",
+                  "type": "string"
+                },
+                "method": {
+                  "title": "Method",
+                  "type": "string"
+                },
+                "page_description": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Page Description"
+                },
+                "posting_index": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Posting Index"
+                },
+                "postings": {
+                  "items": {
+                    "$ref": "#/$defs/PostingChoice"
+                  },
+                  "title": "Postings",
+                  "type": "array"
+                },
+                "reasons": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Reasons",
+                  "type": "array"
+                },
+                "salary": {
+                  "default": "",
+                  "title": "Salary",
+                  "type": "string"
+                },
+                "selection": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Selection"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "url": {
+                  "title": "Url",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "employer",
+                "description",
+                "method",
+                "url"
+              ],
+              "title": "Preview",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "board": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoardInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "candidates": {
+              "items": {
+                "$ref": "#/$defs/GroupCard"
+              },
+              "title": "Candidates",
+              "type": "array"
+            },
+            "describe": {
+              "items": {
+                "type": "integer"
+              },
+              "title": "Describe",
+              "type": "array"
+            },
+            "fetch": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FetchOffer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "group": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GroupCard"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "method": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Method"
+            },
+            "offer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LinkOffer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "outcome": {
+              "enum": [
+                "added",
+                "existing",
+                "possible",
+                "previewed",
+                "linked",
+                "same_job"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "preview": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Preview"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "replayed": {
+              "default": false,
+              "title": "Replayed",
+              "type": "boolean"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Url"
+            }
+          },
+          "required": [
+            "outcome",
+            "message"
+          ],
+          "title": "CaptureResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/capture/fetch": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "url"
+        ],
+        "title": "FetchRequest",
+        "type": "object"
+      },
+      "responses": {
+        "FetchResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "employer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Employer"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title"
+            },
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "text"
+          ],
+          "title": "FetchResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/groups/{id}/describe": {
+      "method": "POST",
+      "request": {
+        "$defs": {
+          "ApplyControl": {
+            "additionalProperties": false,
+            "description": "LinkedIn and Indeed only: the Apply control, read, never clicked.",
+            "properties": {
+              "href": {
+                "anyOf": [
+                  {
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Href"
+              },
+              "kind": {
+                "enum": [
+                  "easy_apply",
+                  "offsite",
+                  "unknown"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "label": {
+                "default": "",
+                "maxLength": 1000,
+                "title": "Label",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "ApplyControl",
+            "type": "object"
+          },
+          "Facts": {
+            "additionalProperties": false,
+            "description": "What ``capture/extract.js`` read from the one page: raw facts, no decisions.",
+            "properties": {
+              "apply_control": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ApplyControl"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "canonical": {
+                "anyOf": [
+                  {
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Canonical"
+              },
+              "document_title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Document Title"
+              },
+              "iframes": {
+                "items": {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "title": "Iframes",
+                "type": "array"
+              },
+              "jsonld": {
+                "items": {
+                  "maxLength": 400000,
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "title": "Jsonld",
+                "type": "array"
+              },
+              "jsonld_dropped": {
+                "default": 0,
+                "maximum": 1000,
+                "minimum": 0,
+                "title": "Jsonld Dropped",
+                "type": "integer"
+              },
+              "microdata": {
+                "items": {
+                  "$ref": "#/$defs/MicroProp"
+                },
+                "maxItems": 100,
+                "title": "Microdata",
+                "type": "array"
+              },
+              "og_site_name": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Og Site Name"
+              },
+              "og_title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Og Title"
+              },
+              "page_text": {
+                "default": "",
+                "maxLength": 100000,
+                "title": "Page Text",
+                "type": "string"
+              },
+              "selection": {
+                "default": "",
+                "maxLength": 100000,
+                "title": "Selection",
+                "type": "string"
+              },
+              "site": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SiteFacts"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "trigger": {
+                "default": "popup",
+                "enum": [
+                  "menu-selection",
+                  "menu-page",
+                  "popup"
+                ],
+                "title": "Trigger",
+                "type": "string"
+              },
+              "truncated": {
+                "items": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "title": "Truncated",
+                "type": "array"
+              },
+              "url": {
+                "maxLength": 2048,
+                "title": "Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "title": "Facts",
+            "type": "object"
+          },
+          "MicroProp": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 100,
+                "title": "Name",
+                "type": "string"
+              },
+              "value": {
+                "maxLength": 100000,
+                "title": "Value",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "title": "MicroProp",
+            "type": "object"
+          },
+          "SiteFacts": {
+            "additionalProperties": false,
+            "description": "A site-table row's fields (``capture/extract.js``; empty table at launch).",
+            "properties": {
+              "description": {
+                "anyOf": [
+                  {
+                    "maxLength": 100000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Description"
+              },
+              "employer": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Employer"
+              },
+              "location": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Location"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Title"
+              }
+            },
+            "title": "SiteFacts",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "**Add this description** to an empty manual group (a capture's mapped fields).",
+        "properties": {
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 100000,
+            "title": "Description",
+            "type": "string"
+          },
+          "facts": {
+            "$ref": "#/$defs/Facts"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          },
+          "posting_index": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 5,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Posting Index"
+          }
+        },
+        "required": [
+          "action_id",
+          "facts"
+        ],
+        "title": "DescribeRequest",
+        "type": "object"
+      },
+      "responses": {
+        "DescribeResponse": {
+          "$defs": {
+            "GroupCard": {
+              "additionalProperties": false,
+              "properties": {
+                "bucket": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Bucket"
+                },
+                "bucket_name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Bucket Name"
+                },
+                "description_chars": {
+                  "default": 0,
+                  "title": "Description Chars",
+                  "type": "integer"
+                },
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "first_lines": {
+                  "default": "",
+                  "title": "First Lines",
+                  "type": "string"
+                },
+                "group_id": {
+                  "title": "Group Id",
+                  "type": "integer"
+                },
+                "has_description": {
+                  "default": false,
+                  "title": "Has Description",
+                  "type": "boolean"
+                },
+                "host": {
+                  "default": "",
+                  "title": "Host",
+                  "type": "string"
+                },
+                "job_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Job Id"
+                },
+                "location": {
+                  "default": "",
+                  "title": "Location",
+                  "type": "string"
+                },
+                "manual": {
+                  "default": false,
+                  "title": "Manual",
+                  "type": "boolean"
+                },
+                "packet_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Packet Id"
+                },
+                "partial": {
+                  "default": false,
+                  "title": "Partial",
+                  "type": "boolean"
+                },
+                "path": {
+                  "title": "Path",
+                  "type": "string"
+                },
+                "posted_at": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Posted At"
+                },
+                "salary": {
+                  "default": "",
+                  "title": "Salary",
+                  "type": "string"
+                },
+                "score_on_request": {
+                  "default": false,
+                  "title": "Score On Request",
+                  "type": "boolean"
+                },
+                "scored": {
+                  "default": false,
+                  "title": "Scored",
+                  "type": "boolean"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "verdict": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Verdict"
+                },
+                "why": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Why"
+                }
+              },
+              "required": [
+                "group_id",
+                "title",
+                "employer",
+                "path"
+              ],
+              "title": "GroupCard",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "group": {
+              "$ref": "#/$defs/GroupCard"
+            },
+            "outcome": {
+              "const": "description_added",
+              "title": "Outcome",
+              "type": "string"
+            },
+            "replayed": {
+              "default": false,
+              "title": "Replayed",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "outcome",
+            "group"
+          ],
+          "title": "DescribeResponse",
+          "type": "object"
+        },
+        "GoneResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "current_group": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Group"
+            },
+            "gone": {
+              "const": true,
+              "title": "Gone",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "title": "GoneResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/groups/{id}/estimate": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "Group routes: the job the popup holds, so a merged-away group can be followed.",
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          }
+        },
+        "title": "GroupRequest",
+        "type": "object"
+      },
+      "responses": {
+        "EstimateResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "batch": {
+              "title": "Batch",
+              "type": "boolean"
+            },
+            "confirm_label": {
+              "title": "Confirm Label",
+              "type": "string"
+            },
+            "cost_per_job": {
+              "title": "Cost Per Job",
+              "type": "number"
+            },
+            "cost_source": {
+              "title": "Cost Source",
+              "type": "string"
+            },
+            "estimated_usd": {
+              "title": "Estimated Usd",
+              "type": "number"
+            },
+            "group_id": {
+              "title": "Group Id",
+              "type": "integer"
+            },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Notice"
+            },
+            "prefilter_line": {
+              "title": "Prefilter Line",
+              "type": "string"
+            },
+            "refusal": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Refusal"
+            },
+            "remaining_usd": {
+              "title": "Remaining Usd",
+              "type": "number"
+            },
+            "scorer": {
+              "title": "Scorer",
+              "type": "string"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "group_id",
+            "scorer",
+            "cost_per_job",
+            "cost_source",
+            "estimated_usd",
+            "remaining_usd",
+            "batch",
+            "token",
+            "prefilter_line",
+            "confirm_label"
+          ],
+          "title": "EstimateResponse",
+          "type": "object"
+        },
+        "GoneResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "current_group": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Group"
+            },
+            "gone": {
+              "const": true,
+              "title": "Gone",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "title": "GoneResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/groups/{id}/prepare": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "Group routes: the job the popup holds, so a merged-away group can be followed.",
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          }
+        },
+        "title": "GroupRequest",
+        "type": "object"
+      },
+      "responses": {
+        "GoneResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "current_group": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Group"
+            },
+            "gone": {
+              "const": true,
+              "title": "Gone",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "title": "GoneResponse",
+          "type": "object"
+        },
+        "PrepareResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "needs_text": {
+              "title": "Needs Text",
+              "type": "boolean"
+            },
+            "packet_id": {
+              "title": "Packet Id",
+              "type": "integer"
+            },
+            "path": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "packet_id",
+            "path",
+            "needs_text"
+          ],
+          "title": "PrepareResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/groups/{id}/score": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          },
+          "token": {
+            "maxLength": 100,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "token"
+        ],
+        "title": "ScoreRequest",
+        "type": "object"
+      },
+      "responses": {
+        "ErrorResponse": {
+          "$defs": {
+            "EstimateResponse": {
+              "additionalProperties": false,
+              "properties": {
+                "batch": {
+                  "title": "Batch",
+                  "type": "boolean"
+                },
+                "confirm_label": {
+                  "title": "Confirm Label",
+                  "type": "string"
+                },
+                "cost_per_job": {
+                  "title": "Cost Per Job",
+                  "type": "number"
+                },
+                "cost_source": {
+                  "title": "Cost Source",
+                  "type": "string"
+                },
+                "estimated_usd": {
+                  "title": "Estimated Usd",
+                  "type": "number"
+                },
+                "group_id": {
+                  "title": "Group Id",
+                  "type": "integer"
+                },
+                "notice": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Notice"
+                },
+                "prefilter_line": {
+                  "title": "Prefilter Line",
+                  "type": "string"
+                },
+                "refusal": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Refusal"
+                },
+                "remaining_usd": {
+                  "title": "Remaining Usd",
+                  "type": "number"
+                },
+                "scorer": {
+                  "title": "Scorer",
+                  "type": "string"
+                },
+                "token": {
+                  "title": "Token",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "group_id",
+                "scorer",
+                "cost_per_job",
+                "cost_source",
+                "estimated_usd",
+                "remaining_usd",
+                "batch",
+                "token",
+                "prefilter_line",
+                "confirm_label"
+              ],
+              "title": "EstimateResponse",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "estimate": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EstimateResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "title": "ErrorResponse",
+          "type": "object"
+        },
+        "GoneResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "current_group": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Group"
+            },
+            "gone": {
+              "const": true,
+              "title": "Gone",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "title": "GoneResponse",
+          "type": "object"
+        },
+        "ScoreAccepted": {
+          "additionalProperties": false,
+          "properties": {
+            "group_id": {
+              "title": "Group Id",
+              "type": "integer"
+            },
+            "status": {
+              "const": "in_progress",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "group_id"
+          ],
+          "title": "ScoreAccepted",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/groups/{id}/status": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "Group routes: the job the popup holds, so a merged-away group can be followed.",
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          }
+        },
+        "title": "GroupRequest",
+        "type": "object"
+      },
+      "responses": {
+        "GoneResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "current_group": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Group"
+            },
+            "gone": {
+              "const": true,
+              "title": "Gone",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "title": "GoneResponse",
+          "type": "object"
+        },
+        "StatusResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "batch_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Batch Id"
+            },
+            "bucket": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Bucket"
+            },
+            "bucket_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Bucket Name"
+            },
+            "group_id": {
+              "title": "Group Id",
+              "type": "integer"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "started_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Started At"
+            },
+            "state": {
+              "enum": [
+                "scored",
+                "submitted",
+                "in_progress",
+                "stopped",
+                "error",
+                "not_scored"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            }
+          },
+          "required": [
+            "group_id",
+            "state",
+            "message"
+          ],
+          "title": "StatusResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/link": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "**Link them** (``b`` may be the same group, or none for a board-id-only link) or\n**Not the same** (``not_same``).",
+        "properties": {
+          "a": {
+            "maximum": 9007199254740992,
+            "minimum": 1,
+            "title": "A",
+            "type": "integer"
+          },
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "apply_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Apply Url"
+          },
+          "b": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "B"
+          },
+          "board_key": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Board Key"
+          },
+          "not_same": {
+            "default": false,
+            "title": "Not Same",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action_id",
+          "a"
+        ],
+        "title": "LinkRequest",
+        "type": "object"
+      },
+      "responses": {
+        "GoneResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "current_group": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Group"
+            },
+            "gone": {
+              "const": true,
+              "title": "Gone",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "title": "GoneResponse",
+          "type": "object"
+        },
+        "LinkResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "group_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Group Id"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "linked_groups",
+                "not_same"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "replayed": {
+              "default": false,
+              "title": "Replayed",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "outcome",
+            "message"
+          ],
+          "title": "LinkResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/pair": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 100,
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "PairRequest",
+        "type": "object"
+      },
+      "responses": {
+        "PairResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "extension_id": {
+              "title": "Extension Id",
+              "type": "string"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token",
+            "extension_id"
+          ],
+          "title": "PairResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/version": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "VersionRequest",
+        "type": "object"
+      },
+      "responses": {
+        "VersionResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "api": {
+              "title": "Api",
+              "type": "string"
+            },
+            "console": {
+              "title": "Console",
+              "type": "string"
+            },
+            "disabled_hosts": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Disabled Hosts",
+              "type": "array"
+            },
+            "min_extension": {
+              "title": "Min Extension",
+              "type": "string"
+            },
+            "notice_hosts": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Notice Hosts",
+              "type": "array"
+            },
+            "tracking_params": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Tracking Params",
+              "type": "array"
+            },
+            "tracking_prefixes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Tracking Prefixes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "api",
+            "console",
+            "min_extension",
+            "tracking_params",
+            "tracking_prefixes",
+            "disabled_hosts",
+            "notice_hosts"
+          ],
+          "title": "VersionResponse",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "title": "jobhunter extension API",
+  "version": "v1"
+}
