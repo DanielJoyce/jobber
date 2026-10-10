@@ -248,6 +248,108 @@ def test_classification_table(sender, subject, body, kind):
     assert match.classify(msg_of(sender, subject, body)).kind == kind
 
 
+# Rejections usually open with a thank-you line and often name the stage. A loose word
+# ("unfortunately") outside a benign sentence must still beat the preamble's phrase, or the
+# rejection is read as an offer, interview or confirmation and silently lost.
+@pytest.mark.parametrize(
+    "subject,body",
+    [
+        (
+            "Your interview with Acme",
+            "Thank you for interviewing with us. Unfortunately, we are unable to extend an "
+            "offer at this time.",
+        ),
+        (
+            "Acme update",
+            "Thanks for the phone screen last week. Unfortunately, we have chosen another "
+            "candidate.",
+        ),
+        (
+            "Thanks for the phone screen",
+            "Unfortunately, the team has decided to go in a different direction.",
+        ),
+        (
+            "Your application to Acme",
+            "Thank you for applying. Unfortunately, we have decided to move forward with "
+            "another candidate.",
+        ),
+        (
+            "Your application to Acme",
+            "Thank you for your application. Unfortunately, we have decided not to proceed.",
+        ),
+        (
+            "Your application to Acme",
+            "Thank you for applying. Unfortunately, you will not be advancing to the next round.",
+        ),
+        (
+            "Your application to Acme",
+            "Thank you for your application. Unfortunately, we went with other applicants "
+            "whose experience more closely matched.",
+        ),
+        (
+            "Your application to Acme",
+            "Thank you for applying. Unfortunately, after careful review of your application, "
+            "the team went another way.",
+        ),
+        (
+            "Thank you for applying",
+            "We have reviewed your application. You were not selected for this role.",
+        ),
+    ],
+)
+def test_thank_you_preamble_rejections_stay_rejections(subject, body):
+    assert match.classify(msg_of("A <no-reply@greenhouse.io>", subject, body)).kind == "rejection"
+    assert match.classify(msg_of("A <x@example.test>", subject, body)).kind == "rejection"
+
+
+@pytest.mark.parametrize(
+    "body,phrase",
+    [
+        (
+            "Unfortunately, we are unable to extend an offer at this time.",
+            "unable to extend an offer",
+        ),
+        ("Unfortunately, we have chosen another candidate.", "chosen another candidate"),
+        ("We have decided to move forward with another candidate.", "with another candidate"),
+        ("We have decided not to proceed with your application.", "decided not to proceed"),
+        ("You will not be advancing to the next round.", "not be advancing"),
+    ],
+)
+def test_specific_rejection_phrases_are_strong(body, phrase):
+    c = match.classify(msg_of("A <x@example.test>", "Thank you for applying", body))
+    assert (c.kind, c.phrase, c.strong) == ("rejection", phrase, True)
+
+
+def test_interview_preamble_rejection_scan_proposes_rejected_and_records_row(conn):
+    app_id = add_job(conn, 1, "Northwind Analytics", "Senior Data Engineer", applied="interview")
+    body = (
+        "Thank you for interviewing with us for the Senior Data Engineer position at Northwind "
+        "Analytics. Unfortunately, we are unable to extend an offer at this time."
+    )
+    m = raw("rj1", "Northwind Analytics <noreply@myworkday.com>", "Your interview", body)
+    run_scan(conn, [m])
+    got = [
+        (r["kind"], r["proposed_action"], r["proposed_status"], r["application_id"])
+        for r in rows(conn)
+    ]
+    assert got == [("rejection", "add_event", "rejected", app_id)]
+    assert len(conn.execute("SELECT * FROM rejection").fetchall()) == 1
+
+
+def test_applied_preamble_rejection_is_not_dropped_as_confirmation(conn):
+    app_id = add_job(conn, 1, "Northwind Analytics", "Senior Data Engineer", applied="applied")
+    body = (
+        "Thank you for applying to the Senior Data Engineer position at Northwind Analytics. "
+        "Unfortunately, the team went another way."
+    )
+    m = raw("rj2", "Northwind Analytics <noreply@myworkday.com>", "Your application", body)
+    run_scan(conn, [m])
+    got = [(r["kind"], r["proposed_status"], r["application_id"]) for r in rows(conn)]
+    assert got == [("rejection", "rejected", app_id)]
+    (rj,) = conn.execute("SELECT state FROM rejection").fetchall()
+    assert rj["state"] == "pending"  # a loose word only: confirmed by the user, not assumed
+
+
 @pytest.mark.parametrize(
     "domain",
     [

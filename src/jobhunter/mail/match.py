@@ -73,9 +73,7 @@ ATS_SENDER_DOMAINS = (
 # Order matters: first kind with a hit wins. A rejection often also says "thank you for
 # applying", and a confirmation often says "if selected for an interview", so the strong,
 # specific kinds are tested first and the loose ones last. Every rejection phrase here is
-# specific; the loose rejection words are in WEAK_REJECTION and count only when no phrase of
-# any kind matched (bug d28c8de: "unfortunately we are unable to respond to every applicant"
-# in a confirmation, or "if you are not selected", made confirmations into rejections).
+# specific; the loose rejection words are in WEAK_REJECTION (see there).
 PHRASES: dict[str, tuple[str, ...]] = {
     "rejection": (
         "not moving forward",
@@ -92,6 +90,15 @@ PHRASES: dict[str, tuple[str, ...]] = {
         "position has been filled",
         "regret to inform",
         "unable to offer you",
+        # Negated offers, read before the offer phrases they contain.
+        "unable to extend an offer",
+        "not be extending an offer",
+        "not extend an offer",
+        "with another candidate",
+        "chosen another candidate",
+        "selected another candidate",
+        "decided not to proceed",
+        "not be advancing",
     ),
     "offer": (
         "pleased to offer",
@@ -137,9 +144,22 @@ PHRASES: dict[str, tuple[str, ...]] = {
 }
 # Too loose to count unless the sender is a known ATS.
 WEAK_PHRASES = {"thank you for your interest", "application status", "your availability"}
-# Loose rejection words: a rejection only when nothing in PHRASES matched, and then a *weak*
-# one, recorded as pending until the user confirms it on /rejections.
+# Loose rejection words. Rejections usually open with a thank-you line that names the stage
+# ("thank you for applying", "thanks for the phone screen"), so a loose word beats every
+# non-rejection phrase; it is skipped only in a sentence that WEAK_REJECTION_BENIGN marks as
+# confirmation or scheduling talk (bug d28c8de: "unfortunately we are unable to respond to
+# every applicant", "if you are not selected", "unfortunately the interviewer is out; please
+# select a time"). A hit is a *weak* rejection, recorded pending until the user confirms it
+# on /rejections, so a misread hides nothing.
 WEAK_REJECTION = ("unfortunately", "not selected")
+WEAK_REJECTION_BENIGN = re.compile(
+    r"respond (?:to )?(?:every|each|all)|respond (?:individually|personally)|"
+    r"(?:individually|personally) respond|(?:unable|not able|cannot|can't|can not) (?:to )?"
+    r"(?:respond|reply)|reschedul|(?:select|pick|choose|find) (?:a|another|a new|a "
+    r"different) time|(?:new|another|different) time|your availability|times? that works?|"
+    r"\b(?:if|should|unless|whether|who|whom)\b[^.!?]*\bnot selected",
+)
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 URL_RE = re.compile(r"https?://[^\s<>\")\]]+", re.I)
 _WS = re.compile(r"\s+")
@@ -244,6 +264,16 @@ def _norm_text(s: str) -> str:
     return _WS.sub(" ", s.lower().replace(chr(0x2019), "'")).strip()
 
 
+def _weak_rejection(subject: str, body: str) -> tuple[bool, str] | None:
+    """(in_subject, word) for the first loose rejection word outside a benign sentence."""
+    for where, text in ((True, subject), (False, body)):
+        for sentence in _SENTENCE_END.split(text):
+            for p in WEAK_REJECTION:
+                if p in sentence and not WEAK_REJECTION_BENIGN.search(sentence):
+                    return where, p
+    return None
+
+
 def classify(msg: Message, fallback: Classifier | None = None) -> Classification:
     """Deterministic classification; ``fallback`` (optional LLM hook) only sees 'other'."""
     subject = _norm_text(msg.subject)
@@ -256,10 +286,8 @@ def classify(msg: Message, fallback: Classifier | None = None) -> Classification
         for p in phrases:
             if p in body and not (p in WEAK_PHRASES and not ats):
                 return Classification(kind, ats, False, p)
-    for where, text in ((True, subject), (False, body)):
-        for p in WEAK_REJECTION:
-            if p in text:
-                return Classification("rejection", ats, where, p, strong=False)
+        if kind == "rejection" and (weak := _weak_rejection(subject, body)) is not None:
+            return Classification("rejection", ats, weak[0], weak[1], strong=False)
     if fallback is not None:
         out = fallback(msg)
         if out is not None and out.kind in KINDS:
