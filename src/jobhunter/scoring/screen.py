@@ -354,6 +354,13 @@ WHERE NOT EXISTS (
       AND b.scoring_version = :scoring_version)
   AND g.id NOT IN (SELECT value FROM json_each(:rejected))
   AND (:only IS NULL OR g.id IN (SELECT value FROM json_each(:only)))
+  AND (NOT :new_only OR (
+    NOT EXISTS (
+      SELECT 1 FROM fit_score f
+      WHERE f.job_group_id = g.id AND f.tier = :tier AND f.input_rev = g.description_rev)
+    AND NOT EXISTS (
+      SELECT 1 FROM score_batch_item i JOIN score_batch b ON b.id = i.batch_id
+      WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier)))
 ORDER BY j.posted_at IS NULL, j.posted_at DESC, g.id
 LIMIT :limit
 """
@@ -366,6 +373,7 @@ def eligible_groups(
     scorer: str,
     limit: int,
     group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> list[sqlite3.Row]:
     """Groups whose canonical job passed the current prefilter and have no screen yet.
 
@@ -375,6 +383,11 @@ def eligible_groups(
     uncollected batch for the same key are skipped so they are never submitted twice. A
     posting the candidate was rejected for (``core/rejections``) is never eligible.
     ``group_ids`` narrows the result to those groups (a re-score runs only its confirmed plan).
+
+    ``new_only`` is the daily run's rule: only groups with no screen score at all for their
+    current description revision (under any model, prompt or ``scoring_version``) and none in
+    an uncollected batch. Re-scoring an already scored group costs money, so it happens only
+    through a confirmed re-score, never automatically (specs/006, specs/014).
     """
     return conn.execute(
         _ELIGIBLE,
@@ -387,6 +400,7 @@ def eligible_groups(
             "limit": limit,
             "rejected": rejections.rejected_json(conn),
             "only": only_json(group_ids),
+            "new_only": int(new_only),
         },
     ).fetchall()
 
@@ -457,6 +471,7 @@ def submit_batch(
     remaining_usd: Callable[[], float] | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
     group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> str | None:
     """Submit one Message Batch for eligible groups. Returns the batch id, or None.
 
@@ -470,7 +485,9 @@ def submit_batch(
         limit = min(limit, affordable)
     if limit <= 0:
         return None
-    groups = eligible_groups(conn, profile, scorer=scorer, limit=limit, group_ids=group_ids)
+    groups = eligible_groups(
+        conn, profile, scorer=scorer, limit=limit, group_ids=group_ids, new_only=new_only
+    )
     if not groups:
         return None
 
@@ -773,6 +790,7 @@ def score_sync(
     remaining_usd: Callable[[], float] | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
     group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> SyncResult:
     """Screen eligible groups through a non-batching scorer and write fit_score rows now.
 
@@ -793,6 +811,7 @@ def score_sync(
             remaining_usd=remaining_usd,
             rejection_days=rejection_days,
             group_ids=group_ids,
+            new_only=new_only,
         )
     out = SyncResult()
     if int(getattr(scorer, "jobs_per_request", 1) or 1) > 1:
@@ -805,6 +824,7 @@ def score_sync(
             remaining_usd=remaining_usd,
             rejection_days=rejection_days,
             group_ids=group_ids,
+            new_only=new_only,
         )
     if remaining_usd is not None:
         affordable = math.floor(max(remaining_usd(), 0.0) / ESTIMATED_COST_PER_REQUEST_USD)
@@ -813,7 +833,9 @@ def score_sync(
         limit = min(limit, affordable)
     if limit <= 0:
         return out
-    groups = eligible_groups(conn, profile, scorer=scorer.name, limit=limit, group_ids=group_ids)
+    groups = eligible_groups(
+        conn, profile, scorer=scorer.name, limit=limit, group_ids=group_ids, new_only=new_only
+    )
     if not groups:
         return out
     by_id = {f"g{g['group_id']}": g for g in groups}
@@ -1055,6 +1077,7 @@ def _score_sync_packed(
     remaining_usd: Callable[[], float] | None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
     group_ids: Sequence[int] | None = None,
+    new_only: bool = False,
 ) -> SyncResult:
     """``score_sync`` with several jobs per request.
 
@@ -1066,7 +1089,12 @@ def _score_sync_packed(
     out = SyncResult()
     groups = sorted(
         eligible_groups(
-            conn, profile, scorer=scorer.name, limit=max(limit, 0), group_ids=group_ids
+            conn,
+            profile,
+            scorer=scorer.name,
+            limit=max(limit, 0),
+            group_ids=group_ids,
+            new_only=new_only,
         ),
         key=lambda g: g["group_id"],
     )
