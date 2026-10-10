@@ -81,7 +81,9 @@ in phase 2, the field `name`/`id`) **before anything else** at every entry point
 | Entry point | On a match |
 |---|---|
 | **Save as answer** on a custom question | Refused: "This one is yours; jobhunter doesn't store it" |
-| Any `packet_answer` write (one function, `apply/answers.py::save_answer`, the only writer) | Raises; nothing written |
+| Any `packet_answer` write (one function, `apply/answers.py::save_packet_answer`, the only writer of `packet_answer`) | Raises; nothing written |
+| **Promote to /prefs** on a saved packet answer, and the `/prefs` Application answers save | Refused with the same message; nothing written |
+| Loading `preferences.yaml` (hand edits included) | The `answers:` pydantic model rejects the entry; the page shows the error and packets ignore `answers:` until it is fixed |
 | **Question draft** | No generation, no spend; the page says "This one is yours" |
 | Phase 2 `fill-classify` | Action `yours`, evaluated before every other row ([precedence](#what-the-helper-does)) |
 
@@ -98,12 +100,21 @@ the preferences file already has.
 relocation and remote preference, work authorization as yes/no (only if you want it there), and saved
 custom answers such as "why this company" templates.
 
-**The [never-store list](#never-store-list) still applies.** The `/prefs` save path rejects any answer whose
-label matches it, with a clear message (for example "'Desired salary' is on the never-store list; answer it
-by hand") and saves nothing. The `answers:` key is not part of any scoring prompt.
+**The [never-store list](#never-store-list) still applies, at the model level.** The check lives in the
+pydantic `answers` model (`Profile` is `extra="ignore"` today, so `answers:` gets an explicit model), which
+runs on every load and every save: a hand edit of `profile/preferences.yaml`, the `/prefs` form save, and
+promotion from a packet. Any answer whose label matches is rejected with a clear message (for example
+"'Desired salary' is on the never-store list; answer it by hand") and nothing is written. The `answers:` key
+is not part of any scoring prompt.
 
-**Packets read from it**; **Save as answer** on a packet writes here, through `apply/answers.py::save_answer`
-(the one writer, which runs the never-store check). `packet_answer` keeps per-packet drafts and edits.
+**Two stores, no overlap.** **Save as answer** on a packet writes only `packet_answer` (per-packet, source
+`user` or `draft`) through `apply/answers.py::save_packet_answer`. A separate **Promote to /prefs** action on a
+saved packet answer copies it into `answers:` through the same model validation and the 014 ruamel round-trip
+write. The `/prefs` form save is the other writer of `answers:`; there is no single writer of `answers:`,
+which is why the check sits in the model.
+
+**Packets read from it**: the packet page offers `answers:` entries to copy next to matching questions. They
+are never sent to the model (see Never sent).
 
 ## Phase 1: packets
 
@@ -192,7 +203,8 @@ evidence quotes, `tailoring_hints` and Stage 3 `requirement_gaps` ([006](006-fit
 for a cover letter or "Why us?" draft, your employer notes; for a behavioral draft, your story
 facts.
 
-**Never sent:** saved answers (`packet_answer` values other than notes and story facts), salary
+**Never sent:** saved answers (`packet_answer` values other than notes and story facts), everything under
+`answers:` on `/prefs` (links, notice period, work authorization, templates; it is only shown to you to copy), salary
 preferences, filters and weights, other jobs, application history, email content.
 
 The model returns structure, not prose, so every line can be checked:
@@ -265,8 +277,8 @@ list](#never-store-list); a match gets "This one is yours" and no draft.
 | Anything else | Drafted from resume lines, checked as above |
 
 **Save as answer** keeps a draft or your own text on the packet (`packet_answer`, source
-`user` or `draft`). Saved answers are reusable: the same normalized question on a later packet
-offers your earlier answers to copy. Reusable ones can also be saved to [Application answers](#application-answers) on `/prefs`, which every packet reads.
+`user` or `draft`) and writes nothing to `/prefs`. Saved answers are reusable: the same normalized question on a later packet
+offers your earlier answers to copy. **Promote to /prefs** on a saved answer copies it into [Application answers](#application-answers), which every packet offers to copy.
 
 ### Export
 
@@ -454,7 +466,7 @@ Yours (4):       ? "Why Acme?" (draft ready) · Salary · EEO block · Consent c
 ```
 
 Revision 3 had no "fill from a bank" row, and revision 4 keeps that: your fill helpers cover contact, links and work
-authorization, and the `/prefs` answers feed packets and drafts, not form fills. If you install your helper in the `jobhunter-apply` profile, run it after the
+authorization, and the `/prefs` answers are offered on packets to copy, not sent to the model and not used for form fills. If you install your helper in the `jobhunter-apply` profile, run it after the
 parse settles and before step 7; its fills then show as `keep` on a re-run. The helper itself
 fills nothing in revision 3 except, with your approval in chat, pasting a draft into its field.
 
@@ -613,10 +625,10 @@ mocked.
 
 | Area | How |
 |---|---|
-| Generator | Canned JSON from a mocked client; streaming; effort and thinking set; the request body contains no saved `packet_answer` values |
+| Generator | Canned JSON from a mocked client; streaming; effort and thinking set; the request body contains no saved `packet_answer` values and no `answers:` content (seeded with a link, notice period and template; none appears in the body) |
 | Factcheck | Table tests: new employer, changed date, invented number, unlisted skill, invented certification, "contributed" → "led", added team size, added "expert", employer sentence without a quote (with and without notes), bad posting quote, behavioral sentence without `S*`/`L*`, confirmed line |
 | Editor | Sources and confirmations carry forward for unchanged items; an edited item is re-checked and keeps its badge if it still fails; a new item without a source blocks Mark ready |
-| Never-store | One test per entry point: Save as answer, `save_answer`, question draft (no client call), `fill-classify` row 1 beats every other row |
+| Never-store | One test per entry point: Save as answer, `save_packet_answer`, Promote to /prefs, `/prefs` answers save, loading a hand-edited `preferences.yaml` with a 'Desired salary' answer (model rejects it; packets do not offer it), question draft (no client call), `fill-classify` row 1 beats every other row |
 | Spend | Packet spend ignored by `remaining_daily_budget` / `weekly_remaining`; `[apply] daily_cap_usd` refuses before the call |
 | Paste | `/apply/new` URL-only, text-only, dedup, robots refusal (mocked `FetchContext`); job at `normalized` and skipped by a daily run; `description_rev` unchanged; Score this group now records the pass and scores one group; Open application hidden without a URL; Pasted Sankey node; cross-site POSTs refused |
 | Merges | As in [Merges and undo](#merges-and-undo) |
