@@ -242,3 +242,42 @@ def test_no_apply_control_off_board(site):
     page = site.open(f"{EMP}/careers/1001b", page_html("jsonld.html"))
     result, _ = site.extract(page)
     assert result["apply_control"] is None
+
+
+def test_the_apply_control_is_read_in_the_job_details_not_the_filter_bar(site):
+    pill = (
+        '<div class="search-filters"><button aria-label="Easy Apply filter.">Easy Apply'
+        "</button></div>"
+    )
+    body = board("direct").replace("<main>", "<main>" + pill, 1)
+    page = site.open(f"{LI}/jobs/search/?currentJobId=4012345099", body)
+    result, _ = site.extract(page)
+    ctl = result["apply_control"]
+    assert ctl["kind"] == "offsite"
+    assert ctl["href"] == "https://boards.greenhouse.io/boardsynthetic/jobs/7001?gh_src=li"
+
+
+def test_text_inside_display_contents_wrappers_is_read(site):
+    html = (
+        "<!doctype html><title>Wrapped</title><main><div style='display: contents'>"
+        "<h1>Data Engineer</h1><p>Build the synthetic pipelines every day.</p></div>"
+        "<p>Outside wrapper.</p></main>"
+    )
+    page = site.open(f"{EMP}/careers/contents", html)
+    result, _ = site.extract(page)
+    assert "Build the synthetic pipelines" in result["page_text"]
+    assert "Outside wrapper." in result["page_text"]
+
+
+def test_capture_leaves_the_selection_and_scroll_alone(site):
+    tall = page_html("plain.html").replace("</main>", "<div style='height:3000px'></div></main>")
+    page = site.open(f"{EMP}/plain/scroll", tall)
+    page.evaluate(
+        "() => { const r = document.createRange(); r.selectNodeContents(document.getElementById"
+        "('para')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); "
+        "window.scrollTo(0, 400); }"
+    )
+    state = "() => [String(getSelection()), getSelection().rangeCount, scrollX, scrollY]"
+    before = page.evaluate(state)
+    site.extract(page)
+    assert page.evaluate(state) == before

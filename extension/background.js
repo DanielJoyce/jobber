@@ -19,13 +19,15 @@ const NOTICE_HOSTS = [
 const IN_FLIGHT_MS = 60 * 1000;
 const RESULT_MS = 10 * 60 * 1000;
 const BOARD_WINDOW_MS = 30 * 60 * 1000;
-const VERSION_TTL_MS = 5 * 60 * 1000;
+const VERSION_TTL_MS = 30 * 1000; // short: the off list and pairing must not go stale
 const MAX_ENTRIES = 50;
 const FETCH_TIMEOUT_MS = 25 * 1000; // every console route answers within 20 s
 const CONSOLE_PATHS = /^\/(job|packet)\/\d+$|^\/apply\/new(\?url=[^#]*)?$|^\/captured$|^\/prefs$/;
 
 // The pairing token is for trusted contexts (this worker and the extension's own pages) only.
 chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"}).catch(() => {});
+// When this worker started (the e2e harness checks that a stopped worker really restarted).
+chrome.storage.session.set({bootAt: Date.now()}).catch(() => {});
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
@@ -70,6 +72,7 @@ async function api(path, body, {auth = true} = {}) {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (e) {
+    await chrome.storage.session.remove("cached");
     throw new ApiError(
       "unreachable",
       "The jobhunter console is not reachable on port " + port + ". Start it with: jobhunter console",
@@ -80,6 +83,9 @@ async function api(path, body, {auth = true} = {}) {
     data = await resp.json();
   } catch (e) {
     data = null;
+  }
+  if (resp.status === 401 || resp.status === 403 || resp.status === 426) {
+    await chrome.storage.session.remove("cached");
   }
   if (resp.status === 401) {
     throw new ApiError("unpaired", "Not paired, or the pairing was revoked: pair again in options.", 401);
@@ -93,6 +99,9 @@ async function api(path, body, {auth = true} = {}) {
 // ── versions, off list, notices ───────────────────────────────────────────────
 
 async function version() {
+  if (!(await config()).token) {
+    throw new ApiError("unpaired", "Pair the extension first: open its options page.");
+  }
   const {cached} = await chrome.storage.session.get("cached");
   if (cached && Date.now() - cached.at < VERSION_TTL_MS) {
     return cached.data;
@@ -173,7 +182,8 @@ function captureKey(tabId, url, ver) {
     }
   }
   const q = new URLSearchParams(kept).toString();
-  return tabId + " " + u.origin + u.pathname + (q ? "?" + q : "");
+  // The fragment stays: hash-routed boards change the job in it.
+  return tabId + " " + u.origin + u.pathname + (q ? "?" + q : "") + u.hash;
 }
 
 async function entries() {
@@ -312,13 +322,16 @@ async function captureNow(tab, {trigger, selectionText = null, again = false}) {
   if (!again) {
     const entry = (await entries())[key];
     const fresh = entry && entry.state === "result" && Date.now() - entry.at < RESULT_MS;
-    if (fresh && recent.has(key)) {
+    // Only an answer that wrote something is shown again; a preview, a possible match or
+    // a same-job offer wrote nothing, so reopening captures again (a new selection counts).
+    const kept = fresh && ["added", "existing", "linked"].includes(entry.outcome);
+    if (kept && recent.has(key)) {
       const seen = recent.get(key);
       const repeat = Boolean(seen.shown);
       seen.shown = true;
       return Object.assign({}, seen, {repeat});
     }
-    if (fresh && entry.card && ["added", "existing", "linked"].includes(entry.outcome)) {
+    if (kept && entry.card) {
       return {state: "stored", key, entry};
     }
   }
@@ -382,6 +395,14 @@ async function doCapture(tab, key, {trigger, selectionText, again}) {
   return out;
 }
 
+function forget(key) {
+  return serial(async () => {
+    const all = await entries();
+    delete all[key];
+    await chrome.storage.session.set({entries: all});
+  });
+}
+
 async function updateEntry(key, resp) {
   if (!key || !resp) {
     return;
@@ -434,8 +455,16 @@ async function handle(msg) {
       }
       return r;
     }
-    case "link":
-      return api("link", msg.body);
+    case "link": {
+      const r = await api("link", msg.body);
+      if (msg.key) {
+        recent.delete(msg.key);
+        if (r.status === 200) {
+          await forget(msg.key); // the stored answer named a group that may be gone now
+        }
+      }
+      return r;
+    }
     case "fetch":
       return api("capture/fetch", msg.body);
     case "estimate":
@@ -464,14 +493,21 @@ async function handle(msg) {
     }
     case "unpair":
       await chrome.storage.local.remove("token");
+      await chrome.storage.session.remove("cached");
       return {paired: false};
     default:
       throw new ApiError("error", "unknown request");
   }
 }
 
+// Only the extension's own pages may ask: never a script in a web page, even this
+// extension's own (the token's powers are for trusted contexts, like the token).
+const OWN_PAGES = [chrome.runtime.getURL("popup/"), chrome.runtime.getURL("options/")];
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (sender.id !== chrome.runtime.id || !msg || typeof msg.type !== "string") {
+  const own = sender.id === chrome.runtime.id && typeof sender.url === "string"
+    && OWN_PAGES.some((prefix) => sender.url.startsWith(prefix));
+  if (!own || !msg || typeof msg.type !== "string") {
     return false;
   }
   handle(msg).then(sendResponse, (err) => sendResponse({
@@ -481,18 +517,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+function onMenu(info, tab) {
   if (!tab || info.menuItemId !== "send-to-jobhunter") {
-    return;
+    return null;
   }
   const trigger = info.selectionText ? "menu-selection" : "menu-page";
   const t = {id: tab.id, url: tab.url, windowId: tab.windowId, openerTabId: tab.openerTabId};
-  captureTab(t, {trigger, selectionText: info.selectionText || null, again: true})
-    .then((res) => setBadge(tab.id, res && res.state === "result"))
+  const run = captureTab(t, {trigger, selectionText: info.selectionText || null, again: true});
+  run.then((res) => setBadge(tab.id, res && res.state === "result"))
     .catch(() => setBadge(tab.id, false));
   // Shows the stored result; if Chrome refuses, the user clicks the icon to see it.
   chrome.action.openPopup().catch(() => {});
+  return run;
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  onMenu(info, tab);
 });
 
 // For the e2e harness and debugging from the worker console: the same path the popup takes.
 self.jobhunterCapture = (tab, opts) => captureTab(tab, opts || {trigger: "popup"});
+// The context-menu handler itself (the e2e cannot click a context menu).
+self.jobhunterMenu = (info, tab) => onMenu(info, tab);

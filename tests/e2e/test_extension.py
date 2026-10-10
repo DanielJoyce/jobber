@@ -395,6 +395,12 @@ def test_preview_with_an_edited_description(paired):
     expect(p.locator("#pv-title")).to_have_value("Site Reliability Engineer")
     expect(p.locator("#pv-employer")).to_have_value("Plain Synthetic Co")
     edited = text.replace("Our stack is Linux, Postgres and a little Go.", "").strip()
+    # Reopening a preview captures again (a preview wrote nothing): a new request.
+    n = len(h.captures)
+    p.close()
+    p = h.popup(url)
+    expect(p.locator("#status")).to_have_text("Check this, then Add")
+    assert len(h.captures) == n + 1
     p.fill("#pv-description", edited)
     p.click("#add")
     expect(p.locator("#status")).to_have_text("Added")
@@ -478,6 +484,7 @@ def test_worker_stopped_mid_score_status_still_reaches_the_bucket(paired):
     p.click("#confirm-score")
     pump_until(scorer.started, p)
     p.close()
+    boot = h.ext_page().evaluate("() => chrome.storage.session.get('bootAt')")["bootAt"]
     cdp = h.ctx.new_cdp_session(h.ctx.pages[0])
     cdp.send("ServiceWorker.enable")
     cdp.send("ServiceWorker.stopAllWorkers")
@@ -486,6 +493,8 @@ def test_worker_stopped_mid_score_status_still_reaches_the_bucket(paired):
         t.join(15)
     again = h.popup(url)
     expect(again.locator("#score-status")).to_contain_text("Scored:", timeout=15000)
+    restarted = h.ext_page().evaluate("() => chrome.storage.session.get('bootAt')")["bootAt"]
+    assert restarted != boot, "the worker was not stopped and restarted"
     again.close()
 
 
@@ -546,3 +555,36 @@ def test_a_page_chrome_will_not_let_us_read_offers_new_packet(paired):
     expect(new.locator("#new-url")).to_have_value(url)
     new.close()
     p.close()
+
+
+def test_a_right_click_on_a_notice_host_reads_nothing_before_the_notice(paired):
+    h = paired
+    url = "https://www.indeed.com/viewjob?jk=0a1b2c3d4e5f6789"
+    h.open(url, html("board.html", **{"<!--APPLY-->": "<button>Apply now</button>"}))
+    n = len(h.captures)
+    tid = h.tab_id(url)
+    sw = h.ctx.service_workers[-1]
+    out = sw.evaluate(
+        "([id, u]) => self.jobhunterMenu({menuItemId: 'send-to-jobhunter', selectionText: "
+        "'A selection made on the board page that must be discarded before the notice.'}, "
+        "{id, url: u, windowId: 0})",
+        [tid, url],
+    )
+    assert out["state"] == "notice"
+    assert len(h.captures) == n and not [k for k in h.entries() if "indeed" in k]
+
+
+def test_a_script_in_a_web_page_cannot_use_the_worker(paired):
+    h = paired
+    url, body = jsonld_page(1007, "Sender Engineer")
+    h.open(url, body)
+    tid = h.tab_id(url)
+    sw = h.ctx.service_workers[-1]
+    # Code running in this extension's isolated world inside the page: its messages are refused.
+    answer = sw.evaluate(
+        "(id) => chrome.scripting.executeScript({target: {tabId: id}, func: () => "
+        "chrome.runtime.sendMessage({type: 'pairStatus'}).then((r) => r === undefined ? "
+        "'refused' : 'answered').catch(() => 'refused')}).then((r) => r[0].result)",
+        tid,
+    )
+    assert answer == "refused"

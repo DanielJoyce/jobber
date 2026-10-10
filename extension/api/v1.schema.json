@@ -853,6 +853,22 @@
               "default": null,
               "title": "Job Id"
             },
+            "link_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pair",
+                    "pick"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Link Mode"
+            },
             "message": {
               "title": "Message",
               "type": "string"
@@ -1764,6 +1780,22 @@
               ],
               "default": null,
               "title": "Job Id"
+            },
+            "link_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pair",
+                    "pick"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Link Mode"
             },
             "message": {
               "title": "Message",

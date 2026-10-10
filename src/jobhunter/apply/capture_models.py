@@ -254,6 +254,9 @@ class CaptureResponse(Strict):
     board: BoardInfo | None = None
     job_id: int | None = None
     url: str | None = None  # the URL chosen for this page's posting
+    # same_job only: "pair" links the two candidates (the board posting and the employer's);
+    # "pick" asks which one candidate this posting is (never links candidates to each other).
+    link_mode: Literal["pair", "pick"] | None = None
     replayed: bool = False
 
 

@@ -155,3 +155,14 @@ def test_reverify_never_requests_a_board_host(conn, factory, server: Server):
 
 def test_no_fetch_error_is_exported():
     assert applylink.NO_FETCH_ERROR.startswith("board host")
+
+
+def test_reverify_never_follows_a_redirect_into_a_board_host(conn, factory, server: Server):
+    start = "https://careers.acme.example/j/77"
+    server.page(start)
+    gid = add_group(conn, (start, None))
+    assert resolve_group(conn, gid, now=NOW, ctx_factory=factory).status == ApplyStatus.live
+    server.redirect(start, LI)
+    link = reverify(conn, gid, now=NOW + timedelta(days=2), ctx_factory=factory)
+    assert link is not None and link.error == NO_FETCH_ERROR
+    assert "www.linkedin.com" not in server.hosts(robots=True)

@@ -24,6 +24,7 @@ from jobhunter.apply import capture, ext_pairing
 from jobhunter.apply import score as group_score
 from jobhunter.console import detail
 from jobhunter.console.inbox_routes import load_console_profile
+from jobhunter.console.tracking_routes import Form
 from jobhunter.core import db
 from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
@@ -121,9 +122,12 @@ def register(
         )
 
     @app.post("/job/{group_id}/score")
-    async def job_score(request: Request, conn: Conn, group_id: int) -> Response:
-        """Score this group now from the job page (specs/017 1e): confirmed, paid, one group."""
-        form = await request.form()
+    def job_score(request: Request, conn: Conn, form: Form, group_id: int) -> Response:
+        """Score this group now from the job page (specs/017 1e): confirmed, paid, one group.
+
+        A plain ``def``: FastAPI runs it in the threadpool, so a synchronous scorer (up to its
+        180-second timeout) never blocks the console's event loop.
+        """
         d = require_detail(request, conn, group_id)
         if not d.score_on_request:
             raise HTTPException(409, "this posting is scored by the nightly run")
@@ -154,9 +158,8 @@ def register(
         return RedirectResponse(f"/job/{group_id}", status_code=303)
 
     @app.post("/job/{group_id}/link")
-    async def job_link(request: Request, conn: Conn, group_id: int) -> Response:
+    def job_link(request: Request, conn: Conn, form: Form, group_id: int) -> Response:
         """**Link them** on the job page: only with a group that is surely the same posting."""
-        form = await request.form()
         try:
             other = int(str(form.get("other") or ""))
         except ValueError as exc:

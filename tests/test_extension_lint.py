@@ -205,6 +205,12 @@ CAPTURE_DENY = [
     r"\bwindow\s*\.\s*open\b", r"\blocation\s*(?:\.\s*href\s*)?=(?!=)",
     r"\blocation\s*\.\s*(?:assign|replace|reload)\b", r"\.(?:value|checked)\b",
     r"\bchrome\s*\.", r"\bimport\s*\(",
+    # the user's selection and scroll position are not ours to change either
+    r"\.collapse(?:ToEnd|ToStart)?\s*\(", r"\.empty\s*\(", r"\baddRange\b",
+    r"\bsetBaseAndExtent\b", r"\.extend\s*\(", r"\bselectAllChildren\b",
+    r"\bdeleteFromDocument\b", r"\bremoveRange\b", r"\bscroll(?:To|By)?\s*\(",
+    r"\bscrollTop\s*=", r"\bscrollLeft\s*=", r"\bselect\s*\(\s*\)", r"\bblur\s*\(",
+    r"\bhistory\s*\.", r"\bnew\s+Image\b", r"\bFormData\b", r"\bdocument\s*\.\s*cookie",
 ]  # fmt: skip
 EVERYWHERE_DENY = [
     r"\binnerHTML\b", r"\bouterHTML\b", r"\binsertAdjacentHTML\b", r"\bdocument\s*\.\s*write",
@@ -230,6 +236,13 @@ def test_lexer_ignores_comments_strings_and_regexes():
     code = strip_js(src)
     assert "appendChild" not in code and "innerHTML" not in code and "fetch" not in code
     assert "a / 2 / 3" in code and "1 + 2" in code
+
+
+def test_rules_catch_selection_and_scroll_changes():
+    for bad in ("sel.collapseToEnd()", "sel.addRange(r)", "window.scrollTo(0, 9)",
+                "el.scrollTop = 5", "sel.setBaseAndExtent(a, 0, b, 0)", "history.replaceState({})",
+                "new Image().src = u", "new FormData(form)"):  # fmt: skip
+        assert violations(strip_js(bad), CAPTURE_DENY), bad
 
 
 def test_rules_catch_violations():

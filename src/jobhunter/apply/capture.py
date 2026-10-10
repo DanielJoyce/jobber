@@ -976,24 +976,39 @@ def _decide(
     now: datetime,
 ) -> tuple[CaptureResponse, int | None, int | None]:
     board = _board_info(a)
+    # A page URL that differs from a chosen URL naming one posting (a search page that keeps
+    # its URL while the posting changes) is only a weak match: it may show another posting.
+    separate = bool(
+        identifies_posting(a.url) and _key(a.page_url) and _key(a.page_url) != _key(a.url)
+    )
     dups = paste.find_duplicates(
         conn,
         a.url,
         a.employer,
         a.title,
-        urls=(a.page_url,),
+        urls=() if separate else (a.page_url,),
         board_keys=(a.board_key,) if a.board_key else (),
     )
+    if separate:
+        seen = {d.group_id for d in dups}
+        for d in paste.find_duplicates(conn, None, "", "", urls=(a.page_url,)):
+            if d.group_id not in seen and d.why != paste.SAME_BOARD_ID:
+                d.why = paste.SAME_SITE_URL
+                dups.append(d)
     board_hits = [d for d in dups if d.why == paste.SAME_BOARD_ID]
     strong = [d for d in dups if d.by_url]
     weak = [d for d in dups if not d.by_url]
     dest_strong: list[paste.Duplicate] = []
     dest_weak: list[paste.Duplicate] = []
-    if a.destination:
+    if a.destination and identifies_posting(a.destination):
+        # Linked at once only when an ATS rule says the destination is one posting; a
+        # generic careers path is only offered. A careers home matches nothing.
+        rule = match_ats(a.destination)
+        posting = rule is not None and rule.is_posting(a.destination)
         for d in paste.find_duplicates(conn, a.destination, "", ""):
-            if any(d.group_id == b.group_id for b in board_hits):
+            if d.why != paste.SAME_URL or any(d.group_id == b.group_id for b in board_hits):
                 continue
-            if d.why == paste.SAME_URL and _titles_agree(a.title, d.title):
+            if posting and _titles_agree(a.title, d.title):
                 dest_strong.append(d)
             else:
                 dest_weak.append(d)
@@ -1026,6 +1041,7 @@ def _decide(
             "This board posting and the employer's posting are both in jobhunter: link them?",
             candidates=cards([board_hits[0], dest_strong[0]]),
             preview=_preview(a),
+            link_mode="pair",
         )
         return resp, None, None
     if board_hits:
@@ -1054,6 +1070,7 @@ def _decide(
                 "The Apply button goes to a posting jobhunter has; is it this job?",
                 candidates=cards(dest_weak[:3]),
                 preview=_preview(a),
+                link_mode="pick",
             ),
             None,
             None,
@@ -1089,7 +1106,8 @@ def add(
     ext_version: str | None = None,
 ) -> CaptureResponse:
     """``POST /ext/v1/capture/add``: **Add** after a preview (the edited fields), or **Add as
-    new** (``force_new``: past a ``possible`` match; a sure match is still answered)."""
+    new** (``force_new``: past a ``possible`` match or a ``same_job`` offer; a sure match is
+    still answered)."""
     a = analyse(req.facts, req.posting_index)
     title, employer = _s(req.title), _s(req.employer)
     description = _plain(req.description)
@@ -1113,7 +1131,7 @@ def add(
         if prior is not None and (replayed := _replay(conn, prior, profile, now)) is not None:
             return replayed
         resp, gid, jid = _decide(conn, a, None, profile, now)
-        if req.force_new and resp.outcome == "possible":
+        if req.force_new and resp.outcome in ("possible", "same_job"):
             gid, jid = _insert(
                 conn, a, title=title, employer=employer, description=description, now=now
             )
@@ -1213,7 +1231,8 @@ def _scored(conn: sqlite3.Connection, gid: int) -> bool:
 
 
 def _busy(conn: sqlite3.Connection, gid: int, now: datetime) -> bool:
-    """A live Score now claim or an open batch item on the group."""
+    """The group is being scored: an open batch item, or a ``user-requested`` claim younger
+    than ``CLAIM_TTL`` on any member job that no score written since has answered."""
     from jobhunter.pipeline.dedupe import CLAIM_TTL, USER_REQUESTED_REASONS
     from jobhunter.pipeline.listing import from_iso
 
@@ -1223,28 +1242,37 @@ def _busy(conn: sqlite3.Connection, gid: int, now: datetime) -> bool:
         (gid,),
     ).fetchone():
         return True
-    if _scored(conn, gid):
-        return False  # a finished Score now keeps its user-requested pass; that is no claim
+    scores = []
+    for r in conn.execute("SELECT created_at FROM fit_score WHERE job_group_id = ?", (gid,)):
+        try:
+            scores.append(from_iso(r[0]))
+        except (TypeError, ValueError):
+            continue
     for r in conn.execute(
         "SELECT p.evaluated_at FROM prefilter_result p JOIN job j ON j.id = p.job_id "
         "WHERE j.job_group_id = ? AND p.reasons = ?",
         (gid, USER_REQUESTED_REASONS),
     ):
         try:
-            if now - from_iso(r[0]) < CLAIM_TTL:
-                return True
+            started = from_iso(r[0])
         except (TypeError, ValueError):
             continue
+        if now - started < CLAIM_TTL and not any(at >= started for at in scores):
+            return True
     return False
 
 
-def _ingested(conn: sqlite3.Connection, gid: int) -> bool:
-    row = conn.execute(
-        "SELECT j.source_key FROM job_group g JOIN job j ON j.id = g.canonical_job_id "
-        "WHERE g.id = ?",
-        (gid,),
-    ).fetchone()
-    return row is not None and row[0] not in MANUAL_SOURCES
+def _rescore_running(conn: sqlite3.Connection, now: datetime) -> bool:
+    """A re-score run is writing scores now: a merge could delete a group it is about to
+    write (its spend record would roll back with the failed write)."""
+    from jobhunter.scoring import rescore
+
+    return rescore.running_request(conn, now) is not None
+
+
+def _flag(conn: sqlite3.Connection, gid: int) -> int:
+    row = conn.execute("SELECT score_on_request FROM job_group WHERE id = ?", (gid,)).fetchone()
+    return int(row[0]) if row else 0
 
 
 def _applied(conn: sqlite3.Connection, gid: int) -> bool:
@@ -1270,18 +1298,21 @@ def _older(conn: sqlite3.Connection, a: int, b: int) -> int:
 
 
 def keep_of(conn: sqlite3.Connection, a: int, b: int) -> tuple[int, int]:
-    """(kept group, its ``score_on_request`` after) for ``link_same_job`` (specs/017)."""
+    """(kept group, its ``score_on_request`` after) for ``link_same_job`` (specs/017).
+
+    "Ingested" means scored by the nightly run: the group flag is 0. The canonical job's source
+    says nothing about scoring (a captured group kept on request can have an ingested copy as
+    its canonical, for its text). The kept group always keeps its own flag.
+    """
     sa, sb = _scored(conn, a), _scored(conn, b)
     if sa != sb:
         kept = a if sa else b
-        flag = conn.execute(
-            "SELECT score_on_request FROM job_group WHERE id = ?", (kept,)
-        ).fetchone()[0]
-        return kept, int(flag)
-    ia, ib = _ingested(conn, a), _ingested(conn, b)
-    if ia != ib:
-        return (a if ia else b), 0
-    if ia and ib:
+        return kept, _flag(conn, kept)
+    fa, fb = _flag(conn, a), _flag(conn, b)
+    if fa != fb:
+        kept = a if fa == 0 else b  # the nightly-scored (ingested) group
+        return kept, 0
+    if fa == 0:
         return _older(conn, a, b), 0
     for test in (_applied, _ats_capture):
         ta, tb = test(conn, a), test(conn, b)
@@ -1296,7 +1327,7 @@ def link_same_job(conn: sqlite3.Connection, a: int, b: int, now: datetime) -> in
     Built on the nightly merge (``dedupe_url._absorb``): jobs, applications (packets re-pointed
     or abandoned), labels, scores and apply links follow the kept group; ``job_board_ref``
     follows its jobs. No score is redone. Refused (Conflict, nothing written) while either
-    group is being scored. Returns the kept group.
+    group is being scored or a re-score run is writing. Returns the kept group.
     """
     if a == b:
         return a
@@ -1305,12 +1336,30 @@ def link_same_job(conn: sqlite3.Connection, a: int, b: int, now: datetime) -> in
             raise KeyError(gid)
         if _busy(conn, gid, now):
             raise Conflict("scoring in progress; link when it finishes")
+    if _rescore_running(conn, now):
+        raise Conflict("a re-score is running; link when it finishes")
     kept, flag = keep_of(conn, a, b)
     other = b if kept == a else a
     dedupe_url._absorb(conn, kept, other, now, dedupe_url.MergeResult())
     _refresh_group(conn, kept)
     conn.execute("UPDATE job_group SET score_on_request = ? WHERE id = ?", (flag, kept))
+    if flag == 0:
+        # A pasted or captured job sat at 'normalized' so no nightly stage touched it; in a
+        # group the nightly run scores, it is an ordinary member (as dedupe._after_join does).
+        conn.execute(
+            "UPDATE job SET stage = 'grouped' WHERE job_group_id = ? AND stage = 'normalized'",
+            (kept,),
+        )
     return kept
+
+
+def _may_link(conn: sqlite3.Connection, a: int, b: int, board_key: str | None) -> bool:
+    """Two existing groups are merged only when one of them holds the board posting being
+    linked (its job id), or they are surely the same posting. Never two candidates that
+    merely share a careers home."""
+    if board_key and set(paste.board_groups(conn, board_key)) & {a, b}:
+        return True
+    return b in {d.group_id for d in same_job_candidates(conn, a)}
 
 
 def link(
@@ -1349,6 +1398,14 @@ def link(
                 ext_version=ext_version,
             )
             return LinkResponse(outcome="not_same", group_id=None, message=msg)
+        if b != req.a:
+            for gid in (req.a, b):
+                if _busy(conn, gid, now):
+                    raise Conflict("scoring in progress; link when it finishes")
+            if not _may_link(conn, req.a, b, req.board_key):
+                raise CaptureError(
+                    "only a posting you captured can be linked: pick the one that is this job"
+                )
         kept = link_same_job(conn, req.a, b, now)
         if req.board_key:
             board, _, bid = req.board_key.partition(":")

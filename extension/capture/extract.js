@@ -151,7 +151,17 @@
         out.push("\n");
         return;
       }
-      if (node.getAttribute("aria-hidden") === "true" || hidden(node)) {
+      if (node.getAttribute("aria-hidden") === "true") {
+        return;
+      }
+      if (getComputedStyle(node).display === "contents") {
+        // A wrapper with no box of its own: its children are what is shown.
+        for (const child of node.childNodes) {
+          visit(child);
+        }
+        return;
+      }
+      if (hidden(node)) {
         return;
       }
       const block = BLOCK.has(node.tagName.toUpperCase());
@@ -223,8 +233,18 @@
   if (onHost(LINKEDIN) || onHost(INDEED)) {
     const label = (el) => ((el.getAttribute("aria-label") || "") + " " + (el.textContent || ""))
       .replace(/\s+/g, " ").trim();
-    const candidates = Array.from(document.querySelectorAll("a, button"))
-      .filter((el) => /\bapply\b/i.test(label(el)) && !hidden(el));
+    // In the job details only: never a filter pill ("Easy Apply filter."), a toolbar, the
+    // header or the search form above the results.
+    const outside = "header, nav, form, [role=search], [role=toolbar], [role=navigation], "
+      + "[class*=filter], [class*=search-box], [class*=searchBox]";
+    const details = document.querySelector(
+      ".jobs-details, .job-details, .jobs-unified-top-card, .job-view-layout, "
+      + ".jobs-search__job-details, #jobsearch-ViewjobPaneWrapper, .jobsearch-ViewJobLayout, "
+      + "[class*=job-details], [class*=jobDetails]",
+    ) || document.querySelector("main") || document.body;
+    const candidates = Array.from(details.querySelectorAll("a, button"))
+      .filter((el) => /\bapply\b/i.test(label(el)) && !/filter\.?$/i.test(el.getAttribute("aria-label") || "")
+        && !el.closest(outside) && !hidden(el));
     const el = candidates[0];
     if (el) {
       const text = label(el);

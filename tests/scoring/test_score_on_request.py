@@ -353,3 +353,64 @@ def test_near_duplicate_joins_an_nlx_shaped_copy(conn):
     jid = ingest(conn, url="https://usnlx.com/synthetic/abcdef0123456789", ext="nlx1")
     group_pending(conn, now=NOW)
     assert group_of(conn, jid) == gid
+
+
+# ─── Link them keeps the flag the group had (review of 5aed9f6) ────────────
+
+
+def test_link_keeps_an_applied_capture_on_request_after_a_copy_became_canonical(
+    conn,
+    profile,  # noqa: F811
+    monkeypatch,
+):
+    from jobhunter.apply.capture import link_same_job
+    from jobhunter.core import db as core_db
+
+    gid = captured(conn, url="https://careers.example.org/jobs/9001")
+    conn.execute(
+        "INSERT INTO application (job_group_id, status, created_at, updated_at) "
+        "VALUES (?, 'preparing', ?, ?)",
+        (gid, ISO, ISO),
+    )
+    jid = ingest(conn, url="https://careers.example.org/jobs/9001")
+    group_pending(conn, now=NOW)
+    assert g(conn, gid)["score_on_request"] == 1 and g(conn, gid)["canonical_job_id"] == jid
+    other = captured(conn, url="https://www.linkedin.com/jobs/view/4000000001/",
+                     text="LinkedIn copy of the posting.", title="LinkedIn copy")  # fmt: skip
+    with core_db.transaction(conn):
+        kept = link_same_job(conn, gid, other, NOW)
+    assert kept == gid and g(conn, kept)["score_on_request"] == 1
+    assert daily(conn, profile, monkeypatch) == [] and spend(conn) == 0
+
+
+def test_link_into_an_unscored_ingested_group_lets_the_nightly_run_score_it(
+    conn,
+    profile,  # noqa: F811
+    monkeypatch,
+):
+    from jobhunter.apply.capture import link_same_job
+    from jobhunter.core import db as core_db
+
+    alert = ingest(conn, url="https://www.linkedin.com/comm/jobs/view/4000000002/",
+                   text="A short alert snippet.", completeness="partial", ext="alert")  # fmt: skip
+    group_pending(conn, now=NOW)
+    alert_group = conn.execute("SELECT job_group_id FROM job WHERE id = ?", (alert,)).fetchone()[0]
+    cap_gid = captured(conn, url="https://boards.greenhouse.io/acme/jobs/4012345")
+    with core_db.transaction(conn):
+        kept = link_same_job(conn, alert_group, cap_gid, NOW)
+    assert kept == alert_group and g(conn, kept)["score_on_request"] == 0
+    canonical = g(conn, kept)["canonical_job_id"]
+    stage = conn.execute("SELECT stage, source_key FROM job WHERE id = ?", (canonical,)).fetchone()
+    assert tuple(stage) == ("grouped", "paste-manual")  # pasted text beats the alert snippet
+    assert daily(conn, profile, monkeypatch) == [f"g{kept}"]
+
+
+def test_a_claim_on_any_member_refuses_a_second_score_now(conn, profile):  # noqa: F811
+    gid = captured(conn, url="https://careers.example.org/jobs/9001")
+    est = group_score.estimate(conn, profile, SCORING, gid, NOW)
+    group_score.start(conn, profile, SCORING, gid, token=est.token, now=NOW)
+    jid = ingest(conn, url="https://careers.example.org/jobs/9001")
+    group_pending(conn, now=NOW)
+    assert g(conn, gid)["canonical_job_id"] == jid  # the claim is on the other member
+    again = group_score.estimate(conn, profile, SCORING, gid, NOW)
+    assert again.refusal and "has not finished" in again.refusal

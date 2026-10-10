@@ -761,6 +761,17 @@ def test_link_them_merges_two_captures_and_maps_the_board_id(conn):
     assert conn.execute("SELECT score_on_request FROM job_group").fetchone()[0] == 1
 
 
+def share(conn, gid, bid="4099999999"):
+    """Record a LinkedIn id on the group's job, as a board capture would: the board side."""
+    job = conn.execute("SELECT canonical_job_id FROM job_group WHERE id = ?", (gid,)).fetchone()
+    conn.execute(
+        "INSERT OR IGNORE INTO job_board_ref (board, board_id, job_id, seen_at) "
+        "VALUES ('linkedin', ?, ?, ?)",
+        (bid, job[0], ISO),
+    )
+    return f"linkedin:{bid}"
+
+
 # ─── link_same_job ─────────────────────────────────────────────────────────
 
 
@@ -843,7 +854,8 @@ def test_link_is_refused_while_a_score_claim_is_held(conn):
         (job, (NOW - timedelta(minutes=1)).isoformat()),
     )
     with pytest.raises(capture.Conflict, match="scoring in progress"):
-        capture.link(conn, LinkRequest(action_id=aid(), a=a, b=b), now=NOW)
+        capture.link(conn, LinkRequest(action_id=aid(), a=a, b=b, board_key=share(conn, a)),
+                     now=NOW)  # fmt: skip
     assert count(conn, "job_group") == 2
 
 
@@ -851,8 +863,9 @@ def test_repeated_link_action_returns_the_stored_answer(conn):
     a = pasted_group(conn, "https://careers.acme.example/jobs/1", "Alpha role")
     b = pasted_group(conn, "https://careers.acme.example/jobs/2", "Beta role")
     action = aid()
-    first = capture.link(conn, LinkRequest(action_id=action, a=a, b=b), now=NOW)
-    again = capture.link(conn, LinkRequest(action_id=action, a=a, b=b), now=NOW)
+    key = share(conn, a)
+    first = capture.link(conn, LinkRequest(action_id=action, a=a, b=b, board_key=key), now=NOW)
+    again = capture.link(conn, LinkRequest(action_id=action, a=a, b=b, board_key=key), now=NOW)
     assert again.replayed and again.group_id == first.group_id
 
 
@@ -860,7 +873,7 @@ def test_current_group_follows_a_merged_capture(conn):
     a = pasted_group(conn, "https://careers.acme.example/jobs/1", "Alpha role")
     b = pasted_group(conn, GH, "Beta role")
     job_a = conn.execute("SELECT canonical_job_id FROM job_group WHERE id = ?", (a,)).fetchone()[0]
-    capture.link(conn, LinkRequest(action_id=aid(), a=a, b=b), now=NOW)
+    capture.link(conn, LinkRequest(action_id=aid(), a=a, b=b, board_key=share(conn, a)), now=NOW)
     assert not capture.group_exists(conn, a)
     assert capture.current_group(conn, a, None) == b
     assert capture.current_group(conn, a, job_a) == b

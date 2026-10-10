@@ -146,7 +146,7 @@ def estimate(
         est.refusal = "this posting is already scored"
     elif in_open_batch(conn, group_id):
         est.refusal = "this posting is in a submitted batch; it is scored when that is collected"
-    elif (claim := _claim_refusal(conn, job["id"], now)) is not None:
+    elif (claim := _group_claim_refusal(conn, group_id, now)) is not None:
         est.refusal = claim
     elif est.estimated_usd > est.remaining_usd:
         est.refusal = (
@@ -162,6 +162,15 @@ class Outcome:
     status: str  # 'scored' or 'submitted'
     detail: str
     cost_usd: float = 0.0
+
+
+def _group_claim_refusal(conn: sqlite3.Connection, group_id: int, now: datetime) -> str | None:
+    """``_claim_refusal`` over every member job: a nightly copy that joins the group during a
+    score can become canonical, and the claim stays on the job it was taken on."""
+    for r in conn.execute("SELECT id FROM job WHERE job_group_id = ? ORDER BY id", (group_id,)):
+        if (msg := _claim_refusal(conn, int(r[0]), now)) is not None:
+            return msg
+    return None
 
 
 def _claim_refusal(conn: sqlite3.Connection, job_id: int, now: datetime) -> str | None:
@@ -255,7 +264,7 @@ def start(
             raise ScoreRefused("this posting is already scored")
         if in_open_batch(conn, group_id):
             raise ScoreRefused("this posting is in a submitted batch")
-        if (msg := _claim_refusal(conn, job["id"], now)) is not None:
+        if (msg := _group_claim_refusal(conn, group_id, now)) is not None:
             raise ScoreRefused(msg)
         pre, stage = _snapshot(conn, job["id"])
         conn.execute(

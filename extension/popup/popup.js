@@ -237,11 +237,19 @@ function renderResponse(r, repeat = false) {
 }
 
 function candidatesBox(r) {
+  const pick = r.outcome === "same_job" && r.link_mode === "pick";
+  const boardKey = r.board ? r.board.key : null;
+  const applyUrl = r.board ? r.board.apply_url : null;
   const list = el("ul", {id: "candidates"});
   for (const c of r.candidates) {
     list.append(el("li", {},
       el("strong", {}, c.title), " · " + c.employer + (c.why ? " (" + c.why + ")" : ""), " ",
       el("button", {class: "link", onclick: () => openConsole(c.path)}, "Open"),
+      // "Is it this job?": the user picks the one candidate this posting is. Candidates are
+      // never linked to each other.
+      pick ? el("button", {class: "link", id: "this-one-" + c.group_id, onclick: () => link({
+        a: c.group_id, b: null, board_key: boardKey, apply_url: applyUrl,
+      })}, " This one") : null,
       r.describe.includes(c.group_id)
         ? el("button", {class: "link", id: "describe-" + c.group_id,
           onclick: () => describeGroup(c)}, " Add this description")
@@ -249,12 +257,21 @@ function candidatesBox(r) {
   }
   const box = el("section", {class: "card"}, list);
   const row = el("div", {class: "row"});
-  if (r.outcome === "same_job") {
+  if (r.outcome === "same_job" && r.link_mode === "pair" && r.candidates.length === 2) {
+    // The board posting (by its job id) and the employer's posting: both are this job.
     const [a, b] = r.candidates;
-    row.append(el("button", {class: "primary", id: "link-them", onclick: () => link({
-      a: a.group_id, b: b ? b.group_id : null,
-      board_key: r.board ? r.board.key : null, apply_url: r.board ? r.board.apply_url : null,
-    })}, "Link them"));
+    row.append(
+      el("button", {class: "primary", id: "link-them", onclick: () => link({
+        a: a.group_id, b: b.group_id, board_key: boardKey, apply_url: applyUrl,
+      })}, "Link them"),
+      el("button", {id: "not-same", onclick: () => link({
+        a: a.group_id, b: b.group_id, not_same: true,
+      })}, "Not the same"));
+  }
+  if (pick) {
+    row.append(el("button", {id: "not-same", onclick: () => {
+      box.after(previewForm(r, true));
+    }}, "Not the same"));
   }
   row.append(el("button", {id: "add-as-new", onclick: () => {
     box.after(previewForm(r, true));
@@ -425,7 +442,7 @@ async function describeGroup(g) {
 
 async function link(body) {
   body.action_id = aid();
-  const res = await send({type: "link", body});
+  const res = await send({type: "link", body, key: current && current.key});
   if (res.status === 200) {
     clear();
     setStatus(res.data.outcome === "linked_groups" ? "Linked" : "Not linked", "ok");

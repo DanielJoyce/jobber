@@ -27,3 +27,14 @@ mark { background: color-mix(in srgb, gold 45%, transparent); color: inherit; bo
 .prepare-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -4px 0 16px; }
 .prepare-line form { margin: 0; }
 .prepare-line a.act { display: inline-block; text-decoration: none; }
+
+/* Score this group now and Link them on /job (specs/017 1e), and the /captured list. */
+.detail .banner-error { border-color: var(--status-critical); }
+.detail .banner-ok { border-color: var(--status-good); }
+.detail .refusal { color: var(--status-critical); }
+.detail .inline-form { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+.captured-list { width: 100%; border-collapse: collapse; }
+.captured-list th, .captured-list td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--axis); vertical-align: top; }
+@media (max-width: 640px) {
+  .captured-list .col-site, .captured-list .col-added { display: none; }
+}

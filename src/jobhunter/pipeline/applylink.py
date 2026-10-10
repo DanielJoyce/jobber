@@ -504,6 +504,11 @@ def reverify(
                 _save(conn, link)
                 return link
             left_posting = _left_posting(rule, url, resp.location)
+            if not left_posting and is_board_host(host_of(resp.location)):
+                # A redirect into LinkedIn or Indeed is never followed (specs/017 1e).
+                link.error = NO_FETCH_ERROR
+                _save(conn, link)
+                return link
             if not left_posting:
                 url = resp.location
                 resp = ctx.get(_fetchable(url), follow_redirects=False)

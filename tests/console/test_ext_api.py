@@ -197,6 +197,17 @@ def post(client, token, path, body=None, **extra):
     return r
 
 
+def share(conn, gid, bid="4099999999"):
+    """Record a LinkedIn id on the group's job, as a board capture would: the board side."""
+    job = conn.execute("SELECT canonical_job_id FROM job_group WHERE id = ?", (gid,)).fetchone()
+    conn.execute(
+        "INSERT OR IGNORE INTO job_board_ref (board, board_id, job_id, seen_at) "
+        "VALUES ('linkedin', ?, ?, ?)",
+        (bid, job[0], ISO),
+    )
+    return f"linkedin:{bid}"
+
+
 def count(conn, table):
     return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
@@ -507,7 +518,8 @@ def test_group_routes_follow_a_merged_group(client, token, conn):
     )
     ga, gb = a.json()["group"]["group_id"], b.json()["group"]["group_id"]
     ja = a.json()["group"]["job_id"]
-    linked = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb})
+    linked = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb,
+                                          "board_key": share(conn, ga)})  # fmt: skip
     assert linked.json()["outcome"] == "linked_groups"
     kept = linked.json()["group_id"]
     gone = ga if kept == gb else gb
@@ -537,13 +549,14 @@ def test_link_route_refuses_while_scoring(client, token, conn):
         == 202
     )
     assert scorer.started.wait(5)
-    r = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb})
+    key = share(conn, ga)
+    r = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb, "board_key": key})
     assert r.status_code == 409 and "scoring in progress" in r.json()["error"]
     assert count(conn, "job_group") == 2
     scorer.release.set()
     for t in client.app.state.ext_score_threads:
         t.join(10)
-    ok = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb})
+    ok = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb, "board_key": key})
     assert ok.status_code == 200
     kept = ok.json()["group_id"]
     assert kept == ga  # the scored one
@@ -795,3 +808,35 @@ def test_apply_new_prefills_the_url_only(client, conn):
     js = client.get("/apply/new", params={"url": "javascript:alert(1)"}).text
     assert "javascript:" not in js
     assert count(conn, "job") == 0
+
+
+# ─── review of 5aed9f6 ─────────────────────────────────────────────────────
+
+
+def test_console_refuses_a_capture_from_a_disabled_host(env):
+    c = make_client(env)
+    c.app.state.settings.capture.disabled_hosts.append("acme.example")
+    t = pair(c, env)
+    add_body = {
+        "action_id": aid(),
+        "facts": facts(posting()),
+        "title": "T",
+        "employer": "E",
+        "description": LONG,
+    }
+    for path, body in (
+        ("capture", {"action_id": aid(), "facts": facts(posting())}),
+        ("capture/add", add_body),
+    ):
+        r = post(c, t, path, body)
+        assert r.status_code == 422 and "capture is off" in r.json()["error"]
+
+
+def test_job_page_score_and_link_run_off_the_event_loop(client):
+    import inspect
+
+    paths = {"/job/{group_id}/score", "/job/{group_id}/link"}
+    found = [r for r in client.app.routes if getattr(r, "path", "") in paths]
+    assert len(found) == 2
+    for route in found:
+        assert not inspect.iscoroutinefunction(route.endpoint), route.path

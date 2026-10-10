@@ -33,7 +33,7 @@ from jobhunter.core.fetch import FetchError, RobotsDisallowed
 from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.core.textnorm import html_to_text
 from jobhunter.pipeline.ats_rules import host_of, is_http_url, match_ats, unwrap
-from jobhunter.pipeline.board_ids import board_key
+from jobhunter.pipeline.board_ids import board_key, is_board_host
 from jobhunter.pipeline.dedupe import _refresh_group, normalize_employer
 from jobhunter.pipeline.dedupe_url import _identifies_job, normalize_apply_url
 from jobhunter.pipeline.dedupe_xstate import normalize_title
@@ -132,18 +132,34 @@ def _key(url: str | None) -> str | None:
 
 
 def _url_matches(conn: sqlite3.Connection, key: str) -> set[int]:
+    """Groups whose posting, page or apply URLs normalize to ``key``.
+
+    A key that names no single posting (a careers home, a board home) is matched against
+    posting and page URLs only: an apply destination of that shape (a LinkedIn Apply button
+    that goes to the careers home) says nothing about which posting it was.
+    """
     host = host_of(key)
+    one = _identifies_job(key)
     rows = conn.execute(
-        "SELECT j.job_group_id AS gid, j.url, j.apply_url, j.page_url FROM job j "
+        "SELECT j.job_group_id AS gid, j.url, j.page_url, j.apply_url FROM job j "
         "WHERE j.job_group_id IS NOT NULL AND (instr(lower(j.url), ?) > 0 "
         "OR instr(lower(coalesce(j.apply_url, '')), ?) > 0 "
-        "OR instr(lower(coalesce(j.page_url, '')), ?) > 0) "
-        "UNION ALL SELECT a.job_group_id, a.start_url, a.final_url, NULL FROM apply_link a "
-        "WHERE instr(lower(a.start_url), ?) > 0 "
-        "OR instr(lower(coalesce(a.final_url, '')), ?) > 0",
-        (host, host, host, host, host),
+        "OR instr(lower(coalesce(j.page_url, '')), ?) > 0)",
+        (host, host, host),
     ).fetchall()
-    return {int(r[0]) for r in rows if key in (_key(r[1]), _key(r[2]), _key(r[3]))}
+    found = {
+        int(r[0]) for r in rows if key in (_key(r[1]), _key(r[2])) or (one and key == _key(r[3]))
+    }
+    if one:
+        for r in conn.execute(
+            "SELECT a.job_group_id, a.start_url, a.final_url FROM apply_link a "
+            "WHERE instr(lower(a.start_url), ?) > 0 "
+            "OR instr(lower(coalesce(a.final_url, '')), ?) > 0",
+            (host, host),
+        ):
+            if key in (_key(r[1]), _key(r[2])):
+                found.add(int(r[0]))
+    return found
 
 
 def board_groups(conn: sqlite3.Connection, key: str) -> list[int]:
@@ -493,6 +509,12 @@ def fetch_posting(ctx_factory: CtxFactory, url: str) -> Fetched:
     """
     url = direct_board_url(url)
     host = host_of(url)
+    if is_board_host(host):
+        # LinkedIn and Indeed are never requested, not even robots.txt (specs/017 1e).
+        raise PasteError(
+            f"jobhunter does not fetch {host}; paste the posting text, or send the page "
+            "from the browser extension"
+        )
     if "/embed/" in urlsplit(url).path:
         raise PasteError(f"{host} does not allow fetching embed pages; paste the posting text")
     try:

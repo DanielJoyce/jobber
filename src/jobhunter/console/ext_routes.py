@@ -57,6 +57,7 @@ from jobhunter.apply.capture_models import (
 from jobhunter.console.inbox_routes import load_console_profile
 from jobhunter.core import bucketnames
 from jobhunter.pipeline import applylink
+from jobhunter.pipeline.ats_rules import host_of
 from jobhunter.pipeline.board_ids import _INDEED_HOST, _LINKEDIN_HOST
 from jobhunter.pipeline.dedupe import CLAIM_TTL, USER_REQUESTED_REASONS
 from jobhunter.pipeline.listing import from_iso
@@ -243,6 +244,17 @@ def register(
 
     # ─── capture and its follow-up actions ─────────────────────────────────
 
+    def host_allowed(url: str) -> None:
+        """[capture] disabled_hosts, checked here too: the extension's cached list may be
+        older than the console's (a config change and restart)."""
+        host = host_of(url)
+        for d in settings().capture.disabled_hosts:
+            h = str(d).lower().lstrip(".")
+            if h and (host == h or host.endswith("." + h)):
+                raise _Error(
+                    422, {"error": f"capture is off for {host} ([capture] disabled_hosts)"}
+                )
+
     def capture_errors(fn: Callable[[], Any]) -> Any:
         try:
             return fn()
@@ -256,6 +268,8 @@ def register(
         version = ext_version(request)
 
         def go(req: CaptureRequest) -> Response:
+            host_allowed(req.facts.url)
+
             def inner(conn: sqlite3.Connection) -> Response:
                 resp = capture_errors(
                     lambda: capture.capture(
@@ -273,6 +287,7 @@ def register(
         version = ext_version(request)
 
         def go(req: AddRequest) -> Response:
+            host_allowed(req.facts.url)
             return with_conn(
                 lambda conn: ok(
                     capture_errors(
@@ -332,6 +347,8 @@ def register(
         version = ext_version(request)
 
         def go(req: DescribeRequest) -> Response:
+            host_allowed(req.facts.url)
+
             def inner(conn: sqlite3.Connection) -> Response:
                 gone(conn, gid, req.job_id)
                 return ok(
