@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791603635,"nonce":"xI+YEiYgRbYkksXWgHa+A2qAjBk=","message":"Landed in PR #76 (2f3496b). Retro-review findings fixed and re-reviewed by opus xhigh; measured on a DB copy: 36 rows improved, no regressions.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791603635,"nonce":"6n36UxVYaTGzXe/4R0SX4mvSqmY=","status":2}]}
