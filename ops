@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":5,"timestamp":1791596321,"nonce":"aRmGgFK0OTAHRdYnTdNK4F6oYgQ=","added":["milestone:M8"],"removed":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791596343,"nonce":"DxWON+aVk3taQhvholvmGOf2aI8=","message":"Landed in PR #68 (3071db8). Sender Hiring Team name and subject shapes first, length caps, fragment rejection; regression tests from real email shapes.","files":null}]}
