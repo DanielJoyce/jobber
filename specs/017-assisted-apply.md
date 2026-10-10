@@ -1,7 +1,7 @@
 # 017 — Assisted apply: targeted resume, cover letter, resume-first fill
 
-Status: **design, revision 3, awaiting your approval.** Bug `7fa29db`. Proposed as a new
-milestone M10 ([Deviations](#deviations-from-earlier-specs)). No code yet. Revisions 2 and 3
+Status: **design, revision 4, awaiting your approval.** Bug `7fa29db`. Proposed as a new
+milestone M10 ([Deviations](#deviations-from-earlier-specs)). No code yet. Revisions 2 to 4
 and why are at the end ([History](#history)).
 
 You asked: *"Is there any way to automate the application part of the process? Filling out web
@@ -52,7 +52,7 @@ Lever, Workable and Workday. Two consequences:
 |---|---|
 | **Submitting an application. Ever.** | See below |
 | **Storing, drafting or filling anything on the [never-store list](#never-store-list)** (salary, EEO and self-ID, citizenship, address, pronouns, DOB, SSN, consent, certification, signature) | You answer these by hand; your fill helpers skip them too. Enforced in code at every write, draft and fill, not only stated here |
-| A second store for contact details, links, work authorization and availability (the revision 2 answer bank) | Your fill helpers already fill these. Deferred unless you ask ([open question 1](#open-questions)) |
+| A separate answer store (the revision 2 `answers.yaml` bank, its own page or deny rule) | Answers live in [Application answers](#application-answers) on `/prefs`, in the preferences file |
 | Passwords, security questions, payment details, criminal history, references' contacts | Never stored, never filled, always yours |
 | Solving, bypassing or "humanizing" past a CAPTCHA, email code or bot check | [008](008-compliance.md#what-we-will-not-build). A challenge means stop and hand back |
 | Creating ATS accounts, logging in, storing credentials | [008](008-compliance.md#what-we-will-not-build) |
@@ -86,6 +86,24 @@ in phase 2, the field `name`/`id`) **before anything else** at every entry point
 | Phase 2 `fill-classify` | Action `yours`, evaluated before every other row ([precedence](#what-the-helper-does)) |
 
 A false positive only means you answer by hand. One test per entry point.
+
+## Application answers
+
+A section on the existing `/prefs` page ([014](014-preferences-console.md)), not a new page or file. It uses the
+014 conventions: the same form, live preview and save flow, and a `?` help text on each field. It is stored
+in the existing preferences file under an `answers:` key. No `answers.yaml`, and no deny rule beyond what
+the preferences file already has.
+
+**Holds reusable, non-sensitive answers only:** links (portfolio, GitHub, LinkedIn), notice period,
+relocation and remote preference, work authorization as yes/no (only if you want it there), and saved
+custom answers such as "why this company" templates.
+
+**The [never-store list](#never-store-list) still applies.** The `/prefs` save path rejects any answer whose
+label matches it, with a clear message (for example "'Desired salary' is on the never-store list; answer it
+by hand") and saves nothing. The `answers:` key is not part of any scoring prompt.
+
+**Packets read from it**; **Save as answer** on a packet writes here, through `apply/answers.py::save_answer`
+(the one writer, which runs the never-store check). `packet_answer` keeps per-packet drafts and edits.
 
 ## Phase 1: packets
 
@@ -248,7 +266,7 @@ list](#never-store-list); a match gets "This one is yours" and no draft.
 
 **Save as answer** keeps a draft or your own text on the packet (`packet_answer`, source
 `user` or `draft`). Saved answers are reusable: the same normalized question on a later packet
-offers your earlier answers to copy. That is the "enter it once" store, without a second file.
+offers your earlier answers to copy. Reusable ones can also be saved to [Application answers](#application-answers) on `/prefs`, which every packet reads.
 
 ### Export
 
@@ -435,8 +453,8 @@ Differ (check):  Phone  "5550100" vs "+1-555-0100" · Job 2 title split into two
 Yours (4):       ? "Why Acme?" (draft ready) · Salary · EEO block · Consent checkbox
 ```
 
-Revision 3 has no "fill from a bank" row: your fill helpers cover contact, links and work
-authorization. If you install your helper in the `jobhunter-apply` profile, run it after the
+Revision 3 had no "fill from a bank" row, and revision 4 keeps that: your fill helpers cover contact, links and work
+authorization, and the `/prefs` answers feed packets and drafts, not form fills. If you install your helper in the `jobhunter-apply` profile, run it after the
 parse settles and before step 7; its fills then show as `keep` on a re-run. The helper itself
 fills nothing in revision 3 except, with your approval in chat, pasting a draft into its field.
 
@@ -625,7 +643,7 @@ Agent-effort estimates, in the style of [009](009-roadmap.md):
 | **1a** | Packet migration, merge and undo handling, Prepare (`p`, detail button), **New packet** (`paste-manual` at `normalized`, dedup, robots-aware fetch), Score this group now, Pasted Sankey node, packet page | **1-1.5 d** |
 | **1b** | Generator (Opus 5, streaming, effort, caching, own cap, measured estimate), factcheck with claim strength and employer claims, structured cited-line editor, versions, cover letter, employer notes, question drafts with story facts, optional entailment pass, `/costs` line | **2-2.5 d** |
 | **1c** | Export (PDF, text, markdown; `.docx` if chosen +0.5 d) | **0.5 d** |
-| **1d** | Never-store table and its enforcement, saved answers with reuse, checklists, loop in `add_event`, `/followups` item, `apply stats` | **0.5-1 d** |
+| **1d** | Never-store table and its enforcement, saved answers with reuse, the `/prefs` Application answers section (small), checklists, loop in `add_event`, `/followups` item, `apply stats` | **0.5-1 d** |
 | | *Gate: 4 weeks of use, plus the spike* | |
 | **2a** | **Spike**: Claude Code driving Claude in Chrome in a dedicated profile; launch flags and site rules; guard dialog blocks the extension; PDF attach per ATS; ref stability; hook inputs | **0.5-1 d** |
 | **2b** | Fixture capture and lint, `fill-classify`, base resume parse, `ats_forms.py` controls and label synonyms | **1-1.5 d** |
@@ -639,8 +657,11 @@ Phase 1 is useful on its own and ships first.
 
 - **Never-store list as data, checked first at every write, draft and fill.** Reason: stating
   the rule in Non-goals did not stop Save as answer, `packet_answer` or drafts from storing it.
-- **No answer bank in phase 1; saved custom answers live on packets and are reusable.** Reason:
-  your fill helpers cover contact, links and work authorization.
+- **Application answers on `/prefs`, in the preferences file under `answers:` (revision 4).**
+  Reason: you said "Just add the answers stuff to a section under prefs". No separate file, page or
+  deny rule; the never-store table is enforced on save. Reverses revision 3's deferral, narrowly.
+- **Saved custom answers also live on packets and are reusable.** Reason: per-packet drafts and
+  edits stay with their packet; reusable ones are promoted to `/prefs`.
 - **Packets hang off `application`; merges re-point or abandon them.** Reason: a `job_group`
   reference would break the nightly merges as the `rejection` FK did (#78).
 - **Pasted postings sit at `normalized` and are scored only on request.** Reason: the nightly run
@@ -663,8 +684,7 @@ Phase 1 is useful on its own and ships first.
 
 ## Open questions
 
-1. **Answer bank.** Your fill helpers already cover contact, links and work authorization.
-   Should jobhunter skip the answer bank for good? (Default: skip.)
+1. **Answer bank.** Answered: yes, as a section on `/prefs` (revision 4).
 2. **Your helper in the apply profile.** Will you install your fill helper in the
    `jobhunter-apply` profile, so phase 2 only lists differences and offers drafts?
 3. **Export format.** PDF only, or also `.docx` (some parsers read it better)? Any visual
@@ -703,3 +723,10 @@ postings are scored only on request; packets have their own spend cap and a high
 placeholder, deny-rule and sentinel plumbing is gone; the loop covers the mail path; and the
 deviations now include 008 and 009. The branch was updated from `main` by a merge, not a rebase,
 because it is pushed fast-forward only.
+
+### Revision 4: answers on /prefs per user
+
+You said: *"Just add the answers stuff to a section under prefs"*. Revision 4: answers on `/prefs` per
+user. A narrow reversal of revision 3's deferral: an Application answers section on `/prefs`, stored under
+`answers:` in the preferences file, never-store enforced on save. See
+[Application answers](#application-answers).
