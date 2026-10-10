@@ -148,7 +148,7 @@ def seed(conn) -> dict[str, int]:
     )
 
     # Six CO applications applied 2026-10-05: two employer responses, one bare acknowledgment.
-    apps = [add_job(conn, states=["CO"], first_seen="2026-08-01") for _ in range(6)]
+    apps = [add_job(conn, states=["CO"], first_seen="2025-01-01", dims=DIMS_B) for _ in range(6)]
     add_app(
         conn,
         apps[0],
@@ -254,7 +254,7 @@ def test_multi_state_job_counts_in_each_state_remote_once(conn):
     assert s["WA"]["new_ab"] == 1 and s["VA"]["new_ab"] == 1
     assert s["REMOTE"]["new_ab"] == 1
     assert sum(r["new_ab"] for r in s.values()) == 5  # fed_b counted 3x, remote once
-    assert s["TX"]["new_ab"] == 0 and s["TX"]["scored"] == 1
+    assert s["TX"]["new_ab"] == 0 and s["TX"]["scored"] == 0  # G is outside the default buckets
     assert s["CO"]["scored"] == 2  # co_unscored has no fit_score
     assert s["CO"]["shortlisted"] == 1
     assert s["CO"]["median_salary"] == 105_000
@@ -292,6 +292,51 @@ def test_coverage_email_stale_needs_a_mail_source(conn):
     cov = dash.coverage(conn, NOW)
     assert cov["AL"].status == "email"  # alert seen within 3 days
     assert cov["TX"].status == "email_stale"
+
+
+def test_state_stats_counts_only_the_selected_buckets(conn):
+    a = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("A",)))
+    assert a["CO"]["new_ab"] == 1 and a["WA"]["new_ab"] == 0 and a["REMOTE"]["new_ab"] == 1
+    assert a["CO"]["median_salary"] == 110_000  # only co_a's salary
+    b = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("B",)))
+    assert b["CO"]["new_ab"] == 1 and b["WA"]["new_ab"] == 1 and b["REMOTE"]["new_ab"] == 0
+    g = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("G",)))
+    assert g["TX"]["new_ab"] == 1 and g["CO"]["new_ab"] == 0
+    both = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("A", "B")))
+    assert both["CO"]["new_ab"] == 2
+
+
+def test_state_stats_default_buckets_are_a_and_b(conn):
+    default = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW))
+    explicit = by_state(dash.state_stats(conn, PROFILE, "new_ab", 7, NOW, ("A", "B")))
+    assert {k: r["new_ab"] for k, r in default.items()} == {
+        k: r["new_ab"] for k, r in explicit.items()
+    }
+
+
+def test_rows_carry_per_bucket_counts_and_totals_count_groups_once(conn):
+    rows, totals = dash.state_stats_with_totals(conn, PROFILE, "new_ab", 7, NOW, ("A",))
+    s = by_state(rows)
+    assert s["CO"]["by_bucket"] == {"A": 1, "B": 1}
+    assert s["WA"]["by_bucket"] == {"B": 1} and s["TX"]["by_bucket"] == {"G": 1}
+    assert s["REMOTE"]["by_bucket"] == {"A": 1}
+    assert totals == {"A": 2, "B": 1, "G": 1}  # fed_b is one group though listed in 3 states
+
+
+def test_clamp_buckets():
+    assert dash.clamp_buckets("c,a") == ("A", "C")
+    assert dash.clamp_buckets("") == dash.clamp_buckets(None) == ("A", "B")
+    assert dash.clamp_buckets("zz") == ("A", "B")
+
+
+def test_map_payload_names_the_selection(conn):
+    rows, totals = dash.state_stats_with_totals(conn, PROFILE, "new_ab", 7, NOW, ("B", "A"))
+    body = dash.map_payload(rows, "new_ab", 7, ("A", "B"), totals)
+    assert body["label"] == "New: Bullseye + Strong"
+    assert body["buckets"] == ["A", "B"] and body["bucket_label"] == "Bullseye + Strong"
+    assert body["bucket_totals"]["A"] == 2 and body["bucket_totals"]["C"] == 0
+    other = dash.map_payload(rows, "scored", 7, ("A",), totals)
+    assert other["label"] == "All scored jobs: Bullseye"
 
 
 def test_class_breaks():
@@ -401,6 +446,48 @@ def test_api_map_unknown_metric_falls_back(client):
     assert body["breaks"] == [pytest.approx(3 / 7, abs=1e-3)]
 
 
+def test_api_map_buckets_param(client):
+    body = client.get("/api/dash/map?metric=new_ab&range=7&buckets=B").json()
+    assert body["buckets"] == ["B"] and body["bucket_label"] == "Strong"
+    co = next(s for s in body["states"] if s["state"] == "CO")
+    assert co["value"] == 1 and co["by_bucket"] == {"A": 1, "B": 1}
+    assert body["bucket_totals"]["A"] == 2
+    default = client.get("/api/dash/map").json()
+    assert default["buckets"] == ["A", "B"] and default["default_buckets"] == ["A", "B"]
+    assert client.get("/api/dash/map?buckets=nonsense").json()["buckets"] == ["A", "B"]
+
+
+def test_state_table_follows_buckets(client):
+    html = client.get("/dash/state-table?metric=new_ab&range=7&buckets=B").text
+    assert "New: Strong" in html and "New A" not in html
+    assert "&amp;bucket=B" in html  # state links carry the selection into the inbox
+    assert 'data-buckets="B"' in html
+    row = re.search(r'<tr data-state="WA">.*?<td class="num">(\d+)</td>', html, re.S)
+    assert row and row.group(1) == "1"
+    assert "buckets=B" in html  # sort links keep the selection
+
+
+def test_state_table_is_in_a_collapsed_details(client):
+    html = client.get("/").text
+    m = re.search(
+        r'<details id="state-details">\s*<summary><h2[^>]*>State statistics \((\d+) rows', html
+    )
+    assert m and int(m.group(1)) == len(geo.US_SUBDIVISIONS) + 1
+    assert '<details id="state-details" open' not in html
+
+
+def test_today_page_renders_bucket_chips(client):
+    html = client.get("/?buckets=A,C").text
+    assert 'id="bucket-filter"' in html
+    assert re.search(r'data-bucket="A" aria-pressed="true"', html)
+    assert re.search(r'data-bucket="B" aria-pressed="false"', html)
+    assert re.search(r'data-bucket="C" aria-pressed="true"', html)
+    assert 'name="buckets" value="A,C"' in html
+    assert "Stretch Up" in html and "Stale Match" in html
+    assert "New: Bullseye + Stretch Up" in html
+    assert 'id="bucket-names"' in html
+
+
 def table_order(html: str) -> list[str]:
     return re.findall(r'<tr data-state="([A-Z]+)">', html)
 
@@ -471,7 +558,16 @@ def test_state_table_says_via_nlx(tmp_path):
 
 def test_series_shapes(conn):
     s = dash.series(conn, PROFILE, 7, NOW)
-    assert set(s) == {"range", "min_points", "line", "funnel", "mix", "status"}
+    assert set(s) == {
+        "range",
+        "buckets",
+        "bucket_label",
+        "min_points",
+        "line",
+        "funnel",
+        "mix",
+        "status",
+    }
     assert [p["day"] for p in s["line"]["points"]] == dash._days(NOW, 7)
     counts = {p["day"]: p["count"] for p in s["line"]["points"]}
     assert counts["2026-10-09"] == 1 and counts["2026-10-08"] == 1 and counts["2026-10-07"] == 1
@@ -479,6 +575,46 @@ def test_series_shapes(conn):
     assert [x["key"] for x in s["mix"]["slots"]] == ["a", "b", "other", "f"]
     assert len(s["mix"]["weeks"]) == 4
     assert [i["status"] for i in s["status"]["items"]] == list(dash.STATUS_ORDER)
+
+
+def test_kpis_series_and_funnel_follow_the_selected_buckets(conn):
+    only_b = dash.kpis(conn, PROFILE, 7, NOW, buckets=("B",))
+    assert only_b["new_ab"]["value"] == 1 and only_b["new_ab"]["buckets"] == ["B"]
+    assert dash.kpis(conn, PROFILE, 7, NOW)["new_ab"]["value"] == 3
+    s = dash.series(conn, PROFILE, 30, NOW, ("A",))
+    assert s["bucket_label"] == "Bullseye" and s["buckets"] == ["A"]
+    assert sum(p["count"] for p in s["line"]["points"]) == 2
+    ab = next(x for x in s["funnel"]["stages"] if x["key"] == "ab")
+    assert ab["count"] == 2 and ab["label"] == "Bullseye"
+    assert [x["key"] for x in s["mix"]["slots"]] == ["a", "b", "other", "f"]  # mix is not filtered
+
+
+def test_dashboard_fragments_take_buckets(client):
+    assert client.get("/api/dash/kpis?buckets=B").json()["new_ab"]["value"] == 1
+    assert "New Strong" in client.get("/dash/kpis?buckets=B").text
+    assert client.get("/api/dash/series?buckets=A").json()["bucket_label"] == "Bullseye"
+    assert "New Bullseye + Strong" in client.get("/").text
+
+
+def test_funnel_downstream_stages_stay_within_the_selection(conn):
+    # Stale Match has no applications at all, so a narrow selection must not show any
+    # shortlisted/applied/responded groups (that gave conversions above 100%).
+    s = dash.series(conn, PROFILE, 30, NOW, ("F",))
+    stages = {x["key"]: x["count"] for x in s["funnel"]["stages"]}
+    assert stages["ab"] == 0
+    assert stages["shortlisted"] == stages["applied"] == stages["responded"] == 0
+    # Strong: the six CO applications and fed_b are all bucket B.
+    b = {x["key"]: x for x in dash.series(conn, PROFILE, 30, NOW, ("B",))["funnel"]["stages"]}
+    assert b["applied"]["count"] == 7 and b["shortlisted"]["count"] == 7  # co_a's label is A
+
+
+def test_state_counts_other_than_new_follow_the_selection(conn):
+    a = by_state(dash.state_stats(conn, PROFILE, "applied", 7, NOW, ("A",)))
+    assert a["CO"]["applied"] == 0 and a["CO"]["applications"] == 0
+    assert a["CO"]["shortlisted"] == 1 and a["CO"]["scored"] == 1  # co_a only
+    b = by_state(dash.state_stats(conn, PROFILE, "applied", 7, NOW, ("B",)))
+    assert b["CO"]["applied"] == 7 and b["CO"]["shortlisted"] == 0 and b["CO"]["scored"] == 1
+    assert b["CO"]["response_rate"] is not None
 
 
 def test_series_funnel_counts(conn):

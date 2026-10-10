@@ -131,7 +131,12 @@
 
   function jump(b) {
     var sec = document.getElementById("bucket-" + b);
-    if (!sec) return;
+    if (!sec) {
+      // Not on this page (filtered out): follow the chip, which keeps the state filter.
+      var chip = document.querySelector('.chips a[data-bucket="' + b + '"]');
+      if (chip) window.location.href = chip.getAttribute("href");
+      return;
+    }
     var d = sec.querySelector("details");
     if (d) d.open = true;
     sec.scrollIntoView({ block: "start" });

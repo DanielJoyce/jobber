@@ -334,3 +334,19 @@ h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .sankey-table { margin-top: 8px; font-size: 0.8125rem; }
 .sankey-table summary { cursor: pointer; color: var(--text-secondary); }
 .sankey-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* bucket names: letter only as a small secondary badge */
+.bucket-badge { display: inline-block; font-size: 0.6875rem; line-height: 1; padding: 2px 5px; margin-left: 4px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-muted); vertical-align: middle; }
+
+/* map bucket filter: toggle chips */
+.bucket-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.bucket-filter-title { color: var(--text-secondary); margin-right: 2px; }
+.bucket-filter .chip { font: inherit; font-size: 0.85rem; cursor: pointer; color: var(--text-primary); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; background: var(--surface-1); }
+.bucket-filter .chip[aria-pressed="true"] { background: var(--grid); border-color: var(--text-secondary); font-weight: 600; }
+.bucket-filter .chip[aria-pressed="true"]::before { content: "\2713\00a0"; }
+.bucket-filter .chip:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+.bucket-filter .chip[data-action] { border-style: dashed; }
+@media (max-width: 480px) { .bucket-filter .chip { padding: 4px 10px; } }
+
+#state-details > summary { cursor: pointer; list-style-position: inside; }
+#state-details > summary h2 { display: inline; }

@@ -1,7 +1,7 @@
 {# State table: the map's accessible equivalent (specs/013 "Table view"). #}
 {% set cols = [
   ("state", "State", "text"),
-  ("new_ab", "New A+B", "count"),
+  ("new_ab", "New: " ~ buckets_name, "count"),
   ("scored", "Scored", "count"),
   ("shortlisted", "Shortlisted", "count"),
   ("applied", "Applied", "count"),
@@ -19,13 +19,13 @@
 {%- elif kind == "money" -%}${{ "{:,.0f}".format(v) }}
 {%- else -%}{{ v }}{%- endif -%}
 {%- endmacro %}
-<table class="state-table" data-sort="{{ sort }}" data-dir="{{ dir }}" data-metric="{{ metric }}" data-range="{{ range }}">
-  <caption>Per-state stats, last {{ range }} days. Sorted by {{ sort }} ({{ dir }}). Multi-state jobs count in each state they list; remote jobs count once, in Remote (US).</caption>
+<table class="state-table" data-sort="{{ sort }}" data-dir="{{ dir }}" data-metric="{{ metric }}" data-range="{{ range }}" data-buckets="{{ buckets_param }}">
+  <caption>Per-state stats, last {{ range }} days. Sorted by {{ sort }} ({{ dir }}). Counts cover only {{ buckets_name }}. Multi-state jobs count in each state they list; remote jobs count once, in Remote (US).</caption>
   <thead>
     <tr>
       {% for key, label, kind in cols %}
       {% set next_dir = ("desc" if dir == "asc" else "asc") if key == sort else ("asc" if key == "state" else "desc") %}
-      {% set q = "range=" ~ range ~ "&metric=" ~ metric ~ "&sort=" ~ key ~ "&dir=" ~ next_dir %}
+      {% set q = "range=" ~ range ~ "&buckets=" ~ buckets_param ~ "&metric=" ~ metric ~ "&sort=" ~ key ~ "&dir=" ~ next_dir %}
       <th scope="col"{% if kind != "text" %} class="num"{% endif %}{% if key == sort %} aria-sort="{{ 'ascending' if dir == 'asc' else 'descending' }}"{% endif %}{% if key == metric %} data-metric-col{% endif %}>
         <a href="/?{{ q }}" hx-get="/dash/state-table?{{ q }}" hx-target="#state-table" hx-swap="innerHTML">{{ label }}{% if key == sort %} {{ "▲" if dir == "asc" else "▼" }}{% endif %}</a>
       </th>
@@ -36,7 +36,7 @@
   <tbody>
     {% for r in rows %}
     <tr data-state="{{ r.state }}">
-      <th scope="row" title="{{ r.name }}"><a href="/inbox?state={{ r.state }}">{{ r.name }}</a> <span class="muted">{{ r.state if r.state != "REMOTE" else "" }}</span></th>
+      <th scope="row" title="{{ r.name }}"><a href="/inbox?state={{ r.state }}&amp;bucket={{ buckets_param }}">{{ r.name }}</a> <span class="muted">{{ r.state if r.state != "REMOTE" else "" }}</span></th>
       <td class="num">{{ r.new_ab }}</td>
       <td class="num">{{ r.scored }}</td>
       <td class="num">{{ r.shortlisted }}</td>

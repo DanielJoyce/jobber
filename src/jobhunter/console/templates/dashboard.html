@@ -17,6 +17,7 @@
     </fieldset>
     <input type="hidden" name="sort" value="{{ sort }}">
     <input type="hidden" name="dir" value="{{ dir }}">
+    <input type="hidden" name="buckets" value="{{ buckets_param }}">
     <noscript><button type="submit">Apply</button></noscript>
   </form>
 </div>
@@ -43,6 +44,14 @@
     </fieldset>
     <label class="check"><input type="checkbox" id="map-status" checked> status</label>
   </div>
+  <div class="bucket-filter" id="bucket-filter" role="group" aria-label="Buckets the map counts">
+    <span class="bucket-filter-title" id="bucket-filter-title">Buckets</span>
+    {% for b in bucket_letters %}
+    <button type="button" class="chip bucket-chip" data-bucket="{{ b }}" aria-pressed="{{ 'true' if b in buckets else 'false' }}" title="{{ bucket_hints[b] }}">{{ bucket_name(b) }} <span class="muted count" data-count></span></button>
+    {% endfor %}
+    <button type="button" class="chip" data-action="fits" title="Select every bucket except Mismatch">All fits</button>
+    <button type="button" class="chip" data-action="reset" title="Back to {{ group_name(['A', 'B']) }}">Reset</button>
+  </div>
   <div id="map" class="map" data-atlas="{{ static_url('vendor/us-atlas-3.0.1-states-albers-10m.json') }}"
        data-api="/api/dash/map" aria-describedby="map-help">
     <p class="muted map-loading">Loading map&hellip;</p>
@@ -60,7 +69,7 @@
   <h2 id="charts-title">Trends</h2>
   <div class="charts-grid">
     <figure class="chart" id="chart-line" aria-labelledby="chart-line-title" style="margin:0">
-      <h3 id="chart-line-title">New A+B per day</h3>
+      <h3 id="chart-line-title">New {{ buckets_name }} per day</h3>
       <div class="body"></div>
     </figure>
     <figure class="chart" id="chart-funnel" aria-labelledby="chart-funnel-title" style="margin:0">
@@ -94,10 +103,12 @@
 </section>
 
 <section class="panel" aria-labelledby="table-title">
-  <h2 id="table-title">States</h2>
+  <details id="state-details">
+  <summary><h2 id="table-title">State statistics ({{ rows | length }} rows: states, DC, territories, Remote)</h2></summary>
   <div id="state-table" class="table-wrap" hx-disinherit="*"
        hx-get="/dash/state-table" hx-include="#dash-controls" hx-trigger="dash-refresh from:body" hx-swap="innerHTML">
     {% include "_state_table.html" %}
   </div>
+  </details>
 </section>
 {% endblock %}

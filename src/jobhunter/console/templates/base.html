@@ -12,6 +12,7 @@
   </script>
   <link rel="stylesheet" href="{{ static_url('app.css') }}">
   <script src="{{ static_url('vendor/htmx-2.0.4.min.js') }}" defer></script>
+  <script type="application/json" id="bucket-names">{{ bucket_names_json | safe }}</script>
   <script src="{{ static_url('app.js') }}" defer></script>
   {% block head %}{% endblock %}
 </head>

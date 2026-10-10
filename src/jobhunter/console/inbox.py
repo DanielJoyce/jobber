@@ -18,21 +18,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jobhunter.core import rejections
+from jobhunter.core.bucketnames import BUCKET_TITLES, parse_letters  # noqa: F401 (re-export)
 from jobhunter.core.models import Bucket
 from jobhunter.pipeline.locations import jobs_in_state, load_job_group_locations, location_summary
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile
 
 BUCKETS = [b.value for b in Bucket]
-BUCKET_TITLES: dict[str, tuple[str, str]] = {
-    "A": ("BULLSEYE", "apply, minimal tailoring"),
-    "B": ("STRONG", "apply, tailor to the gaps"),
-    "C": ("STRETCH UP", "apply if you want the jump"),
-    "D": ("LATERAL", "apply selectively"),
-    "E": ("DOWNLEVEL", "only if the trade is worth it"),
-    "F": ("STALE MATCH", "matched skills you last used years ago"),
-    "G": ("MISMATCH", "not your field"),
-}
 SOURCE_BADGE = {"C": "federal", "A": "state", "B": "state-employer"}
 
 
@@ -225,7 +217,9 @@ def inbox_items(
     now: datetime | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> Inbox:
-    """Group untriaged job groups by bucket A..G (G only when ``bucket="G"``).
+    """Group untriaged job groups by bucket A..G (G only when asked for).
+
+    ``bucket`` is one letter or a comma list (``"A,B"``) to show only those buckets.
 
     ``counts`` cover every group matching the state filter; ``limit`` caps rows per bucket.
     Postings an employer already rejected you for are left out unless ``include_triaged``.
@@ -250,7 +244,8 @@ def inbox_items(
     stale: Counter[str] = Counter()
     for item in buckets["F"]:
         stale.update(set(item.stale_skills))
-    shown = [bucket] if bucket in BUCKETS else [b for b in BUCKETS if b != "G"]
+    picked = parse_letters(bucket)  # "A,B" -> ["A", "B"]; a lone "G" shows the hidden bucket
+    shown = picked or [b for b in BUCKETS if b != "G"]
     return Inbox(
         buckets={b: buckets[b][:limit] if b in shown else [] for b in BUCKETS},
         counts=counts,

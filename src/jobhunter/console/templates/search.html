@@ -11,9 +11,9 @@
       {% for c, n in (("A", "A state"), ("B", "B employer"), ("C", "C federal")) %}<option value="{{ c }}"{% if source_class == c %} selected{% endif %}>{{ n }}</option>{% endfor %}
       </select></label>
     <label>Bucket from
-      <select name="bucket_from"><option value="">-</option>{% for b in buckets %}<option{% if bucket_from == b %} selected{% endif %}>{{ b }}</option>{% endfor %}</select></label>
+      <select name="bucket_from"><option value="">-</option>{% for b in buckets %}<option value="{{ b }}"{% if bucket_from == b %} selected{% endif %}>{{ bucket_name(b) }}</option>{% endfor %}</select></label>
     <label>Bucket to
-      <select name="bucket_to"><option value="">-</option>{% for b in buckets %}<option{% if bucket_to == b %} selected{% endif %}>{{ b }}</option>{% endfor %}</select></label>
+      <select name="bucket_to"><option value="">-</option>{% for b in buckets %}<option value="{{ b }}"{% if bucket_to == b %} selected{% endif %}>{{ bucket_name(b) }}</option>{% endfor %}</select></label>
     <label>Salary floor (annual)<input name="salary_floor" value="{{ salary_floor }}" size="8" inputmode="numeric"></label>
     <label>Posted after<input type="date" name="posted_after" value="{{ posted_after }}"></label>
     <button type="submit">Search</button>
@@ -32,7 +32,7 @@
       <td>{% if h.group_id %}<a href="/job/{{ h.group_id }}">{{ h.title }}</a>{% else %}{{ h.title }}{% endif %}
         {% if h.dismissed %}<span class="tag">dismissed</span>{% endif %}</td>
       <td>{{ h.employer }}</td><td>{{ h.location }}</td><td>{{ h.salary }}</td>
-      <td>{{ h.posted or "-" }}</td><td>{{ h.bucket or "unscored" }}</td><td>{{ h.source_name }}</td>
+      <td>{{ h.posted or "-" }}</td><td>{{ bucket_name(h.bucket) }}</td><td>{{ h.source_name }}</td>
     </tr>
     {% endfor %}
     </tbody>

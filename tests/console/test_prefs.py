@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from stray_letters import stray_letters
 
 from jobhunter.config import Paths, Settings
 from jobhunter.console import prefs as pf
@@ -216,6 +217,15 @@ def test_preview_bucket_deltas_when_floor_drops(client, pdir, conn):
     assert f"Filtered out by salary 1 → 0 ({MINUS}1)" in r.text
     assert 'href="/job/1"' in r.text
     assert "Save — free" in r.text
+
+
+def test_preview_names_buckets_not_letters_for_moved_jobs(client, pdir, conn):
+    add_job(conn, 1, salary_max=120000)
+    add_job(conn, 2, salary_max=200000)
+    r = client.post("/prefs/preview", data=form_for(pdir, hard__salary_floor__amount="100000"))
+    assert "that would move into Bullseye or Strong" in r.text
+    assert re.search(r'<span class="muted">[A-Z][a-z]+( [A-Z][a-z]+)? → [A-Z][a-z]+', r.text)
+    assert stray_letters(r.text) == []
 
 
 def test_preview_paid_estimate_uses_measured_cost(client, pdir, conn):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import expect
 
@@ -135,3 +137,128 @@ def test_sankey_phone_width_has_no_horizontal_scroll(dash):
     )
     assert dash.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     assert dash.locator(SANKEY_NODES).count() >= 5
+
+
+# ─── bucket filter ─────────────────────────────────────────────────────────
+
+CHIPS = "#bucket-filter button.chip"
+
+
+def chip(page, name):
+    return page.locator(CHIPS, has_text=name).first
+
+
+def wa_fill(page):
+    return page.get_attribute('#map g.targets path[data-state="WA"]', "fill")
+
+
+def wa_tip(page) -> dict[str, str]:
+    page.focus('#map g.targets path[data-state="WA"]')
+    expect(page.locator("#map-tooltip")).to_be_visible()
+    return page.evaluate(
+        "() => { const o = {}; const dl = document.querySelector('#map-tooltip dl');"
+        "dl.querySelectorAll('dt').forEach(dt => { o[dt.textContent.trim()] = "
+        "dt.nextElementSibling.textContent; }); return o; }"
+    )
+
+
+def toggle(page, name):
+    with page.expect_response(lambda r: "/api/dash/map" in r.url):
+        chip(page, name).click()
+    page.wait_for_function("() => !document.querySelector('.map-loading')")
+
+
+def test_bucket_chips_default_to_bullseye_and_strong(dash):
+    expect(chip(dash, "Bullseye")).to_have_attribute("aria-pressed", "true")
+    expect(chip(dash, "Strong")).to_have_attribute("aria-pressed", "true")
+    expect(chip(dash, "Stale Match")).to_have_attribute("aria-pressed", "false")
+    expect(chip(dash, "Bullseye")).to_contain_text("3")  # counts from the payload
+    assert wa_tip(dash)["New: Bullseye + Strong"] == "3"
+
+
+def test_toggling_buckets_recolors_map_and_updates_tooltip_url_and_table(dash):
+    before = wa_fill(dash)
+    toggle(dash, "Bullseye")  # WA: Strong only
+    expect(chip(dash, "Bullseye")).to_have_attribute("aria-pressed", "false")
+    assert wa_tip(dash)["New: Strong"] == "2"
+    assert "buckets=B" in dash.url
+    expect(dash.locator('#state-table tr[data-state="WA"] td.num').first).to_have_text("2")
+    expect(dash.locator("#map-legend")).to_contain_text("New: Strong")
+    toggle(dash, "Stale Match")
+    tip = wa_tip(dash)
+    assert tip["New: Strong + Stale Match"] == "3"
+    assert tip["Stale Match"] == "1" and tip["Strong"] == "2"
+    assert "buckets=B%2CF" in dash.url or "buckets=B,F" in dash.url
+    # Only Mismatch: WA has none, so its fill drops to the zero step.
+    toggle(dash, "Mismatch")
+    toggle(dash, "Strong")
+    toggle(dash, "Stale Match")
+    assert wa_tip(dash)["New: Mismatch"] == "0"
+    assert wa_fill(dash) != before
+
+
+def test_bucket_selection_persists_and_clicking_a_state_filters_the_inbox(dash):
+    toggle(dash, "Strong")
+    assert dash.evaluate("localStorage.getItem('jh-dash-buckets')") == "A"
+    dash.goto(dash.url.split("?")[0])  # no URL param: restored from localStorage
+    dash.wait_for_selector(PATHS)
+    expect(chip(dash, "Strong")).to_have_attribute("aria-pressed", "false")
+    expect(chip(dash, "Bullseye")).to_have_attribute("aria-pressed", "true")
+    dash.locator('#map g.targets path[data-state="WA"]').focus()
+    dash.keyboard.press("Enter")
+    dash.wait_for_url("**/inbox?state=WA&bucket=A")
+    expect(dash.locator("section.bucket")).to_have_count(1)
+
+
+def test_bucket_chips_keyboard_reset_and_all_fits(dash):
+    chip(dash, "Stale Match").focus()
+    with dash.expect_response(lambda r: "/api/dash/map" in r.url):
+        dash.keyboard.press("Space")
+    expect(chip(dash, "Stale Match")).to_have_attribute("aria-pressed", "true")
+    toggle(dash, "Reset")
+    expect(chip(dash, "Stale Match")).to_have_attribute("aria-pressed", "false")
+    toggle(dash, "All fits")
+    expect(chip(dash, "Lateral")).to_have_attribute("aria-pressed", "true")
+    expect(chip(dash, "Mismatch")).to_have_attribute("aria-pressed", "false")
+    # The last selected bucket cannot be switched off.
+    toggle(dash, "Reset")
+    toggle(dash, "Bullseye")
+    chip(dash, "Strong").click()
+    expect(chip(dash, "Strong")).to_have_attribute("aria-pressed", "true")
+
+
+def test_bucket_filter_fits_a_phone_in_dark_mode(page, server):
+    page.set_viewport_size({"width": 360, "height": 800})
+    page.goto(f"{server.url}/?buckets=A,C")
+    page.wait_for_selector(PATHS)
+    page.click("#theme-toggle")
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    expect(chip(page, "Lateral")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_bucket_selection_drives_kpi_and_trend_chart(dash):
+    kpi = dash.locator('[data-kpi="new_ab"]')
+    both = int(kpi.inner_text())
+    expect(dash.locator("#kpis")).to_contain_text("New Bullseye + Strong")
+    with dash.expect_response(lambda r: "/dash/kpis" in r.url and "buckets=B" in r.url):
+        toggle(dash, "Bullseye")
+    expect(dash.locator("#kpis")).to_contain_text("New Strong")
+    assert int(kpi.inner_text()) < both
+    expect(dash.locator("#chart-line-title")).to_have_text("New Strong per day")
+    expect(dash.locator("#chart-funnel")).to_contain_text("Strong")
+
+
+def test_state_statistics_collapsed_by_default_and_remembered(dash):
+    details = dash.locator("#state-details")
+    expect(details).not_to_have_attribute("open", "")
+    expect(dash.locator("#state-details summary")).to_contain_text(
+        re.compile(r"State statistics \(\d+ rows")
+    )
+    expect(dash.locator("#state-table table")).not_to_be_visible()
+    dash.locator("#state-details summary").click()
+    expect(dash.locator("#state-table table")).to_be_visible()
+    assert dash.evaluate("localStorage.getItem('jh-dash-states')") == "open"
+    dash.reload()
+    dash.wait_for_selector(PATHS)
+    expect(dash.locator("#state-table table")).to_be_visible()

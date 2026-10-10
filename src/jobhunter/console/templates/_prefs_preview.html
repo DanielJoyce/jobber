@@ -31,7 +31,7 @@
   <details>
     <summary>Show the {{ into_ab | length }} job{{ "s" if into_ab | length != 1 }} that would move into Bullseye or Strong</summary>
     <ul class="plain">
-      {% for m in into_ab %}<li><a href="/job/{{ m.job_group_id }}">{{ m.title }}</a> <span class="muted">{{ m.before }} → {{ m.after }}</span></li>{% endfor %}
+      {% for m in into_ab %}<li><a href="/job/{{ m.job_group_id }}">{{ m.title }}</a> <span class="muted">{{ bucket_name(m.before) }} → {{ bucket_name(m.after) }}</span></li>{% endfor %}
     </ul>
   </details>
   {% endif %}

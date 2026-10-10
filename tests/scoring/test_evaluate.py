@@ -148,7 +148,8 @@ def test_insufficient_labels_still_shows_numbers(conn):
     assert "insufficient labels (10/150)" in r.notes
     text = r.to_text()
     assert "insufficient labels (10/150)" in text
-    assert "recall A+B" in text and "FAIL" in text
+    assert "recall Bullseye (A) + Strong (B)" in text and "FAIL" in text
+    assert "Mismatch (G)" in text  # confusion tables name the bucket too
 
 
 def test_targets_pass_with_enough_labels(conn):

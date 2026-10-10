@@ -144,7 +144,22 @@ already says it.
 Below the charts sits the **state table**: one sortable row per state plus Remote and
 territories, with every map metric as a column, coverage status as icon + text, and sources.
 It is the map's accessible equivalent, it's where precise comparisons happen, and
-sorting by "New A+B" is the fastest way to answer *where should I look this week?*
+sorting by "New matches" is the fastest way to answer *where should I look this week?*
+
+### Bucket filter
+
+Above the map, one toggle chip per bucket, shown by name (Bullseye, Strong, ...) with that
+bucket's count in the range; plus **All fits** (A-F) and **Reset** (Bullseye + Strong, the
+default). Chips are `aria-pressed` buttons; at least one stays on. The selection drives the
+"New: ..." metric, the legend, tooltips (with a per-bucket split), the median-salary metrics
+and the state table. It lives in `?buckets=A,B` (letters in URLs) and `localStorage`
+(`jh-dash-buckets`), the URL winning. The map payload carries `by_bucket` per state and
+`bucket_totals`; a toggle re-fetches the payload, table, KPI tile and trend/funnel charts (the bucket-mix chart always shows every bucket). The state table sits in a `<details>` collapsed by default (`jh-dash-states`) and still updates while closed. Clicking a state opens
+`/inbox?state=XX&bucket=A,B`; the inbox accepts a comma list. Names come from
+`core/bucketnames.py`. The KPI tile, trend line and funnel follow the selection too: the
+funnel's downstream stages (shortlisted, applied, responded...) count only groups in the
+selected buckets, and the per-state counts, medians and response rate do likewise. Unscored
+groups therefore drop out of those counts.
 
 ## Charts
 

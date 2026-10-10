@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from jobhunter.core.bucketnames import bucket_label
 from jobhunter.core.models import Bucket, Verdict
 from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring.buckets import ComputedFit, compute_row, thresholds_for
@@ -544,7 +545,7 @@ def format_report(r: EvalReport) -> str:
         [
             ["labels", t["min_labels"]["value"], f">= {MIN_LABELS}", _pf(t["min_labels"])],
             [
-                "recall A+B on positives",
+                "recall Bullseye (A) + Strong (B) on positives",
                 _pct(t["recall_bucket_ab"]["value"]),
                 f">= {TARGET_RECALL}",
                 _pf(t["recall_bucket_ab"]),
@@ -585,13 +586,13 @@ def format_report(r: EvalReport) -> str:
     out += ["", "Buckets (label counts)"]
     out += _table(
         ["bucket", "positive", "negative"],
-        [[b, c["positive"], c["negative"]] for b, c in r.bucket_counts.items()],
+        [[bucket_label(b), c["positive"], c["negative"]] for b, c in r.bucket_counts.items()],
     )
     out += [
         "",
-        f"Bucket F audit: {r.f_audit['positives_in_F']} positives in F "
+        f"Stale Match (F) audit: {r.f_audit['positives_in_F']} positives in F "
         "(stale matches you wanted; recency weighting too aggressive if high)",
-        f"D-fallback (no rule matched): {r.d_fallback['positive']} positive, "
+        f"Lateral (D) fallback (no rule matched): {r.d_fallback['positive']} positive, "
         f"{r.d_fallback['negative']} negative",
     ]
     for title, rows in (
@@ -602,7 +603,13 @@ def format_report(r: EvalReport) -> str:
         out += _table(
             ["group", "bucket", "overall", "title", "first evidence claim"],
             [
-                [c["group_id"], c["bucket"], c["overall"], c["title"], c["claim"] or ""]
+                [
+                    c["group_id"],
+                    bucket_label(c["bucket"]),
+                    c["overall"],
+                    c["title"],
+                    c["claim"] or "",
+                ]
                 for c in rows
             ],
         )
@@ -629,10 +636,10 @@ def format_compare(c: CompareReport) -> str:
     ]
     cols = [f"{r.variant['prompt_version']}@{r.variant['model'] or 'any'}" for r in c.variants]
     keys = [
-        ("recall_bucket_ab", "recall A+B"),
+        ("recall_bucket_ab", "recall Bullseye + Strong (A+B)"),
         ("recall_verdict_strong_possible", "recall strong+possible"),
-        ("precision_bucket_a", "precision A"),
-        ("precision_bucket_ab", "precision A+B"),
+        ("precision_bucket_a", "precision Bullseye (A)"),
+        ("precision_bucket_ab", "precision Bullseye + Strong (A+B)"),
         ("discard_rate_not_interesting", "discard not_interesting"),
         ("evidence_unverified_rate", "evidence_unverified"),
     ]

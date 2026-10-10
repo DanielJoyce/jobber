@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from stray_letters import stray_letters
 
 from jobhunter.config import Paths, Settings
 from jobhunter.console import inbox
@@ -459,3 +460,79 @@ def test_rejected_page_is_still_the_prefilter_page(client):
     # /rejected (jobs we filtered out) is unchanged and distinct from /rejections.
     assert client.get("/rejected").status_code == 200
     assert "Employer rejections" not in client.get("/rejected").text.split("<main")[-1]
+
+
+# ─── multi-bucket filter (?bucket=A,B) ─────────────────────────────────────
+
+
+def test_inbox_items_accepts_several_buckets(seeded, profile):
+    data = inbox.inbox_items(seeded, profile, bucket="A,B")
+    assert data.shown == ["A", "B"]
+    assert [i.title for i in data.buckets["A"]] == ["Bullseye"]
+    assert [i.title for i in data.buckets["B"]] == ["Strong"]
+    assert data.buckets["F"] == []
+    assert inbox.inbox_items(seeded, profile, bucket="b,zz").shown == ["B"]
+    assert "G" not in inbox.inbox_items(seeded, profile, bucket="nonsense").shown
+
+
+def test_inbox_page_multi_bucket_chips(client):
+    t = client.get("/inbox?bucket=A,B").text
+    assert 'id="bucket-A"' in t and 'id="bucket-B"' in t and 'id="bucket-F"' not in t
+    assert 'class="chip on" data-bucket="A" href="#bucket-A"' in t
+    assert 'class="chip on" data-bucket="B" href="#bucket-B"' in t
+    # Buckets not on the page link to that bucket (a dead #anchor would do nothing).
+    assert 'data-bucket="F" href="/inbox?bucket=F"' in t
+
+
+def test_inbox_chips_keep_the_state_filter(client):
+    t = client.get("/inbox?state=CO&bucket=A,B").text
+    assert 'data-bucket="D" href="/inbox?state=CO&amp;bucket=D"' in t
+    assert 'data-bucket="G" href="/inbox?state=CO&amp;bucket=G"' in t
+    assert 'href="#bucket-D"' not in t and 'href="#bucket-G"' not in t
+    plain = client.get("/inbox").text  # nothing picked: every non-hidden section is on the page
+    assert 'href="#bucket-D"' in plain
+    assert 'data-bucket="G" href="/inbox?bucket=G"' in plain
+    assert "toggle Stale Match" in plain
+
+
+# ─── stray bucket letters ──────────────────────────────────────────────────
+
+_PAGES = [
+    "/",
+    "/dash/state-table?buckets=A,B",
+    "/dash/kpis",
+    "/inbox",
+    "/inbox?bucket=A,B",
+    "/inbox?bucket=G",
+    "/job/1",
+    "/job/3",
+    "/search?bucket_from=A&bucket_to=C",
+    "/prefs",
+    "/pipeline",
+    "/costs",
+    "/rejections",
+    "/proposals",
+    "/alerts",
+]
+
+
+def test_stray_scanner_catches_known_bad_patterns():
+    assert "letters joined with +" in stray_letters("<span>New A+B</span>")
+    assert "letters joined with +" in stray_letters("<td>A + B</td>")
+    assert "'bucket X'" in stray_letters("<span>bucket B</span>")
+    assert "letter arrow letter" in stray_letters('<span class="muted">B → A</span>')
+    assert "letter arrow letter" in stray_letters("<li>D &rarr; A</li>")
+    assert stray_letters('<span title="Bucket B">Strong</span>') == []
+    assert "letter then count" in stray_letters(
+        '<a class="chip"><b>B 12</b></a>'.replace("<b>", ">")
+    )
+    assert "bare letter element" in stray_letters("<td>C</td>")
+    assert stray_letters('<span class="bucket-badge" title="Bucket B">B</span> Strong') == []
+    assert stray_letters("<script>var x = 'A+B';</script>") == []
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_pages_show_bucket_names_not_letters(client, path):
+    r = client.get(path)
+    assert r.status_code == 200, path
+    assert stray_letters(r.text) == [], path
