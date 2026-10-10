@@ -45,7 +45,7 @@ def employer_tokens(name: str) -> list[str]:
 
 
 def employer_norm(name: str | None) -> str:
-    """``"Seeq Corporation"`` -> ``"seeq"``. Empty string when there is nothing to match on."""
+    """``"Contoso Corporation"`` -> ``"contoso"``; empty when there is nothing to match on."""
     return " ".join(employer_tokens(name or ""))
 
 

@@ -527,14 +527,15 @@ def rejections_rows(conn):
     return conn.execute("SELECT * FROM rejection ORDER BY id").fetchall()
 
 
-SEEQ_REJECT = (
-    "Thank you for your interest in the Senior Platform Engineer position at Seeq. "
+CONTOSO_REJECT = (
+    "Thank you for your interest in the Senior Platform Engineer position at Contoso. "
     "Unfortunately, we have decided to move forward with other candidates."
 )
 
 
-def msg_seeq_reject(mid="rj1", thread=None, days_ago=1):
-    m = raw(mid, "Seeq <no-reply@ashbyhq.com>", "Your application to Seeq", SEEQ_REJECT, days_ago)
+def msg_contoso_reject(mid="rj1", thread=None, days_ago=1):
+    sender, subject = "Contoso <no-reply@ashbyhq.com>", "Your application to Contoso"
+    m = raw(mid, sender, subject, CONTOSO_REJECT, days_ago)
     if thread:
         m["threadId"] = thread
     return m
@@ -542,12 +543,12 @@ def msg_seeq_reject(mid="rj1", thread=None, days_ago=1):
 
 def test_unmatched_rejection_is_stored_not_dropped(conn):
     add_job(conn, 1, "Fabrikam Robotics", "Welder")
-    _, res = run_scan(conn, [msg_seeq_reject()])
+    _, res = run_scan(conn, [msg_contoso_reject()])
     assert rows(conn) == []  # no proposal: nothing to change in the pipeline
     (r,) = rejections_rows(conn)
     assert (r["employer"], r["employer_norm"], r["title"]) == (
-        "Seeq",
-        "seeq",
+        "Contoso",
+        "contoso",
         "Senior Platform Engineer",
     )
     assert r["job_group_id"] is None and r["application_id"] is None
@@ -578,21 +579,21 @@ def test_matched_rejection_stores_row_and_still_proposes_event(conn):
 
 
 def test_rejection_rescan_is_idempotent_and_not_refetched(conn):
-    run_scan(conn, [msg_seeq_reject()])
-    svc, res = run_scan(conn, [msg_seeq_reject()])
+    run_scan(conn, [msg_contoso_reject()])
+    svc, res = run_scan(conn, [msg_contoso_reject()])
     assert len(rejections_rows(conn)) == 1
     assert res.rejections_stored == 0
     assert svc.gets == []
 
 
 def test_rejection_dry_run_lists_and_writes_nothing(conn):
-    _, res = run_scan(conn, [msg_seeq_reject()], dry_run=True)
-    assert [r.employer for r in res.rejections] == ["Seeq"]
+    _, res = run_scan(conn, [msg_contoso_reject()], dry_run=True)
+    assert [r.employer for r in res.rejections] == ["Contoso"]
     assert rejections_rows(conn) == []
 
 
 def test_one_rejection_per_thread(conn):
-    run_scan(conn, [msg_seeq_reject("a", "T1", 3), msg_seeq_reject("b", "T1", 1)])
+    run_scan(conn, [msg_contoso_reject("a", "T1", 3), msg_contoso_reject("b", "T1", 1)])
     assert [r["gmail_message_id"] for r in rejections_rows(conn)] == ["a"]
 
 
@@ -601,12 +602,12 @@ def test_repeated_confirmations_in_one_thread_make_one_proposal(conn):
     for i in range(5):
         m = raw(
             f"s{i}",
-            "Seeq <no-reply@ashbyhq.com>",
-            "Thanks for applying to Seeq",
-            "Thanks for applying to the Platform Engineer role at Seeq.",
+            "Contoso <no-reply@ashbyhq.com>",
+            "Thanks for applying to Contoso",
+            "Thanks for applying to the Platform Engineer role at Contoso.",
             days_ago=5 - i,
         )
-        m["threadId"] = "T-seeq"
+        m["threadId"] = "T-contoso"
         msgs.append(m)
     _, res = run_scan(conn, msgs)
     (p,) = rows(conn)
@@ -667,7 +668,7 @@ class FlakyGmail(FakeGmail):
 def test_rate_limit_backs_off_then_succeeds(conn):
     sleeps: list[float] = []
     svc = FlakyGmail(
-        [msg_seeq_reject()],
+        [msg_contoso_reject()],
         [http_error(429), http_error(403, "userRateLimitExceeded"), http_error(429, retry_after=7)],
     )
     res = match.scan(conn, svc, SETTINGS, now=NOW, sleep=sleeps.append)
@@ -679,7 +680,7 @@ def test_rate_limit_exhausted_raises_clean_error(conn):
     from jobhunter.mail.gmail_api import MAX_RETRIES, GmailRateLimited
 
     sleeps: list[float] = []
-    svc = FlakyGmail([msg_seeq_reject()], [http_error(429)] * (MAX_RETRIES + 1))
+    svc = FlakyGmail([msg_contoso_reject()], [http_error(429)] * (MAX_RETRIES + 1))
     with pytest.raises(GmailRateLimited, match="rate limit"):
         match.scan(conn, svc, SETTINGS, now=NOW, sleep=sleeps.append)
     assert len(sleeps) == MAX_RETRIES
@@ -689,7 +690,7 @@ def test_other_http_errors_are_not_retried(conn):
     from googleapiclient.errors import HttpError
 
     sleeps: list[float] = []
-    svc = FlakyGmail([msg_seeq_reject()], [http_error(403, "insufficientPermissions")])
+    svc = FlakyGmail([msg_contoso_reject()], [http_error(403, "insufficientPermissions")])
     with pytest.raises(HttpError):
         match.scan(conn, svc, SETTINGS, now=NOW, sleep=sleeps.append)
     assert sleeps == []
@@ -719,52 +720,54 @@ def test_cli_dry_run_lists_employer_rejections(monkeypatch, tmp_path):
     settings = Settings.model_validate({"paths": {"db_path": str(path)}})
     monkeypatch.setattr("jobhunter.config.load_settings", lambda *a, **k: settings)
     monkeypatch.setattr(auth, "load_token", lambda: "tok")
-    monkeypatch.setattr(auth, "build_service", lambda s: FakeGmail([msg_seeq_reject()]))
+    monkeypatch.setattr(auth, "build_service", lambda s: FakeGmail([msg_contoso_reject()]))
     res = CliRunner().invoke(cli_app, ["mail", "match", "--dry-run"])
     assert res.exit_code == 0, res.output
-    assert "employer rejection: Seeq | Senior Platform Engineer" in res.output
+    assert "employer rejection: Contoso | Senior Platform Engineer" in res.output
     assert "would store 0 proposals and 1 employer rejections" in res.output
     c = db.connect(path)
     assert c.execute("SELECT COUNT(*) FROM rejection").fetchone()[0] == 0
     c.close()
 
 
-# Shapes of real rejection emails that once produced sentence fragments as employer/title.
+# Shapes of rejection emails that once produced sentence fragments as employer/title.
+# Synthetic employers and roles only: never copy a real email's subject or sender here.
 @pytest.mark.parametrize(
     ("sender", "subject", "body", "want"),
     [
         (
-            "Ditto Hiring Team <no-reply@ashbyhq.com>",
-            "Update - Senior Software Engineer, Cloud at Ditto",
+            "Tailspin Hiring Team <no-reply@ashbyhq.com>",
+            "Update - Senior Software Engineer, Widgets at Tailspin",
             "Thank you for applying for this role. Thanks for the time you put in.",
-            ("Ditto", "Senior Software Engineer, Cloud"),
+            ("Tailspin", "Senior Software Engineer, Widgets"),
         ),
         (
-            "FluidStack Hiring Team <no-reply@ashbyhq.com>",
-            "Fluidstack Application Update",
+            "AcmeCloud Hiring Team <no-reply@ashbyhq.com>",
+            "Acmecloud Application Update",
             "We've decided to move forward with other candidates whose experience more closely "
-            "aligns with the requirements of the Telemetry Platform Lead role at Fluidstack. "
+            "aligns with the requirements of the Example Platform Lead role at Acmecloud. "
             "After reviewing your application, we've decided to move forward.",
-            ("FluidStack", None),
+            ("AcmeCloud", None),
         ),
         (
             "no-reply@us.greenhouse-mail.io",
-            "Important information about your application to Machinify",
+            "Important information about your application to Example Corp",
             "We've decided to move forward with other candidates whose experience more closely "
-            "aligns with our current needs at Machinify. After careful review, we've decided.",
-            ("Machinify", None),
+            "aligns with our current needs at Example Corp. After careful review, we've decided.",
+            ("Example Corp", None),
         ),
         (
-            "no-reply@example-space.com",
-            "K2 Space: Application Update",
-            "Thank you for your interest in the Senior Flight Software Engineer role at K2 Space.",
-            ("K2 Space", "Senior Flight Software Engineer"),
+            "no-reply@example-robotics.com",
+            "Acme Robotics: Application Update",
+            "Thank you for your interest in the Senior Widget Software Engineer role at "
+            "Acme Robotics.",
+            ("Acme Robotics", "Senior Widget Software Engineer"),
         ),
         (
-            '"Pure Storage Inc." <careers@example.com>',
-            "Thank You for Applying With Everpure",
+            '"Globex Holdings Inc." <careers@example.com>',
+            "Thank You for Applying With Globex",
             "Unfortunately we will not be moving forward.",
-            ("Everpure", None),
+            ("Globex", None),
         ),
     ],
 )

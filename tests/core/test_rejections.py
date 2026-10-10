@@ -83,7 +83,7 @@ def test_source_check_and_unique_message_id(conn):
 
 
 def test_employer_norm_drops_corporate_suffixes():
-    assert rejections.employer_norm("Seeq Corporation") == "seeq"
+    assert rejections.employer_norm("Contoso Corporation") == "contoso"
     assert rejections.employer_norm("Northwind Analytics, Inc.") == "northwind analytics"
     assert rejections.employer_norm(None) == ""
 
