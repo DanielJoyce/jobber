@@ -15,6 +15,8 @@ An unconfirmed line blocks export of that document, the same gate as Mark ready.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 import shutil
@@ -27,6 +29,9 @@ from jinja2 import Environment, select_autoescape
 
 from jobhunter.apply import generator, review
 from jobhunter.core import db
+
+log = logging.getLogger(__name__)
+MANIFEST = ".named.json"
 
 KINDS = ("resume", "cover_letter")
 # URL slug -> document kind.
@@ -54,12 +59,13 @@ def packet_dir(data_dir: Path, packet_id: int) -> Path:
 
 # ─── names ──────────────────────────────────────────────────────────────────
 
+_HEADING = re.compile(r"^#{1,6}\s+")
 _NAME_TOKEN = re.compile(r"^[^\W\d_]+(?:['.-][^\W\d_]+)*\.?$")
 
 
 def person_name(first_line: str) -> str:
     """``First-Last`` from a resume's first line, or ``""`` when it does not look like a name."""
-    line = (first_line or "").strip()
+    line = _HEADING.sub("", (first_line or "").strip())  # "# Jane Doe" is a name too
     if not line or any(c in line for c in "@|/\\:,;0123456789"):
         return ""
     tokens = line.split()
@@ -68,9 +74,6 @@ def person_name(first_line: str) -> str:
     parts = [tokens[0], tokens[-1]] if len(tokens) > 1 else tokens
     parts = [re.sub(r"[^\w-]", "", p, flags=re.UNICODE).strip("-") for p in parts]
     return "-".join(p for p in parts if p)
-
-
-_HEADING = re.compile(r"^#{1,6}\s+")
 
 
 def _first_line_of(v: review.Version) -> str:
@@ -205,7 +208,8 @@ pre { font: inherit; white-space: pre-wrap; margin: 0; }
 
 
 def _is_markdown(md: str) -> bool:
-    return any(ln.startswith(("#", "- ", "* ")) for ln in md.splitlines())
+    """Only a ``#`` heading marks Markdown: plain text may use ``- `` bullets of its own."""
+    return any(_HEADING.match(ln) for ln in md.splitlines())
 
 
 def to_html(md: str, kind: str, *, title: str, plain: bool = False) -> str:
@@ -281,56 +285,107 @@ def packet_refusal(status: str) -> str | None:
     )
 
 
+def _chmod(path: Path, mode: int) -> None:
+    try:
+        os.chmod(path, mode)
+    except OSError as exc:  # e.g. a filesystem without modes: the export still works
+        log.warning("could not set mode %o on %s: %s", mode, path, exc)
+
+
 def _private_dir(path: Path) -> None:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path, 0o700)
+    _chmod(path, 0o700)
 
 
 def _private_file(path: Path) -> None:
-    os.chmod(path, 0o600)
+    _chmod(path, 0o600)
+
+
+def _owned(d: Path) -> set[str]:
+    """Names of the employer-named copies jobhunter wrote here (never anything else)."""
+    try:
+        data = json.loads((d / MANIFEST).read_text(encoding="utf-8"))
+        return {n for n in data.get("files", []) if isinstance(n, str) and "/" not in n}
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+
+def _save_owned(d: Path, names: set[str]) -> None:
+    f = d / MANIFEST
+    f.write_text(json.dumps({"files": sorted(names)}), encoding="utf-8")
+    _private_file(f)
 
 
 def named_files(data_dir: Path, packet_id: int, kind: str) -> list[Path]:
-    """Employer-named copies of ``kind`` in the packet folder (any name, any version)."""
+    """The employer-named copies of ``kind`` that jobhunter wrote (per its manifest)."""
     d = packet_dir(data_dir, packet_id)
-    if not d.is_dir():
-        return []
-    return sorted(f for ext in FORMATS for f in d.glob(f"*{SUFFIX[kind]}.{ext}") if f.is_file())
+    out = []
+    for n in sorted(_owned(d)):
+        if any(n.endswith(f"{SUFFIX[kind]}.{ext}") for ext in FORMATS) and (d / n).is_file():
+            out.append(d / n)
+    return out
 
 
 def sync_named(conn: sqlite3.Connection, data_dir: Path, packet_id: int) -> None:
     """Make the employer-named copies match the current version, or remove them.
 
     Those are the files you attach, so a copy of a version that is no longer current must not
-    stay. Every named copy is dropped, then the current version's are restored from its
-    versioned files when that version was exported and still passes the gate. Run after
+    stay. Only files jobhunter wrote (the ``.named.json`` manifest) are ever removed. Every one
+    that is not the current version's is dropped, and the current version's are restored from
+    its versioned files when that version was exported and still passes the gate. Run after
     anything that can move the current version (generate, edit, restore, base, abandon) and
     before the packet page is drawn. Idempotent; a packet never exported is untouched.
     """
     data_dir = Path(data_dir)
-    if not packet_dir(data_dir, packet_id).is_dir():
+    d = packet_dir(data_dir, packet_id)
+    if not d.is_dir():
         return
     row = conn.execute(
         "SELECT status FROM application_packet WHERE id = ?", (packet_id,)
     ).fetchone()
     live = row is not None and packet_refusal(row["status"]) is None
+    owned = _owned(d)
+    keep: dict[str, Path] = {}
     for kind in KINDS:
-        stale = named_files(data_dir, packet_id, kind)
         exp = current_export(conn, packet_id, kind) if live else None
-        keep: dict[str, Path] = {}
         if exp is not None and refusal(exp) is None:
             for fmt in FORMATS:
                 src = versioned_path(data_dir, packet_id, exp, fmt)
                 if src.is_file():
                     keep[exp.download_name(fmt)] = src
-        for f in stale:
-            if keep.get(f.name) is None or f.read_bytes() != keep[f.name].read_bytes():
-                f.unlink(missing_ok=True)
-        for name, src in keep.items():
-            dst = packet_dir(data_dir, packet_id) / name
-            if not dst.exists():
-                shutil.copyfile(src, dst)
-                _private_file(dst)
+    now_owned: set[str] = set()
+    for name in sorted(owned):
+        f = d / name
+        try:
+            same = name in keep and f.read_bytes() == keep[name].read_bytes()
+        except FileNotFoundError:
+            continue  # another request got there first
+        if same:
+            now_owned.add(name)
+        else:
+            f.unlink(missing_ok=True)
+    for name, src in keep.items():
+        dst = d / name
+        if name in now_owned or dst.exists():
+            continue  # never overwrite a file we did not write
+        try:
+            shutil.copyfile(src, dst)
+        except FileNotFoundError:
+            continue
+        _private_file(dst)
+        now_owned.add(name)
+    if now_owned != owned:
+        _save_owned(d, now_owned)
+
+
+def safe_sync(conn: sqlite3.Connection, data_dir: Path, packet_id: int) -> str | None:
+    """``sync_named`` that never raises: a one-line warning for the page, or None."""
+    try:
+        sync_named(conn, data_dir, packet_id)
+    except OSError as exc:
+        log.warning("could not refresh the exported files of packet %s: %s", packet_id, exc)
+        return f"Could not refresh the exported files in the data folder ({exc.strerror or exc})."
+    return None
 
 
 def named_version(data_dir: Path, packet_id: int, exp: Export) -> int | None:
@@ -387,9 +442,12 @@ def write_export(
             "UPDATE packet_document SET rendered_path = ? WHERE id = ?",
             (str(vpdf.relative_to(data_dir)) if err is None else None, exp.version.id),
         )
-    # Replaces any copy from an older version or an older name.
+    # An explicit export replaces the copies of this document, whatever their version or name
+    # (the manifest says they are ours) and a file of the exact same name.
     for f in named_files(data_dir, packet_id, exp.kind):
         f.unlink(missing_ok=True)
+    for fmt in FORMATS:
+        (packet_dir(data_dir, packet_id) / exp.download_name(fmt)).unlink(missing_ok=True)
     sync_named(conn, data_dir, packet_id)
     for fmt in FORMATS:
         f = packet_dir(data_dir, packet_id) / exp.download_name(fmt)

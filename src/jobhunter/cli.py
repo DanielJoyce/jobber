@@ -1417,7 +1417,8 @@ def apply_draft(
             confirm_paid=confirm_paid,
         )
         # A new version is current now: files named for employers must not hold an older one.
-        export.sync_named(conn, settings.paths.data_dir, packet_id)
+        if (warn := export.safe_sync(conn, settings.paths.data_dir, packet_id)) is not None:
+            typer.echo(warn, err=True)
     except generator.ApplyRefused as exc:
         typer.echo(f"not run: {exc.message}", err=True)
         if exc.offer_api:

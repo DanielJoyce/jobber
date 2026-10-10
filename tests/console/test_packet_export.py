@@ -149,6 +149,7 @@ def test_export_writes_every_format_named_for_the_employer(
         "resume-v1.txt",
         "resume-v1.md",
         "resume-v1.html",
+        ".named.json",  # which of these files jobhunter wrote, so it never touches others
     } == named
     body_md = docs(env)[0]["body_md"]
     assert (d / "Synthetic-Person-Resume.md").read_text(encoding="utf-8") == body_md
@@ -513,7 +514,7 @@ def test_exported_files_and_folders_are_private(env, renderer):
     for d in (pdir(env), pdir(env).parent):
         assert d.stat().st_mode & 0o777 == 0o700
     files = list(pdir(env).iterdir())
-    assert len(files) == 8
+    assert len(files) == 9
     for f in files:
         assert f.stat().st_mode & 0o777 == 0o600, f.name
 
@@ -553,7 +554,7 @@ def test_an_abandoned_packet_refuses_export_and_downloads(env, renderer):
 
 def test_markdown_headings_become_a_clean_name_header_and_text(env, renderer):
     md = (
-        "# Jane Doe\njane@example.com | Denver\n\n## Experience\n\n"
+        "# Jane Doe\n<you>@example.com | Denver\n\n## Experience\n\n"
         "### Engineer, Acme (2020)\n\n- Ran things\n"
     )
     text = export.to_text(md)
@@ -568,3 +569,91 @@ def test_markdown_headings_become_a_clean_name_header_and_text(env, renderer):
     export_kind(env)
     assert named(env, "Jane-Doe-Resume")
     assert "#" not in (pdir(env) / "Jane-Doe-Resume.txt").read_text(encoding="utf-8")
+
+
+# ─── review round 2 ─────────────────────────────────────────────────────────
+
+
+def test_sync_only_removes_files_it_wrote(env, renderer):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    mine = pdir(env) / "Tailored-Resume.pdf"  # the user's own file, a name the old glob matched
+    other = pdir(env) / "Old-Cover-Letter.txt"
+    mine.write_bytes(b"theirs")
+    other.write_bytes(b"theirs too")
+    env.conn.execute(
+        "UPDATE packet_document SET body_md = replace(body_md, 'Synthetic Person', 'Other Name')"
+    )
+    env.conn.commit()
+    env.client.get(f"/packet/{env.pid}")
+    assert named(env) == []  # ours are gone
+    assert mine.read_bytes() == b"theirs" and other.read_bytes() == b"theirs too"
+
+
+def test_a_failing_refresh_shows_a_warning_instead_of_a_500(env, renderer, monkeypatch):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+
+    def deny(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(export, "sync_named", deny)
+    r = env.client.get(f"/packet/{env.pid}")
+    assert r.status_code == 200 and "Could not refresh the exported files" in r.text
+    r = env.client.post(f"/packet/{env.pid}/base")  # a saved change still redirects
+    assert r.status_code == 303
+    assert "Could not refresh" in env.client.get(f"/packet/{env.pid}").text
+
+
+def test_chmod_failure_does_not_break_the_export(env, renderer, monkeypatch):
+    env.client.post(f"/packet/{env.pid}/base")
+
+    def deny(*a, **k):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(export.os, "chmod", deny)
+    assert export_kind(env).status_code == 200
+    assert named(env)
+
+
+def test_a_file_that_vanishes_mid_sync_is_tolerated(env, renderer):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    (pdir(env) / "Synthetic-Person-Resume.txt").unlink()  # another request removed it
+    (pdir(env) / "resume-v1.md").unlink()
+    export.sync_named(env.conn, env.settings.paths.data_dir, env.pid)
+    assert env.client.get(f"/packet/{env.pid}").status_code == 200
+
+
+def test_plain_text_base_resume_keeps_its_layout(env, renderer):
+    """A base resume with "- " bullets and no "#" headings renders as it always did."""
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    html = (pdir(env) / "Synthetic-Person-Resume.html").read_text(encoding="utf-8")
+    assert "<h1>Synthetic Person</h1>" in html
+    assert "<ul>" not in html and "<h2>" not in html
+    pre = html.split("<pre>")[1].split("</pre>")[0]
+    assert pre.splitlines() == [
+        "<you>@example.com | Denver, CO".replace("<", "&lt;").replace(">", "&gt;"),
+        "Experience",
+        "Platform Engineer, Acme Synthetic Corp",
+        "2019 - 2023",
+        "- Contributed to the migration of 40 services to Kubernetes",
+        "- Wrote Terraform modules used by 3 teams",
+        "- Cut deploy time by 35%",
+        "Skills: Python, Go, Terraform, Kubernetes",
+    ]
+
+
+def test_a_markdown_name_heading_still_gives_a_name():
+    assert export.person_name("# Jane Doe") == "Jane-Doe"
+    assert export.person_name("## Jane Doe") == "Jane-Doe"
+
+
+def test_an_abandoned_packet_page_has_no_download_links(env, renderer):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    env.conn.execute("UPDATE application_packet SET status = 'abandoned'")
+    env.conn.commit()
+    page = env.client.get(f"/packet/{env.pid}").text
+    assert "/export/resume/" not in page and 'id="export-btn-resume"' not in page

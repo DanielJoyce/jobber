@@ -264,7 +264,11 @@ def register(
                 else {
                     "exp": exp,
                     "refusal": export.packet_refusal(p.status) or export.refusal(exp),
-                    "on_disk": export.available(data_dir, p.id, exp),
+                    "on_disk": (
+                        {f: False for f in export.FORMATS}
+                        if export.packet_refusal(p.status)
+                        else export.available(data_dir, p.id, exp)
+                    ),
                     "named_version": export.named_version(data_dir, p.id, exp),
                 }
             )
@@ -301,10 +305,10 @@ def register(
         **docs: Any,
     ) -> HTMLResponse:
         p = require_packet(conn, p.id)  # re-read: status and pointers may have moved
-        export.sync_named(conn, request.app.state.settings.paths.data_dir, p.id)
+        warn = export.safe_sync(conn, request.app.state.settings.paths.data_dir, p.id)
         ctx = score_ctx(request, conn, p, score_message, score_ok)
         ctx.update(docs_ctx(request, conn, p, **docs))
-        ctx.update(export_ctx(request, conn, p, export_msg))
+        ctx.update(export_ctx(request, conn, p, export_msg or ((False, warn) if warn else None)))
         return templates.TemplateResponse(
             request,
             "packet.html",
@@ -316,7 +320,9 @@ def register(
         request: Request, conn: sqlite3.Connection, packet_id: int, anchor: str
     ) -> RedirectResponse:
         # The version may just have changed: the files to attach must follow it.
-        export.sync_named(conn, request.app.state.settings.paths.data_dir, packet_id)
+        warn = export.safe_sync(conn, request.app.state.settings.paths.data_dir, packet_id)
+        if warn:
+            request.app.state.export_notes[packet_id] = (False, warn)
         return RedirectResponse(f"/packet/{packet_id}#{anchor}", status_code=303)
 
     def apply_profile(request: Request) -> Profile:
