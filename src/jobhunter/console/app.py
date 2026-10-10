@@ -202,6 +202,7 @@ def create_app(
             "tile_grid": json.dumps({k: list(v) for k, v in geo.TILE_GRID.items()}),
             "fips": json.dumps({s.fips: s.usps for s in geo.STATES}),
             "names": json.dumps({s.usps: s.name for s in geo.STATES}),
+            "sankey": json.dumps(dash.sankey(conn, get_profile())).replace("</", "<\\/"),
             **kpi_context(conn, range_),
             **table_context(conn, range_, metric_, sort, dir),
         }

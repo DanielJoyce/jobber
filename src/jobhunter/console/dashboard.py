@@ -13,12 +13,13 @@ from __future__ import annotations
 import math
 import sqlite3
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from statistics import median
 from typing import Any
 
+from jobhunter.console.inbox import BUCKET_TITLES
 from jobhunter.core import geo
 from jobhunter.core.models import Bucket, JobLocation
 from jobhunter.core.textnorm import annualize
@@ -774,3 +775,134 @@ def series(
             "enough": sum(1 for s in status if s["count"] > 0) >= MIN_POINTS,
         },
     }
+
+
+# ─── outcomes Sankey ────────────────────────────────────────────────────────
+
+MANUAL_SOURCE = (
+    "email-manual"  # proposals.MANUAL_SOURCE: groups made when accepting a mail proposal
+)
+_UNPREFILTERED = ("listed", "resolved", "normalized", "grouped")
+# application status -> outcome node. ``acknowledged`` is an automated receipt, so it is still
+# awaiting; ``screening`` is a person engaging, so it shares the interview node.
+_OUTCOME_NODE = {
+    "applied": "awaiting",
+    "acknowledged": "awaiting",
+    "screening": "interview",
+    "interview": "interview",
+    "offer": "offer",
+    "rejected": "rejected",
+    "withdrawn": "closed",
+    "closed": "closed",
+    "no_response": "no_response",
+}
+# (id, label, column, kind, href). kind picks the color: flow, win, loss, bad.
+_SANKEY_NODES: tuple[tuple[str, str, int, str, str | None], ...] = (
+    ("fetched", "Fetched", 0, "flow", None),
+    ("elsewhere", "Applied elsewhere", 0, "flow", "/tracking"),
+    ("prefiltered_out", "Prefiltered out", 1, "loss", None),
+    ("awaiting_prefilter", "Awaiting prefilter", 1, "loss", None),
+    ("passed", "Passed prefilter", 1, "flow", None),
+    ("unscored", "Not yet scored", 2, "loss", None),
+    *(
+        (f"bucket_{b}", f"{b} {title.title()}", 2, "flow", f"/inbox?bucket={b}")
+        for b, (title, _hint) in BUCKET_TITLES.items()
+    ),
+    ("untriaged", "Untriaged", 3, "loss", "/inbox"),
+    ("dismissed", "Dismissed", 3, "loss", None),
+    ("shortlisted", "Shortlisted", 3, "flow", "/tracking"),
+    ("not_applied", "Not applied yet", 4, "loss", "/tracking"),
+    ("applied", "Applied", 4, "flow", "/tracking"),
+    ("awaiting", "Awaiting response", 5, "loss", "/tracking"),
+    ("interview", "Screening / interview", 5, "win", "/tracking"),
+    ("offer", "Offer", 5, "win", "/tracking"),
+    ("rejected", "Rejected", 5, "bad", "/tracking"),
+    ("closed", "Withdrawn / closed", 5, "loss", "/tracking"),
+    ("no_response", "No response", 5, "loss", "/tracking"),
+)
+_SANKEY_ORDER = {n[0]: i for i, n in enumerate(_SANKEY_NODES)}
+
+
+def sankey(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    extra_rejected: Collection[int] = (),
+) -> dict[str, Any]:
+    """Outcome flows over every job group (deduped, not postings), all time.
+
+    Each group takes exactly one path, so flow is conserved: for every node that has outgoing
+    links, in == out. ``extra_rejected`` is a hook for job-group ids known to be rejected from
+    other evidence (employer rejection emails); they land on the Rejected node whatever their
+    application status says. Zero-value nodes and links are dropped from the payload.
+    """
+    facts = {f.group_id: f for f in group_facts(conn, profile, "")}
+    apps = {a.group_id: a for a in application_facts(conn)}
+    labels = dict(conn.execute("SELECT job_group_id, label FROM label").fetchall())
+    meta = {
+        r["gid"]: r
+        for r in conn.execute(
+            "SELECT jg.id AS gid, j.source_key, j.stage, p.passed "
+            "FROM job_group jg JOIN job j ON j.id = jg.canonical_job_id "
+            "LEFT JOIN prefilter_result p ON p.job_id = j.id"
+        )
+    }
+    rejected_extra = set(extra_rejected)
+    links: dict[tuple[str, str], int] = defaultdict(int)
+
+    for gid, fact in facts.items():
+        m = meta.get(gid)
+        app = apps.get(gid)
+        label = labels.get(gid)
+        if m is None:
+            continue
+        elsewhere = m["source_key"] == MANUAL_SOURCE
+        shortlisted = app is not None or label in ("interesting", "applied")
+        if elsewhere:
+            if app is None:  # a manual group exists only to hold an application
+                continue
+            came_from = "elsewhere"
+        else:
+            touched = fact.scored or shortlisted or label is not None
+            if not touched and m["stage"] in _UNPREFILTERED:
+                links[("fetched", "awaiting_prefilter")] += 1
+                continue
+            if not touched and m["passed"] == 0:
+                links[("fetched", "prefiltered_out")] += 1
+                continue
+            scored = f"bucket_{fact.bucket.value}" if fact.bucket else "unscored"
+            links[("fetched", "passed")] += 1
+            links[("passed", scored)] += 1
+            if shortlisted:
+                triage = "shortlisted"
+            elif label == "not_interesting":
+                triage = "dismissed"
+            else:
+                triage = "untriaged"
+            links[(scored, triage)] += 1
+            if not shortlisted:
+                continue
+            came_from = "shortlisted"
+        if app is None or app.applied_on is None:
+            links[(came_from, "not_applied")] += 1
+            continue
+        links[(came_from, "applied")] += 1
+        outcome = "rejected" if gid in rejected_extra else _OUTCOME_NODE.get(app.status)
+        links[("applied", outcome or "awaiting")] += 1
+
+    value: dict[str, int] = defaultdict(int)
+    for (a, b), n in links.items():
+        value[b] += n
+        if a in ("fetched", "elsewhere"):
+            value[a] += n
+    nodes = [
+        {"id": i, "label": label, "col": col, "kind": kind, "href": href, "value": value[i]}
+        for i, label, col, kind, href in _SANKEY_NODES
+        if value[i] > 0
+    ]
+    link_rows = [
+        {"source": a, "target": b, "value": n}
+        for (a, b), n in sorted(
+            links.items(), key=lambda kv: tuple(_SANKEY_ORDER[k] for k in kv[0])
+        )
+    ]
+    return {"nodes": nodes, "links": link_rows, "total": value["fetched"] + value["elsewhere"]}

@@ -1,4 +1,5 @@
-// Today dashboard charts (specs/013 "Charts"): line, funnel, stacked columns, status bars.
+// Today dashboard charts (specs/013 "Charts"): line, funnel, stacked columns, status bars,
+// and the outcomes Sankey (own small layout, no d3-sankey; see "Outcomes Sankey" below).
 // d3 alone (vendored); colors come from CSS tokens via style="fill:var(--...)", so a theme
 // change recolors the marks without a redraw.
 (function () {
@@ -48,8 +49,8 @@
 
   // ─── tooltip ──────────────────────────────────────────────────────────────
 
-  function tip(ev, title, rows) {
-    var t = ui.tip;
+  function tip(ev, title, rows, tipEl, boxEl) {
+    var t = tipEl || ui.tip;
     t.textContent = "";
     var h = document.createElement("strong");
     h.textContent = title;
@@ -72,7 +73,7 @@
       t.appendChild(row);
     });
     t.hidden = false;
-    var box = ui.section.getBoundingClientRect();
+    var box = (boxEl || ui.section).getBoundingClientRect();
     var left = ev.clientX - box.left + 14;
     if (left + t.offsetWidth > box.width - 4) left = ev.clientX - box.left - t.offsetWidth - 14;
     var top = ev.clientY - box.top + 14;
@@ -296,6 +297,258 @@
     body.appendChild(legend);
   }
 
+
+  // ─── Outcomes Sankey ──────────────────────────────────────────────────────
+  // Deterministic layout: one column per stage, node height proportional to value (3px floor so
+  // a one-group node stays visible), links are cubic-bezier bands stacked in node order. The
+  // payload comes from dashboard.sankey(); zero-value nodes never arrive.
+
+  var KIND_COLOR = {
+    flow: "var(--series-1)", win: "var(--series-3)", bad: "var(--series-2)", loss: "var(--text-muted)"
+  };
+  var sankeyData = null;
+  var sankeyWidth = 0;
+
+  function wrapWords(text, max) {
+    var lines = [], cur = "";
+    text.split(" ").forEach(function (w) {
+      if (cur && (cur + " " + w).length > max) { lines.push(cur); cur = w; }
+      else cur = cur ? cur + " " + w : w;
+    });
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
+  function layoutSankey(data, width, height) {
+    var nw = 10, cols = d3.max(data.nodes, function (n) { return n.col; }) + 1;
+    var byId = {};
+    data.nodes.forEach(function (n) { byId[n.id] = n; n.in = []; n.out = []; });
+    data.links.forEach(function (l) {
+      l.s = byId[l.source]; l.t = byId[l.target];
+      l.s.out.push(l); l.t.in.push(l);
+    });
+    var colNodes = d3.range(cols).map(function (c) {
+      return data.nodes.filter(function (n) { return n.col === c; });
+    });
+    var pad = 10, k = Infinity;
+    colNodes.forEach(function (ns) {
+      if (!ns.length) return;
+      var sum = d3.sum(ns, function (n) { return n.value; });
+      k = Math.min(k, (height - pad * (ns.length - 1)) / sum);
+    });
+    var step = (width - nw) / Math.max(1, cols - 1);
+    var fit = false;
+    for (var guard = 0; !fit && guard < 80; guard++) {
+      fit = true;
+      colNodes.forEach(function (ns) {
+        var total = d3.sum(ns, function (n) { return Math.max(3, n.value * k); }) + pad * Math.max(0, ns.length - 1);
+        if (total > height + 0.5) fit = false;
+      });
+      if (!fit) k *= 0.95;
+    }
+    // Neighbors sit far enough apart that their labels (n.lh tall, centered on the node)
+    // never overlap, even when the node itself is a 3px sliver.
+    var bottom = height;
+    colNodes.forEach(function (ns, c) {
+      var y = 0, prev = null;
+      ns.forEach(function (n) {
+        n.x0 = c * step; n.x1 = c * step + nw;
+        n.h = Math.max(3, n.value * k);
+        if (prev) y += Math.max(pad, (prev.lh + n.lh) / 2 - (prev.h + n.h) / 2);
+        n.y0 = y; n.y1 = y + n.h;
+        y = n.y1;
+        prev = n;
+      });
+      bottom = Math.max(bottom, y);
+    });
+    data.nodes.forEach(function (n) {
+      var oy = n.y0;
+      n.out.sort(function (a, b) { return a.t.y0 - b.t.y0; }).forEach(function (l) {
+        l.w = n.h * (l.value / n.value); l.sy = oy; oy += l.w;
+      });
+      n.in.sort(function (a, b) { return a.s.y0 - b.s.y0; });
+    });
+    data.nodes.forEach(function (n) {
+      var iy = n.y0;
+      n.in.forEach(function (l) {
+        l.tw = n.h * (l.value / n.value); l.ty = iy; iy += l.tw;
+      });
+    });
+    return { nw: nw, cols: cols, height: bottom };
+  }
+
+  function sankeyTable(wrap, data, pctOf) {
+    wrap.textContent = "";
+    var tbl = document.createElement("table");
+    var head = document.createElement("tr");
+    ["From", "To", "Job groups", "% of From"].forEach(function (h) {
+      var th = document.createElement("th");
+      th.textContent = h;
+      head.appendChild(th);
+    });
+    var thead = document.createElement("thead");
+    thead.appendChild(head);
+    tbl.appendChild(thead);
+    var tb = document.createElement("tbody");
+    data.links.forEach(function (l) {
+      var tr = document.createElement("tr");
+      [l.s.label, l.t.label, l.value.toLocaleString(), pctOf(l.value, l.s.value)].forEach(function (v, i) {
+        var td = document.createElement("td");
+        td.textContent = v;
+        if (i > 1) td.className = "num";
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    wrap.appendChild(tbl);
+  }
+
+  function pctOf(v, d) { return d ? Math.round(v / d * 100) + "%" : "n/a"; }
+
+  // One Sankey into ``body``. ``data`` = {nodes, links}, columns numbered from 0.
+  function drawSankey(box, body, data, width, narrow, ariaLabel) {
+    var colCount = d3.max(data.nodes, function (n) { return n.col; }) + 1;
+    var counts = d3.range(colCount).map(function (c) {
+      return data.nodes.filter(function (n) { return n.col === c; }).length;
+    });
+    var plotH = Math.max(narrow ? 330 : 280, d3.max(counts) * (narrow ? 38 : 30));
+    var m = { l: 4, r: 4, t: 6, b: 6 };
+    var lastC = colCount - 1;
+    var gap0 = (width - m.l - m.r - 10) / Math.max(1, lastC);
+    var maxChars = narrow ? Math.max(8, Math.floor((gap0 - 10) / 5.6)) : 40;
+    data.nodes.forEach(function (n) {
+      n.lines = wrapWords(n.label, maxChars);
+      n.lh = (n.lines.length + 1) * 12;
+    });
+    var lay = layoutSankey(data, width - m.l - m.r, plotH);
+    plotH = Math.ceil(lay.height);
+    var svg = d3.select(body).append("svg").attr("class", "sankey")
+      .attr("viewBox", "0 0 " + width + " " + (plotH + m.t + m.b))
+      .attr("role", "img")
+      .attr("aria-label", ariaLabel);
+    var g = svg.append("g").attr("transform", "translate(" + m.l + "," + m.t + ")");
+    var tipEl = box.querySelector(".chart-tip");
+
+    function path(l) {
+      var x0 = l.s.x1, x1 = l.t.x0, xm = (x0 + x1) / 2;
+      var a0 = l.sy, a1 = l.sy + l.w, b0 = l.ty, b1 = l.ty + l.tw;
+      return "M" + x0 + "," + a0 + "C" + xm + "," + a0 + " " + xm + "," + b0 + " " + x1 + "," + b0 +
+        "L" + x1 + "," + b1 + "C" + xm + "," + b1 + " " + xm + "," + a1 + " " + x0 + "," + a1 + "Z";
+    }
+
+    g.append("g").selectAll("path").data(data.links).enter().append("path")
+      .attr("class", "slink").attr("d", path)
+      .style("fill", function (l) { return KIND_COLOR[l.t.kind]; })
+      .call(hover, function (ev, l) {
+        tip(ev, l.s.label + " → " + l.t.label, [
+          { label: "Job groups", value: l.value.toLocaleString() },
+          { label: "Of " + l.s.label, value: pctOf(l.value, l.s.value) }
+        ], tipEl, box);
+      });
+    // hover() hides the shared tooltip on leave; the Sankey has its own.
+    g.selectAll("path.slink").on("mouseleave", function () { tipEl.hidden = true; });
+
+    var lastCol = lay.cols - 1;
+    var node = g.append("g").selectAll("g.snode").data(data.nodes).enter().append("g").attr("class", "snode");
+    node.each(function (n) {
+      var el = d3.select(this);
+      var host = n.href ? el.append("a").attr("href", n.href) : el;
+      if (n.href) host.attr("aria-label", n.label + ", " + n.value.toLocaleString() + " job groups, open list");
+      host.append("rect").attr("class", "snode-rect").attr("x", n.x0).attr("y", n.y0)
+        .attr("width", lay.nw).attr("height", n.h).attr("rx", 2)
+        .style("fill", KIND_COLOR[n.kind]);
+      var left = n.col === lastCol;
+      var tx = left ? n.x0 - 6 : n.x1 + 6;
+      var lines = n.lines;
+      var lh = 12;
+      var y0 = n.y0 + n.h / 2 - ((lines.length + 1) * lh) / 2 + lh - 2;
+      var t = host.append("text").attr("class", "slabel" + (n.href ? " linked" : ""))
+        .attr("text-anchor", left ? "end" : "start");
+      lines.forEach(function (ln, i) {
+        t.append("tspan").attr("x", tx).attr("y", y0 + i * lh).text(ln);
+      });
+      t.append("tspan").attr("class", "sval").attr("x", tx).attr("y", y0 + lines.length * lh)
+        .text(n.value.toLocaleString());
+      host.append("rect").attr("class", "hit").attr("x", n.x0 - 2).attr("y", n.y0 - 2)
+        .attr("width", lay.nw + 4).attr("height", n.h + 4);
+      host.on("mousemove", function (ev) {
+        var rows = n.out.map(function (l) {
+          return { label: "→ " + l.t.label, value: l.value.toLocaleString() + " (" + pctOf(l.value, n.value) + ")" };
+        });
+        tip(ev, n.label + ": " + n.value.toLocaleString(),
+          rows.length ? rows : [{ label: "End of path", value: "" }], tipEl, box);
+      }).on("mouseleave", function () { tipEl.hidden = true; });
+    });
+  }
+
+  // Narrow screens cannot fit six labeled columns, so the same flows are drawn as two stacked
+  // diagrams: fetch to triage, then shortlisted to outcome. Both read left to right.
+  function splitSankey(data) {
+    var late = ["shortlisted", "elsewhere"];
+    function part(pick, remap) {
+      var nodes = data.nodes.filter(pick).map(function (n) {
+        var c = JSON.parse(JSON.stringify(n));
+        c.col = remap(n);
+        return c;
+      });
+      var ids = {};
+      nodes.forEach(function (n) { ids[n.id] = true; });
+      return {
+        nodes: nodes,
+        links: data.links.filter(function (l) { return ids[l.source] && ids[l.target]; })
+          .map(function (l) { return { source: l.source, target: l.target, value: l.value }; })
+      };
+    }
+    return [
+      part(function (n) { return n.col <= 3 && n.id !== "elsewhere"; }, function (n) { return n.col; }),
+      part(function (n) { return n.col >= 4 || late.indexOf(n.id) >= 0; },
+        function (n) { return n.col >= 4 ? n.col - 3 : 0; })
+    ];
+  }
+
+  function sankeyChart(box) {
+    var body = box.querySelector(".body");
+    body.textContent = "";
+    var data = JSON.parse(JSON.stringify(sankeyData));
+    if (!data.nodes.length || data.total < 1) { empty(body, "Outcomes"); return; }
+    sankeyWidth = box.clientWidth;
+    var narrow = sankeyWidth < 560;
+    var width = Math.max(300, Math.floor(sankeyWidth || 640));
+    var label = "Outcomes Sankey, " + data.total.toLocaleString() +
+      " job groups from fetch to outcome. A table follows.";
+    var byId = {};
+    data.nodes.forEach(function (n) { byId[n.id] = n; });
+    var rows = data.links.map(function (l) {
+      return { s: byId[l.source], t: byId[l.target], value: l.value };
+    });
+    if (narrow) {
+      splitSankey(data).forEach(function (part, i) {
+        if (part.nodes.length < 2) return;
+        drawSankey(box, body, part, width, true, label + (i ? " Part two, shortlisted to outcome." : " Part one, fetch to triage."));
+      });
+    } else {
+      drawSankey(box, body, data, width, false, label);
+    }
+    sankeyTable(box.querySelector(".sankey-table .table-wrap"), { links: rows }, pctOf);
+  }
+
+
+  function initSankey() {
+    var box = document.getElementById("chart-sankey");
+    var dataEl = document.getElementById("sankey-data");
+    if (!box || !dataEl || !window.d3) return;
+    try { sankeyData = JSON.parse(dataEl.textContent); } catch (e) { return; }
+    sankeyChart(box);
+    var timer = null;
+    window.addEventListener("resize", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        if (Math.abs(box.clientWidth - sankeyWidth) > 8) sankeyChart(box);
+      }, 120);
+    });
+  }
+
   // ─── data flow ────────────────────────────────────────────────────────────
 
   var CHARTS = [
@@ -335,6 +588,7 @@
   }
 
   function init() {
+    initSankey();
     ui.section = document.getElementById("charts");
     if (!ui.section || !window.d3) return;
     ui.tip = document.getElementById("chart-tooltip");

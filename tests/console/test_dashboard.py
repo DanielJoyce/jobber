@@ -577,3 +577,117 @@ def test_dark_sequential_ramp_tokens(client):
         lum = [_luminance(ramp[k]) for k in sorted(ramp, key=int)]
         assert lum == sorted(lum)  # dark ramp climbs: low recedes, high is brightest
         assert _contrast(ramp["700"], surface) > 8
+
+
+# ─── outcomes Sankey ───────────────────────────────────────────────────────
+
+
+def _set_stage(conn, gid, stage, passed=None):
+    jid = conn.execute("SELECT canonical_job_id FROM job_group WHERE id = ?", (gid,)).fetchone()[0]
+    conn.execute("UPDATE job SET stage = ? WHERE id = ?", (stage, jid))
+    if passed is not None:
+        conn.execute(
+            "INSERT INTO prefilter_result (job_id, passed, reasons, filter_version, evaluated_at) "
+            "VALUES (?, ?, '[]', 'v', ?)",
+            (jid, passed, ts("2026-10-08")),
+        )
+    return jid
+
+
+def _manual_app(conn, status="applied", applied="2026-10-05"):
+    conn.execute(
+        "INSERT OR IGNORE INTO source (key, class, name, family, tier, entry, policy, status) "
+        "VALUES ('email-manual', 'C', 'Added from email', 'manual', 'manual', 'gmail', "
+        "'manual', 'manual')"
+    )
+    gid = add_job(conn, source="email-manual", first_seen="2026-10-05")
+    add_app(conn, gid, status, applied, [(applied, "applied")] if applied else [])
+    return gid
+
+
+def _links(sk):
+    return {(link["source"], link["target"]): link["value"] for link in sk["links"]}
+
+
+def _assert_conserved(sk):
+    inflow: dict[str, int] = {}
+    outflow: dict[str, int] = {}
+    for link in sk["links"]:
+        assert link["value"] > 0
+        outflow[link["source"]] = outflow.get(link["source"], 0) + link["value"]
+        inflow[link["target"]] = inflow.get(link["target"], 0) + link["value"]
+    values = {n["id"]: n["value"] for n in sk["nodes"]}
+    assert all(v > 0 for v in values.values())
+    for node_id, out in outflow.items():
+        assert out == values[node_id]
+        if node_id in inflow:  # not a source column
+            assert inflow[node_id] == out, node_id
+    for node_id, inn in inflow.items():
+        assert values[node_id] == inn
+
+
+def test_sankey_counts_and_conservation(conn):
+    seeded = conn.execute("SELECT COUNT(*) FROM job_group").fetchone()[0]
+    # Add: a prefiltered-out group, one awaiting prefilter, a dismissed one, a manual app.
+    out = add_job(conn, states=["CO"])
+    _set_stage(conn, out, "prefiltered", passed=0)
+    waiting = add_job(conn, states=["CO"])
+    _set_stage(conn, waiting, "grouped")
+    nay = add_job(conn, states=["TX"], dims=DIMS_G)
+    conn.execute(
+        "INSERT INTO label (job_group_id, label, labeled_at) VALUES (?, 'not_interesting', ?)",
+        (nay, ts("2026-10-08")),
+    )
+    _manual_app(conn)
+    sk = dash.sankey(conn, PROFILE)
+    _assert_conserved(sk)
+    links = _links(sk)
+    fetched_total = seeded + 3
+    assert sk["total"] == fetched_total + 1
+    assert links[("fetched", "prefiltered_out")] == 1
+    assert links[("fetched", "awaiting_prefilter")] == 1
+    assert links[("fetched", "passed")] == fetched_total - 2
+    assert links[("passed", "unscored")] >= 1  # co_unscored (stage 'scored', no fit_score)
+    assert links[("bucket_G", "dismissed")] == 1
+    assert links[("elsewhere", "applied")] == 1
+    assert links[("shortlisted", "not_applied")] == 2  # co_a (label only) and remote_a
+    assert links[("applied", "interview")] == 2  # screening + interview
+    assert links[("applied", "rejected")] == 1
+    assert links[("applied", "awaiting")] == 5  # 3 applied, 1 acknowledged, the manual one
+    node_ids = {n["id"] for n in sk["nodes"]}
+    assert "offer" not in node_ids and "closed" not in node_ids  # zero-value nodes hidden
+
+
+def test_sankey_extra_rejected_hook_moves_to_rejected(conn):
+    base = _links(dash.sankey(conn, PROFILE))
+    gid = conn.execute(
+        "SELECT job_group_id FROM application WHERE status = 'acknowledged'"
+    ).fetchone()[0]
+    sk = dash.sankey(conn, PROFILE, extra_rejected={gid})
+    _assert_conserved(sk)
+    links = _links(sk)
+    assert links[("applied", "rejected")] == base[("applied", "rejected")] + 1
+    assert links[("applied", "awaiting")] == base[("applied", "awaiting")] - 1
+
+
+def test_sankey_empty_database():
+    c = db.connect(":memory:")
+    db.migrate(c)
+    assert dash.sankey(c, PROFILE) == {"nodes": [], "links": [], "total": 0}
+
+
+def test_sankey_node_links_point_at_real_lists(conn):
+    nodes = {n["id"]: n for n in dash.sankey(conn, PROFILE)["nodes"]}
+    assert nodes["applied"]["href"] == "/tracking"
+    assert nodes["fetched"]["href"] is None
+    assert any(n["href"] == "/inbox?bucket=A" for n in nodes.values())
+
+
+def test_today_page_embeds_sankey_payload(client):
+    html = client.get("/").text
+    m = re.search(r'id="sankey-data">(.*?)</script>', html, re.S)
+    assert m
+    payload = json.loads(m.group(1))
+    assert payload["nodes"] and payload["links"]
+    _assert_conserved(payload)
+    assert 'id="chart-sankey"' in html
