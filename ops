@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791603866,"nonce":"snFvtMR/Y3ePkPPIsr6up5sKOZc=","message":"Landed in PR #78 (f21d021). Retro-review findings fixed, re-reviewed by opus xhigh, one fix round; real email text removed from tests (history left as is per user).","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791603866,"nonce":"Kw+RV9G26W13Y6qRWRZxh04X0TA=","status":2}]}
