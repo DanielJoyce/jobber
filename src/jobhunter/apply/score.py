@@ -196,7 +196,7 @@ def _snapshot(conn: sqlite3.Connection, job_id: int) -> tuple[sqlite3.Row | None
     return pre, stage
 
 
-def _restore(conn: sqlite3.Connection, job_id: int, snap: tuple[sqlite3.Row | None, str]) -> None:
+def _restore(conn: sqlite3.Connection, job_id: int, snap: tuple[Any | None, str]) -> None:
     pre, stage = snap
     with db.transaction(conn):
         conn.execute("DELETE FROM prefilter_result WHERE job_id = ?", (job_id,))
@@ -211,7 +211,22 @@ def _restore(conn: sqlite3.Connection, job_id: int, snap: tuple[sqlite3.Row | No
         )
 
 
-def score_now(
+@dataclass
+class Claim:
+    """A Score now claim taken by ``start``: the group is marked as being scored.
+
+    ``run_claimed`` consumes it (scores, or restores the snapshot), possibly on another
+    connection and thread (the extension's Score it, specs/017 1e).
+    """
+
+    group_id: int
+    job_id: int
+    estimate: Estimate
+    prefilter: dict[str, Any] | None
+    stage: str
+
+
+def start(
     conn: sqlite3.Connection,
     profile: Profile,
     scoring: Scoring,
@@ -219,13 +234,12 @@ def score_now(
     *,
     token: str | None,
     now: datetime,
-    scorer_factory: ScorerFactory | None = None,
-    client_factory: ClientFactory | None = None,
-) -> Outcome:
-    """Score one group the user chose. ``token`` must match the estimate built now.
+) -> Claim:
+    """Check the confirmed estimate and take the claim, in one ``BEGIN IMMEDIATE``.
 
-    Raises ScoreRefused (nothing written, nothing spent) or EstimateChanged. A scorer failure
-    raises ScoreRefused after restoring the prefilter row and stage.
+    Spends nothing. Raises ScoreRefused (nothing written) or EstimateChanged. On success the
+    job carries a ``user-requested`` prefilter row and stage ``prefiltered`` until
+    ``run_claimed`` scores it or puts both back.
     """
     est = estimate(conn, profile, scoring, group_id, now)
     if est.refusal:
@@ -236,14 +250,14 @@ def score_now(
     assert job is not None
     with db.transaction(conn):
         # The claim: under the write lock, re-check and mark the group as being scored, so a
-        # second confirm (another tab, the CLI) cannot pay for the same group in parallel.
+        # second confirm (another tab, the CLI, the extension) cannot pay for the same group.
         if is_scored(conn, group_id):
             raise ScoreRefused("this posting is already scored")
         if in_open_batch(conn, group_id):
             raise ScoreRefused("this posting is in a submitted batch")
         if (msg := _claim_refusal(conn, job["id"], now)) is not None:
             raise ScoreRefused(msg)
-        snap = _snapshot(conn, job["id"])
+        pre, stage = _snapshot(conn, job["id"])
         conn.execute(
             "INSERT OR REPLACE INTO prefilter_result (job_id, passed, reasons, filter_version, "
             "evaluated_at) VALUES (?, 1, ?, ?, ?)",
@@ -254,6 +268,25 @@ def score_now(
             f"UPDATE job SET stage = 'prefiltered' WHERE id = ? AND stage IN ({marks})",
             (job["id"], *_BEFORE_PREFILTERED),
         )
+    return Claim(group_id, int(job["id"]), est, dict(pre) if pre is not None else None, stage)
+
+
+def run_claimed(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    scoring: Scoring,
+    claim: Claim,
+    *,
+    now: datetime,
+    scorer_factory: ScorerFactory | None = None,
+    client_factory: ClientFactory | None = None,
+) -> Outcome:
+    """The paid part: score the claimed group, or restore the claim when nothing was written.
+
+    Raises ScoreRefused after restoring (the scorer failed, or wrote nothing).
+    """
+    group_id, est = claim.group_id, claim.estimate
+    snap = (claim.prefilter, claim.stage)
 
     def remaining() -> float:
         return screen.remaining_budget(conn, scoring, now)
@@ -307,7 +340,36 @@ def score_now(
         why = f"scoring failed: {exc}"
     except BaseException:
         # Ctrl-C during `score --group`, or shutdown: release the claim so a retry can run.
-        _restore(conn, job["id"], snap)
+        _restore(conn, claim.job_id, snap)
         raise
-    _restore(conn, job["id"], snap)
+    _restore(conn, claim.job_id, snap)
     raise ScoreRefused(f"{why}; nothing is left waiting to be scored")
+
+
+def score_now(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    scoring: Scoring,
+    group_id: int,
+    *,
+    token: str | None,
+    now: datetime,
+    scorer_factory: ScorerFactory | None = None,
+    client_factory: ClientFactory | None = None,
+) -> Outcome:
+    """Score one group the user chose: ``start`` then ``run_claimed`` on this connection.
+
+    ``token`` must match the estimate built now. Raises ScoreRefused (nothing written, nothing
+    spent) or EstimateChanged. A scorer failure raises ScoreRefused after restoring the
+    prefilter row and stage.
+    """
+    claim = start(conn, profile, scoring, group_id, token=token, now=now)
+    return run_claimed(
+        conn,
+        profile,
+        scoring,
+        claim,
+        now=now,
+        scorer_factory=scorer_factory,
+        client_factory=client_factory,
+    )
