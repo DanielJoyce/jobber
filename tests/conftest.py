@@ -372,6 +372,7 @@ class FakeClaude:
             self.runs = runs
         if auth is not None:
             self.auth = auth
+        (self.dir / "counter").unlink(missing_ok=True)  # a new scenario starts at run 0
         self.path.write_text(_FAKE_CLAUDE.format(python=sys.executable), encoding="utf-8")
         self.path.chmod(0o755)
         (self.dir / "scenario.json").write_text(
@@ -422,11 +423,16 @@ def claude_run(
     init: dict | None = None,
     result: dict | None = None,
     exit: int = 0,
+    model: str | None = None,
 ) -> dict:
-    """One fake-claude run replaying the recorded transcript with ``structured`` as output."""
+    """One fake-claude run replaying the recorded transcript with ``structured`` as output.
+    ``model`` renames the serving model everywhere the transcript names it."""
     import json
 
-    lines = [json.loads(x) for x in CLAUDE_STREAM.read_text(encoding="utf-8").splitlines()]
+    raw = CLAUDE_STREAM.read_text(encoding="utf-8")
+    if model is not None:
+        raw = raw.replace('"claude-opus-5"', json.dumps(model))
+    lines = [json.loads(x) for x in raw.splitlines()]
     for line in lines:
         if line["type"] == "system":
             line.update(init or {})
