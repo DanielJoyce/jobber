@@ -254,7 +254,7 @@
     var pat = el("pattern", { id: "map-nodata", width: 6, height: 6, patternUnits: "userSpaceOnUse",
       patternTransform: "rotate(45)" }, defs);
     el("rect", { width: 6, height: 6, "class": "nodata-bg" }, pat);
-    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, "class": "nodata-hatch" }, pat);
+    el("line", { x1: 3, y1: 0, x2: 3, y2: 6, "class": "nodata-hatch" }, pat);
     var gLeaders = el("g", { "class": "leaders", "aria-hidden": "true" }, svg);
     var gTargets = el("g", { "class": "targets" }, svg);
     var gLabels = el("g", { "class": "labels", "aria-hidden": "true" }, svg);

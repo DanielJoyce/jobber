@@ -492,3 +492,83 @@ def test_no_data_cells_are_hatched_and_distinct_from_every_scale_step(page, serv
     assert _contrast(_rgb(page, line), _rgb(page, surface)) >= 2.5
     for n in range(6):
         assert "url(" not in page.evaluate(_TOKEN_JS, f"--map-{n}")
+
+
+# ─── synthetic data covering null, zero and every class ──────────────────────────────────
+
+# value per state; breaks [2, 4, 6, 8, 10] make class i hold values in (2(i-1), 2i].
+_CLASS_STATES = {"AK": 1, "AZ": 3, "AR": 5, "CA": 7, "CO": 9}  # classes 1..5
+_ZERO_STATE, _NODATA_STATE = "AL", "TX"
+
+
+def _load_synthetic(page, server, scheme):
+    def handler(route):
+        payload = route.fetch().json()
+        for row in payload["states"]:
+            if row["state"] == "REMOTE":
+                continue
+            row["value"] = _CLASS_STATES.get(row["state"], 0)
+            if row["state"] == _NODATA_STATE:
+                row["value"] = None
+        payload["kind"] = "count"
+        payload["breaks"] = [2, 4, 6, 8, 10]
+        route.fulfill(json=payload)
+
+    page.emulate_media(color_scheme=scheme)
+    page.route("**/api/dash/map*", handler)
+    page.goto(f"{server.url}/")
+    page.wait_for_selector(PATHS)
+    page.wait_for_function("() => !document.querySelector('.map-loading')")
+    return page
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_legend_swatch_i_matches_map_class_i_and_classes_are_monotonic(page, server, scheme):
+    _load_synthetic(page, server, scheme)
+    swatches = page.eval_on_selector_all(
+        "#map-legend .legend-scale .swatch",
+        "ns => ns.map(n => getComputedStyle(n).backgroundColor)",
+    )
+    assert len(swatches) == 7  # zero, five classes, no data
+    sw = [_rgb(page, c) for c in swatches[:6]]
+    assert _rgb(page, _fill_of(page, _ZERO_STATE)) == sw[0]
+    class_fills = [_rgb(page, _fill_of(page, st)) for st in _CLASS_STATES]
+    assert class_fills == sw[1:], "legend swatch i must be the fill of a class-i cell"
+    assert len(set(sw)) == 6
+    assert _fill_of(page, _NODATA_STATE) == "url(#map-nodata)"
+    lum = [_lum(c) for c in sw]
+    assert lum == sorted(lum, reverse=(scheme == "light"))
+    legend = page.inner_text("#map-legend .legend-scale")
+    for text in ("1\u20132", "3\u20134", "5\u20136", "7\u20138", "9\u201310"):
+        assert text in legend
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_rendered_label_ink_is_readable_on_every_class_and_no_data(page, server, scheme):
+    _load_synthetic(page, server, scheme)
+    surface = _rgb(page, page.evaluate(_TOKEN_JS, "--surface-1"))
+    seen = set()
+    for st in [*_CLASS_STATES, _ZERO_STATE, _NODATA_STATE]:
+        fill = _fill_of(page, st)
+        base = surface if fill.startswith("url(") else _rgb(page, fill)
+        ink = page.evaluate(
+            "s => { const t = Array.from(document.querySelectorAll('#map g.labels text.lbl'))"
+            ".find(t => t.textContent.trim() === s); return t ? getComputedStyle(t).fill : null; }",
+            st,
+        )
+        assert ink, f"{st} has a label"
+        assert _contrast(_rgb(page, ink), base) >= 4.5, (st, ink, fill)
+        seen.add(fill)
+    assert len(seen) == 7
+
+
+def test_no_data_hatch_line_is_inside_its_tile_and_has_ink(dash):
+    geo = dash.evaluate(
+        "() => { const p = document.querySelector('#map-nodata');"
+        " const l = p.querySelector('line');"
+        " return {w: +p.getAttribute('width'), x: +l.getAttribute('x1'), x2: +l.getAttribute('x2'),"
+        " sw: parseFloat(getComputedStyle(l).strokeWidth)}; }"
+    )
+    half = geo["sw"] / 2
+    assert geo["sw"] >= 1 and geo["x"] == geo["x2"]
+    assert half <= geo["x"] <= geo["w"] - half, "line must not be clipped by the tile edge"
