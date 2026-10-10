@@ -18,13 +18,29 @@
   </div>
 
   <div class="stats">
-    <div><span class="label">Spend, {{ c.days }}d</span><span class="big">${{ "%.2f" | format(c.total) }}</span></div>
+    <div><span class="label">Scoring spend, {{ c.days }}d</span><span class="big">${{ "%.2f" | format(c.total) }}</span></div>
     <div><span class="label">Today vs daily cap</span><span class="big">${{ "%.2f" | format(c.today) }}</span>of ${{ "%.2f" | format(c.daily_cap) }} cap{% if c.today > c.daily_cap %} &#9888; over cap{% endif %}</div>
     <div><span class="label">Last 7 days vs weekly cap</span><span class="big">${{ "%.2f" | format(c.last7) }}</span>of ${{ "%.2f" | format(c.weekly_cap) }} cap{% if c.last7 > c.weekly_cap %} &#9888; over cap{% endif %}</div>
     <div><span class="label">Per shortlisted job</span><span class="big">{% if c.per_shortlisted is none %}n/a{% else %}${{ "%.2f" | format(c.per_shortlisted) }}{% endif %}</span>{{ c.shortlisted }} shortlisted</div>
   </div>
 
-  <h2>Daily spend</h2>
+  <h2>Packet drafting</h2>
+  <div class="stats" id="packet-costs">
+    <div><span class="label">API today vs apply cap</span><span class="big">${{ "%.2f" | format(pk.today_usd) }}</span>of ${{ "%.2f" | format(pk.daily_cap) }} [apply] cap{% if pk.today_usd > pk.daily_cap %} &#9888; over cap{% endif %}</div>
+    <div><span class="label">API, {{ pk.days }}d</span><span class="big">${{ "%.2f" | format(pk.api_usd) }}</span>{{ pk.api_calls }} call{{ "" if pk.api_calls == 1 else "s" }}</div>
+    <div><span class="label">Subscription calls, {{ pk.days }}d</span><span class="big">{{ pk.cli_calls }}</span>no API credit; the CLI reports ${{ "%.2f" | format(pk.cli_equiv_usd) }} API-equivalent (information only)</div>
+  </div>
+  <p class="muted">Packet spend has its own cap and never counts in the scoring totals above or below.</p>
+  {% if runner.off %}
+  <div class="callout alert" id="runner-off">
+    <p><strong>CLI runner off.</strong> {{ runner.off_reason }}</p>
+    <form method="post" action="/apply/runner/on"><input type="hidden" name="next" value="/costs"><button type="submit" id="runner-on">Turn back on</button></form>
+  </div>
+  {% elif runner.overage %}
+  <p class="callout" id="runner-overage">Your subscription reported paid extra usage on the last packet call: CLI runs are charged against the apply cap and wait for your click.</p>
+  {% endif %}
+
+  <h2>Daily scoring spend</h2>
   <div class="bars" id="daily-bars">
     {% for day, cost in c.daily %}
     <span>{{ day }}</span>
@@ -33,7 +49,7 @@
     {% endfor %}
   </div>
 
-  <h2>Weekly spend (weeks starting Monday)</h2>
+  <h2>Weekly scoring spend (weeks starting Monday)</h2>
   <table class="pg-table" id="weekly">
     <thead><tr><th>Week of</th><th class="num">Spend</th><th class="num">Of weekly cap</th></tr></thead>
     <tbody>{% for w, cost in c.weekly %}<tr><td>{{ w }}</td><td class="num">${{ "%.2f" | format(cost) }}</td><td class="num">{{ "%.0f" | format(cost / c.weekly_cap * 100) if c.weekly_cap else "-" }}%</td></tr>{% else %}<tr><td colspan="3" class="muted">No spend recorded.</td></tr>{% endfor %}</tbody>
