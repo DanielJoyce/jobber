@@ -88,15 +88,29 @@ def test_services_use_absolute_exec_and_repo_paths(inst):
     )
 
 
-def test_services_are_oneshot_niced_with_only_path_env(inst):
+def test_services_are_oneshot_niced_with_path_and_xdg_env(inst):
     units = schedule.render_units(inst)
+    home = Path.home()  # a tmp dir; XDG_* are unset, so the defaults below it
     for name in SERVICES:
         text = units[name]
         assert "Type=oneshot" in text
         assert "Nice=10" in text
         assert [ln for ln in text.splitlines() if ln.startswith("Environment=")] == [
-            f"Environment=PATH={PATH}"
+            f"Environment=PATH={PATH}",
+            f"Environment=XDG_CONFIG_HOME={home / '.config'}",
+            f"Environment=XDG_DATA_HOME={home / '.local/share'}",
+            f"Environment=XDG_CACHE_HOME={home / '.cache'}",
         ]
+
+
+def test_units_pin_the_xdg_dirs_the_installing_shell_resolved(tmp_path, monkeypatch):
+    """Timers must use the same database as the shell even when the systemd user manager
+    does not see XDG_* from a login shell."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "my data"))
+    units = schedule.render_units(Install(jobhunter=EXEC, repo=REPO, path=PATH))
+    text = units["jobhunter-run.service"]
+    assert f'Environment="XDG_DATA_HOME={tmp_path / "my data"}"' in text
+    assert f"WorkingDirectory={REPO}" in text  # still the checkout, for .env
 
 
 def test_every_service_has_onfailure_to_notify_template(inst):

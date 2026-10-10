@@ -1,7 +1,8 @@
 """systemd --user timers for the nightly run (specs/002-architecture.md#process-model).
 
-Templates live in ``units/`` as package data. Rendering substitutes ``@EXEC@``, ``@REPO@`` and
-``@PATH@`` with absolute paths resolved at install time. Nothing here installs or enables
+Templates live in ``units/`` as package data. Rendering substitutes ``@EXEC@``, ``@REPO@``,
+``@PATH@`` and ``@XDG_ENV@`` (``XDG_CONFIG_HOME``, ``XDG_DATA_HOME``, ``XDG_CACHE_HOME``) with
+absolute paths resolved at install time. Nothing here installs or enables
 anything unless the caller asks (``install(..., enable=True)``); tests and ``--dry-run`` only
 render text.
 """
@@ -13,9 +14,11 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
+
+from jobhunter.xdg import xdg_base
 
 TIMERS = ("jobhunter-run.timer", "jobhunter-collect.timer", "jobhunter-verify.timer")
 UNIT_FILES = (
@@ -40,6 +43,20 @@ class Install:
     jobhunter: Path  # absolute path to the jobhunter executable (the project venv's)
     repo: Path  # WorkingDirectory: holds .env and pyproject.toml; user data is under XDG, not here
     path: str  # PATH for the units: the venv bin first, then the system dirs
+    # XDG base directories as resolved now, written into the units so the timers find the
+    # same config, database and cache as the shell that installed them.
+    xdg: tuple[tuple[str, str], ...] = field(default_factory=lambda: _xdg_env())
+
+
+def _xdg_env() -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (var, str(xdg_base(kind)))
+        for var, kind in (
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_CACHE_HOME", "cache"),
+        )
+    )
 
 
 def _find_repo() -> Path:
@@ -81,6 +98,9 @@ def render_units(inst: Install) -> dict[str, str]:
         "@EXEC@": _systemd_word(str(inst.jobhunter)),
         "@REPO@": str(inst.repo),  # WorkingDirectory= takes the raw path, no quoting
         "@PATH@": inst.path,
+        "@XDG_ENV@": "\n".join(
+            "Environment=" + _systemd_word(f"{var}={value}") for var, value in inst.xdg
+        ),
     }
     rendered: dict[str, str] = {}
     for name in UNIT_FILES:

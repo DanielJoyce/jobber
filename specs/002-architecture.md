@@ -51,7 +51,12 @@ only triage and application state. SQLite in WAL mode handles that concurrency f
 
 Scheduling is a `systemd` **user** timer (`~/.config/systemd/user/jobhunter.timer`), not cron:
 it gives logs via `journalctl`, `OnFailure=` hooks, and `Persistent=true` so a missed run
-catches up after the laptop wakes.
+catches up after the laptop wakes. The units keep `WorkingDirectory=` at the checkout so
+`./.env` is read, and `jobhunter schedule install` writes `Environment=XDG_CONFIG_HOME=`,
+`XDG_DATA_HOME=` and `XDG_CACHE_HOME=` with the values the installing shell resolved, so the
+timers use the same config, database and cache as `jobhunter paths` shows even when the systemd
+user manager does not see `XDG_*` from a login shell. Reinstall after changing them.
+`JOBHUNTER_*` path variables are not copied; set those in `config.toml` or `.env`.
 
 ## The pipeline is stages over a database, not a dataflow graph
 
@@ -148,7 +153,7 @@ $XDG_DATA_HOME/jobhunter/          (~/.local/share/jobhunter)   user data, mode 
 ├── jobhunter.db
 ├── profile/preferences.yaml       edited by the console; dated backups beside it
 ├── resume/                        one .md; older versions in .previous/
-└── backups/                       timestamped sqlite backups (migrate-paths writes the first)
+└── backups/                       sqlite backups (migrate-paths brings the old data/backups)
 $XDG_CACHE_HOME/jobhunter/         (~/.cache/jobhunter)
 ├── ab/cd/<sha256>.gz              the raw cache (still never auto-evicted by jobhunter)
 └── openrouter_models.json
@@ -167,20 +172,53 @@ then `config.toml`, then the XDG default. `db_path`, `profile_dir` and `resume_p
 names inside `data_dir`, so setting `data_dir` moves all three. Relative explicit paths still
 resolve against the working directory.
 
-**Compatibility with the old layout.** The previous defaults were `./data`, `./profile` and
-`./resume`, relative to the working directory. For each of the database, profile, resume and
-cache that has no explicit path: if the old location exists and the new one does not, the old
-one is used and a single warning says to run `jobhunter migrate-paths`. The old location is
-looked for in the working directory, then in the source checkout the package runs from, so a
-command run from another directory still finds the real database instead of starting an empty
-one. (An installed copy with no checkout and no old data in the cwd has nothing to fall back to.) `migrate-paths` is a dry run by default; `--apply` takes a timestamped
-sqlite backup of the database, copies (never moves) the database, profile, resume and cache,
-and leaves a `MOVED.txt` in each old directory. It refuses when a destination exists and
-differs, unless the original is unchanged since it was copied (each `MOVED.txt` records a
-digest), which means the destination is simply in use. `--apply --remove-old` deletes only
-originals whose copy is identical or, by that digest, in use since the migration. Old
-`backups/` are copied before the database backup is written into the new `backups/`. The tests'
-isolation guard (`tests/conftest.py`) blocks the real XDG locations as well as the repo-relative ones.
+**The old layout: detect and stop, never guess.** The previous defaults were `./data`,
+`./profile` and `./resume`, relative to the working directory. Path resolution has no fallback
+to them: an explicit setting, else the XDG default. Instead `src/jobhunter/legacy_data.py` looks
+for an old database, narrowly: only `data/jobhunter.db` counts (a `resume/` or `profile/` alone
+is not a jobhunter checkout), and only in two places, the main checkout of the repository the
+package runs from (`git rev-parse --git-common-dir`, so every worktree maps to the same main
+checkout) and the working directory. Every command except `paths`, `migrate-paths`, `init` and
+`schedule` checks first (the Typer root callback):
+
+| Old `data/jobhunter.db` | Configured database | Result |
+|---|---|---|
+| none | missing | runs; the database is created (a fresh install; `jobhunter init` does it explicitly) |
+| exists, no `MOVED.txt` in `data/` | missing | stops: "your data is still in <path>; run jobhunter migrate-paths". Nothing is created. |
+| exists, no `MOVED.txt` | exists, default location | stops: two databases, jobhunter will not pick one |
+| exists, no `MOVED.txt` | exists, set explicitly | runs, with a note (a one-off run against a copy) |
+| exists, `MOVED.txt` beside it | exists | runs, with a note that the old one is stale |
+| is the configured one (`data_dir = "data"`) | | runs: the user chose it |
+
+`jobhunter init` creates the data directory (0700) and the database (0600) and refuses while old
+data exists.
+
+**`migrate-paths`.** A dry run by default; `--from DIR` names the old folder, otherwise the one
+found above (two different old databases need `--from`). `--apply`:
+
+1. refuses while any other process has the old database open: a scan of `/proc/*/fd` names the
+   process, and an exclusive SQLite lock (`locking_mode=EXCLUSIVE` plus `BEGIN EXCLUSIVE`, which
+   in WAL mode fails while any other connection is open) is taken and held to the end, so
+   nothing can open the database meanwhile. It says to stop `jobhunter console` and
+   `systemctl --user stop` the timers;
+2. copies the database with SQLite's online backup API into a temp file beside the destination,
+   and `data/backups`, `data/cache`, `profile/` and `resume/` into staging names;
+3. verifies: `integrity_check`, the same tables, schema and row counts for the database, the same
+   sha256 for every file of every tree; then moves the copies into place;
+4. makes the data directory 0700 and the database, backups, profile and resume 0600 (existing
+   ones too);
+5. renames the old folders in their parent to `data.migrated-YYYYMMDD`,
+   `profile.migrated-YYYYMMDD`, `resume.migrated-YYYYMMDD` (with `-2` and so on if taken) and
+   writes a `MOVED.txt` inside each. A rename is atomic and reversible, and no process can keep
+   using the old path. There is no `--remove-old`: the user deletes the `.migrated` folders by
+   hand; the command prints the `rm -rf` line.
+
+A failure before step 5 removes this run's copies and leaves the old layout untouched. A
+destination that exists and differs (a database that exists at all) is a conflict: nothing
+happens until the user moves one aside. A rerun after success prints "nothing to migrate" and
+the archive folders still present. The tests' isolation guard (`tests/conftest.py`) blocks the
+real XDG locations as well as the repo-relative ones, and points the main-checkout detector away
+from the developer's checkout.
 
 ## Configuration
 

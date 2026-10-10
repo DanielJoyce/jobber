@@ -6,9 +6,13 @@ OnFailure=jobhunter-notify@%n.service
 
 [Service]
 Type=oneshot
-# The checkout is the working directory for .env (and the legacy ./data fallback). The
-# database, profile and cache live under XDG_DATA_HOME / XDG_CACHE_HOME (jobhunter paths).
+# The checkout is the working directory only so ./.env is read. The config, database,
+# profile and cache live under the XDG directories below, pinned to what the shell resolved
+# at `jobhunter schedule install` time so the timers use the same files as `jobhunter paths`
+# (the systemd user manager may not see XDG_* set in a login shell). Reinstall after changing
+# them.
 WorkingDirectory=@REPO@
 ExecStart=@EXEC@ sources verify
 Nice=10
 Environment=PATH=@PATH@
+@XDG_ENV@

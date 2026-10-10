@@ -1,39 +1,19 @@
-"""XDG default locations, provenance, the legacy fallback, and `jobhunter paths`. Synthetic."""
+"""XDG default locations, provenance (no fallback to the old layout), and `jobhunter paths`.
+Synthetic."""
 
 from __future__ import annotations
 
 import json
-import logging
-import sqlite3
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
-from jobhunter import config as cfg
 from jobhunter.cli import app
 from jobhunter.config import Paths, Settings, load_settings
 from jobhunter.mail import auth
 from jobhunter.xdg import cache_home, config_home, data_home
 
 runner = CliRunner()
-
-
-@pytest.fixture(autouse=True)
-def _reset_warned():
-    cfg._warned_legacy.clear()
-    yield
-    cfg._warned_legacy.clear()
-
-
-def _legacy_tree(cwd: Path) -> None:
-    """The pre-XDG layout, as a synthetic checkout would have it."""
-    (cwd / "data").mkdir()
-    sqlite3.connect(cwd / "data" / "jobhunter.db").close()
-    (cwd / "profile").mkdir()
-    (cwd / "profile" / "preferences.yaml").write_text("hard: {}\n", encoding="utf-8")
-    (cwd / "resume").mkdir()
-    (cwd / "resume" / "me.md").write_text("Synthetic Person\n", encoding="utf-8")
 
 
 # ─── defaults ───────────────────────────────────────────────────────────────
@@ -139,96 +119,19 @@ def test_explicit_catalog_cache_is_kept(tmp_path):
     assert s.scoring.openrouter.catalog_cache == tmp_path / "m"
 
 
-# ─── legacy fallback ────────────────────────────────────────────────────────
+# ─── no fallback to the old layout ──────────────────────────────────────────
 
 
-def test_old_relative_data_keeps_working_with_one_warning(tmp_path, monkeypatch, caplog):
-    monkeypatch.chdir(tmp_path)
-    _legacy_tree(tmp_path)
-    with caplog.at_level(logging.WARNING, logger="jobhunter.config"):
-        s = load_settings()
-        load_settings()  # the second load does not warn again
-    assert s.paths.db_path == tmp_path / "data/jobhunter.db"
-    assert s.paths.profile_dir == tmp_path / "profile"
-    assert s.paths.resume_path == tmp_path / "resume"
-    assert s.paths.data_dir == tmp_path / "data"
-    assert s.paths.sources["db_path"] == "legacy"
-    warnings = [r.getMessage() for r in caplog.records if "migrate-paths" in r.getMessage()]
-    assert len(warnings) == 1
-    assert str(tmp_path / "data/jobhunter.db") in warnings[0]
-
-
-def test_new_location_wins_once_it_exists(tmp_path, monkeypatch, caplog):
-    monkeypatch.chdir(tmp_path)
-    _legacy_tree(tmp_path)
-    new_db = data_home() / "jobhunter.db"
-    new_db.parent.mkdir(parents=True)
-    sqlite3.connect(new_db).close()
-    with caplog.at_level(logging.WARNING, logger="jobhunter.config"):
-        s = load_settings()
-    assert s.paths.db_path == new_db
-    assert s.paths.sources["db_path"] == "default"
-    assert s.paths.profile_dir == tmp_path / "profile"  # not migrated yet: still legacy
-    assert "profile" in caplog.text and "jobhunter.db" not in caplog.text
-
-
-def test_no_legacy_files_means_no_fallback_and_no_warning(tmp_path, monkeypatch, caplog):
-    monkeypatch.chdir(tmp_path)
-    with caplog.at_level(logging.WARNING, logger="jobhunter.config"):
-        s = load_settings()
-    assert s.paths.db_path == data_home() / "jobhunter.db"
-    assert "migrate-paths" not in caplog.text
-
-
-def test_explicit_paths_never_fall_back(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _legacy_tree(tmp_path)
-    s = load_settings(overrides={"paths": {"db_path": tmp_path / "mine.db", "data_dir": tmp_path}})
-    assert s.paths.db_path == tmp_path / "mine.db"
-    assert s.paths.profile_dir == tmp_path / "profile"  # data_dir/profile, which exists anyway
-    assert "legacy" not in s.paths.sources.values()
-
-
-def test_legacy_data_is_found_from_the_checkout_when_run_from_another_directory(
-    tmp_path, monkeypatch
-):
-    """Running from ~ must not miss the checkout's data and start an empty database."""
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    _legacy_tree(checkout)
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    monkeypatch.chdir(elsewhere)
-    monkeypatch.setattr(cfg, "source_checkout", lambda: checkout)
+def test_old_relative_data_is_never_used_as_a_path(old_layout, monkeypatch):
+    """Resolution is explicit setting, else XDG default: an old ./data is not a fallback."""
+    root = old_layout()
+    monkeypatch.chdir(root)
     s = load_settings()
-    assert s.paths.db_path == checkout / "data/jobhunter.db"
-    assert s.paths.sources["db_path"] == "legacy"
-    assert s.paths.profile_dir == checkout / "profile"
-    # a command that opens the database uses the real one and creates nothing at the new place
-    from jobhunter.core import db
-
-    conn = db.connect(s.paths.db_path)
-    conn.close()
-    assert not data_home().exists()
-
-
-def test_cwd_legacy_data_wins_over_the_checkout(tmp_path, monkeypatch):
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    _legacy_tree(checkout)
-    here = tmp_path / "here"
-    here.mkdir()
-    _legacy_tree(here)
-    monkeypatch.chdir(here)
-    monkeypatch.setattr(cfg, "source_checkout", lambda: checkout)
-    assert load_settings().paths.db_path == here / "data/jobhunter.db"
-
-
-def test_fallback_can_be_disabled(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _legacy_tree(tmp_path)
-    s = load_settings(legacy_fallback=False)
     assert s.paths.db_path == data_home() / "jobhunter.db"
+    assert s.paths.profile_dir == data_home() / "profile"
+    assert s.paths.resume_path == data_home() / "resume"
+    assert s.paths.cache_dir == cache_home()
+    assert all(src.startswith("default") for src in s.paths.sources.values())
 
 
 # ─── jobhunter paths ────────────────────────────────────────────────────────
@@ -264,9 +167,19 @@ def test_paths_command_text_marks_missing_and_config_source(tmp_path, monkeypatc
     assert "exists" in lines["config_file"] and "[env JOBHUNTER_CONFIG]" in lines["config_file"]
 
 
-def test_paths_command_flags_legacy(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _legacy_tree(tmp_path)
+def test_paths_command_reports_unmigrated_old_data(old_layout, monkeypatch):
+    root = old_layout()
+    monkeypatch.chdir(root)
     result = runner.invoke(app, ["paths"])
-    assert "[legacy]" in result.output
-    assert "migrate-paths" in result.output
+    assert result.exit_code == 0, result.output  # paths always works
+    assert "stopped: your data is still in" in result.output
+    assert str(root / "data" / "jobhunter.db") in result.output
+    info = json.loads(runner.invoke(app, ["paths", "--json"]).output)
+    assert info["old_layout"]["state"] == "unmigrated"
+    assert info["old_layout"]["unmigrated"] == [str(root / "data" / "jobhunter.db")]
+    assert not data_home().exists()
+
+
+def test_paths_command_with_no_old_data_says_nothing_about_it():
+    info = json.loads(runner.invoke(app, ["paths", "--json"]).output)
+    assert info["old_layout"] == {"state": "ok", "unmigrated": [], "stale": [], "message": ""}

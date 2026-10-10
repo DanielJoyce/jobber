@@ -48,6 +48,25 @@ def cache_home() -> Path:
     return xdg_base("cache") / APP_DIR
 
 
+def mkdir_private(path: Path) -> Path:
+    """Create ``path`` and any missing parents. Every directory created here is owner-only
+    (0700); existing ones are left as they are. User data (database, profile, resume,
+    backups) lives below these, and the home directory itself is often world-readable."""
+    path = Path(path)
+    missing: list[Path] = []
+    probe = path
+    while not probe.exists() and probe.parent != probe:
+        missing.append(probe)
+        probe = probe.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            continue  # created by another process meanwhile
+        os.chmod(directory, 0o700)  # mkdir's mode is masked by the umask
+    return path
+
+
 def xdg_source(kind: str) -> str:
     """How the base for ``kind`` was chosen: the ``$XDG_*`` variable or the home default."""
     var, _ = _BASES[kind]

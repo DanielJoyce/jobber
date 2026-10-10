@@ -7,26 +7,23 @@ mapping passed by the caller. Nested sections are deep-merged, so overriding one
 leaves its siblings alone. Lists are replaced wholesale, not concatenated.
 
 Default locations follow the XDG base directory spec (``jobhunter.xdg``): user data below
-``$XDG_DATA_HOME/jobhunter``, the fetch cache below ``$XDG_CACHE_HOME/jobhunter``. The old
-repo-relative locations (``./data``, ``./profile``, ``./resume``) are still used, with a
-one-time warning, when they exist and the new location does not, until ``jobhunter
-migrate-paths`` moves them.
+``$XDG_DATA_HOME/jobhunter``, the fetch cache below ``$XDG_CACHE_HOME/jobhunter``. There is no
+fallback to the old repo-relative locations (``./data``, ``./profile``, ``./resume``): an
+explicit setting wins, otherwise the XDG default. ``jobhunter.legacy_data`` stops commands
+while an unmigrated old database exists, and ``jobhunter migrate-paths`` moves it.
 """
 
 from __future__ import annotations
 
-import logging
 import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationInfo, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
-
-logger = logging.getLogger(__name__)
 
 CONFIG_ENV_VAR = "JOBHUNTER_CONFIG"
 CONFIG_FILE_NAME = "config.toml"
@@ -40,57 +37,10 @@ PATH_ENV_VARS = {
     "resume_path": "JOBHUNTER_RESUME_PATH",
 }
 DB_FILE_NAME = "jobhunter.db"
-# Where each default lived before the XDG move, relative to the directory jobhunter was run from.
-LEGACY_RELATIVE = {
-    "data_dir": Path("data"),
-    "cache_dir": Path("data/cache"),
-    "db_path": Path("data/jobhunter.db"),
-    "profile_dir": Path("profile"),
-    "resume_path": Path("resume"),
-}
-LEGACY = "legacy"  # the source label of a field that fell back to the old location
-LEGACY_CONTEXT = "legacy_fallback"  # validation-context key; False turns the fallback off
 
 
 def default_config_path() -> Path:
     return config_home() / CONFIG_FILE_NAME
-
-
-def source_checkout() -> Path | None:
-    """The source checkout this package runs from, or None for an installed copy.
-
-    The old repo-relative data lives in the checkout, so it is found from there even when
-    jobhunter is run from another directory (tests patch this to None).
-    """
-    root = Path(__file__).resolve().parents[2]
-    if (root / "pyproject.toml").is_file() and (root / "src" / "jobhunter").is_dir():
-        return root
-    return None
-
-
-def find_legacy_root() -> Path:
-    """The directory that holds the pre-XDG ``data``/``profile``/``resume``.
-
-    The working directory when it has any of them, else the source checkout when it has any,
-    else the working directory. Looking at the cwd alone made a run from another directory
-    miss the real database and start an empty one at the new location.
-    """
-    cwd = Path.cwd()
-    candidates = [cwd]
-    checkout = source_checkout()
-    if checkout is not None and checkout != cwd:
-        candidates.append(checkout)
-    probes = [LEGACY_RELATIVE[f] for f in ("db_path", "profile_dir", "resume_path", "cache_dir")]
-    for root in candidates:
-        if any((root / rel).exists() for rel in probes):
-            return root
-    return cwd
-
-
-def legacy_locations(base: Path | None = None) -> dict[str, Path]:
-    """The pre-XDG default locations, absolute, below ``base`` (default: ``find_legacy_root``)."""
-    root = base if base is not None else find_legacy_root()
-    return {k: root / v for k, v in LEGACY_RELATIVE.items()}
 
 
 class Paths(BaseModel):
@@ -113,15 +63,13 @@ class Paths(BaseModel):
 
     @property
     def sources(self) -> dict[str, str]:
-        """Field -> where its value came from: "explicit", "default", "default (XDG_...)",
-        "under data_dir" or "legacy"; ``load_settings`` refines "explicit" to "config file",
+        """Field -> where its value came from: "explicit", "default", "default (XDG_...)" or
+        "under data_dir"; ``load_settings`` refines "explicit" to "config file",
         "env JOBHUNTER_..." or "override"."""
         return dict(self._sources)
 
     @model_validator(mode="after")
-    def _resolve_defaults(self, info: ValidationInfo) -> Paths:
-        context = info.context if isinstance(info.context, dict) else {}
-        legacy_ok = bool(context.get(LEGACY_CONTEXT, True))
+    def _resolve_defaults(self) -> Paths:
         explicit = set(self.model_fields_set)
         sources: dict[str, str] = {}
 
@@ -145,16 +93,6 @@ class Paths(BaseModel):
                 put(field, data_dir / name, derived)
         if "cache_dir" not in explicit:
             put("cache_dir", cache_home(), xdg_source("cache"))
-
-        if legacy_ok and "data_dir" not in explicit:
-            old = legacy_locations()
-            for field in ("db_path", "profile_dir", "resume_path", "cache_dir"):
-                if field in explicit:
-                    continue
-                if not getattr(self, field).exists() and old[field].exists():
-                    put(field, old[field], LEGACY)
-            if sources["db_path"] == LEGACY:
-                put("data_dir", old["data_dir"], LEGACY)
         self._sources = sources
         return self
 
@@ -370,29 +308,9 @@ def load_env_files() -> list[Path]:
     return loaded
 
 
-_warned_legacy: set[str] = set()
-
-
-def _warn_legacy_once(paths: Paths) -> None:
-    old = sorted(str(getattr(paths, f)) for f, src in paths.sources.items() if src == LEGACY)
-    key = "\n".join(old)
-    if not old or key in _warned_legacy:
-        return
-    _warned_legacy.add(key)
-    logger.warning(
-        "using the old repo-relative location(s): %s. Defaults moved to %s and %s; "
-        "run `jobhunter migrate-paths` (a dry run) to see how to move them.",
-        ", ".join(old),
-        data_home(),
-        cache_home(),
-    )
-
-
 def load_settings(
     config_path: Path | None = None,
     overrides: Mapping[str, Any] | None = None,
-    *,
-    legacy_fallback: bool = True,
 ) -> Settings:
     """Build Settings from code defaults, the TOML file, the environment, then ``overrides``.
 
@@ -400,8 +318,7 @@ def load_settings(
     default location. A missing file is not an error. Unknown keys raise
     ``pydantic.ValidationError`` naming the key (e.g. ``fetch.bogus``). The ``[paths]``
     keys can also come from ``JOBHUNTER_DATA_DIR`` and friends (``PATH_ENV_VARS``), which
-    beat the file. ``legacy_fallback=False`` ignores the old repo-relative locations
-    (``migrate-paths`` uses it to find where files should go).
+    beat the file.
     """
     path = config_file(config_path)
     file_data: dict[str, Any] = {}
@@ -411,9 +328,8 @@ def load_settings(
     env_paths = {f: v for f, var in PATH_ENV_VARS.items() if (v := os.environ.get(var))}
     merged = _deep_merge(file_data, {"paths": env_paths} if env_paths else {})
     merged = _deep_merge(merged, overrides or {})
-    # Validated (not default-factory built) so the legacy_fallback context reaches Paths.
     merged.setdefault("paths", {})
-    settings = Settings.model_validate(merged, context={LEGACY_CONTEXT: legacy_fallback})
+    settings = Settings.model_validate(merged)
     labels = settings.paths._sources
     for field in PATH_FIELDS:
         if field in ((overrides or {}).get("paths") or {}):
@@ -422,6 +338,4 @@ def load_settings(
             labels[field] = f"env {PATH_ENV_VARS[field]}"
         elif field in (file_data.get("paths") or {}):
             labels[field] = "config file"
-    if legacy_fallback:
-        _warn_legacy_once(settings.paths)
     return settings
