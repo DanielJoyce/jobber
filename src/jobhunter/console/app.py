@@ -230,7 +230,12 @@ def create_app(
         conn: sqlite3.Connection, range_: int, buckets: tuple[str, ...] = dash.DEFAULT_GROUP
     ) -> dict[str, object]:
         k = dash.kpis(conn, get_profile(), range_, now(), settings.scoring.weekly_cap_usd, buckets)
-        return {"k": k, "range": range_, "kpi_buckets_name": bucketnames.group_name(buckets)}
+        return {
+            "k": k,
+            "range": range_,
+            "kpi_buckets_name": bucketnames.group_name(buckets),
+            "kpi_buckets_title": bucketnames.group_title(buckets),
+        }
 
     @app.get("/", response_class=HTMLResponse)
     def today(

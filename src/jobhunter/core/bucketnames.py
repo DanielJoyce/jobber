@@ -59,9 +59,15 @@ def group_name(letters: Iterable[str]) -> str:
         return "All fits"
     if ls == list(LETTERS):
         return "All buckets"
-    if len(ls) > 3:
-        return f"{len(ls)} buckets"
+    if len(ls) == len(FIT_GROUP) - 1 and set(ls) < set(FIT_GROUP):
+        (missing,) = set(FIT_GROUP) - set(ls)
+        return f"All fits except {bucket_name(missing)}"
     return " + ".join(bucket_name(b) for b in ls)
+
+
+def group_title(letters: Iterable[str]) -> str:
+    """Full list of names for a hover title: ``Bullseye, Strong``."""
+    return ", ".join(bucket_name(b) for b in parse_letters(list(letters)))
 
 
 GROUP_AB = group_name(DEFAULT_GROUP)  # "Bullseye + Strong"

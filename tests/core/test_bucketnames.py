@@ -37,5 +37,7 @@ def test_group_name():
     assert bn.group_name(["C"]) == "Stretch Up"
     assert bn.group_name(bn.FIT_GROUP) == "All fits"
     assert bn.group_name(bn.LETTERS) == "All buckets"
-    assert bn.group_name("ABCD") == "4 buckets"
+    assert bn.group_name("ABCD") == "Bullseye + Strong + Stretch Up + Lateral"
+    assert bn.group_name("ABCDE") == "All fits except Stale Match"
+    assert bn.group_title("BA") == "Bullseye, Strong"
     assert bn.group_name([]) == "No buckets"

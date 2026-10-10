@@ -324,7 +324,7 @@
     scale.className = "legend-scale";
     var title = document.createElement("span");
     title.className = "legend-title";
-    title.textContent = data.label + ":";
+    title.textContent = data.label + (data.label.indexOf(":") >= 0 ? "" : ":");
     scale.appendChild(title);
     scale.appendChild(swatch(token("--seq-100"), "0"));
     var prev = 0;

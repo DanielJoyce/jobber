@@ -7,10 +7,12 @@
     {% if data %}
     <nav class="chips" aria-label="Buckets">
       {% for b in all_buckets %}
-      {% if b == "G" and "G" not in picked %}
-      <a class="chip" href="?{% if state %}state={{ state }}&amp;{% endif %}bucket=G" title="G &middot; {{ titles[b][1] }}">{{ titles[b][0] | title }} <span class="muted">&middot;hidden&middot; {{ data.counts[b] }}</span></a>
+      {# A chip scrolls to its section only when that section is on the page; otherwise it opens that bucket (same state). #}
+      {% set on_page = (b in picked) or (not picked and b != "G") %}
+      {% if on_page %}
+      <a class="chip{% if b in picked %} on{% endif %}" data-bucket="{{ b }}" href="#bucket-{{ b }}" title="{{ b }} &middot; {{ titles[b][1] }}">{{ titles[b][0] | title }} {{ data.counts[b] }}</a>
       {% else %}
-      <a class="chip{% if b in picked %} on{% endif %}" href="#bucket-{{ b }}" title="{{ b }} &middot; {{ titles[b][1] }}">{{ titles[b][0] | title }} {{ data.counts[b] }}</a>
+      <a class="chip" data-bucket="{{ b }}" href="/inbox?{% if state %}state={{ state }}&amp;{% endif %}bucket={{ b }}" title="{{ b }} &middot; {{ titles[b][1] }}">{{ titles[b][0] | title }} <span class="muted">{% if b == "G" %}&middot;hidden&middot; {% endif %}{{ data.counts[b] }}</span></a>
       {% endif %}
       {% endfor %}
       {% if bucket %}<a class="chip" href="/inbox{% if state %}?state={{ state }}{% endif %}">all</a>{% endif %}
@@ -70,7 +72,7 @@
     <span><kbd>A</kbd> apply link</span>
     <span><kbd>u</kbd> undo</span>
     <span><kbd>1</kbd>-<kbd>7</kbd> bucket</span>
-    <span><kbd>f</kbd> toggle F</span>
+    <span><kbd>f</kbd> toggle Stale Match</span>
   </aside>
   {% endif %}
 </div>

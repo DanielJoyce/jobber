@@ -20,7 +20,7 @@
 {%- else -%}{{ v }}{%- endif -%}
 {%- endmacro %}
 <table class="state-table" data-sort="{{ sort }}" data-dir="{{ dir }}" data-metric="{{ metric }}" data-range="{{ range }}" data-buckets="{{ buckets_param }}">
-  <caption>Per-state stats, last {{ range }} days. Sorted by {{ sort }} ({{ dir }}). "New" counts only {{ buckets_name }}. Multi-state jobs count in each state they list; remote jobs count once, in Remote (US).</caption>
+  <caption>Per-state stats, last {{ range }} days. Sorted by {{ sort }} ({{ dir }}). Counts cover only {{ buckets_name }}. Multi-state jobs count in each state they list; remote jobs count once, in Remote (US).</caption>
   <thead>
     <tr>
       {% for key, label, kind in cols %}

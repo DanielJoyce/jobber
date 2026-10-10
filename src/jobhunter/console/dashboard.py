@@ -526,7 +526,8 @@ def state_stats_with_totals(
     A job counts in every state it lists (011 display rules). A remote_us / nationwide /
     negotiable job also counts once in REMOTE, never spread across states.
 
-    ``new_ab`` (and the salary medians) count only the selected ``buckets``; every row also
+    Every count (new, scored, shortlisted, applied, responses, applications) and the salary
+    medians cover only groups in the selected ``buckets``; every row also
     carries ``by_bucket`` (letter -> count for all buckets) so a client can re-slice. The
     second return value is the distinct-group count per bucket (a multi-state job once).
     """
@@ -543,12 +544,16 @@ def state_stats_with_totals(
 
     salaries: dict[str, list[float]] = defaultdict(list)
     totals: dict[str, int] = {}
-    for f in group_facts(conn, profile, since):
+    all_facts = group_facts(conn, profile, "")
+    bucket_of = {f.group_id: f.bucket for f in all_facts}
+    for f in all_facts:
+        if f.first_seen < since:
+            continue
         if f.bucket is not None:
             totals[f.bucket.value] = totals.get(f.bucket.value, 0) + 1
         for key in places(f.states, f.remote):
             r = rows[key]
-            r["scored"] += f.scored
+            r["scored"] += f.bucket in chosen
             if f.bucket is not None:
                 r["by_bucket"][f.bucket.value] = r["by_bucket"].get(f.bucket.value, 0) + 1
             if f.bucket in chosen:
@@ -566,9 +571,13 @@ def state_stats_with_totals(
     apps = application_facts(conn)
     place_of = _group_places(conn, [*shortlisted, *(a.group_id for a in apps)])
     for gid in shortlisted:
+        if bucket_of.get(gid) not in chosen:
+            continue
         for key in places(*place_of.get(gid, (set(), False))):
             rows[key]["shortlisted"] += 1
     for a in apps:
+        if bucket_of.get(a.group_id) not in chosen:
+            continue
         keys = places(*place_of.get(a.group_id, (set(), False)))
         for key in keys:
             rows[key]["applications"] += 1
@@ -645,8 +654,8 @@ def map_payload(
     metric = clamp_metric(metric)
     label, kind = METRICS[metric]
     picked = list(buckets)
-    if metric == "new_ab":
-        label = f"New: {group_name(picked)}"
+    # Every metric covers only the selected buckets, so the label says which.
+    label = f"{'New' if metric == 'new_ab' else label}: {group_name(picked)}"
     breaks = class_breaks((r["value"] for r in rows if r["state"] != REMOTE), kind)
     return {
         "metric": metric,
@@ -742,14 +751,22 @@ def _funnel(
         "FROM g JOIN job_group jg ON jg.id = g.gid JOIN job j ON j.id = jg.canonical_job_id",
         (since,),
     ).fetchone()
+    bucket_of = {f.group_id: f.bucket for f in group_facts(conn, profile, "")}
     ab = sum(1 for f in group_facts(conn, profile, since) if f.bucket in chosen)
-    applied = [a for a in apps if a.applied_on and a.applied_on >= since]
+    # Downstream stages only count groups in the selected buckets, so a narrow selection
+    # never shows more applications than matches.
+    applied = [
+        a
+        for a in apps
+        if a.applied_on and a.applied_on >= since and bucket_of.get(a.group_id) in chosen
+    ]
     liked = {
         r[0]
         for r in conn.execute(
             "SELECT job_group_id FROM label WHERE label = 'interesting' AND labeled_at >= ?",
             (since,),
         )
+        if bucket_of.get(r[0]) in chosen
     }
     shortlisted = liked | {a.group_id for a in applied}
 

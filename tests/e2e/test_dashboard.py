@@ -253,7 +253,7 @@ def test_state_statistics_collapsed_by_default_and_remembered(dash):
     details = dash.locator("#state-details")
     expect(details).not_to_have_attribute("open", "")
     expect(dash.locator("#state-details summary")).to_contain_text(
-        re.compile(r"State statistics \(\d+ states\)")
+        re.compile(r"State statistics \(\d+ rows")
     )
     expect(dash.locator("#state-table table")).not_to_be_visible()
     dash.locator("#state-details summary").click()

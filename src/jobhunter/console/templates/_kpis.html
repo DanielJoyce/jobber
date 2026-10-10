@@ -5,7 +5,7 @@
 {%- endmacro %}
 <div class="kpi-row">
   <a class="kpi" href="/inbox?bucket={{ k.new_ab.buckets | join(',') }}&amp;new={{ range }}">
-    <span class="kpi-label">New {{ kpi_buckets_name }}</span>
+    <span class="kpi-label" title="{{ kpi_buckets_title }}">New {{ kpi_buckets_name }}</span>
     <span class="kpi-value" data-kpi="new_ab">{{ k.new_ab.value }}</span>
     <span class="kpi-sub">{% if k.new_ab.delta > 0 %}+{% endif %}{{ k.new_ab.delta }} vs previous {{ range }}d</span>
     {{ spark(k.new_ab.series, "New " ~ kpi_buckets_name ~ " per day, last " ~ range ~ " days") }}

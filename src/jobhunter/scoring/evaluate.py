@@ -603,7 +603,13 @@ def format_report(r: EvalReport) -> str:
         out += _table(
             ["group", "bucket", "overall", "title", "first evidence claim"],
             [
-                [c["group_id"], c["bucket"], c["overall"], c["title"], c["claim"] or ""]
+                [
+                    c["group_id"],
+                    bucket_label(c["bucket"]),
+                    c["overall"],
+                    c["title"],
+                    c["claim"] or "",
+                ]
                 for c in rows
             ],
         )

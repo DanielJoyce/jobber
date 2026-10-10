@@ -104,7 +104,7 @@
 
 <section class="panel" aria-labelledby="table-title">
   <details id="state-details">
-  <summary><h2 id="table-title">State statistics ({{ rows | length }} states)</h2></summary>
+  <summary><h2 id="table-title">State statistics ({{ rows | length }} rows: states, DC, territories, Remote)</h2></summary>
   <div id="state-table" class="table-wrap" hx-disinherit="*"
        hx-get="/dash/state-table" hx-include="#dash-controls" hx-trigger="dash-refresh from:body" hx-swap="innerHTML">
     {% include "_state_table.html" %}

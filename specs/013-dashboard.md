@@ -156,8 +156,10 @@ and the state table. It lives in `?buckets=A,B` (letters in URLs) and `localStor
 (`jh-dash-buckets`), the URL winning. The map payload carries `by_bucket` per state and
 `bucket_totals`; a toggle re-fetches the payload, table, KPI tile and trend/funnel charts (the bucket-mix chart always shows every bucket). The state table sits in a `<details>` collapsed by default (`jh-dash-states`) and still updates while closed. Clicking a state opens
 `/inbox?state=XX&bucket=A,B`; the inbox accepts a comma list. Names come from
-`core/bucketnames.py`; the KPI tile, trend line and funnel use the fixed group "Bullseye +
-Strong".
+`core/bucketnames.py`. The KPI tile, trend line and funnel follow the selection too: the
+funnel's downstream stages (shortlisted, applied, responded...) count only groups in the
+selected buckets, and the per-state counts, medians and response rate do likewise. Unscored
+groups therefore drop out of those counts.
 
 ## Charts
 
