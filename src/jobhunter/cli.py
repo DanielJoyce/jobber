@@ -592,7 +592,7 @@ def console(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
-    uvicorn.run(create_app(settings), host=bind_host, port=bind_port)
+    uvicorn.run(create_app(settings, allow_remote=allow_remote), host=bind_host, port=bind_port)
 
 
 @app.command(name="eval")

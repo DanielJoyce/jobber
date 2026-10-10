@@ -65,3 +65,18 @@ def test_rescore_now_confirms_runs_and_links_to_the_inbox(page, server):
     row = server.rows("SELECT status, scored FROM rescore_request")[0]
     assert row[0] == "done" and row[1] == scored
     assert not page.errors
+
+
+def test_rescore_controls_follow_the_dark_theme_and_disabled_looks_disabled(page, server):
+    page.emulate_media(color_scheme="dark")
+    page.goto(f"{server.url}/prefs")
+    select = page.locator("#rescore-form select[name=scope]")
+    expect(select).to_be_visible()
+    # Themed like the rest of /prefs, not a light-grey native control on the dark page.
+    assert select.evaluate("e => getComputedStyle(e).backgroundColor") == "rgb(13, 13, 13)"
+    assert select.evaluate("e => getComputedStyle(e).color") == "rgb(255, 255, 255)"
+    run = page.locator("#rescore-run")
+    run.evaluate("e => { e.disabled = true; }")
+    assert run.evaluate("e => getComputedStyle(e).cursor") == "not-allowed"
+    assert run.evaluate("e => getComputedStyle(e).backgroundColor") != "rgb(57, 135, 229)"
+    assert not page.errors

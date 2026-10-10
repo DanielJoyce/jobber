@@ -69,6 +69,11 @@ label .hint { margin: 0; }
 }
 .button.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
 .button.small { padding: 1px 8px; font-size: 0.75rem; }
+/* A disabled button must look it: the author styles above override the UA's greyed look. */
+.button:disabled, .button[disabled] {
+  background: var(--surface-1); border-color: var(--border); color: var(--text-muted);
+  cursor: not-allowed; opacity: 0.6;
+}
 
 .banner { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; border: 1px solid var(--border); background: var(--surface-1); }
 .banner-conflict { border-color: var(--status-warning); }
@@ -104,7 +109,13 @@ label .hint { margin: 0; }
 .thresholds label:focus-within .focus-hint { display: block; }
 .upload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 
-/* Re-score now */
+/* Re-score now: the form sits outside .prefs-form, so it needs its own themed controls. */
+.rescore-form label { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; color: var(--text-secondary); font-size: 0.875rem; }
+.rescore-form select {
+  font: inherit; font-size: 0.9375rem; color: var(--text-primary); background: var(--page);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 100%;
+}
+.rescore-form .rescore-scope { color: var(--text-primary); }
 .rescore-form .actions { margin-top: 8px; }
 .rescore-progress { margin-bottom: 12px; }
 .rescore-progress progress { width: 100%; }

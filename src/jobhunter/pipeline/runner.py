@@ -425,6 +425,9 @@ def _score_stage(
         return
     from jobhunter.scoring.scorers import privacy_notice, scorer_from_string
 
+    # new_only: the daily run scores new jobs (and pasted descriptions) only. Re-scoring jobs
+    # already scored under another scoring_version, model or prompt costs money, so it runs only
+    # as a re-score the user confirmed on /prefs (specs/006, specs/014).
     spec = settings.scoring.screen_scorer
     if notice := privacy_notice(spec, settings.scoring):
         report.messages.append(notice)
@@ -440,6 +443,7 @@ def _score_stage(
                     conn, settings.scoring.daily_cap_usd, now
                 ),
                 rejection_days=settings.scoring.employer_rejection_days,
+                new_only=True,
             )
         except Exception as exc:  # scoring trouble must not fail the ingest exit code
             logger.warning("score failed: %s", exc)
@@ -465,6 +469,7 @@ def _score_stage(
             scorer=settings.scoring.screen_scorer,
             remaining_usd=lambda: screen.remaining_daily_budget(conn, cap, now),
             rejection_days=settings.scoring.employer_rejection_days,
+            new_only=True,
         )
     except Exception as exc:  # scoring trouble must not fail the ingest exit code
         logger.warning("score submit failed: %s", exc)

@@ -229,6 +229,8 @@ def run_prefilter(
     jobs = conn.execute(sql, params).fetchall()
 
     counts = {"evaluated": 0, "passed": 0, "rejected": 0}
+    if not jobs:
+        return counts  # no empty write transaction (the /prefs panel asks on every load)
     with _txn(conn):
         for job in jobs:
             passed, reasons = evaluate(job, load_job_group_locations(conn, job["id"]), profile, now)
