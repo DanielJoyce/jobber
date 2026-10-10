@@ -838,9 +838,10 @@ def mail_match(
         )
     for r in result.rejections:
         where = f"job group {r.job_group_id}" if r.job_group_id else "no known job"
+        review = "" if r.confirmed else " | needs review on /rejections"
         typer.echo(
             f"employer rejection: {r.employer or 'employer unknown'} | "
-            f"{r.title or 'title unknown'} | {r.received_at[:10]} | {where}"
+            f"{r.title or 'title unknown'} | {r.received_at[:10]} | {where}{review}"
         )
     verb = "would store" if dry_run else "stored"
     n = len(result.proposals) if dry_run else result.stored

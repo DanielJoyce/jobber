@@ -13,12 +13,13 @@
     <button type="submit" class="act">add rejection</button>
   </form>
   {% if error %}<p class="banner" role="alert">{{ error }}</p>{% endif %}
+  {% if pending %}<p class="banner" role="status">{{ pending }} rejection email{{ "s need" if pending != 1 else " needs" }} review: read from a loose phrase (like "unfortunately"), so {{ "they hide" if pending != 1 else "it hides" }} nothing until you confirm. Delete any that are not rejections.</p>{% endif %}
 
   {% if items %}
   <ul class="fu-list">
     {% for r in items %}
     <li class="fu-row" id="rej-{{ r.id }}">
-      <span class="fu-due">{{ r.received_at[:10] }}<br><span class="muted">{{ r.source }}</span></span>
+      <span class="fu-due">{{ r.received_at[:10] }}<br><span class="muted">{{ r.source }}</span>{% if r.state == 'pending' %}<br><strong class="rej-pending">needs review</strong>{% endif %}</span>
       <span class="fu-body">
         <strong>{{ r.employer or "employer unknown" }}</strong>: {{ r.title or "title unknown" }}
         {% if r.job_group_id %}<br><a href="/job/{{ r.job_group_id }}">matched job: {{ r.job_title or ("job " ~ r.job_group_id) }}</a>{% if r.application_id %} &middot; <a href="/pipeline/{{ r.application_id }}">application</a>{% endif %}{% else %}<br><span class="muted">no matching job in jobhunter</span>{% endif %}
@@ -26,6 +27,7 @@
         {% if r.evidence.snippet %}<br><em>{{ r.evidence.snippet }}</em>{% endif %}
       </span>
       <span class="fu-actions">
+        {% if r.state == 'pending' %}<form method="post" action="/rejections/{{ r.id }}/confirm"><button type="submit" class="act" title="this email is a rejection: hide the posting and flag other roles">confirm</button></form>{% endif %}
         <form method="post" action="/rejections/{{ r.id }}/delete"><button type="submit" class="act" title="remove a wrongly recorded rejection">delete</button></form>
       </span>
     </li>

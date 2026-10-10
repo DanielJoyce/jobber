@@ -194,8 +194,16 @@ email and an accept/dismiss control. Milestone 9.
 most applications happen outside jobhunter (Ashby, Greenhouse, Workday, Lever, Workable), so a
 rejection email that matched no job group used to be dropped and its outcome lost.
 `jobhunter mail match` now writes every rejection email to the `rejection` table (migration
-0023) directly: it is a recorded fact, not a status change, so it needs no accept. Employer and
-title come from the matched job, else from the email (`parse_employer_title`); `employer_norm`
+0023) directly: it is a recorded fact, not a status change, so it needs no accept, **when it
+is read from a specific phrase** ("decided to move forward with other candidates", "will not
+be moving forward", "regret to inform"). A loose word alone ("unfortunately", "not selected")
+is also common in confirmations and interview mail, so it counts only when no phrase of any
+other kind matched, and the row is stored `pending` (migration 0026, bug d28c8de): it hides
+no posting, flags no other role and reaches no scorer until you confirm it on `/rejections`.
+Accepting the matching `add_event` proposal confirms the row; dismissing it deletes the row.
+The scan skips sent mail (`-in:sent`), so your own replies are never read. Employer and
+title come from the matched job, else from the email (`parse_employer_title`: subject shapes
+first, then the sender's "Acme Hiring Team" name, then body sentences); `employer_norm`
 is the normalized employer used for matching. Evidence is sender, subject, a snippet of at most
 `SNIPPET_MAX` characters and the matched phrase; never bodies. Matched applications still get
 the usual `add_event` proposal. Rows are idempotent by Gmail message id, one per thread, and

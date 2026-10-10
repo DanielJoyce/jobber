@@ -150,3 +150,48 @@ def test_annotate_sets_fact_only_for_other_roles_within_window(conn):
     late = [{"group_id": 1, "employer": "Northwind Analytics", "title": "Platform Engineer"}]
     rejections.annotate(conn, late, now=NOW, days=10)
     assert "prior_rejection" not in late[0]
+
+
+def test_pending_rows_count_for_nothing_until_confirmed(conn):
+    # A rejection read from a loose phrase is pending: it hides no posting, flags no other
+    # role and is not counted until the user confirms it (bug d28c8de).
+    g1 = add_group(conn, 1, "Acme", "Welder")
+    add_group(conn, 2, "Acme", "Painter")
+    rid = rec(conn, "Acme", "Welder", state="pending")
+    assert rejections.rejected_group_ids(conn) == set()
+    assert not rejections.RejectionIndex.load(conn, NOW)
+    assert rejections.unmatched_email_count(conn) == 0
+    assert rejections.pending_count(conn) == 1
+    assert [r["state"] for r in rejections.listing(conn)] == ["pending"]
+    assert rejections.confirm(conn, rid) is True
+    assert rejections.rejected_group_ids(conn) == {g1}
+    assert rejections.unmatched_email_count(conn) == 1
+    assert rejections.pending_count(conn) == 0
+    assert rejections.confirm(conn, 999) is False
+    with pytest.raises(ValueError):
+        rec(conn, "Acme", "X", state="maybe")
+
+
+def test_migration_0026_marks_loose_phrase_email_rows_pending(monkeypatch):
+    import json
+
+    real = db._load_migrations
+    monkeypatch.setattr(db, "_load_migrations", lambda: [m for m in real() if m[0] < 26])
+    c = db.connect(":memory:")
+    db.migrate(c)
+    rows = [
+        ("m1", "email", {"phrase": "unfortunately", "snippet": "Unfortunately the role closed."}),
+        ("m2", "email", {"phrase": "unfortunately", "snippet": "We decided to not move forward"}),
+        ("m3", "email", {"phrase": "regret to inform", "snippet": "We regret to inform you"}),
+        (None, "manual", {}),
+    ]
+    for mid, source, ev in rows:
+        c.execute(
+            "INSERT INTO rejection (gmail_message_id, received_at, employer, source, evidence, "
+            "created_at) VALUES (?, 'x', 'Acme', ?, ?, 'x')",
+            (mid, source, json.dumps(ev)),
+        )
+    monkeypatch.setattr(db, "_load_migrations", real)
+    db.migrate(c)
+    got = dict(c.execute("SELECT COALESCE(gmail_message_id, 'manual'), state FROM rejection"))
+    assert got == {"m1": "pending", "m2": "confirmed", "m3": "confirmed", "manual": "confirmed"}

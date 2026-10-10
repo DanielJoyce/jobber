@@ -868,3 +868,51 @@ def test_parse_employer_title_rejects_sentence_fragments(sender, subject, body, 
 )
 def test_parse_employer_prefers_subject_and_strips_generic_words(sender, subject, body, want):
     assert match.parse_employer_title(msg_of(sender, subject, body)) == want
+
+
+def test_loose_phrase_rejection_is_stored_pending(conn):
+    add_job(conn, 1, "Contoso", "Senior Platform Engineer")
+    loose = raw(
+        "w1",
+        "Contoso <no-reply@ashbyhq.com>",
+        "About your application to Contoso",
+        "Unfortunately the Senior Platform Engineer role at Contoso is on hold for now.",
+    )
+    _, res = run_scan(conn, [loose, msg_contoso_reject("s1", days_ago=2)])
+    states = {
+        r["gmail_message_id"]: r["state"]
+        for r in conn.execute("SELECT gmail_message_id, state FROM rejection")
+    }
+    assert states == {"w1": "pending", "s1": "confirmed"}
+    assert [r.confirmed for r in res.rejections] == [True, False]  # oldest first
+
+
+def test_dismissing_a_rejection_proposal_removes_the_rejection_row(conn, client):
+    add_job(conn, 1, "Northwind Analytics", "Senior Data Engineer", applied="applied")
+    rej = raw(
+        "r1",
+        "Northwind Analytics <no-reply@greenhouse.io>",
+        "Your application to Northwind Analytics",
+        "Unfortunately we will not be moving forward. Senior Data Engineer.",
+    )
+    run_scan(conn, [rej])
+    assert conn.execute("SELECT COUNT(*) FROM rejection").fetchone()[0] == 1
+    pid = rows(conn)[0]["id"]
+    assert client.post(f"/proposals/{pid}/dismiss").status_code == 303
+    # The user said this email did not reject them: the posting must not stay hidden.
+    assert conn.execute("SELECT COUNT(*) FROM rejection").fetchone()[0] == 0
+
+
+def test_accepting_a_rejection_proposal_confirms_the_rejection_row(conn, client):
+    add_job(conn, 1, "Northwind Analytics", "Senior Data Engineer", applied="applied")
+    rej = raw(
+        "r1",
+        "Northwind Analytics <no-reply@greenhouse.io>",
+        "Your application to Northwind Analytics",
+        "Unfortunately the Senior Data Engineer role is closed to you.",
+    )
+    run_scan(conn, [rej])
+    assert conn.execute("SELECT state FROM rejection").fetchone()[0] == "pending"
+    pid = rows(conn)[0]["id"]
+    assert client.post(f"/proposals/{pid}/accept").status_code == 303
+    assert conn.execute("SELECT state FROM rejection").fetchone()[0] == "confirmed"

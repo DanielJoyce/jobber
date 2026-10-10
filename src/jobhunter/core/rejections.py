@@ -98,6 +98,7 @@ class Rejection:
     job_group_id: int | None
     application_id: int | None
     source: str
+    state: str = "confirmed"
 
     @property
     def day(self) -> str:
@@ -119,12 +120,30 @@ def _row(r: Mapping[str, Any]) -> Rejection:
         job_group_id=r["job_group_id"],
         application_id=r["application_id"],
         source=r["source"],
+        state=r["state"],
     )
 
 
+STATES = ("pending", "confirmed")
+
+
 def load(conn: sqlite3.Connection) -> list[Rejection]:
-    rows = conn.execute("SELECT * FROM rejection ORDER BY received_at DESC, id DESC").fetchall()
+    """Confirmed rejections only: a pending one (read from a loose phrase) hides nothing,
+    flags nothing and reaches no scorer until the user confirms it on /rejections."""
+    rows = conn.execute(
+        "SELECT * FROM rejection WHERE state = 'confirmed' ORDER BY received_at DESC, id DESC"
+    ).fetchall()
     return [_row(r) for r in rows]
+
+
+def confirm(conn: sqlite3.Connection, rid: int) -> bool:
+    """Mark a pending rejection confirmed; False when there is no such row."""
+    cur = conn.execute("UPDATE rejection SET state = 'confirmed' WHERE id = ?", (rid,))
+    return bool(cur.rowcount)
+
+
+def pending_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM rejection WHERE state = 'pending'").fetchone()[0]
 
 
 def record(
@@ -140,16 +159,19 @@ def record(
     job_group_id: int | None = None,
     application_id: int | None = None,
     evidence: Mapping[str, Any] | None = None,
+    state: str = "confirmed",
 ) -> int | None:
     """Insert one rejection; None when this Gmail message already has a row."""
     if source not in ("email", "manual"):
         raise ValueError(f"bad rejection source {source!r}")  # OR IGNORE would hide the CHECK
+    if state not in STATES:
+        raise ValueError(f"bad rejection state {state!r}")
     employer = (employer or "").strip() or None
     title = (title or "").strip() or None
     cur = conn.execute(
         "INSERT OR IGNORE INTO rejection (gmail_message_id, thread_id, received_at, employer, "
-        "employer_norm, title, job_group_id, application_id, source, evidence, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "employer_norm, title, job_group_id, application_id, source, evidence, created_at, state) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             gmail_message_id,
             thread_id,
@@ -162,6 +184,7 @@ def record(
             source,
             json.dumps(dict(evidence or {})),
             now.astimezone(UTC).isoformat(),
+            state,
         ),
     )
     return cur.lastrowid if cur.rowcount else None
@@ -285,17 +308,19 @@ def annotate(
 def unmatched_email_count(conn: sqlite3.Connection) -> int:
     """Rejection emails that matched no job group (applied for outside jobhunter)."""
     return conn.execute(
-        "SELECT COUNT(*) FROM rejection WHERE source = 'email' AND job_group_id IS NULL"
+        "SELECT COUNT(*) FROM rejection WHERE source = 'email' AND job_group_id IS NULL "
+        "AND state = 'confirmed'"
     ).fetchone()[0]
 
 
 def listing(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Rows for the /rejections page, newest first, with the matched job's title if any."""
+    """Rows for the /rejections page: pending (needs review) first, then newest first, with
+    the matched job's title if any."""
     rows = conn.execute(
         "SELECT r.*, j.title AS job_title FROM rejection r "
         "LEFT JOIN job_group g ON g.id = r.job_group_id "
         "LEFT JOIN job j ON j.id = g.canonical_job_id "
-        "ORDER BY r.received_at DESC, r.id DESC"
+        "ORDER BY r.state = 'confirmed', r.received_at DESC, r.id DESC"
     ).fetchall()
     out = []
     for r in rows:

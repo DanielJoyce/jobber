@@ -594,6 +594,27 @@ def test_rejections_form_validation_and_delete(client, seeded):
     assert 'id="row-1"' in client.get("/inbox").text
 
 
+def test_pending_rejection_needs_confirmation_on_the_page(client, seeded):
+    from jobhunter.core import rejections
+
+    rid = rejections.record(
+        seeded, received_at=NOW.isoformat(), employer="Acme Inc", title="Bullseye",
+        source="email", now=NOW, gmail_message_id="m1", job_group_id=1, state="pending",
+        evidence={"sender": "Acme <no-reply@ashbyhq.com>", "subject": "About your application",
+                  "phrase": "unfortunately"},
+    )  # fmt: skip
+    seeded.commit()
+    assert 'id="row-1"' in client.get("/inbox").text  # pending: not hidden yet
+    page = client.get("/rejections").text
+    assert "needs review" in page and f'action="/rejections/{rid}/confirm"' in page
+    assert "1 rejection email needs review" in page
+    r = client.post(f"/rejections/{rid}/confirm", follow_redirects=False)
+    assert r.status_code == 303
+    assert 'id="row-1"' not in client.get("/inbox").text
+    assert "needs review" not in client.get("/rejections").text
+    assert client.post("/rejections/999/confirm").status_code == 404
+
+
 def test_rejected_page_is_still_the_prefilter_page(client):
     # /rejected (jobs we filtered out) is unchanged and distinct from /rejections.
     assert client.get("/rejected").status_code == 200

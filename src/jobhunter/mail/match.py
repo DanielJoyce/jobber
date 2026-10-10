@@ -215,6 +215,9 @@ class RejectionRecord:
     evidence: dict
     job_group_id: int | None = None
     application_id: int | None = None
+    # False for a rejection read from a loose word only: stored 'pending', so it hides no
+    # posting until the user confirms it on /rejections.
+    confirmed: bool = True
 
 
 @dataclass
@@ -739,7 +742,8 @@ def build_proposal(
 
 def build_rejection(msg: Message, cls: Classification, found: Match | None) -> RejectionRecord:
     """Every rejection email is recorded, matched or not. Employer and title come from the
-    matched job when there is one, else from the email itself."""
+    matched job when there is one, else from the email itself. One read from a loose word
+    only ("unfortunately") is recorded unconfirmed: a misread must not hide a posting."""
     employer, title = parse_employer_title(msg)
     evidence = {
         "sender": msg.sender[:200],
@@ -754,6 +758,7 @@ def build_rejection(msg: Message, cls: Classification, found: Match | None) -> R
         employer=employer,
         title=title,
         evidence=evidence,
+        confirmed=cls.strong,
     )
     if found is not None:
         rec.job_group_id = found.group.group_id
@@ -806,6 +811,7 @@ def store_rejections(
             source="email",
             evidence=r.evidence,
             now=now,
+            state="confirmed" if r.confirmed else "pending",
         )
         n += int(new is not None)
     conn.commit()
