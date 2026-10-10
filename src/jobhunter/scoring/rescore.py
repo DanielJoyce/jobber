@@ -632,6 +632,7 @@ def _execute(
             scorer=spec,
             remaining_usd=remaining,
             group_ids=ids,
+            rejection_days=scoring.employer_rejection_days,
         )
         st.notes.append(
             f"submitted batch {batch_id}; `jobhunter score --collect-pending` collects it"
@@ -668,6 +669,7 @@ def _execute(
             now=now(),
             remaining_usd=remaining,
             group_ids=batch,
+            rejection_days=scoring.employer_rejection_days,
         )
         st.attempted += res.submitted
         st.scored += res.written

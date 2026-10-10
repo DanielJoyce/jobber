@@ -263,13 +263,20 @@ def inbox_items(
     )
 
 
-def inbox_item(conn: sqlite3.Connection, profile: Profile, group_id: int) -> InboxItem | None:
-    """One group's row (regardless of label), for re-rendering after undo."""
+def inbox_item(
+    conn: sqlite3.Connection,
+    profile: Profile,
+    group_id: int,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+) -> InboxItem | None:
+    """One group's row (regardless of label), for re-rendering after undo. Pass the
+    configured ``scoring.employer_rejection_days`` so the flag matches the full inbox."""
     row = conn.execute(_SQL + " WHERE g.id = ?", (group_id,)).fetchone()
     if not row:
         return None
     now = datetime.now(UTC)
-    return _item(conn, row, profile, now, rejections.RejectionIndex.load(conn, now))
+    index = rejections.RejectionIndex.load(conn, now, rejection_days)
+    return _item(conn, row, profile, now, index)
 
 
 def group_title(conn: sqlite3.Connection, group_id: int) -> str:

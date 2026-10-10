@@ -120,6 +120,29 @@ def test_changed_filter_and_scoring_version_reprefilters_then_scores(conn, profi
     assert n == 3
 
 
+def test_sync_rescore_uses_configured_employer_rejection_days(conn, profile, monkeypatch):
+    add_group(conn, 1, profile)
+    rid = queue(conn, profile)
+    seen = []
+    real = screen.score_sync
+
+    def spy(*a, **kw):
+        seen.append(kw.get("rejection_days"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(screen, "score_sync", spy)
+    rescore.run_request(
+        conn,
+        rid,
+        profile,
+        scoring(employer_rejection_days=0),
+        now=now,
+        scorer_factory=lambda s: FakeScorer(),
+        scorer=SPEC,
+    )
+    assert seen and set(seen) == {0}
+
+
 def test_scope_all_vs_recent(conn, profile):
     for n in range(1, 4):
         add_group(conn, n, profile)
@@ -243,17 +266,38 @@ def test_anthropic_scorer_submits_a_batch(conn, profile, monkeypatch):
     rid = queue(conn, profile, scorer=spec)
     seen = {}
 
-    def fake_submit(c, client, prof, *, limit, now, scorer, remaining_usd, group_ids):
-        seen.update(limit=limit, scorer=scorer, client=client, group_ids=sorted(group_ids))
+    def fake_submit(
+        c, client, prof, *, limit, now, scorer, remaining_usd, group_ids, rejection_days
+    ):
+        seen.update(
+            limit=limit,
+            scorer=scorer,
+            client=client,
+            group_ids=sorted(group_ids),
+            days=rejection_days,
+        )
         return "msgbatch_x"
 
     monkeypatch.setattr(screen, "submit_batch", fake_submit)
     rescore.run_request(
-        conn, rid, profile, scoring(), now=now, client_factory=lambda: "fake-client", scorer=spec
+        conn,
+        rid,
+        profile,
+        scoring(employer_rejection_days=7),
+        now=now,
+        client_factory=lambda: "fake-client",
+        scorer=spec,
     )
     r = row(conn, rid)
     assert r["status"] == "done" and "msgbatch_x" in r["note"] and "--collect-pending" in r["note"]
-    assert seen == {"limit": 2, "scorer": spec, "client": "fake-client", "group_ids": [1, 2]}
+    # scoring.employer_rejection_days reaches the scorer (it used to fall back to 90).
+    assert seen == {
+        "limit": 2,
+        "scorer": spec,
+        "client": "fake-client",
+        "group_ids": [1, 2],
+        "days": 7,
+    }
 
 
 def test_drain_pending_runs_in_order_and_skips_refused(conn, profile):

@@ -615,6 +615,25 @@ def test_pending_rejection_needs_confirmation_on_the_page(client, seeded):
     assert client.post("/rejections/999/confirm").status_code == 404
 
 
+def test_undo_rerender_honours_employer_rejection_days(tmp_path, profile_dir, seeded):
+    # Regression: the undo re-render loaded the index with the default 90-day window, so a
+    # row could show a flag the full inbox (configured window) did not.
+    _reject(seeded, "Bullseye", gid=1, days_ago=5)
+    inbox.set_label(seeded, 2, "not_interesting")
+    seeded.commit()
+    settings = Settings(
+        paths=Paths(profile_dir=profile_dir, db_path=tmp_path / "t.db"),
+        scoring={"employer_rejection_days": 1},
+    )
+    client = TestClient(create_app(settings, lambda: db.connect(tmp_path / "t.db")))
+    assert "employer rejected you" not in client.get("/inbox").text
+    r = client.post("/inbox/2/undo")
+    assert r.status_code == 200 and 'id="row-2"' in r.text
+    assert "employer rejected you" not in r.text
+    item = inbox.inbox_item(seeded, load_profile(profile_dir), 2)
+    assert item.employer_rejection  # the default window still flags it
+
+
 def test_rejected_page_is_still_the_prefilter_page(client):
     # /rejected (jobs we filtered out) is unchanged and distinct from /rejections.
     assert client.get("/rejected").status_code == 200

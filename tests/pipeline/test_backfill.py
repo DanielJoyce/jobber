@@ -213,7 +213,7 @@ def run(conn, *, scorer=None, client=None, **kw):
 
     result = bf.run_backfill(
         conn,
-        Settings(),
+        kw.pop("settings", Settings()),
         [row("a")],
         scorer=scorer or _batch_scorer(client),
         client=client,
@@ -377,6 +377,28 @@ def test_sync_scorer_respects_budget(conn):
     assert result.committed_usd == pytest.approx(0.03)
     assert "budget reached" in text
     assert eligible_count(conn, scorer) == 2
+
+
+@pytest.mark.parametrize("sync", [True, False])
+def test_scoring_uses_configured_employer_rejection_days(conn, monkeypatch, sync):
+    # Regression: backfill scored with the default 90-day window whatever
+    # scoring.employer_rejection_days said, so the fact reached the scorer at 0 days too.
+    from jobhunter.scoring import screen
+
+    seen: list[int] = []
+    name = "score_sync" if sync else "submit_batch"
+    real = getattr(screen, name)
+
+    def spy(*a, **kw):
+        seen.append(kw.get("rejection_days"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(screen, name, spy)
+    settings = Settings.model_validate({"scoring": {"employer_rejection_days": 0}})
+    scorer = FakeSyncScorer() if sync else None
+    client = None if sync else FakeClient()
+    run(conn, scorer=scorer, client=client, settings=settings, confirm=lambda est: True)
+    assert seen and set(seen) == {0}
 
 
 def test_sync_scorer_rerun_is_idempotent(conn):
