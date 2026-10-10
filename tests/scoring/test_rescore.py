@@ -147,7 +147,7 @@ def test_status_transitions_and_cost(conn, profile):
         add_group(conn, n, profile)
     rid = queue(conn, profile)
     assert row(conn, rid)["status"] == "pending"
-    scorer = FakeScorer(cost=0.01, conn=conn)
+    scorer = FakeScorer(cost=0.002, conn=conn)  # the default per-job estimate
     rescore.run_request(
         conn,
         rid,
@@ -161,7 +161,7 @@ def test_status_transitions_and_cost(conn, profile):
     assert scorer.statuses == ["running", "running"]  # two chunks of 2 and 1
     r = row(conn, rid)
     assert (r["status"], r["scored"], r["total"], r["scorer"]) == ("done", 3, 3, SPEC)
-    assert r["cost_usd"] == pytest.approx(0.03)
+    assert r["cost_usd"] == pytest.approx(0.006)
 
 
 def test_failure_is_recorded(conn, profile):
@@ -243,8 +243,8 @@ def test_anthropic_scorer_submits_a_batch(conn, profile, monkeypatch):
     rid = queue(conn, profile, scorer=spec)
     seen = {}
 
-    def fake_submit(c, client, prof, *, limit, now, scorer, remaining_usd):
-        seen.update(limit=limit, scorer=scorer, client=client)
+    def fake_submit(c, client, prof, *, limit, now, scorer, remaining_usd, group_ids):
+        seen.update(limit=limit, scorer=scorer, client=client, group_ids=sorted(group_ids))
         return "msgbatch_x"
 
     monkeypatch.setattr(screen, "submit_batch", fake_submit)
@@ -253,7 +253,7 @@ def test_anthropic_scorer_submits_a_batch(conn, profile, monkeypatch):
     )
     r = row(conn, rid)
     assert r["status"] == "done" and "msgbatch_x" in r["note"] and "--collect-pending" in r["note"]
-    assert seen == {"limit": 2, "scorer": spec, "client": "fake-client"}
+    assert seen == {"limit": 2, "scorer": spec, "client": "fake-client", "group_ids": [1, 2]}
 
 
 def test_drain_pending_runs_in_order_and_skips_refused(conn, profile):
@@ -264,8 +264,11 @@ def test_drain_pending_runs_in_order_and_skips_refused(conn, profile):
         conn, profile, scoring(), now=now, scorer_factory=lambda s: FakeScorer(), scorer=SPEC
     )
     assert [rid for rid, _ in out] == [a, b]
-    assert row(conn, a)["status"] == "done" and row(conn, b)["status"] == "done"
-    assert row(conn, b)["scored"] == 0 and "nothing waiting" in row(conn, b)["note"]
+    assert row(conn, a)["status"] == "done"
+    # a covered b (same scope, queued before a started): b is closed, not run a second time
+    assert row(conn, b)["status"] == "canceled"
+    assert row(conn, b)["note"] == f"superseded by re-score #{a}"
+    assert out[1][1] == f"skipped: superseded by re-score #{a}"
 
 
 def test_cancel_only_pending(conn, profile):

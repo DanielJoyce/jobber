@@ -6,8 +6,12 @@
 {% elif rs.running %}
 <p class="muted">A re-score is running; you can leave this page, it keeps going while the console is open.</p>
 {% elif p %}
+{% if p.batch %}{% set spend = "Estimated cost $%.2f, billed when the batch is collected." | format(p.estimated_usd) %}{% else %}{% set spend = "Estimated cost $%.2f; the run stops before it spends more than $%.2f." | format(p.estimated_usd, p.max_usd) %}{% endif %}
 <form id="rescore-form" class="rescore-form" hx-post="/prefs/rescore/run" hx-target="#rescore-panel" hx-swap="innerHTML"
-      hx-confirm="Re-score {{ p.total }} job groups with {{ p.scorer }}? Estimated cost ${{ '%.2f' | format(p.estimated_usd) }}. This spends credits.">
+      hx-confirm="{% if rs.queued %}Run queued re-score #{{ rs.queued.id }}: re-score{% else %}Re-score{% endif %} {{ p.total }} job groups with {{ p.scorer }}? {{ spend }} This spends credits.">
+  <input type="hidden" name="plan" value="{{ p.token }}">
+  {% if rs.queued %}<input type="hidden" name="request_id" value="{{ rs.queued.id }}">
+  <p id="rescore-queued-run"><strong>Running queued re-score #{{ rs.queued.id }}</strong> (requested {{ rs.queued.requested_at | localtime }}). <a href="#" hx-get="/prefs/rescore/panel" hx-target="#rescore-panel" hx-swap="innerHTML">Back</a></p>{% endif %}
   <p id="rescore-stale"><strong>{{ p.waiting }}</strong> job group{{ "" if p.waiting == 1 else "s" }} waiting to be scored under your current preferences ({{ p.rescored }} already scored before, {{ p.waiting - p.rescored }} new).</p>
   <div class="grid2">
     <label>Scorer
@@ -15,17 +19,21 @@
         {% for spec, label in rs.scorers %}<option value="{{ spec }}"{% if spec == rs.scorer %} selected{% endif %}>{{ spec }} ({{ label }})</option>{% endfor %}
       </select>
     </label>
+    {% if rs.queued %}
+    <label>Scope <input type="hidden" name="scope" value="{{ rs.scope }}"><span class="rescore-scope">{{ rs.scope_labels[rs.scope] }}</span></label>
+    {% else %}
     <label>Scope
       <select name="scope" hx-get="/prefs/rescore/panel" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
         {% for k, label in rs.scope_labels.items() %}<option value="{{ k }}"{% if k == rs.scope %} selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
     </label>
+    {% endif %}
   </div>
-  <p id="rescore-estimate">Will score <strong>{{ p.total }}</strong> job group{{ "" if p.total == 1 else "s" }}, estimated <strong>${{ "%.2f" | format(p.estimated_usd) }}</strong> at ${{ "%.5f" | format(p.cost_per_job) }} per job ({% if p.cost_source == "default" %}assumed; nothing measured yet{% else %}measured from {{ p.cost_source }}{% endif %}). Spend cap remaining: ${{ "%.2f" | format([p.remaining_usd, 0] | max) }}.</p>
+  <p id="rescore-estimate">Will score <strong>{{ p.total }}</strong> job group{{ "" if p.total == 1 else "s" }}, estimated <strong>${{ "%.2f" | format(p.estimated_usd) }}</strong> at ${{ "%.5f" | format(p.cost_per_job) }} per job ({% if p.cost_source == "default" %}assumed; nothing measured yet{% else %}measured from {{ p.cost_source }}{% endif %}){% if not p.batch %}; it stops before spending more than <strong>${{ "%.2f" | format(p.max_usd) }}</strong>{% endif %}. Spend cap remaining: ${{ "%.2f" | format([p.remaining_usd, 0] | max) }}.</p>
   {% if p.prefilter.evaluated %}<p class="hint">{{ p.prefilter.evaluated }} jobs were re-checked against your current filters ({{ p.prefilter.passed }} passed).</p>{% endif %}
   {% if rs.notice %}<p class="hint">{{ rs.notice }}</p>{% endif %}
   {% if p.refusal %}<p class="field-error" role="alert">{{ p.refusal }}</p>{% endif %}
-  <div class="actions"><button type="submit" class="button primary" id="rescore-run"{% if p.total == 0 or p.refusal %} disabled{% endif %}>Re-score now</button></div>
+  <div class="actions"><button type="submit" class="button primary" id="rescore-run"{% if p.total == 0 or p.refusal %} disabled{% endif %}>{% if rs.queued %}Run queued re-score{% else %}Re-score now{% endif %}</button></div>
 </form>
 {% endif %}
 {% if rs.pending %}
@@ -33,16 +41,15 @@
   <h3>Queued re-scores</h3>
   <ul class="plain">
     {% for r in rs.pending %}
-    <li>{{ r.scope }}: {{ r.job_count }} jobs &asymp; ${{ "%.2f" | format(r.estimated_usd) }} <span class="muted">requested at {{ r.requested_at | localtime }}</span>
+    <li>{{ r.scope }} <span class="muted">requested at {{ r.requested_at | localtime }}</span>
       {% if rs.ok and not rs.running %}
-      <button type="button" class="button small" hx-post="/prefs/rescore/run" hx-target="#rescore-panel" hx-swap="innerHTML"
-              hx-vals='{"request_id": "{{ r.id }}"}' hx-include="#rescore-form [name=scorer]"
-              hx-confirm="Run this queued re-score now with the selected scorer? This spends credits.">Run</button>
+      <button type="button" class="button small" hx-get="/prefs/rescore/panel" hx-target="#rescore-panel" hx-swap="innerHTML"
+              hx-vals='{"request_id": "{{ r.id }}"}' hx-include="#rescore-form [name=scorer]">Run&hellip;</button>
       {% endif %}
       <button type="button" class="button small" hx-post="/prefs/rescore/{{ r.id }}/cancel" hx-target="#rescore-panel" hx-swap="innerHTML">Dismiss</button>
     </li>
     {% endfor %}
   </ul>
-  <p class="hint">A queued request is a note of what you asked for, not a schedule. Run it here, or <code>jobhunter score --rescore-pending</code> (the nightly 03:30 collect timer runs that too).</p>
+  <p class="hint">A queued request is a note of what you asked for, not a schedule. Run&hellip; shows what it would score and cost before anything is spent; or run <code>jobhunter score --rescore-pending</code> (the nightly 03:30 collect timer runs that too). A Re-score now that finishes closes the queued requests it covers.</p>
 </div>
 {% endif %}

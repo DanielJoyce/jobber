@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from datetime import UTC, datetime
 
@@ -139,6 +140,21 @@ def finish(client):
     client.app.state.rescore.join()
 
 
+def token_of(html: str) -> str:
+    m = re.search(r'name="plan" value="([0-9a-f]+)"', html)
+    assert m, "the panel shows no confirmable plan"
+    return m.group(1)
+
+
+def confirm_and_run(client, scope="all", scorer=SPEC, request_id=None):
+    """What the browser does: render the panel (the confirm shows its plan), then post it."""
+    params = {"scope": scope, "scorer": scorer}
+    if request_id is not None:
+        params["request_id"] = str(request_id)
+    data = {**params, "plan": token_of(client.get("/prefs/rescore/panel", params=params).text)}
+    return client.post("/prefs/rescore/run", data=data)
+
+
 def test_prefs_has_labeled_section_with_help_estimate_and_confirm(client):
     text = client.get("/prefs").text
     assert 'id="sec-rescore"' in text and "Re-score now" in text
@@ -164,7 +180,7 @@ def test_panel_fragment_follows_scope_and_scorer(client):
 
 
 def test_run_scores_in_background_and_progress_finishes(client, conn):
-    r = client.post("/prefs/rescore/run", data={"scope": "all", "scorer": SPEC})
+    r = confirm_and_run(client)
     assert r.status_code == 200
     finish(client)
     row = conn.execute("SELECT * FROM rescore_request").fetchone()
@@ -178,7 +194,7 @@ def test_progress_polls_while_running_then_stops(client, conn):
     gate = threading.Event()
     scorer = FakeScorer(gate=gate)
     client.app.state.rescore_scorer_factory = lambda spec: scorer
-    r = client.post("/prefs/rescore/run", data={"scope": "all", "scorer": SPEC})
+    r = confirm_and_run(client)
     assert 'hx-trigger="every 1s"' in r.text  # the progress fragment polls itself
     assert scorer.entered.wait(10)
     rid = conn.execute("SELECT id FROM rescore_request").fetchone()[0]
@@ -193,9 +209,11 @@ def test_second_click_shows_the_running_one(client, conn):
     gate = threading.Event()
     scorer = FakeScorer(gate=gate)
     client.app.state.rescore_scorer_factory = lambda spec: scorer
-    client.post("/prefs/rescore/run", data={"scope": "all", "scorer": SPEC})
+    data = {"scope": "all", "scorer": SPEC}
+    data["plan"] = token_of(client.get("/prefs/rescore/panel", params=data).text)
+    client.post("/prefs/rescore/run", data=data)
     assert scorer.entered.wait(10)
-    second = client.post("/prefs/rescore/run", data={"scope": "all", "scorer": SPEC})
+    second = client.post("/prefs/rescore/run", data=data)  # a second tab, same confirm
     assert "already running" in second.text and "Re-scoring" in second.text
     assert conn.execute("SELECT count(*) FROM rescore_request").fetchone()[0] == 1
     gate.set()
@@ -206,7 +224,7 @@ def test_failed_run_is_shown(client, conn):
     client.app.state.rescore_scorer_factory = lambda spec: FakeScorer(
         fail=RuntimeError("provider down")
     )
-    client.post("/prefs/rescore/run", data={"scope": "all", "scorer": SPEC})
+    confirm_and_run(client)
     finish(client)
     rid = conn.execute("SELECT id FROM rescore_request").fetchone()[0]
     text = client.get(f"/prefs/rescore/progress/{rid}").text
@@ -231,7 +249,7 @@ def test_queued_request_has_run_and_dismiss_with_local_time(client, conn):
     assert "Queued re-scores" in text and "requested at " in text
     assert "2026-10-10T01:21" not in text  # shown as local time, not raw UTC
     assert 'hx-vals=\'{"request_id": "1"}\'' in text
-    client.post("/prefs/rescore/run", data={"request_id": "1", "scorer": SPEC})
+    confirm_and_run(client, request_id=1)
     finish(client)
     assert conn.execute("SELECT status, scored FROM rescore_request").fetchone()[:] == ("done", 3)
 
@@ -250,8 +268,11 @@ def test_stale_filter_version_is_reprefiltered_by_the_run(pdir, db_path, conn, c
     """A /prefs edit changed filter_version too: prefilter_result is empty for the new one."""
     conn.execute("DELETE FROM prefilter_result")
     conn.execute("UPDATE job SET stage = 'grouped'")
-    client.post("/prefs/rescore/run", data={"scope": "all", "scorer": SPEC})
+    panel = client.get("/prefs/rescore/panel", params={"scope": "all"}).text
+    assert "3 jobs were re-checked against your current filters" in panel
+    client.post(
+        "/prefs/rescore/run", data={"scope": "all", "scorer": SPEC, "plan": token_of(panel)}
+    )
     finish(client)
     row = conn.execute("SELECT * FROM rescore_request").fetchone()
     assert row["status"] == "done" and row["scored"] == 3
-    assert "re-prefiltered 3 jobs" in row["note"]

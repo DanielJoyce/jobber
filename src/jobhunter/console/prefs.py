@@ -595,13 +595,11 @@ def signed(n: int | float) -> str:
 
 
 def cost_per_job(conn: sqlite3.Connection) -> tuple[float, str]:
-    """Measured screen cost per job: llm_spend, else fit_score.cost_usd, else a default."""
-    row = conn.execute(
-        "SELECT coalesce(sum(cost_usd), 0), coalesce(sum(calls), 0) FROM llm_spend "
-        "WHERE tier = 'screen' AND calls > 0"
-    ).fetchone()
-    if row[1] and row[0] > 0:
-        return float(row[0]) / float(row[1]), "llm_spend"
+    """Measured screen cost per job from fit_score.cost_usd, else a default.
+
+    Not llm_spend: it counts one call per request, and a packed or Jev request scores several
+    jobs, so its cost per call overstates the cost per job (about 8x for Jev).
+    """
     row = conn.execute(
         "SELECT avg(cost_usd), count(*) FROM fit_score WHERE tier = 'screen' AND cost_usd > 0"
     ).fetchone()

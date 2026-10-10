@@ -7,13 +7,14 @@ import ipaddress
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -99,6 +100,37 @@ def check_host(host: str, allow_remote: bool = False) -> None:
         )
 
 
+STATE_CHANGING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def cross_site_reason(
+    method: str, headers: Mapping[str, str], allow_remote: bool = False
+) -> str | None:
+    """Why a state-changing request must be refused, or None to let it through.
+
+    The console has no auth, so any page the user visits could otherwise POST to it (a form
+    auto-submit or a no-cors fetch can start a paid re-score), and a DNS-rebinding page could
+    reach it under its own host name. Browsers send ``Origin`` (and ``Sec-Fetch-Site``) on
+    every POST; such a request must name a loopback ``Host`` (any host with
+    ``--allow-remote``) and come from that same origin. A request with neither header is not
+    from a browser page (curl, the CLI, tests) and is let through.
+    """
+    if method.upper() not in STATE_CHANGING:
+        return None
+    origin = headers.get("origin")
+    site = headers.get("sec-fetch-site")
+    if origin is None and site is None:
+        return None
+    host = headers.get("host", "")
+    if not allow_remote and not is_loopback(urlsplit(f"//{host}").hostname or ""):
+        return f"host {host!r} is not a loopback address"
+    if site is not None and site not in ("same-origin", "none"):
+        return f"cross-site request (Sec-Fetch-Site: {site})"
+    if origin is not None and urlsplit(origin).netloc.lower() != host.lower():
+        return f"origin {origin!r} is not this console"
+    return None
+
+
 def get_conn(request: Request) -> Iterator[sqlite3.Connection]:
     """Per-request DB connection, closed after the response."""
     conn = request.app.state.conn_factory()
@@ -145,8 +177,13 @@ def create_app(
     conn_factory: ConnFactory | None = None,
     profile_loader: ProfileLoader | None = None,
     clock: Clock | None = None,
+    allow_remote: bool = False,
 ) -> FastAPI:
-    """Build the console. ``conn_factory`` defaults to opening ``settings.paths.db_path``."""
+    """Build the console. ``conn_factory`` defaults to opening ``settings.paths.db_path``.
+
+    ``allow_remote`` (``console --allow-remote``) accepts a non-loopback ``Host``; requests
+    must still be same-origin.
+    """
     factory: ConnFactory = conn_factory or (lambda: db.connect(settings.paths.db_path))
     get_profile: ProfileLoader = profile_loader or default_profile_loader(settings)
     now: Clock = clock or (lambda: datetime.now(UTC))
@@ -170,6 +207,17 @@ def create_app(
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.state.conn_factory = factory
+    app.state.allow_remote = allow_remote
+
+    @app.middleware("http")
+    async def same_origin_writes(request: Request, call_next):
+        # Why: a cross-site POST could start a paid re-score (or edit prefs) with no prompt;
+        # hx-confirm only runs in our own page. See cross_site_reason.
+        reason = cross_site_reason(request.method, request.headers, request.app.state.allow_remote)
+        if reason is not None:
+            logger.warning("refused %s %s: %s", request.method, request.url.path, reason)
+            return PlainTextResponse(f"refused: {reason}", status_code=403)
+        return await call_next(request)
 
     @app.middleware("http")
     async def no_store_pages(request: Request, call_next):
