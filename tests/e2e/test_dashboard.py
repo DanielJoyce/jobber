@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import expect
 
@@ -233,3 +235,30 @@ def test_bucket_filter_fits_a_phone_in_dark_mode(page, server):
     expect(page.locator("html")).to_have_attribute("data-theme", "dark")
     expect(chip(page, "Lateral")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_bucket_selection_drives_kpi_and_trend_chart(dash):
+    kpi = dash.locator('[data-kpi="new_ab"]')
+    both = int(kpi.inner_text())
+    expect(dash.locator("#kpis")).to_contain_text("New Bullseye + Strong")
+    with dash.expect_response(lambda r: "/dash/kpis" in r.url and "buckets=B" in r.url):
+        toggle(dash, "Bullseye")
+    expect(dash.locator("#kpis")).to_contain_text("New Strong")
+    assert int(kpi.inner_text()) < both
+    expect(dash.locator("#chart-line-title")).to_have_text("New Strong per day")
+    expect(dash.locator("#chart-funnel")).to_contain_text("Strong")
+
+
+def test_state_statistics_collapsed_by_default_and_remembered(dash):
+    details = dash.locator("#state-details")
+    expect(details).not_to_have_attribute("open", "")
+    expect(dash.locator("#state-details summary")).to_contain_text(
+        re.compile(r"State statistics \(\d+ states\)")
+    )
+    expect(dash.locator("#state-table table")).not_to_be_visible()
+    dash.locator("#state-details summary").click()
+    expect(dash.locator("#state-table table")).to_be_visible()
+    assert dash.evaluate("localStorage.getItem('jh-dash-states')") == "open"
+    dash.reload()
+    dash.wait_for_selector(PATHS)
+    expect(dash.locator("#state-table table")).to_be_visible()

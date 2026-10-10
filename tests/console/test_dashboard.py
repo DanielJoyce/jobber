@@ -467,6 +467,15 @@ def test_state_table_follows_buckets(client):
     assert "buckets=B" in html  # sort links keep the selection
 
 
+def test_state_table_is_in_a_collapsed_details(client):
+    html = client.get("/").text
+    m = re.search(
+        r'<details id="state-details">\s*<summary><h2[^>]*>State statistics \((\d+) states\)', html
+    )
+    assert m and int(m.group(1)) == len(geo.US_SUBDIVISIONS) + 1
+    assert '<details id="state-details" open' not in html
+
+
 def test_today_page_renders_bucket_chips(client):
     html = client.get("/?buckets=A,C").text
     assert 'id="bucket-filter"' in html
@@ -549,7 +558,16 @@ def test_state_table_says_via_nlx(tmp_path):
 
 def test_series_shapes(conn):
     s = dash.series(conn, PROFILE, 7, NOW)
-    assert set(s) == {"range", "min_points", "line", "funnel", "mix", "status"}
+    assert set(s) == {
+        "range",
+        "buckets",
+        "bucket_label",
+        "min_points",
+        "line",
+        "funnel",
+        "mix",
+        "status",
+    }
     assert [p["day"] for p in s["line"]["points"]] == dash._days(NOW, 7)
     counts = {p["day"]: p["count"] for p in s["line"]["points"]}
     assert counts["2026-10-09"] == 1 and counts["2026-10-08"] == 1 and counts["2026-10-07"] == 1
@@ -557,6 +575,25 @@ def test_series_shapes(conn):
     assert [x["key"] for x in s["mix"]["slots"]] == ["a", "b", "other", "f"]
     assert len(s["mix"]["weeks"]) == 4
     assert [i["status"] for i in s["status"]["items"]] == list(dash.STATUS_ORDER)
+
+
+def test_kpis_series_and_funnel_follow_the_selected_buckets(conn):
+    only_b = dash.kpis(conn, PROFILE, 7, NOW, buckets=("B",))
+    assert only_b["new_ab"]["value"] == 1 and only_b["new_ab"]["buckets"] == ["B"]
+    assert dash.kpis(conn, PROFILE, 7, NOW)["new_ab"]["value"] == 3
+    s = dash.series(conn, PROFILE, 30, NOW, ("A",))
+    assert s["bucket_label"] == "Bullseye" and s["buckets"] == ["A"]
+    assert sum(p["count"] for p in s["line"]["points"]) == 2
+    ab = next(x for x in s["funnel"]["stages"] if x["key"] == "ab")
+    assert ab["count"] == 2 and ab["label"] == "Bullseye"
+    assert [x["key"] for x in s["mix"]["slots"]] == ["a", "b", "other", "f"]  # mix is not filtered
+
+
+def test_dashboard_fragments_take_buckets(client):
+    assert client.get("/api/dash/kpis?buckets=B").json()["new_ab"]["value"] == 1
+    assert "New Strong" in client.get("/dash/kpis?buckets=B").text
+    assert client.get("/api/dash/series?buckets=A").json()["bucket_label"] == "Bullseye"
+    assert "New Bullseye + Strong" in client.get("/").text
 
 
 def test_series_funnel_counts(conn):

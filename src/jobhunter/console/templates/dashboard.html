@@ -69,7 +69,7 @@
   <h2 id="charts-title">Trends</h2>
   <div class="charts-grid">
     <figure class="chart" id="chart-line" aria-labelledby="chart-line-title" style="margin:0">
-      <h3 id="chart-line-title">New {{ group_name(["A", "B"]) }} per day</h3>
+      <h3 id="chart-line-title">New {{ buckets_name }} per day</h3>
       <div class="body"></div>
     </figure>
     <figure class="chart" id="chart-funnel" aria-labelledby="chart-funnel-title" style="margin:0">
@@ -103,10 +103,12 @@
 </section>
 
 <section class="panel" aria-labelledby="table-title">
-  <h2 id="table-title">States</h2>
+  <details id="state-details">
+  <summary><h2 id="table-title">State statistics ({{ rows | length }} states)</h2></summary>
   <div id="state-table" class="table-wrap" hx-disinherit="*"
        hx-get="/dash/state-table" hx-include="#dash-controls" hx-trigger="dash-refresh from:body" hx-swap="innerHTML">
     {% include "_state_table.html" %}
   </div>
+  </details>
 </section>
 {% endblock %}

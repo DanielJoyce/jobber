@@ -24,7 +24,6 @@ from jobhunter.core.bucketnames import (
     BUCKET_TITLES,
     DEFAULT_GROUP,
     FIT_GROUP,
-    GROUP_AB,
     group_name,
     parse_letters,
 )
@@ -41,7 +40,6 @@ RESPONSE_MIN_N = 5
 RESPONSE_WINDOW_DAYS = 30
 EMAIL_STALE_DAYS = 3
 
-AB = (Bucket.A, Bucket.B)
 IN_FLIGHT = ("applied", "acknowledged", "screening", "interview")
 # Statuses that count as an employer response. ``acknowledged`` is excluded: it is usually an
 # automated receipt, not a person reading the application.
@@ -51,7 +49,10 @@ NOT_YET_APPLIED = ("interested", "preparing")
 
 # metric key -> (label, kind). kind drives break rounding and value formatting.
 METRICS: dict[str, tuple[str, str]] = {
-    "new_ab": ("New matches", "count"),  # key stays: URLs and sort keys; label follows the buckets
+    "new_ab": (
+        "New in selected buckets",
+        "count",
+    ),  # key stays: URLs and sort keys; label follows the buckets
     "scored": ("All scored jobs", "count"),
     "shortlisted": ("Shortlisted", "count"),
     "applied": ("Applied", "count"),
@@ -315,8 +316,13 @@ def kpis(
     range_days: int,
     now: datetime,
     weekly_cap_usd: float = 10.0,
+    buckets: Sequence[str] = DEFAULT_GROUP,
 ) -> dict[str, Any]:
-    """The five KPI tiles with their sparkline series (013 "KPI row")."""
+    """The five KPI tiles with their sparkline series (013 "KPI row").
+
+    The "New ..." tile counts the selected ``buckets`` (default Bullseye + Strong).
+    """
+    chosen = {Bucket(b) for b in buckets}
     days = _days(now, range_days)
     today = days[-1]
 
@@ -326,7 +332,7 @@ def kpis(
     ab_daily = dict.fromkeys(days, 0)
     prev_ab = 0
     for f in facts:
-        if f.bucket not in AB:
+        if f.bucket not in chosen:
             continue
         day = f.first_seen[:10]
         if day in ab_daily:
@@ -371,6 +377,7 @@ def kpis(
             "value": new_ab,
             "previous": prev_ab,
             "delta": new_ab - prev_ab,
+            "buckets": list(buckets),
             "series": [ab_daily[d] for d in days],
         },
         "in_flight": {"value": in_flight, "series": in_flight_series},
@@ -688,7 +695,7 @@ FUNNEL_DAYS = 30
 FUNNEL_STAGES: tuple[tuple[str, str], ...] = (
     ("found", "Found"),
     ("prefilter", "Passed prefilter"),
-    ("ab", GROUP_AB),
+    ("ab", "Bullseye + Strong"),  # label follows the selected buckets
     ("shortlisted", "Shortlisted"),
     ("applied", "Applied"),
     ("responded", "Responded"),
@@ -720,8 +727,13 @@ MIN_POINTS = 3
 
 
 def _funnel(
-    conn: sqlite3.Connection, profile: Profile, now: datetime, apps: Sequence[AppFact]
+    conn: sqlite3.Connection,
+    profile: Profile,
+    now: datetime,
+    apps: Sequence[AppFact],
+    buckets: Sequence[str] = DEFAULT_GROUP,
 ) -> list[dict[str, Any]]:
+    chosen = {Bucket(b) for b in buckets}
     since = _since(now, FUNNEL_DAYS)
     found, passed = conn.execute(
         "WITH g AS (SELECT job_group_id AS gid FROM job WHERE job_group_id IS NOT NULL "
@@ -730,7 +742,7 @@ def _funnel(
         "FROM g JOIN job_group jg ON jg.id = g.gid JOIN job j ON j.id = jg.canonical_job_id",
         (since,),
     ).fetchone()
-    ab = sum(1 for f in group_facts(conn, profile, since) if f.bucket in AB)
+    ab = sum(1 for f in group_facts(conn, profile, since) if f.bucket in chosen)
     applied = [a for a in apps if a.applied_on and a.applied_on >= since]
     liked = {
         r[0]
@@ -756,6 +768,8 @@ def _funnel(
     ]
     out: list[dict[str, Any]] = []
     for i, ((key, label), n) in enumerate(zip(FUNNEL_STAGES, counts, strict=True)):
+        if key == "ab":
+            label = group_name(buckets)
         prev = counts[i - 1] if i else 0
         out.append(
             {"key": key, "label": label, "count": n, "pct_prev": (n / prev) if prev else None}
@@ -764,7 +778,11 @@ def _funnel(
 
 
 def series(
-    conn: sqlite3.Connection, profile: Profile, range_days: int, now: datetime
+    conn: sqlite3.Connection,
+    profile: Profile,
+    range_days: int,
+    now: datetime,
+    buckets: Sequence[str] = DEFAULT_GROUP,
 ) -> dict[str, Any]:
     """Data for the four dashboard charts. Each chart reports ``enough`` (>= 3 points)."""
     days = _days(now, range_days)
@@ -773,10 +791,11 @@ def series(
     first_day = min(days[0], (week_ends[0] - timedelta(days=6)).isoformat())
     facts = [f for f in group_facts(conn, profile, first_day) if f.bucket is not None]
 
-    # New A+B per day, plus the mean of the last 7 days as a reference line.
+    chosen = {Bucket(b) for b in buckets}
+    # New matches (selected buckets) per day, plus the mean of the last 7 days as a reference line.
     daily = dict.fromkeys(days, 0)
     for f in facts:
-        if f.bucket in AB and f.first_seen[:10] in daily:
+        if f.bucket in chosen and f.first_seen[:10] in daily:
             daily[f.first_seen[:10]] += 1
     line = [{"day": d, "count": daily[d]} for d in days]
     last7 = [daily[d] for d in days[-7:]]
@@ -788,13 +807,13 @@ def series(
         start = (end - timedelta(days=6)).isoformat()
         stop = end.isoformat()
         wk: dict[str, Any] = {"week": stop}
-        for slot, _, buckets in MIX_SLOTS:
+        for slot, _, slot_buckets in MIX_SLOTS:
             wk[slot] = sum(
-                1 for f in facts if f.bucket in buckets and start <= f.first_seen[:10] <= stop
+                1 for f in facts if f.bucket in slot_buckets and start <= f.first_seen[:10] <= stop
             )
         mix_weeks.append(wk)
 
-    funnel = _funnel(conn, profile, now, application_facts(conn))
+    funnel = _funnel(conn, profile, now, application_facts(conn), buckets)
 
     by_status = dict(
         conn.execute("SELECT status, COUNT(*) FROM application GROUP BY status").fetchall()
@@ -803,6 +822,8 @@ def series(
 
     return {
         "range": range_days,
+        "buckets": list(buckets),
+        "bucket_label": group_name(buckets),
         "min_points": MIN_POINTS,
         "line": {
             "points": line,

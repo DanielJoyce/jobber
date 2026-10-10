@@ -572,6 +572,14 @@
       orderFocus();
     });
 
+    var details = document.getElementById("state-details");
+    if (details) {
+      details.open = store("jh-dash-states") === "open";
+      details.addEventListener("toggle", function () {
+        store("jh-dash-states", details.open ? "open" : "closed");
+      });
+    }
+
     bindMap();
 
     var mo = new MutationObserver(function () { render(); });

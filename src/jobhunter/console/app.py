@@ -226,9 +226,11 @@ def create_app(
             "buckets_name": bucketnames.group_name(buckets),
         }
 
-    def kpi_context(conn: sqlite3.Connection, range_: int) -> dict[str, object]:
-        k = dash.kpis(conn, get_profile(), range_, now(), settings.scoring.weekly_cap_usd)
-        return {"k": k, "range": range_}
+    def kpi_context(
+        conn: sqlite3.Connection, range_: int, buckets: tuple[str, ...] = dash.DEFAULT_GROUP
+    ) -> dict[str, object]:
+        k = dash.kpis(conn, get_profile(), range_, now(), settings.scoring.weekly_cap_usd, buckets)
+        return {"k": k, "range": range_, "kpi_buckets_name": bucketnames.group_name(buckets)}
 
     @app.get("/", response_class=HTMLResponse)
     def today(
@@ -261,22 +263,36 @@ def create_app(
                     elsewhere_rejected=rejections.unmatched_email_count(conn),
                 )
             ).replace("</", "<\\/"),
-            **kpi_context(conn, range_),
+            **kpi_context(conn, range_, dash.clamp_buckets(buckets)),
             **table_context(conn, range_, metric_, sort, dir, dash.clamp_buckets(buckets)),
         }
         return templates.TemplateResponse(request, "dashboard.html", ctx)
 
     @app.get("/api/dash/kpis")
-    def api_kpis(conn: Conn, range: str | None = None) -> JSONResponse:
+    def api_kpis(conn: Conn, range: str | None = None, buckets: str | None = None) -> JSONResponse:
         range_ = dash.clamp_range(range)
         return JSONResponse(
-            dash.kpis(conn, get_profile(), range_, now(), settings.scoring.weekly_cap_usd)
+            dash.kpis(
+                conn,
+                get_profile(),
+                range_,
+                now(),
+                settings.scoring.weekly_cap_usd,
+                dash.clamp_buckets(buckets),
+            )
         )
 
     @app.get("/dash/kpis", response_class=HTMLResponse)
-    def kpis_fragment(request: Request, conn: Conn, range: str | None = None) -> HTMLResponse:
+    def kpis_fragment(
+        request: Request,
+        conn: Conn,
+        range: str | None = None,
+        buckets: str | None = None,
+    ) -> HTMLResponse:
         return templates.TemplateResponse(
-            request, "_kpis.html", kpi_context(conn, dash.clamp_range(range))
+            request,
+            "_kpis.html",
+            kpi_context(conn, dash.clamp_range(range), dash.clamp_buckets(buckets)),
         )
 
     @app.get("/api/dash/map")
@@ -295,8 +311,14 @@ def create_app(
         return JSONResponse(dash.map_payload(rows, metric_, range_, picked, totals))
 
     @app.get("/api/dash/series")
-    def api_series(conn: Conn, range: str | None = None) -> JSONResponse:
-        return JSONResponse(dash.series(conn, get_profile(), dash.clamp_range(range), now()))
+    def api_series(
+        conn: Conn, range: str | None = None, buckets: str | None = None
+    ) -> JSONResponse:
+        return JSONResponse(
+            dash.series(
+                conn, get_profile(), dash.clamp_range(range), now(), dash.clamp_buckets(buckets)
+            )
+        )
 
     @app.get("/dash/state-table", response_class=HTMLResponse)
     def state_table(

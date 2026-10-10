@@ -5,11 +5,9 @@
 (function () {
   "use strict";
 
-  // "Bullseye + Strong": the A+B group, named from the injected bucket table.
-  function abName() {
-    var n = window.jh && window.jh.bucketName;
-    return n ? n("A") + " + " + n("B") : "Bullseye + Strong";
-  }
+  // Name of the selected bucket group ("Bullseye + Strong"), from the series payload.
+  var groupLabel = "Bullseye + Strong";
+  function abName() { return groupLabel; }
 
   var SVGNS = "http://www.w3.org/2000/svg";
   var W = 460;
@@ -566,6 +564,10 @@
 
   function render(data) {
     last = data;
+    if (data.bucket_label) groupLabel = data.bucket_label;
+    var title = document.getElementById("chart-line-title");
+    if (title) title.textContent = "New " + groupLabel + " per day";
+    CHARTS[0].name = "New " + groupLabel + " per day";
     CHARTS.forEach(function (c) {
       var body = document.querySelector("#" + c.id + " .body");
       body.textContent = "";
@@ -581,9 +583,15 @@
     return r || "7";
   }
 
+  function buckets() {
+    var form = document.getElementById("dash-controls");
+    return (form && form.elements.buckets && form.elements.buckets.value) || "A,B";
+  }
+
   function load() {
     var n = ++seq;
-    return fetch(ui.section.dataset.api + "?range=" + encodeURIComponent(range()))
+    return fetch(ui.section.dataset.api + "?range=" + encodeURIComponent(range()) +
+      "&buckets=" + encodeURIComponent(buckets()))
       .then(function (r) { return r.json(); })
       .then(function (data) { if (n === seq) render(data); })
       .catch(function () {
