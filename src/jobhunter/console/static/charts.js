@@ -419,13 +419,18 @@
     var plotH = Math.max(narrow ? 330 : 280, d3.max(counts) * (narrow ? 38 : 30));
     var m = { l: 4, r: 4, t: 6, b: 6 };
     var lastC = colCount - 1;
-    var gap0 = (width - m.l - m.r - 10) / Math.max(1, lastC);
-    var maxChars = narrow ? Math.max(8, Math.floor((gap0 - 10) / 5.6)) : 40;
+    // Every label sits to the right of its node, so the last column reserves room for its own
+    // labels at the right edge. Labels that grew leftwards into the gap ran over the previous
+    // column's labels once the gap was narrower than the two together.
+    var labelW = Math.min(Math.round(width * 0.3), 140);
+    var gap0 = (width - m.l - m.r - labelW - 10) / Math.max(1, lastC);
+    var maxChars = Math.min(40, Math.max(8, Math.floor((gap0 - 10) / 5.6)));
+    var lastChars = Math.max(8, Math.floor((labelW - 8) / 5.6));
     data.nodes.forEach(function (n) {
-      n.lines = wrapWords(n.label, maxChars);
-      n.lh = (n.lines.length + 1) * 12;
+      n.lines = wrapWords(n.label, n.col === lastC ? lastChars : maxChars);
+      n.lh = (n.lines.length + 1) * 12 + 4;
     });
-    var lay = layoutSankey(data, width - m.l - m.r, plotH);
+    var lay = layoutSankey(data, width - m.l - m.r - labelW, plotH);
     plotH = Math.ceil(lay.height);
     var svg = d3.select(body).append("svg").attr("class", "sankey")
       .attr("viewBox", "0 0 " + width + " " + (plotH + m.t + m.b))
@@ -453,7 +458,6 @@
     // hover() hides the shared tooltip on leave; the Sankey has its own.
     g.selectAll("path.slink").on("mouseleave", function () { tipEl.hidden = true; });
 
-    var lastCol = lay.cols - 1;
     var node = g.append("g").selectAll("g.snode").data(data.nodes).enter().append("g").attr("class", "snode");
     node.each(function (n) {
       var el = d3.select(this);
@@ -462,13 +466,12 @@
       host.append("rect").attr("class", "snode-rect").attr("x", n.x0).attr("y", n.y0)
         .attr("width", lay.nw).attr("height", n.h).attr("rx", 2)
         .style("fill", KIND_COLOR[n.kind]);
-      var left = n.col === lastCol;
-      var tx = left ? n.x0 - 6 : n.x1 + 6;
+      var tx = n.x1 + 6;
       var lines = n.lines;
       var lh = 12;
       var y0 = n.y0 + n.h / 2 - ((lines.length + 1) * lh) / 2 + lh - 2;
       var t = host.append("text").attr("class", "slabel" + (n.href ? " linked" : ""))
-        .attr("text-anchor", left ? "end" : "start");
+        .attr("text-anchor", "start");
       lines.forEach(function (ln, i) {
         t.append("tspan").attr("x", tx).attr("y", y0 + i * lh).text(ln);
       });

@@ -47,6 +47,7 @@
       <summary class="bucket-head"><span>{{ name | title }} &mdash; {{ action }} &middot; collapsed <span class="bucket-letter">F</span></span><span class="count">{{ data.counts["F"] }}</span></summary>
       <p class="stale-note">{{ data.counts["F"] }} jobs matched on skills you last used 7+ years ago.
         {% if data.stale_summary %}<br><span class="muted">most common: {% for s, n in data.stale_summary %}{{ s }} ({{ n }}){% if not loop.last %} &middot; {% endif %}{% endfor %}</span>{% endif %}</p>
+      {% if items and data.counts["F"] > items|length %}<p class="muted pad">Showing the first {{ items|length }} of {{ data.counts["F"] }}.</p>{% endif %}
       {% for i in items %}{% include "_inbox_row.html" %}{% endfor %}
     </details>
     {% if not items %}<p class="muted pad">None.</p>{% endif %}
@@ -54,6 +55,7 @@
   {% else %}
   <section class="bucket" id="bucket-{{ b }}" data-bucket="{{ b }}">
     <h2 class="bucket-head"><span>{{ name | title }} &mdash; {{ action }} <span class="bucket-letter">{{ b }}</span></span><span class="count">{{ data.counts[b] }}</span></h2>
+    {% if items and data.counts[b] > items|length %}<p class="muted pad">Showing the first {{ items|length }} of {{ data.counts[b] }}.</p>{% endif %}
     {% for i in items %}{% include "_inbox_row.html" %}{% else %}<p class="muted pad">None.</p>{% endfor %}
   </section>
   {% endif %}

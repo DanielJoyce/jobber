@@ -37,6 +37,7 @@ def register(
         conn: Conn,
         state: str | None = None,
         bucket: str | None = None,
+        triaged: str | None = None,
     ) -> HTMLResponse:
         profile, error = load_console_profile(request.app.state.settings)
         state = (state or "").strip().upper() or None
@@ -45,7 +46,14 @@ def register(
         data = None
         if profile is not None:
             days = request.app.state.settings.scoring.employer_rejection_days
-            data = inbox.inbox_items(conn, profile, state=state, bucket=bucket, rejection_days=days)
+            data = inbox.inbox_items(
+                conn,
+                profile,
+                state=state,
+                bucket=bucket,
+                triaged=triaged in ("1", "true"),
+                rejection_days=days,
+            )
         return templates.TemplateResponse(
             request,
             "inbox.html",
@@ -74,6 +82,13 @@ def register(
             raise HTTPException(404, f"no such job group: {sorted(missing)[0]}")
         return ids
 
+    def refuse_triaged(conn: sqlite3.Connection, ids: list[int]) -> None:
+        # Already shortlisted or dismissed: relabelling then undoing would delete
+        # the label and its application (the triaged=1 lists show such rows read-only).
+        done = inbox.triaged_group_ids(conn, ids)
+        if done:
+            raise HTTPException(409, f"already triaged: {sorted(done)[0]}")
+
     # Declared before the /inbox/{group_id}/... routes so "bulk" is never parsed as an id.
     @app.post("/inbox/bulk", response_class=HTMLResponse)
     def bulk_label(
@@ -85,6 +100,7 @@ def register(
         if label not in inbox.LABELS:
             raise HTTPException(422, "label must be interesting or not_interesting")
         ids = bulk_ids(conn, group_id or [])
+        refuse_triaged(conn, ids)
         triaged = [{"group_id": g, "job_title": inbox.group_title(conn, g)} for g in ids]
         inbox.set_labels(conn, ids, label)
         return templates.TemplateResponse(
@@ -118,6 +134,7 @@ def register(
             raise HTTPException(422, "label must be interesting or not_interesting")
         if not inbox.group_exists(conn, group_id):
             raise HTTPException(404, "no such job group")
+        refuse_triaged(conn, [group_id])
         title = inbox.group_title(conn, group_id)
         inbox.set_label(conn, group_id, label)
         return templates.TemplateResponse(

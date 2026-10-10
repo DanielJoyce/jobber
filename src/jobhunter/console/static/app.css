@@ -7,6 +7,8 @@
   --grid: #e1e0d9;
   --axis: #c3c2b7;
   --border: rgba(11, 11, 11, 0.1);
+  --link: #1c5cab;
+  --link-visited: #6a3d9a;
 
   --series-1: #2a78d6;
   --series-2: #eb6834;
@@ -54,6 +56,8 @@
     --grid: #2c2c2a;
     --axis: #383835;
     --border: rgba(255, 255, 255, 0.1);
+    --link: #90bbef;
+    --link-visited: #c4abe8;
 
     --series-1: #3987e5;
     --series-2: #d95926;
@@ -95,6 +99,8 @@
   --grid: #2c2c2a;
   --axis: #383835;
   --border: rgba(255, 255, 255, 0.1);
+  --link: #90bbef;
+  --link-visited: #c4abe8;
 
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -128,6 +134,11 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Bare links take the themed tokens; the browser default (#0000EE) is unreadable on dark. */
+a { color: var(--link); }
+/* :where() keeps this at element specificity so classed links (chips, titles) keep their own color. */
+a:where(:visited) { color: var(--link-visited); }
 
 body {
   margin: 0;

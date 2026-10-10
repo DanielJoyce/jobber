@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -283,6 +284,17 @@ def test_inbox_bucket_and_state_params(client):
     assert ">Bullseye</a>" not in client.get("/inbox?state=TX").text
 
 
+def test_shortlist_toast_links_to_the_pipeline_but_dismiss_does_not(client):
+    # The shortlist is otherwise invisible: say where it went.
+    r = client.post("/inbox/1/label?label=interesting")
+    assert '<a href="/pipeline">see it in Pipeline</a>' in r.text
+    assert client.get("/pipeline").status_code == 200
+    r = client.post("/inbox/2/label?label=not_interesting")
+    assert "Pipeline" not in r.text
+    r = client.post("/inbox/bulk", data={"label": "interesting", "group_id": [3, 4]})
+    assert r.text.count('<a href="/pipeline">see it in Pipeline</a>') == 2
+
+
 def test_label_and_undo_routes(client):
     r = client.post("/inbox/1/label?label=interesting")
     assert r.status_code == 200
@@ -322,7 +334,11 @@ def test_set_labels_is_atomic(seeded):
 def test_bulk_routes(client):
     r = client.post("/inbox/bulk", data={"label": "not_interesting", "group_id": [1, 2, 2]})
     assert r.status_code == 200
-    assert r.text.count('hx-swap-oob="true"') == 3  # two rows (deduped) and the toast
+    assert r.text.count('hx-swap-oob="true"') == 2  # two rows (deduped)
+    # The toast goes into the page's standing role=status node. A replacement node (outerHTML)
+    # is not announced by screen readers.
+    assert r.text.count('hx-swap-oob="innerHTML:#bulk-toast"') == 1
+    assert 'id="bulk-toast"' not in r.text and 'role="status"' not in r.text
     assert "Dismissed: Bullseye" in r.text and "Dismissed: Strong" in r.text
     assert 'name="group_id" value="1"' in r.text and "/inbox/bulk/undo" in r.text
     page = client.get("/inbox").text
@@ -331,6 +347,8 @@ def test_bulk_routes(client):
     assert r.status_code == 200
     assert 'id="row-1"' in r.text and ">Bullseye</a>" in r.text and ">Strong</a>" in r.text
     assert "Undone: 2 jobs restored." in r.text
+    assert r.text.count('hx-swap-oob="innerHTML:#bulk-toast"') == 1
+    assert 'id="bulk-toast"' not in r.text and 'role="status"' not in r.text
     assert ">Bullseye</a>" in client.get("/inbox").text
 
 
@@ -362,6 +380,8 @@ def test_bulk_validation(client, tmp_path):
 
 def test_page_has_bulk_controls(client):
     t = client.get("/inbox").text
+    assert t.count('id="bulk-toast"') == 1  # the one standing live region the toasts swap into
+    assert 'id="bulk-toast" class="bulk-toast" role="status"' in t
     assert 'id="select-all"' in t and 'id="bulk-bar"' in t and "Clear selection" in t
     assert 'type="checkbox" class="sel" name="group_id" value="1"' in t
     assert "Select Bullseye" in t
@@ -392,6 +412,93 @@ def _reject(conn, title, gid=None, days_ago=5):
         job_group_id=gid,
         evidence={"sender": "Acme <no-reply@ashbyhq.com>", "subject": "Your application"},
     )
+
+
+def test_triaged_param_lists_shortlisted_and_dismissed_groups_with_a_badge(client):
+    client.post("/inbox/1/label?label=interesting")
+    client.post("/inbox/2/label?label=not_interesting")
+    plain = client.get("/inbox?bucket=A,B").text
+    assert "badge-triaged" not in plain  # untriaged lists show no triage badges
+    t = client.get("/inbox?bucket=A,B&triaged=1").text
+    shortlisted = r'<article class="row readonly" id="row-1".*?badge-triaged"[^>]*>shortlisted<'
+    dismissed = r'<article class="row readonly" id="row-2".*?badge-triaged"[^>]*>dismissed<'
+    assert re.search(shortlisted, t, re.S)
+    assert re.search(dismissed, t, re.S)
+    assert "badge-triaged" in t and t.count("badge-triaged") == 2
+
+
+def _row_html(page: str, gid: int) -> str:
+    return re.search(rf'<article[^>]*id="row-{gid}".*?</article>', page, re.S).group(0)
+
+
+def test_triaged_rows_are_read_only_but_untriaged_rows_keep_their_controls(client):
+    client.post("/inbox/1/label?label=interesting")
+    client.post("/inbox/2/label?label=not_interesting")
+    t = client.get("/inbox?bucket=A,B&triaged=1").text
+    for gid in (1, 2):
+        row = _row_html(t, gid)
+        assert 'class="sel"' not in row and "/label?label=" not in row
+        assert "shortlist (s)" not in row and "dismiss (x)" not in row
+        assert "posting (o)" in row
+    # an untriaged row in the same kind of list still has them
+    other = client.get("/inbox?bucket=F&triaged=1").text
+    assert re.findall(r'<article class="row" id="row-(\d+)"', other)
+    plain = _row_html(other, int(re.findall(r'<article class="row" id="row-(\d+)"', other)[0]))
+    assert 'class="sel"' in plain and "shortlist (s)" in plain
+
+
+def test_relabel_and_bulk_relabel_refuse_triaged_groups_and_keep_the_application(client, seeded):
+    client.post("/inbox/1/label?label=interesting")
+    r = client.post("/inbox/1/label?label=not_interesting")
+    assert r.status_code == 409
+    r = client.post("/inbox/bulk", data={"label": "not_interesting", "group_id": [1, 2]})
+    assert r.status_code == 409
+    assert seeded.execute("SELECT label FROM label WHERE job_group_id = 1").fetchone()[0] == (
+        "interesting"
+    )
+    assert seeded.execute("SELECT COUNT(*) FROM label WHERE job_group_id = 2").fetchone()[0] == 0
+
+
+def test_undo_keeps_an_application_the_shortlist_press_did_not_open(client, seeded):
+    seeded.execute(
+        "INSERT INTO application (job_group_id, status, created_at, updated_at) "
+        "VALUES (1, 'interested', 'x', 'x')"
+    )
+    seeded.execute(
+        "INSERT INTO application_event (application_id, at, status, note, source) "
+        "SELECT id, 'x', 'interested', 'added from job page', 'manual' FROM application"
+    )
+    assert client.post("/inbox/1/label?label=interesting").status_code == 200
+    assert client.post("/inbox/1/undo").status_code == 200
+    assert seeded.execute("SELECT COUNT(*) FROM application WHERE job_group_id = 1").fetchone()[0]
+    assert seeded.execute("SELECT COUNT(*) FROM label WHERE job_group_id = 1").fetchone()[0] == 0
+
+
+def test_undo_without_a_label_keeps_the_application(client, seeded):
+    client.post("/inbox/1/label?label=interesting")
+    seeded.execute("DELETE FROM label WHERE job_group_id = 1")  # e.g. a stale second undo
+    assert client.post("/inbox/1/undo").status_code == 200
+    assert client.post("/inbox/bulk/undo", data={"group_id": [1]}).status_code == 200
+    apps = seeded.execute("SELECT status FROM application WHERE job_group_id = 1").fetchall()
+    assert [a[0] for a in apps] == ["interested"]
+
+
+def test_triaged_param_still_hides_rejected_postings_you_never_acted_on(client, seeded):
+    _reject(seeded, "Bullseye", gid=1)
+    _reject(seeded, "Strong", gid=2)
+    client.post("/inbox/2/label?label=interesting")
+    t = client.get("/inbox?bucket=A,B&triaged=1").text
+    assert 'id="row-1"' not in t  # rejected, never triaged: left out as in the plain inbox
+    assert 'id="row-2"' in t  # rejected but shortlisted: you are tracking it
+
+
+def test_a_capped_bucket_says_how_many_rows_it_is_showing(client, seeded):
+    assert "Showing the first" not in client.get("/inbox").text
+    for n in range(100, 100 + inbox.BULK_MAX + 1):
+        add(seeded, n, dims(90), title=f"Extra {n}")
+    seeded.commit()
+    t = client.get("/inbox?bucket=A").text
+    assert f"Showing the first {inbox.BULK_MAX} of {inbox.BULK_MAX + 1 + 1}." in t
 
 
 def test_rejected_posting_left_out_and_other_roles_flagged(seeded, profile):
@@ -482,6 +589,30 @@ def test_inbox_page_multi_bucket_chips(client):
     assert 'class="chip on" data-bucket="B" href="#bucket-B"' in t
     # Buckets not on the page link to that bucket (a dead #anchor would do nothing).
     assert 'data-bucket="F" href="/inbox?bucket=F"' in t
+
+
+def _chips(html: str) -> dict[str, str]:
+    """data-bucket letter -> the chip's visible text."""
+    found = re.findall(r'<a class="chip[^"]*" data-bucket="([A-G])"[^>]*>(.*?)</a>', html, re.S)
+    return {
+        b: " ".join(re.sub(r"<[^>]+>", " ", text).replace("&middot;", "·").split())
+        for b, text in found
+    }
+
+
+def test_inbox_chips_read_bucket_names_with_counts(client):
+    # The chips, not the job titles in the rows below (seeded as "Bullseye" and "Mismatch").
+    assert _chips(client.get("/inbox").text) == {
+        "A": "Bullseye 1",
+        "B": "Strong 1",
+        "C": "Stretch Up 0",
+        "D": "Lateral 0",
+        "E": "Downlevel 0",
+        "F": "Stale Match 2",
+        "G": "Mismatch ·hidden· 1",
+    }
+    picked = _chips(client.get("/inbox?bucket=A,B").text)  # chips for sections off the page too
+    assert picked["A"] == "Bullseye 1" and picked["F"] == "Stale Match 2"
 
 
 def test_inbox_chips_keep_the_state_filter(client):
