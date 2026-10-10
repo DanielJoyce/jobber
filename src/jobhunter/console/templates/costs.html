@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<link rel="stylesheet" href="{{ url_for('static', path='pages.css') }}">
+<link rel="stylesheet" href="{{ static_url('pages.css') }}">
 <div class="pg">
   <h1>Costs</h1>
   <p class="muted">Last {{ c.days }} days.

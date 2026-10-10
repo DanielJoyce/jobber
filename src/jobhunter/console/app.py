@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import logging
@@ -36,6 +37,26 @@ logger = logging.getLogger(__name__)
 HERE = Path(__file__).parent
 TEMPLATES_DIR = HERE / "templates"
 STATIC_DIR = HERE / "static"
+
+_static_versions: dict[tuple[str, int], str] = {}
+
+
+def static_url(path: str) -> str:
+    """``/static/<path>?v=<content hash>`` so a plain reload picks up changed CSS/JS.
+
+    Why: browsers cached the old inbox.css after the bulk-select change and the new row
+    markup rendered with stale styles until a hard refresh. The hash is cached per mtime.
+    """
+    file = STATIC_DIR / path
+    try:
+        mtime = file.stat().st_mtime_ns
+    except OSError:
+        return f"/static/{path}"
+    key = (path, mtime)
+    if key not in _static_versions:
+        _static_versions[key] = hashlib.sha256(file.read_bytes()).hexdigest()[:10]
+    return f"/static/{path}?v={_static_versions[key]}"
+
 
 ConnFactory = Callable[[], sqlite3.Connection]
 ProfileLoader = Callable[[], Profile]
@@ -139,6 +160,7 @@ def create_app(
     app.state.settings = settings
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["sparkline"] = sparkline
+    templates.env.globals["static_url"] = static_url
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.state.conn_factory = factory

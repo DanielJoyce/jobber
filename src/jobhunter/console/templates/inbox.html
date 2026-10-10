@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<link rel="stylesheet" href="{{ url_for('static', path='inbox.css') }}">
+<link rel="stylesheet" href="{{ static_url('inbox.css') }}">
 <div class="inbox">
   <header class="inbox-head">
     <h1>Inbox</h1>
@@ -74,5 +74,5 @@
   </aside>
   {% endif %}
 </div>
-{% if data %}<script src="{{ url_for('static', path='inbox.js') }}" defer></script>{% endif %}
+{% if data %}<script src="{{ static_url('inbox.js') }}" defer></script>{% endif %}
 {% endblock %}

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from jobhunter.cli import app as cli_app
 from jobhunter.config import Paths, Settings
-from jobhunter.console.app import NAV, check_host, create_app
+from jobhunter.console.app import NAV, check_host, create_app, static_url
 from jobhunter.core import db
 
 
@@ -70,6 +72,16 @@ def test_static_js_and_htmx(client):
     assert r.status_code == 200
     assert "htmx" in r.text[:200]
     assert "registerKeys" in client.get("/static/app.js").text
+
+
+def test_static_urls_are_content_versioned(client):
+    # A plain reload must pick up changed CSS/JS; stale inbox.css once broke the row layout.
+    url = static_url("app.css")
+    assert re.fullmatch(r"/static/app\.css\?v=[0-9a-f]{10}", url)
+    page = client.get("/").text
+    assert url in page
+    assert client.get(url).status_code == 200
+    assert static_url("no-such-file.css") == "/static/no-such-file.css"
 
 
 def test_check_host():

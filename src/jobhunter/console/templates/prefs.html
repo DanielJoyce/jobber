@@ -3,7 +3,7 @@
 {% macro inv(name) %}{% if errors.get(name) %} aria-invalid="true" aria-describedby="err-{{ name | replace('.', '-') }}"{% endif %}{% endmacro %}
 {% macro help_btn(id, label) %}<button type="button" class="help-btn" data-help="{{ id }}" aria-expanded="false" aria-controls="help-{{ id }}" aria-label="Help: {{ label }}" title="What is this?">?</button>{% endmacro %}
 {% macro help_body(id, label) %}<div class="help-body" id="help-{{ id }}" role="region" aria-label="{{ label }} help" hidden>{{ caller() }}</div>{% endmacro %}
-{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='prefs.css') }}">{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ static_url('prefs.css') }}">{% endblock %}
 {% block main %}
 <div class="prefs">
   <header class="prefs-head">
@@ -297,5 +297,5 @@
     {% else %}<p class="muted">No changes yet.</p>{% endif %}
   </section>
 </div>
-<script src="{{ url_for('static', path='prefs.js') }}" defer></script>
+<script src="{{ static_url('prefs.js') }}" defer></script>
 {% endblock %}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<link rel="stylesheet" href="{{ url_for('static', path='detail.css') }}">
+<link rel="stylesheet" href="{{ static_url('detail.css') }}">
 <div class="detail">
   <h1>This posting has closed</h1>
   <p>The employer's page for <strong>{{ job_title }}</strong> no longer looks open, so nothing was opened for you.</p>
