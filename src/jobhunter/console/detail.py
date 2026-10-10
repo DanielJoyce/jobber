@@ -243,6 +243,7 @@ class Detail:
     salary: str
     salary_stated: bool
     source_name: str
+    salary_from_text: bool = False  # parsed from the description, not a posted pay field
     scored: bool = False
     bucket: str | None = None
     overall: int | None = None
@@ -357,6 +358,7 @@ def load_detail(
         salary=salary_text(job),
         salary_stated=bool(job["salary_stated"]),
         source_name=job["source_name"],
+        salary_from_text=job["salary_source"] == "text",
         partial=job["description_completeness"] == "partial",
         pasted=job["description_completeness"] == "pasted",
     )

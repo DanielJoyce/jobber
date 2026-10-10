@@ -9,7 +9,7 @@
       <span class="row-loc">{{ i.location }}{% if "+" in i.location %} <span title="multiple locations">&#8853;</span>{% endif %}</span>
     </div>
     <div class="row-meta">
-      {% if i.salary_stated %}<span>{{ i.salary }}{% if i.salary_from_text %} <span title="parsed from the description">~</span>{% endif %}</span>{% else %}<span class="warn">salary not stated &#9888;</span>{% endif %}
+      {% if i.salary_stated %}<span>{{ i.salary }}{% if i.salary_from_text %} <span title="parsed from the description"><span aria-hidden="true">~</span><span class="sr-only">(parsed from the description)</span></span>{% endif %}</span>{% else %}<span class="warn">salary not stated &#9888;</span>{% endif %}
       {% if i.employment_type %}<span>{{ i.employment_type }}</span>{% endif %}
       {% if i.remote %}<span>{{ i.remote }}</span>{% endif %}
       {% if i.posted %}<span>posted {{ i.posted }}</span>{% endif %}
