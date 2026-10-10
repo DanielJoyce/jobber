@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 
 import pytest
@@ -405,6 +406,11 @@ def _fill_of(page, state):
     return page.get_attribute(f'#map g.targets path[data-state="{state}"]', "fill")
 
 
+def _contrast(a, b) -> float:
+    hi, lo = max(_lum(a), _lum(b)), min(_lum(a), _lum(b))
+    return (hi + 0.05) / (lo + 0.05)
+
+
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_map_scale_is_grey_for_zero_and_greener_with_more_jobs(dash, scheme):
     dash.emulate_media(color_scheme=scheme)
@@ -419,43 +425,70 @@ def test_map_scale_is_grey_for_zero_and_greener_with_more_jobs(dash, scheme):
     tok = lambda n: dash.evaluate(_TOKEN_JS, n)  # noqa: E731
     assert _fill_of(dash, zero_state) == tok("--map-0")  # neutral grey
     assert _fill_of(dash, top_state) == tok("--map-5")  # strongest green
-    # Zero grey is not the no-data fill, and the grey is actually grey.
-    assert tok("--map-0") != tok("--axis")
     r, g, b = _rgb(dash, tok("--map-0"))
     assert max(r, g, b) - min(r, g, b) < 12
-    # The greens are green, and intensity (distance from the grey) rises monotonically:
-    # lighter surface-ward in light mode, brighter in dark mode.
     steps = [_rgb(dash, tok(f"--map-{i}")) for i in range(6)]
     for r, g, b in steps[1:]:
         assert g > r and g > b
-    lum = [_lum(s) for s in steps[1:]]
+    # Every neighbouring pair (including zero vs the lowest class) differs clearly in
+    # lightness, and the ramp is monotonic: darker in light mode, brighter in dark mode.
+    for a, b in itertools.pairwise(steps):
+        assert _contrast(a, b) >= 1.25, (a, b)
+    lum = [_lum(s) for s in steps]
     assert lum == sorted(lum, reverse=(scheme == "light"))
-    assert len(set(lum)) == 5
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_map_labels_stay_readable_on_every_step(dash, scheme):
+    """Read the rendered label ink against the rendered cell fill, so inkOn regressions fail."""
     dash.emulate_media(color_scheme=scheme)
     dash.reload()
     dash.wait_for_selector(PATHS)
-    fills_ = [dash.evaluate(_TOKEN_JS, f"--map-{i}") for i in range(6)]
-    ink = dash.evaluate(_TOKEN_JS, "--text-primary")
-    inverse = "#0b0b0b" if _lum(_rgb(dash, ink)) > 0.5 else "#ffffff"
-    for f in fills_:
-        lf = _lum(_rgb(dash, f))
-        best = max(
-            (max(_lum(_rgb(dash, c)), lf) + 0.05) / (min(_lum(_rgb(dash, c)), lf) + 0.05)
-            for c in (ink, inverse)
-        )
-        assert best >= 4.5, (f, best)
+    rows = dash.evaluate(
+        """() => {
+          const out = [];
+          document.querySelectorAll('#map g.labels text.lbl').forEach(t => {
+            const cell = document.querySelector(
+              '#map g.targets [data-state="' + t.textContent.trim() + '"]');
+            if (!cell) return;
+            out.push([getComputedStyle(t).fill, getComputedStyle(cell).fill]);
+          });
+          return out;
+        }"""
+    )
+    assert len(rows) > 10
+    for ink, cell in rows:
+        assert _contrast(_rgb(dash, ink), _rgb(dash, cell)) >= 4.5, (ink, cell)
 
 
 def test_map_legend_swatches_run_grey_then_green_then_no_data(dash):
     swatches = dash.eval_on_selector_all(
         "#map-legend .legend-scale .swatch", "ns => ns.map(n => n.style.backgroundColor)"
     )
-    toks = [dash.evaluate(_TOKEN_JS, n) for n in ("--map-0", "--axis")]
-    rgbs = [_rgb(dash, s) for s in swatches]
-    assert rgbs[0] == _rgb(dash, toks[0])
-    assert rgbs[-1] == _rgb(dash, toks[1])
-    assert rgbs[1] != rgbs[0] and rgbs[-2] == _rgb(dash, dash.evaluate(_TOKEN_JS, "--map-5"))
+    tok = lambda n: dash.evaluate(_TOKEN_JS, n)  # noqa: E731
+    rgbs = [_rgb(dash, s) for s in swatches[:-1]]
+    assert rgbs[0] == _rgb(dash, tok("--map-0"))
+    assert len(rgbs) >= 2 and all(c != rgbs[0] for c in rgbs[1:])
+    # The last swatch (no data) is hatched, not a flat color.
+    nodata = dash.locator("#map-legend .swatch.nodata")
+    expect(nodata).to_have_count(1)
+    assert "repeating-linear-gradient" in nodata.evaluate(
+        "n => getComputedStyle(n).backgroundImage"
+    )
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_no_data_cells_are_hatched_and_distinct_from_every_scale_step(page, server, scheme):
+    page.emulate_media(color_scheme=scheme)
+    page.goto(f"{server.url}/?metric=response_rate")
+    page.wait_for_selector(PATHS)
+    paints = set(fills(page))
+    assert "url(#map-nodata)" in paints, "seed has states with no response-rate data"
+    # A pattern paint is not a flat color, so no hue/lightness coincidence with a step is possible,
+    # and the pattern itself carries visible line marks against the surface.
+    assert page.locator("#map pattern#map-nodata line.nodata-hatch").count() == 1
+    line = page.eval_on_selector("#map-nodata line", "n => getComputedStyle(n).stroke")
+    surface = page.evaluate(_TOKEN_JS, "--surface-1")
+    assert _contrast(_rgb(page, line), _rgb(page, surface)) >= 2.5
+    for n in range(6):
+        assert "url(" not in page.evaluate(_TOKEN_JS, f"--map-{n}")

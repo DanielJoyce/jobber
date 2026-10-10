@@ -5,7 +5,7 @@
   var SMALL = ["VT", "NH", "MA", "RI", "CT", "NJ", "DE", "MD", "DC"];
   var TERRITORIES = ["PR", "GU", "MP", "VI", "AS"];
   var REMOTE = "REMOTE";
-  // Sequential ramp steps for the five quantile classes; zero gets grey --map-0, no data --axis.
+  // Sequential ramp steps for the five quantile classes; zero gets grey --map-0, no data a hatch (see fillFor).
   // Fewest = lightest green, most = most intense green (brighter in dark theme).
   var ZERO = "--map-0";
   var STEPS = ["--map-1", "--map-2", "--map-3", "--map-4", "--map-5"];
@@ -111,9 +111,17 @@
     return STEPS[Math.round(((cls - 1) * (STEPS.length - 1)) / (n - 1))];
   }
 
+  var NODATA_PAINT = "url(#map-nodata)";
+
+  // No data is drawn hatched (shape, not hue) on the surface color, so it cannot be mistaken
+  // for the zero grey or any green step. Contrast logic uses the surface as its base color.
+  function isNoData(row) {
+    return classOf(row ? row.value : null, data.breaks) < 0;
+  }
+
   function fillFor(row) {
     var cls = classOf(row ? row.value : null, data.breaks);
-    if (cls < 0) return token("--axis");
+    if (cls < 0) return token("--surface-1");
     if (cls === 0) return token(ZERO);
     return token(stepFor(cls, data.breaks.length));
   }
@@ -242,6 +250,11 @@
       role: "group",
       "aria-label": "Map of " + data.label + " by state"
     }, ui.map);
+    var defs = el("defs", {}, svg);
+    var pat = el("pattern", { id: "map-nodata", width: 6, height: 6, patternUnits: "userSpaceOnUse",
+      patternTransform: "rotate(45)" }, defs);
+    el("rect", { width: 6, height: 6, "class": "nodata-bg" }, pat);
+    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, "class": "nodata-hatch" }, pat);
     var gLeaders = el("g", { "class": "leaders", "aria-hidden": "true" }, svg);
     var gTargets = el("g", { "class": "targets" }, svg);
     var gLabels = el("g", { "class": "labels", "aria-hidden": "true" }, svg);
@@ -257,7 +270,7 @@
         node = el("rect", { x: c.x, y: c.y, width: c.w, height: c.h, rx: 4 }, gTargets);
       }
       node.setAttribute("class", "cell" + (c.callout ? " callout" : "") + (c.remote ? " remote" : ""));
-      node.setAttribute("fill", fill);
+      node.setAttribute("fill", isNoData(row) ? NODATA_PAINT : fill);
       node.dataset.state = c.usps;
       if (c.focus) {
         node.setAttribute("tabindex", "0");
@@ -342,8 +355,11 @@
       scale.appendChild(swatch(color, label));
       prev = b;
     });
-    scale.appendChild(swatch(token("--axis"),
-      data.metric === "response_rate" ? "no data / n < 5" : "no data"));
+    var nd = swatch(token("--surface-1"),
+      data.metric === "response_rate" ? "no data / n < 5" : "no data");
+    nd.firstChild.className = "swatch nodata";
+    nd.firstChild.style.background = "";
+    scale.appendChild(nd);
     box.appendChild(scale);
 
     var status = document.createElement("div");

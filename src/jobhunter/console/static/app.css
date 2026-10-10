@@ -45,10 +45,10 @@
   --status-critical: #d03b3b;
 
   /* Map scale: neutral grey = zero, then green growing more intense with the count. --axis stays the no-data fill. */
-  --map-0: #e4e3dd;
-  --map-1: #cfe8d5;
-  --map-2: #9fd3ac;
-  --map-3: #5fb47a;
+  --map-0: #ecebe6;
+  --map-1: #aedbbc;
+  --map-2: #86c99d;
+  --map-3: #58ae74;
   --map-4: #2e8f55;
   --map-5: #14663a;
 
@@ -73,7 +73,7 @@
     --series-4: #c98500;
 
     /* Dark map scale: grey, then greens getting brighter (not darker) with the count. */
-    --map-0: #4a4a47;
+    --map-0: #42423f;
     --map-1: #2f6b4a;
     --map-2: #2f8f5f;
     --map-3: #3fb374;
@@ -124,7 +124,7 @@
   --series-4: #c98500;
 
   /* Dark map scale: grey, then greens getting brighter (not darker) with the count. */
-  --map-0: #4a4a47;
+  --map-0: #42423f;
   --map-1: #2f6b4a;
   --map-2: #2f8f5f;
   --map-3: #3fb374;
@@ -294,6 +294,9 @@ h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .legend-title { color: var(--text-primary); }
 .legend-item { display: inline-flex; align-items: center; gap: 4px; }
 .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; border: 1px solid var(--border); }
+.swatch.nodata { background: repeating-linear-gradient(45deg, var(--surface-1) 0 3px, var(--text-muted) 3px 4px); }
+.map-svg .nodata-hatch { stroke: var(--text-muted); stroke-width: 1; }
+.map-svg .nodata-bg { fill: var(--surface-1); }
 .badge-html { display: inline-block; min-width: 16px; height: 16px; line-height: 14px; text-align: center; font-size: 10px; font-weight: 600; border: 1px solid var(--text-secondary); border-radius: 8px; color: var(--text-primary); }
 
 .map-tooltip {
