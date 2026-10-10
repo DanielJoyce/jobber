@@ -289,6 +289,17 @@ config:
 Dates go through `dateparser`, salary through the shared parser. Most of the 18 unclassified
 sources should land here or in a known family without a new Python file.
 
+**Salary from description text** (`core/salary_text.py`, bug fec27be). Most boards (us-nlx,
+wyoming, new york, kentucky, montana) have no structured pay field, yet the pay is in the
+description ("$225,000 - $260,000 / yearly", "$70-$90/hr"), so postings showed "salary not
+stated" and comp fit was dropped. Normalize now falls back to a precision-first extractor when
+the structured field yields no numbers: it needs pay context, an explicit period or a USD tag,
+sane magnitude per period, and rejects bonuses, funding, benefits and minimum-wage blurbs.
+Several ranges (location tiers): the one near the job's location, else the widest min..max over
+ranges sharing the first period. `job.salary_source` is `structured` or `text`; for `text`,
+`salary_raw` holds the matched snippet and is re-derived on every normalize. Free backfill:
+`jobhunter backfill-salary`.
+
 **As built** (`sources/adapters/htmlconfig.py`, milestone M3). Beyond the sketch above the adapter
 also handles: a JSON variant (`list.format: json`, `rows` as a dotted path, fields as dotted paths
 or `template`/`re` specs, JSON POST bodies); WebForms boards (`search.form` GETs the page and POSTs
