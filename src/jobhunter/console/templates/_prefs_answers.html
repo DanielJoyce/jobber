@@ -1,0 +1,72 @@
+{# Application answers (specs/017): part of the main /prefs form, saved with it under answers:.
+   Never read by scoring and never sent to a model. Uses the page's err/inv/help macros. #}
+{% macro ahelp(id, label) %}{{ help_btn('ans-' ~ id, label) }}{% endmacro %}
+<section class="panel" id="sec-answers">
+  <input type="hidden" name="ans.present" value="1">
+  <h2>Application answers <span class="kind free">free; never scored</span> {{ help_btn('answers', 'Application answers') }}</h2>
+  {% call help_body('answers', 'Application answers') %}<p class="hint">Reusable answers for application forms: links, notice period, relocation, remote preference and saved custom answers. Every packet shows them with a copy button. They are stored in this file under <code>answers:</code>, never used in scoring and never sent to a model. Salary, EEO and self-ID, citizenship, address, pronouns, date of birth, consent and signatures are yours to answer by hand: jobhunter refuses to store them.</p>{% endcall %}
+  {% if ans_warnings %}
+  <div class="banner banner-error" role="alert" id="answers-warnings">
+    <strong>Some answers in the file were not loaded.</strong> The rest of your preferences and scoring are unaffected.
+    <ul class="plain">{% for w in ans_warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    <div class="muted">Saving a change to the custom answers rewrites that list without the dropped entries.</div>
+  </div>
+  {% endif %}
+
+  <div class="grid2">
+    {% for k, label in ans_link_fields %}
+    <label>{{ label }} {{ ahelp('links-' ~ k, label) }}
+      <input type="text" name="ans.links.{{ k }}" value="{{ ansv['ans.links.' ~ k] }}" inputmode="url" spellcheck="false" placeholder="https://"{{ inv('ans.links.' ~ k) }}>
+    </label>
+    {% call help_body('ans-links-' ~ k, label) %}<p class="hint">Your {{ label }} address, offered on every packet to copy.</p>{% endcall %}
+    {{ err('ans.links.' ~ k) }}
+    {% endfor %}
+  </div>
+
+  <div class="grid2">
+    {% for k, label in ans_text_fields %}
+    <label>{{ label }} {{ ahelp(k, label) }}
+      <input type="text" name="ans.{{ k }}" value="{{ ansv['ans.' ~ k] }}" maxlength="500"{{ inv('ans.' ~ k) }}>
+    </label>
+    {% call help_body('ans-' ~ k, label) %}<p class="hint">{% if k == "notice_period" %}How soon you could start, for example "two weeks".{% elif k == "relocation" %}Your answer to "Are you willing to relocate?", in your words.{% else %}Your answer to "remote, hybrid or on-site?", in your words.{% endif %}</p>{% endcall %}
+    {{ err('ans.' ~ k) }}
+    {% endfor %}
+    <label>{{ ans_work_auth_label }} {{ ahelp('work-auth', ans_work_auth_label) }}
+      <select name="ans.work_authorization"{{ inv('ans.work_authorization') }}>
+        {% for val, text in ans_work_auth_choices %}<option value="{{ val }}"{% if ansv['ans.work_authorization'] == val %} selected{% endif %}>{{ text }}</option>{% endfor %}
+      </select>
+    </label>
+    {% call help_body('ans-work-auth', ans_work_auth_label) %}<p class="hint">Only a yes or no to "Are you authorized to work here?", and only if you want it stored. Citizenship and visa details are never stored.</p>{% endcall %}
+    {{ err('ans.work_authorization') }}
+  </div>
+
+  <h3 class="sub">Saved custom answers {{ ahelp('custom', 'Saved custom answers') }}</h3>
+  {% call help_body('ans-custom', 'Saved custom answers') %}<p class="hint">Templates such as "Why do you want to work here?". A packet offers each one beside a question with the same wording. Promote to /prefs on a packet adds one here. Clear both boxes to remove one.</p>{% endcall %}
+  <div class="answers-custom">
+    {% for q, a in ansv.custom %}
+    <fieldset class="answer-row" id="ans-custom-{{ loop.index0 }}">
+      <legend class="sr">Saved answer {{ loop.index }}</legend>
+      <label>Question
+        <input type="text" name="ans.custom.question" value="{{ q }}" maxlength="300"{{ inv('ans.custom.' ~ loop.index0 ~ '.question') }}>
+      </label>
+      {{ err('ans.custom.' ~ loop.index0 ~ '.question') }}
+      <label>Answer
+        <textarea name="ans.custom.answer" rows="3"{{ inv('ans.custom.' ~ loop.index0 ~ '.answer') }}>{{ a }}</textarea>
+      </label>
+      {{ err('ans.custom.' ~ loop.index0 ~ '.answer') }}
+    </fieldset>
+    {% endfor %}
+    {% set n = ansv.custom | length %}
+    <fieldset class="answer-row new" id="ans-custom-new">
+      <legend class="sr">Add a saved answer</legend>
+      <label>New question
+        <input type="text" name="ans.custom.question" value="" maxlength="300" placeholder="Why do you want to work here?"{{ inv('ans.custom.' ~ n ~ '.question') }}>
+      </label>
+      {{ err('ans.custom.' ~ n ~ '.question') }}
+      <label>Answer
+        <textarea name="ans.custom.answer" rows="3"></textarea>
+      </label>
+      {{ err('ans.custom.' ~ n ~ '.answer') }}
+    </fieldset>
+  </div>
+</section>

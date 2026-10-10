@@ -67,6 +67,10 @@ _YAML_KEYS = frozenset(
         "buckets",
     }
 )
+# Top-level keys another loader owns. The profile never reads them (so a bad entry there can
+# never stop scoring or the nightly run) and does not warn about them: ``answers:`` is
+# Application answers, loaded on its own by ``apply/answers.py`` (specs/017).
+SEPARATE_KEYS = frozenset({"answers"})
 _SINCE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
@@ -458,7 +462,7 @@ def _load_file(
     preferences while the resume is missing); ``resume_text`` is then empty.
     """
     raw = _read_yaml(prefs_file)
-    unknown = [key for key in raw if key not in _YAML_KEYS]
+    unknown = [key for key in raw if key not in _YAML_KEYS and key not in SEPARATE_KEYS]
     warnings = tuple(f"{prefs_file}: unknown top-level key {key!r} ignored" for key in unknown)
     for message in warnings:
         logger.warning(message)
@@ -765,19 +769,28 @@ def backup_preferences(profile_dir: Path, now: str) -> Path | None:
 
 
 def write_preferences_data(
-    profile_dir: Path, data: Mapping[str, Any], *, backup_stamp: str
+    profile_dir: Path,
+    data: Mapping[str, Any],
+    *,
+    backup_stamp: str,
+    separate: Mapping[str, Any] | None = None,
 ) -> Path:
     """Validate ``data`` and write it as a whole new ``preferences.yaml`` (atomic, 0600).
 
     Used when there is no file or the existing one is unreadable; the old file, if any, is
     copied to a timestamped ``.bak`` first. The profile dir is created 0700 if missing.
-    Raises ``ProfileValidationError`` before touching anything when ``data`` is invalid.
+    ``separate`` carries ``SEPARATE_KEYS`` blocks (``answers``), validated by their own owner
+    before this call. Raises ``ProfileValidationError`` before touching anything when
+    ``data`` is invalid.
     """
     profile_dir = Path(profile_dir).expanduser()
     validate_profile_data(data, base=Profile())
     doc = CommentedMap()
     for key, value in _clean(json.loads(json.dumps(dict(data)))).items():
         if key in EDITABLE_KEYS:
+            doc[key] = _to_yaml(value)
+    for key, value in _clean(json.loads(json.dumps(dict(separate or {})))).items():
+        if key in SEPARATE_KEYS and value:
             doc[key] = _to_yaml(value)
     doc.yaml_set_start_comment(NEW_FILE_HEADER.rstrip("\n"))
     yaml = _yaml_writer("")

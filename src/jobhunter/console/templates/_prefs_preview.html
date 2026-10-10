@@ -5,8 +5,10 @@
 <h2>Can't preview yet</h2>
 <ul class="plain field-errors">{% for k, m in errors.items() %}<li><code>{{ k }}</code>: {{ m }}</li>{% endfor %}</ul>
 {% elif not changes %}
-<p class="muted">No unsaved changes.</p>
+{% if answer_changes %}<p id="preview-answers">Application answers: {{ answer_changes }} unsaved change{{ "s" if answer_changes != 1 }}. Free: answers are never scored and never sent to a model.</p>
+{% else %}<p class="muted">No unsaved changes.</p>{% endif %}
 {% else %}
+{% if answer_changes %}<p id="preview-answers">Application answers: {{ answer_changes }} unsaved change{{ "s" if answer_changes != 1 }}. Free: answers are never scored and never sent to a model.</p>{% endif %}
 <h2>Unsaved changes</h2>
 <ul class="plain changes">
   {% for path, (old, new) in changes.items() %}<li><code>{{ path }}</code> <span class="muted">{{ old | pref_value }}</span> → {{ new | pref_value }}</li>{% endfor %}
