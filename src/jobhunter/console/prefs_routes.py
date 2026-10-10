@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.console import prefs as pf
 from jobhunter.console import prefs_graceful as gr
-from jobhunter.core import db, geo
+from jobhunter.core import db
 from jobhunter.scoring import buckets as bk
 from jobhunter.scoring.profile import (
     PREFERENCES_FILE,
@@ -378,7 +378,7 @@ def register(
     @app.post("/prefs/state/{code}", response_class=HTMLResponse)
     async def cycle_state(request: Request, code: str) -> HTMLResponse:
         code = code.upper()
-        if code not in geo.TILE_GRID:
+        if code not in pf.PICKER_TILES:
             raise HTTPException(404, "not a state on the picker")
         form = pf.parse_form(await request.body())
         ranking = pf.state_codes(pf.form_value(form, "state_ranking"))

@@ -99,8 +99,8 @@
 
       <section class="panel" id="sec-where">
         <h2>Where <span class="kind free">free</span> {{ help_btn('where', 'Where') }}</h2>
-        {% call help_body('where', 'Where') %}<p class="hint">Ranked states score higher, in the order you ranked them. Excluded states are filtered out. Remote OK lets remote jobs through wherever they are.</p>{% endcall %}
-        <p class="hint">Click a state to cycle it: neutral → ranked → excluded. Ranked states show their rank; re-rank by cycling a state back to neutral and ranking it again.</p>
+        {% call help_body('where', 'Where') %}<p class="hint">Ranked states score higher, in the order you ranked them. Excluded states and territories are filtered out. Changing them is free: nothing is re-scored. Remote OK lets remote jobs through wherever they are.</p>{% endcall %}
+        <p class="hint">Click a state to cycle it: neutral → ranked → excluded. Ranked states show their rank; the bottom row is the US territories (PR, GU, VI, MP, AS), so you can exclude them too; re-rank by cycling a state back to neutral and ranking it again.</p>
         {% include "_prefs_states.html" %}
         {{ err('state_ranking') }}{{ err('states_excluded') }}
         {% if states_allowed != "all" %}<p class="hint">From the file, <code>states_allowed</code> is limited to {{ states_allowed | join(", ") }}; edit the file to change it.</p>{% endif %}

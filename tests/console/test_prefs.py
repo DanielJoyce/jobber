@@ -185,6 +185,29 @@ def test_state_picker_cycle(client):
     assert client.post("/prefs/state/ZZ", data=data).status_code == 404
 
 
+def test_picker_offers_territories(client):
+    r = client.get("/prefs")
+    for code in ("PR", "GU", "VI", "MP", "AS"):
+        assert f'data-state="{code}"' in r.text
+    r = client.post("/prefs/state/PR", data={"state_ranking": "CO", "states_excluded": ""})
+    assert r.status_code == 200 and "Puerto Rico: ranked 2" in r.text
+    r = client.post("/prefs/state/PR", data={"state_ranking": "CO,PR", "states_excluded": ""})
+    assert 'name="states_excluded" value="PR"' in r.text
+    assert "Puerto Rico: excluded" in r.text
+
+
+def test_excluding_territory_saves_free_without_filter_rescore(client, pdir, conn):
+    client.get("/prefs")
+    before = load_profile(pdir)
+    form = form_for(pdir, states_excluded="PR,GU")
+    r = client.post("/prefs/save", data=form, follow_redirects=False)
+    assert r.status_code == 303 and "rescore" not in r.headers["location"]
+    after = load_profile(pdir)
+    assert after.hard.states_excluded == ["PR", "GU"]
+    assert after.scoring_version == before.scoring_version  # free: no paid re-score
+    assert after.filter_version != before.filter_version
+
+
 def test_cycle_state_unit():
     assert pf.cycle_state([], [], "CO") == (["CO"], [])
     assert pf.cycle_state(["CO"], [], "CO") == ([], ["CO"])
