@@ -83,6 +83,18 @@ Deliberate choices in that layout:
 Every `s`/`x` writes a `label` row, which is the calibration set from
 [006](006-fit-scoring.md#calibration). Triage *is* the labeling, with no separate chore.
 
+**Bulk triage.** Each row has a checkbox (accessible name: the job title). Selecting one or
+more shows a sticky bar with "N selected", **Shortlist**, **Dismiss** and **Clear selection**;
+the bar's header checkbox selects all visible rows (tri-state), shift-click selects a range,
+and `Space` toggles the focused row. While anything is selected, `s`/`x` apply to the whole
+selection (the bar says so), otherwise to the focused row; `u` undoes the last action, which
+for a bulk action is the whole batch. A bulk action is one request (`POST /inbox/bulk`, up to
+500 ids) applied in one transaction, so it is all-or-nothing, and `POST /inbox/bulk/undo`
+reverses it in one step. Why: a morning of triage is often "dismiss these 12 of the same
+kind", and 12 keystrokes plus 12 round trips is both slow and leaves a half-applied state if
+the page is interrupted. Bulk writes the same `label` rows as single triage, so calibration
+is unaffected.
+
 ### `/job/{group_id}` Detail
 
 At the top: the **Apply** button, which goes straight to the employer's application after

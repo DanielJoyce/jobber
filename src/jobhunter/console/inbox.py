@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import Counter
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -255,62 +256,92 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def set_label(conn: sqlite3.Connection, group_id: int, label: str) -> None:
-    """Upsert the label; ``interesting`` also opens an application at 'interested'."""
-    if label not in ("interesting", "not_interesting"):
-        raise ValueError(f"bad label {label!r}")
-    now = _now()
+BULK_MAX = 500
+LABELS = ("interesting", "not_interesting")
+
+
+def _write_label(conn: sqlite3.Connection, group_id: int, label: str, now: str) -> None:
+    """Upsert one label (no transaction handling); ``interesting`` opens an application."""
+    conn.execute(
+        "INSERT INTO label (job_group_id, label, labeled_at) VALUES (?, ?, ?) "
+        "ON CONFLICT (job_group_id) DO UPDATE SET label = excluded.label, "
+        "labeled_at = excluded.labeled_at",
+        (group_id, label, now),
+    )
+    if label == "interesting":
+        has_app = conn.execute(
+            "SELECT 1 FROM application WHERE job_group_id = ?", (group_id,)
+        ).fetchone()
+        if not has_app:
+            cur = conn.execute(
+                "INSERT INTO application (job_group_id, status, created_at, updated_at) "
+                "VALUES (?, 'interested', ?, ?)",
+                (group_id, now, now),
+            )
+            conn.execute(
+                "INSERT INTO application_event (application_id, at, status, note, source) "
+                "VALUES (?, ?, 'interested', 'shortlisted from inbox', 'manual')",
+                (cur.lastrowid, now),
+            )
+
+
+def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
+    """Delete the label, and the application if it never progressed past 'interested'."""
+    conn.execute("DELETE FROM label WHERE job_group_id = ?", (group_id,))
+    app = conn.execute(
+        "SELECT id FROM application WHERE job_group_id = ? AND status = 'interested'",
+        (group_id,),
+    ).fetchone()
+    if app:
+        events = conn.execute(
+            "SELECT COUNT(*) FROM application_event WHERE application_id = ?", (app["id"],)
+        ).fetchone()[0]
+        others = conn.execute(
+            "SELECT (SELECT COUNT(*) FROM contact WHERE application_id = :a) + "
+            "(SELECT COUNT(*) FROM attachment WHERE application_id = :a)",
+            {"a": app["id"]},
+        ).fetchone()[0]
+        if events <= 1 and not others:
+            conn.execute("DELETE FROM application_event WHERE application_id = ?", (app["id"],))
+            conn.execute("DELETE FROM application WHERE id = ?", (app["id"],))
+
+
+def _in_transaction(conn: sqlite3.Connection, work: Callable[[], None]) -> None:
     conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute(
-            "INSERT INTO label (job_group_id, label, labeled_at) VALUES (?, ?, ?) "
-            "ON CONFLICT (job_group_id) DO UPDATE SET label = excluded.label, "
-            "labeled_at = excluded.labeled_at",
-            (group_id, label, now),
-        )
-        if label == "interesting":
-            has_app = conn.execute(
-                "SELECT 1 FROM application WHERE job_group_id = ?", (group_id,)
-            ).fetchone()
-            if not has_app:
-                cur = conn.execute(
-                    "INSERT INTO application (job_group_id, status, created_at, updated_at) "
-                    "VALUES (?, 'interested', ?, ?)",
-                    (group_id, now, now),
-                )
-                conn.execute(
-                    "INSERT INTO application_event (application_id, at, status, note, source) "
-                    "VALUES (?, ?, 'interested', 'shortlisted from inbox', 'manual')",
-                    (cur.lastrowid, now),
-                )
+        work()
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+
+
+def set_label(conn: sqlite3.Connection, group_id: int, label: str) -> None:
+    """Upsert the label; ``interesting`` also opens an application at 'interested'."""
+    set_labels(conn, [group_id], label)
+
+
+def set_labels(conn: sqlite3.Connection, group_ids: Sequence[int], label: str) -> None:
+    """Label many groups in one transaction: all of them, or (on any error) none."""
+    if label not in LABELS:
+        raise ValueError(f"bad label {label!r}")
+    now = _now()
+    _in_transaction(conn, lambda: [_write_label(conn, g, label, now) for g in group_ids])
 
 
 def undo_label(conn: sqlite3.Connection, group_id: int) -> None:
     """Remove the label, and the application if it never progressed past 'interested'."""
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute("DELETE FROM label WHERE job_group_id = ?", (group_id,))
-        app = conn.execute(
-            "SELECT id FROM application WHERE job_group_id = ? AND status = 'interested'",
-            (group_id,),
-        ).fetchone()
-        if app:
-            events = conn.execute(
-                "SELECT COUNT(*) FROM application_event WHERE application_id = ?", (app["id"],)
-            ).fetchone()[0]
-            others = conn.execute(
-                "SELECT (SELECT COUNT(*) FROM contact WHERE application_id = :a) + "
-                "(SELECT COUNT(*) FROM attachment WHERE application_id = :a)",
-                {"a": app["id"]},
-            ).fetchone()[0]
-            if events <= 1 and not others:
-                conn.execute("DELETE FROM application_event WHERE application_id = ?", (app["id"],))
-                conn.execute("DELETE FROM application WHERE id = ?", (app["id"],))
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
+    undo_labels(conn, [group_id])
+
+
+def undo_labels(conn: sqlite3.Connection, group_ids: Sequence[int]) -> None:
+    """Undo many labels in one transaction."""
+    _in_transaction(conn, lambda: [_remove_label(conn, g) for g in group_ids])
+
+
+def existing_group_ids(conn: sqlite3.Connection, group_ids: Sequence[int]) -> set[int]:
+    if not group_ids:
+        return set()
+    marks = ",".join("?" * len(group_ids))
+    rows = conn.execute(f"SELECT id FROM job_group WHERE id IN ({marks})", tuple(group_ids))
+    return {r[0] for r in rows}

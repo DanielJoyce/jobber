@@ -26,6 +26,16 @@
     <div class="muted">{{ profile_error }}</div>
   </div>
   {% elif data %}
+  <div class="bulk-bar" id="bulk-bar" role="toolbar" aria-label="Bulk actions">
+    <label class="bulk-all"><input type="checkbox" id="select-all"> <span id="bulk-count">Select all visible</span></label>
+    <span class="bulk-actions" id="bulk-actions" hidden>
+      <button type="button" class="act bulk-act" hx-post="/inbox/bulk" hx-include=".inbox input.sel:checked" hx-vals='{"label": "interesting"}' hx-swap="none">Shortlist (s)</button>
+      <button type="button" class="act bulk-act" hx-post="/inbox/bulk" hx-include=".inbox input.sel:checked" hx-vals='{"label": "not_interesting"}' hx-swap="none">Dismiss (x)</button>
+      <button type="button" class="act" id="bulk-clear">Clear selection</button>
+      <span class="muted" id="bulk-hint">s / x apply to all selected</span>
+    </span>
+    <div id="bulk-toast" class="bulk-toast" role="status"></div>
+  </div>
   {% for b in data.shown %}
   {% set items = data.buckets[b] %}
   {% set name, action = titles[b] %}
@@ -51,8 +61,9 @@
     <strong>keys</strong>
     <span><kbd>j</kbd><kbd>k</kbd> move</span>
     <span><kbd>Enter</kbd> expand</span>
-    <span><kbd>s</kbd> shortlist</span>
-    <span><kbd>x</kbd> dismiss</span>
+    <span><kbd>Space</kbd> select row</span>
+    <span><kbd>s</kbd> shortlist (selection, else row)</span>
+    <span><kbd>x</kbd> dismiss (selection, else row)</span>
     <span><kbd>d</kbd> deep pass</span>
     <span><kbd>o</kbd> open posting</span>
     <span><kbd>a</kbd> applied</span>
