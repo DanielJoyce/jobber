@@ -47,6 +47,7 @@ class InboxItem:
     location: str
     salary: str
     salary_stated: bool
+    salary_from_text: bool
     employment_type: str | None
     remote: str | None
     posted: str | None
@@ -175,6 +176,7 @@ def _item(
         location=location_summary(locs, row["location_scope"]),
         salary=salary_text(row),
         salary_stated=bool(row["salary_stated"]),
+        salary_from_text=row["salary_source"] == "text",
         employment_type=None if row["employment_type"] == "unknown" else row["employment_type"],
         remote=None if row["remote"] == "unknown" else row["remote"],
         posted=posted_age(row["posted_at"], now),

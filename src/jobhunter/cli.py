@@ -553,6 +553,23 @@ def dedupe(
         conn.close()
 
 
+@app.command(name="backfill-salary")
+def backfill_salary_cmd() -> None:
+    """Fill missing salaries from description text (free, local, idempotent; specs/003)."""
+    from jobhunter.pipeline.normalize import backfill_salary
+
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    conn = db.connect(db_path)
+    try:
+        db.migrate(conn)
+        before, after = backfill_salary(conn)
+    finally:
+        conn.close()
+    for label, counts in (("before", before), ("after", after)):
+        typer.echo(f"{label}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+
+
 @app.command()
 def console(
     host: Annotated[str | None, typer.Option(help="Bind host (default: config).")] = None,

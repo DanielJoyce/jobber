@@ -11,6 +11,7 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import datetime
 
+from jobhunter.core.salary_text import extract_salary_from_text
 from jobhunter.core.textnorm import (
     content_hash,
     detect_employment_type,
@@ -43,14 +44,46 @@ def _norm_date(value: str | None, tz: str, label: str, warnings: list[str]) -> s
     return to_iso(parsed)
 
 
+def resolve_salary(
+    raw: str | None, source: str | None, text: str, location: str | None
+) -> dict[str, object]:
+    """Salary columns for one job. Structured pay always wins; description text is the fallback.
+
+    ``source == 'text'`` means ``raw`` is a snippet we extracted earlier, so it is ignored here
+    and the description is searched again (idempotent, follows description changes).
+    """
+    warnings: list[str] = []
+    structured = None if source == "text" else raw
+    sal = parse_salary(structured)
+    warnings.extend(sal.warnings)
+    if sal.min is not None or sal.max is not None:
+        return {
+            "salary_raw": structured, "salary_min": sal.min, "salary_max": sal.max,
+            "salary_period": sal.period, "salary_stated": 1 if sal.stated else 0,
+            "salary_source": "structured", "warnings": warnings,
+        }  # fmt: skip
+    found = extract_salary_from_text(text, location)
+    if found is not None:
+        return {
+            "salary_raw": found.raw, "salary_min": found.min, "salary_max": found.max,
+            "salary_period": found.period, "salary_stated": 1, "salary_source": "text",
+            "warnings": [*warnings, f"salary taken from description text: {found.raw[:60]!r}"],
+        }  # fmt: skip
+    return {
+        "salary_raw": structured, "salary_min": None, "salary_max": None,
+        "salary_period": None, "salary_stated": 1 if sal.stated else 0,
+        "salary_source": None, "warnings": warnings,
+    }  # fmt: skip
+
+
 def _normalize_row(row: sqlite3.Row, tz: str) -> dict[str, object]:
     warnings: list[str] = []
     text = html_to_text(row["description_raw"])
     if not text:
         warnings.append(f"{WARNING_PREFIX}description empty after html_to_text")
 
-    sal = parse_salary(row["salary_raw"])
-    warnings.extend(f"{WARNING_PREFIX}{w}" for w in sal.warnings)
+    sal = resolve_salary(row["salary_raw"], row["salary_source"], text, row["location_raw"])
+    warnings.extend(f"{WARNING_PREFIX}{w}" for w in sal["warnings"])  # type: ignore[attr-defined]
 
     employer = row["employer"] or row["agency_raw"]
     emp = detect_employment_type(f"{row['title']}\n{text[:_EMP_HEAD_CHARS]}")
@@ -66,10 +99,12 @@ def _normalize_row(row: sqlite3.Row, tz: str) -> dict[str, object]:
     all_warnings = kept + warnings
     return {
         "description_text": text,
-        "salary_min": sal.min,
-        "salary_max": sal.max,
-        "salary_period": sal.period,
-        "salary_stated": 1 if sal.stated else 0,
+        "salary_raw": sal["salary_raw"],
+        "salary_min": sal["salary_min"],
+        "salary_max": sal["salary_max"],
+        "salary_period": sal["salary_period"],
+        "salary_stated": sal["salary_stated"],
+        "salary_source": sal["salary_source"],
         "remote": detect_remote(row["title"], row["location_raw"], text),
         "employment_type": emp,
         "employer": employer,
@@ -83,7 +118,8 @@ def _normalize_row(row: sqlite3.Row, tz: str) -> dict[str, object]:
 _UPDATE = """
 UPDATE job SET
   description_text = :description_text, salary_min = :salary_min,
-  salary_max = :salary_max, salary_period = :salary_period,
+  salary_max = :salary_max, salary_period = :salary_period, salary_raw = :salary_raw,
+  salary_source = :salary_source,
   salary_stated = :salary_stated, remote = :remote,
   employment_type = :employment_type, employer = :employer,
   posted_at = :posted_at, closes_at = :closes_at,
@@ -133,3 +169,41 @@ def normalize_pending(
             conn.execute(_UPDATE, vals)
     apply_locations(conn, force=force)  # leave job_locations populated (specs/011)
     return len(rows)
+
+
+def _salary_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT COALESCE(salary_source, 'none') AS s, COUNT(*) AS n FROM job GROUP BY s"
+    ).fetchall()
+    counts = {"structured": 0, "text": 0, "none": 0}
+    counts.update({r["s"]: r["n"] for r in rows})
+    return counts
+
+
+def backfill_salary(conn: sqlite3.Connection) -> tuple[dict[str, int], dict[str, int]]:
+    """Fill salary from description text for jobs with no structured salary; free and local.
+
+    Touches only the salary columns of jobs whose pay did not come from a structured field, so it
+    is idempotent and safe to re-run. Returns (counts before, counts after) keyed by salary_source
+    ('structured', 'text', 'none').
+    """
+    before = _salary_counts(conn)
+    rows = conn.execute(
+        "SELECT id, salary_raw, salary_source, description_text, location_raw FROM job "
+        "WHERE description_text IS NOT NULL AND description_text != '' "
+        "AND (salary_source IS NULL OR salary_source = 'text')"
+    ).fetchall()
+    with _txn(conn):
+        for r in rows:
+            sal = resolve_salary(
+                r["salary_raw"], r["salary_source"], r["description_text"], r["location_raw"]
+            )
+            sal.pop("warnings")
+            sal["id"] = r["id"]
+            conn.execute(
+                "UPDATE job SET salary_raw = :salary_raw, salary_min = :salary_min, "
+                "salary_max = :salary_max, salary_period = :salary_period, "
+                "salary_stated = :salary_stated, salary_source = :salary_source WHERE id = :id",
+                sal,
+            )
+    return before, _salary_counts(conn)
