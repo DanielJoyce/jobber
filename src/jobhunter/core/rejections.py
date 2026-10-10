@@ -7,7 +7,7 @@ email (``jobhunter mail match``) or entered by hand on ``/rejections``.
 Two uses in scoring, both decided in Python with no model call:
 
 * **Same posting** (``RejectionIndex.same_posting``): the group the rejection matched, or a
-  group at the same normalized employer whose title is a near-identical match. Such a group is
+  group at the same normalized employer with the same title (``same_title``). Such a group is
   never sent to a scorer (no credits spent) and is kept out of the inbox.
 * **Same employer, different role, within N days** (``RejectionIndex.prior``): the job is
   still scored, and the prompt carries one neutral sentence of context. Pay and location stay
@@ -25,10 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from rapidfuzz import fuzz
-
 DEFAULT_WINDOW_DAYS = 90
-TITLE_MATCH = 90  # rapidfuzz token_sort_ratio on normalized titles: "the same posting"
 
 _NONWORD = re.compile(r"[^a-z0-9]+")
 CORP_WORDS = {"inc", "llc", "corp", "corporation", "co", "company", "ltd", "the", "plc", "lp"}
@@ -53,26 +50,32 @@ def title_norm(title: str | None) -> str:
     return " ".join(tokens(title or ""))
 
 
-# Tokens that make two otherwise identical titles different roles: "Engineer II" is not
-# "Engineer III", and "Senior Analyst" is not "Analyst". They must agree exactly.
-LEVEL_WORDS = {
-    "i", "ii", "iii", "iv", "v", "vi", "senior", "sr", "junior", "jr", "lead", "staff",
-    "principal", "chief", "head", "intern", "associate", "manager", "director", "trainee",
-}  # fmt: skip
+# Words that never distinguish two postings. Everything else must match: a team, specialty
+# or level word ("Cloud" vs "Core", "Search" vs "Research", "Engineer II" vs "III", "Leader")
+# makes a different role. A fuzzy ratio (token_sort_ratio >= 90) was too loose on short
+# titles and hid different roles at the same employer for good (bug d28c8de).
+FILLER_WORDS = {"a", "an", "and", "at", "for", "in", "of", "on", "the", "to", "with"}
 
 
-def _level_key(title: str) -> frozenset[str]:
-    return frozenset(t for t in title.split() if t.isdigit() or t in LEVEL_WORDS)
+def _title_words(title: str) -> list[str]:
+    out = []
+    for t in title.split():
+        if t in FILLER_WORDS:
+            continue
+        if len(t) > 3 and t.endswith("s") and not t.endswith("ss"):
+            t = t[:-1]  # "Engineers" is "Engineer"
+        out.append(t)
+    return out
 
 
 def same_title(a: str | None, b: str | None) -> bool:
-    """Near-identical titles (fuzzy) with exactly the same level words and numbers."""
+    """The same posting title: the same words in any order, ignoring case, punctuation,
+    plurals, filler words and spacing ("Full Stack" is "Fullstack")."""
     ta, tb = title_norm(a), title_norm(b)
     if not ta or not tb:
         return False
-    if ta == tb:
-        return True
-    return _level_key(ta) == _level_key(tb) and fuzz.token_sort_ratio(ta, tb) >= TITLE_MATCH
+    wa, wb = _title_words(ta), _title_words(tb)
+    return sorted(wa) == sorted(wb) or "".join(wa) == "".join(wb)
 
 
 def _parse(ts: str | None) -> datetime | None:
@@ -229,7 +232,7 @@ def rejected_group_ids(conn: sqlite3.Connection, index: RejectionIndex | None = 
     """Groups that are a posting the candidate was rejected for (never scored, not in inbox).
 
     Directly matched groups, plus groups at a rejecting employer whose canonical title is a
-    near match. A ``LIKE`` on the employer's longest token narrows the scan in SQL first.
+    ``same_title`` match. A ``LIKE`` on the employer's longest token narrows the scan in SQL first.
     """
     index = index if index is not None else RejectionIndex.load(conn)
     out = set(index.direct)

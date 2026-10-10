@@ -98,6 +98,24 @@ def test_employer_norm_drops_corporate_suffixes():
         ("Systems Engineer 1", "Systems Engineer 3", False),
         ("Data Engineer", "Senior Data Engineer", False),
         ("Data Engineer", None, False),
+        # Word order, punctuation, case, plurals and spacing do not make a different posting.
+        ("Platform Engineer - Data", "Data Platform Engineer", True),
+        ("Full Stack Engineer", "Fullstack Engineer", True),
+        ("Software Engineers", "software engineer", True),
+        # A different team, specialty or extra word is a different role (the fuzzy ratio
+        # alone scored all of these >= 90).
+        ("Senior Software Engineer, Cloud", "Senior Software Engineer, Core", False),
+        ("Staff Software Engineer, Ads", "Staff Software Engineer, AI", False),
+        ("Senior Engineer - Search", "Senior Engineer - Research", False),
+        ("Staff Software Engineer", "Staff Software Engineer - FE", False),
+        ("Senior Software Engineer, Mobile QA", "Senior Software Engineer, Native Mobile", False),
+        ("Software Engineer, AV Labs", "Software Engineer, ML AV Labs", False),
+        ("Radiologic Technologist (Gen)", "Radiologic Technologist (MRI)", False),
+        (
+            "Housekeeping Aid - Service Technician",
+            "Housekeeping Aid - Service Technician Leader",
+            False,
+        ),
     ],
 )
 def test_same_title(a, b, same):
