@@ -185,6 +185,54 @@ def test_mixed_periods_the_pay_range_wins_over_an_earlier_hourly_mention():
     assert (s.min, s.max, s.period) == (100000, 140000, "year")
 
 
+UNLABELLED_ANNUAL_WITH_HOURLY_SIDE_RATE = [
+    (
+        "Salary range: $120,000 - $150,000\n\nThis role participates in the on-call rotation; "
+        "on-call hours are paid at $15 per hour.",
+        (120000, 150000),
+    ),
+    (
+        "On-call hours are paid at $15 per hour. Salary range: $120,000 - $150,000",
+        (120000, 150000),
+    ),
+    (
+        "The salary range for this role is $120,000 - $150,000. On-call is paid at $10 per hour.",
+        (120000, 150000),
+    ),
+    (
+        "Base salary: $150,000 - $180,000. Interns are paid $40 - $50 per hour.",
+        (150000, 180000),
+    ),
+    (
+        "Interns are paid $40 - $50 per hour. Base salary: $150,000 - $180,000.",
+        (150000, 180000),
+    ),
+]
+
+
+@pytest.mark.parametrize(("text", "want"), UNLABELLED_ANNUAL_WITH_HOURLY_SIDE_RATE)
+def test_annual_range_without_a_period_word_beats_an_hourly_side_rate(text, want):
+    # An explicit "per hour" scores higher than an annual range with no period word, but a
+    # stated annual range is the salary: the hourly figure is a side rate (on-call, interns).
+    s = ex(text)
+    assert s is not None and (s.min, s.max, s.period) == (*want, "year")
+
+
+def test_hourly_side_rate_does_not_hard_reject_against_an_annual_floor():
+    from jobhunter.scoring.prefilter import rule_salary
+    from jobhunter.scoring.profile import Hard, SalaryFloor
+
+    s = ex(UNLABELLED_ANNUAL_WITH_HOURLY_SIDE_RATE[0][0])
+    job = {"salary_stated": 1, "salary_min": s.min, "salary_max": s.max, "salary_period": s.period}
+    hard = Hard(salary_floor=SalaryFloor(amount=100000, period="year"))
+    assert rule_salary(job, hard) is None
+
+
+def test_hourly_pay_still_wins_when_no_annual_range_is_stated():
+    s = ex("Pay: $45/hr for on-call. The pay range for this position is $70.00 - $90.00/hr.")
+    assert (s.min, s.max, s.period) == (45, 90, "hour")
+
+
 @pytest.mark.parametrize(
     ("text", "want"),
     [

@@ -296,8 +296,11 @@ stated" and comp fit was dropped. Normalize now falls back to a precision-first 
 the structured field yields no numbers: it needs pay context, an explicit period or a USD tag,
 sane magnitude per period, and rejects bonuses, funding, equity, benefits and minimum-wage
 blurbs, including the $7.25/hr federal-minimum placeholder some boards put in every posting's
-Compensation field. Candidates are grouped by period and the strongest group wins (confidence,
-then ranges), so an earlier hourly or placeholder figure cannot displace a stated annual range.
+Compensation field. Candidates are grouped by period; a confident annual group always wins,
+else the strongest group (confidence, then ranges). Confidence is not compared across periods,
+since "$15 per hour" earns an explicit-period bonus that "Salary range: $120,000 - $150,000"
+cannot, so an hourly on-call, intern or placeholder figure, before or after it, cannot displace
+a stated annual range.
 Several ranges (location tiers): the one whose label (before the range, else after it; a city
 before a state code) names the job's location, else the widest min..max over the group.
 `job.salary_source` is `structured` or `text`; for `text`, `salary_raw` holds the matched

@@ -319,18 +319,29 @@ def _by_location(
     return None
 
 
-def _group_strength(group: list[tuple[int, int, TextSalary]]) -> tuple[float, int, int]:
+def _group_strength(group: list[tuple[int, int, TextSalary]]) -> tuple[bool, float, int, int]:
+    """Sort key for a period group: annual first, then confidence, more ranges, earliest.
+
+    Confidence alone is not comparable across periods: "$15 per hour" earns the explicit-period
+    bonus while "Salary range: $120,000 - $150,000" has no period word to earn it, yet the
+    hourly figure is an on-call or intern side rate. A confident annual candidate already needs
+    an annual period word, labelled min/max, a USD tag, or a range after a pay word (a lone
+    "Salary: $130,000" scores below CONFIDENT), so it is the stated salary and wins over any
+    other period.
+    """
+    annual = group[0][2].period == "year"
     best = max(f[2].confidence for f in group)
     ranges = sum(1 for f in group if f[2].min != f[2].max)
-    return best, ranges, -group[0][0]
+    return annual, best, ranges, -group[0][0]
 
 
 def extract_salary_from_text(text: str | None, location: str | None = None) -> TextSalary | None:
     """Best pay range found in a description, or None when nothing is confidently pay.
 
-    Candidates are grouped by period and the strongest group wins (highest confidence, then
-    more ranges, then earliest), so an earlier hourly overtime rate or placeholder cannot
-    displace a stated annual range. Within that group, several ranges (location tiers): the one
+    Candidates are grouped by period. A confident annual group always wins; otherwise the
+    strongest group wins (highest confidence, then more ranges, then earliest). So an hourly
+    on-call, overtime or intern rate, or a placeholder, before or after it, cannot displace a
+    stated annual range. Within that group, several ranges (location tiers): the one
     labelled with the job's location wins; otherwise the widest min..max across the group.
     """
     if not text:
