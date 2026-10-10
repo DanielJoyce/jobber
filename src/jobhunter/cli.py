@@ -1489,6 +1489,26 @@ def apply_draft(
     )
 
 
+@apply_app.command("stats")
+def apply_stats(
+    days: Annotated[
+        int | None, typer.Option("--days", help="Only the last N days (default: all time).")
+    ] = None,
+) -> None:
+    """How assisted apply is used: packets by status and board, ready packets on the four
+    public ATSs (the phase 2 gate), documents, saved answers (counts only), packet spend and,
+    once phase 1e has landed, captures. Writes no rows and spends nothing."""
+    from jobhunter.apply import stats
+
+    settings = load_settings()
+    conn = db.connect(settings.paths.db_path)
+    try:
+        db.migrate(conn)
+        typer.echo(stats.compute(conn, datetime.now(UTC), days).format())
+    finally:
+        conn.close()
+
+
 def _api_hint(packet_id: int, letter: bool, question: str | None) -> str:
     extra = " --letter" if letter else f" --question {json.dumps(question)}" if question else ""
     command = f"jobhunter apply draft {packet_id}{extra} --runner api"

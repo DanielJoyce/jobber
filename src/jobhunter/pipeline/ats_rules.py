@@ -171,6 +171,13 @@ ATS_RULES: tuple[AtsRule, ...] = (
         re.compile(r"^/[^/]+/[0-9a-f-]{20,}"),
         _append_segment("application"),
     ),
+    # Postings live at /<account>/j/<shortcode>/, the form at .../apply/ (specs/017, 1d).
+    AtsRule(
+        "workable",
+        ("apply.workable.com",),
+        re.compile(r"^/[^/]+/j/[0-9A-Za-z]+"),
+        _append_segment("apply"),
+    ),
     AtsRule("icims", ("*.icims.com",), re.compile(r"/jobs/\d+"), _as_is),
     AtsRule(
         "smartrecruiters",

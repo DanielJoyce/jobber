@@ -12,6 +12,7 @@ LEVER = "https://jobs.lever.co/acme/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
 ASHBY = "https://jobs.ashbyhq.com/acme/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
 NEOGOV = "https://www.governmentjobs.com/careers/acme/jobs/4567890/analyst"
 USAS = "https://apply.usastaffing.gov/Application/Apply?AnnouncementNumber=X-1&JobId=1"
+WORKABLE = "https://apply.workable.com/acme/j/1A2B3C4D5E/"
 
 
 @pytest.mark.parametrize(
@@ -40,6 +41,9 @@ USAS = "https://apply.usastaffing.gov/Application/Apply?AnnouncementNumber=X-1&J
         (NEOGOV, "neogov", NEOGOV + "/apply"),
         (NEOGOV + "/apply", "neogov", NEOGOV + "/apply"),
         (USAS, "usastaffing", None),
+        (WORKABLE, "workable", WORKABLE.rstrip("/") + "/apply"),
+        (WORKABLE + "apply/", "workable", WORKABLE.rstrip("/") + "/apply"),
+        ("https://apply.workable.com/acme/", "workable", None),
     ],
 )
 def test_ats_canonical(url, ats, canonical):
