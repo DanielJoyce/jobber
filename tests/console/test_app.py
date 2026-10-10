@@ -99,3 +99,9 @@ def test_cli_refuses_remote():
     res = CliRunner().invoke(cli_app, ["console", "--host", "0.0.0.0"])
     assert res.exit_code == 2
     assert "--allow-remote" in res.output
+
+
+def test_pages_are_never_cached_but_static_files_are(client):
+    # Back must re-fetch /inbox, or rows triaged since look untriaged again.
+    assert client.get("/inbox").headers["cache-control"] == "no-store"
+    assert "no-store" not in client.get(static_url("app.css")).headers.get("cache-control", "")

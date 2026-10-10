@@ -408,3 +408,37 @@ def test_followups_page_and_actions(client, conn):
     assert status_of(conn, b) == "no_response"
     assert "Job 2" not in client.get("/followups").text
     assert client.post("/followups/999/done").status_code == 404
+
+
+def test_card_shows_source_posted_and_job_link_to_tell_lookalikes_apart(tmp_path):
+    from datetime import UTC, datetime
+
+    from jobhunter.console import tracking
+    from jobhunter.core import db as _db
+
+    conn = _db.connect(tmp_path / "c.db")
+    _db.migrate(conn)
+    now = "2026-10-01T00:00:00+00:00"
+    conn.execute(
+        "INSERT INTO source (key, state, class, name, family, tier, entry, policy) "
+        "VALUES ('s1', 'CO', 'A', 'Example Board', 'vos', 'api', 'https://example.com', 'enabled')"
+    )
+    conn.execute(
+        "INSERT INTO job_group (id, member_count, method, created_at) "
+        "VALUES (7, 1, 'exact_hash', ?)",
+        (now,),
+    )
+    conn.execute(
+        "INSERT INTO job (id, source_key, external_id, job_group_id, url, title, posted_at, "
+        "first_seen_at, last_seen_at) VALUES (1, 's1', 'x', 7, 'https://example.com/j', 'Eng', "
+        "'2026-09-30T12:00:00Z', ?, ?)",
+        (now, now),
+    )
+    conn.execute("UPDATE job_group SET canonical_job_id = 1 WHERE id = 7")
+    conn.execute(
+        "INSERT INTO application (id, job_group_id, status, created_at, updated_at) "
+        "VALUES (1, 7, 'interested', ?, ?)",
+        (now, now),
+    )
+    c = tracking.card(conn, 1, datetime(2026, 10, 2, tzinfo=UTC))
+    assert (c.source, c.posted, c.group_id) == ("Example Board", "2026-09-30", 7)

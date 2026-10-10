@@ -3,6 +3,7 @@
   <a class="pcard-title" href="/pipeline/{{ c.app_id }}" hx-get="/pipeline/{{ c.app_id }}" hx-target="#drawer" hx-swap="innerHTML">{{ c.title }}</a>
   <div class="pcard-employer">{{ c.employer }}</div>
   <div class="pcard-loc muted">{{ c.location }}</div>
+  <div class="pcard-src muted">{% if c.source %}{{ c.source }}{% endif %}{% if c.posted %} &middot; posted {{ c.posted }}{% endif %} &middot; <a href="/job/{{ c.group_id }}" title="open the job page">job #{{ c.group_id }}</a></div>
   <div class="pcard-meta">
     <span class="days{% if c.stale %} amber{% endif %}" title="days in {{ c.status }}">{{ c.days }}d{% if c.stale %} &#9888;{% endif %}</span>
     {% if c.status not in board_statuses %}<span class="badge-status">{{ c.status }}</span>{% endif %}

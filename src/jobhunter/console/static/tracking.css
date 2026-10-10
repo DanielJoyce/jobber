@@ -9,7 +9,7 @@
 .pcard.stale { border-color: var(--status-warning); border-left-width: 4px; }
 .pcard.focused { outline: 2px solid var(--text-secondary); outline-offset: 1px; }
 .pcard-title { color: var(--text-primary); font-weight: 600; text-decoration: none; }
-.pcard-employer, .pcard-loc { font-size: 0.8rem; }
+.pcard-employer, .pcard-loc, .pcard-src { font-size: 0.8rem; }
 .pcard-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; font-size: 0.78rem; }
 .pcard-next { margin-top: 4px; font-size: 0.78rem; }
 .pcard-moves { display: flex; gap: 4px; margin-top: 6px; }
