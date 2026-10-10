@@ -213,6 +213,35 @@ def msg_of(sender, subject, body=""):
         # Loose phrases only count from a known ATS sender.
         ("A <x@example.test>", "Hi", "Thank you for your interest in our newsletter.", "other"),
         ("A <x@smartrecruiters.com>", "Hi", "Thank you for your interest in Acme.", "confirmation"),
+        # A loose rejection word loses to any other kind's phrase (bug d28c8de): these are
+        # confirmations and interview mail, not rejections.
+        (
+            "A <no-reply@greenhouse.io>",
+            "Thank you for applying for the Data Engineer position at Acme",
+            "Unfortunately we are unable to respond to every applicant individually.",
+            "confirmation",
+        ),
+        (
+            "A <no-reply@greenhouse.io>",
+            "Your interview with Acme",
+            "Unfortunately the interviewer is out that day; please select a time that works.",
+            "interview",
+        ),
+        (
+            "A <x@example.test>",
+            "Thank you for applying",
+            "If you are not selected for an interview we will keep your resume on file.",
+            "confirmation",
+        ),
+        # A specific rejection phrase still wins, and a bare "unfortunately" is still a
+        # (weak) rejection when nothing else matches.
+        (
+            "A <x@example.test>",
+            "Thank you for applying",
+            "Unfortunately, we have decided to not move forward with your candidacy.",
+            "rejection",
+        ),
+        ("A <x@example.test>", "Your application", "Unfortunately it closed.", "rejection"),
     ],
 )
 def test_classification_table(sender, subject, body, kind):
@@ -412,6 +441,22 @@ def test_snippet_capped_and_body_not_stored(conn):
     ev = json.loads(r["evidence"])
     assert 0 < len(ev["snippet"]) <= match.SNIPPET_MAX
     assert "SECRET-TAIL" not in json.dumps(dict(r))
+
+
+def test_rejection_strength():
+    strong = match.classify(
+        msg_of("A <x@example.test>", "Update", "Unfortunately we will not be moving forward.")
+    )
+    assert (strong.kind, strong.phrase, strong.strong) == (
+        "rejection", "not be moving forward", True,
+    )  # fmt: skip
+    weak = match.classify(msg_of("A <x@example.test>", "Update", "Unfortunately it is closed."))
+    assert (weak.kind, weak.phrase, weak.strong) == ("rejection", "unfortunately", False)
+
+
+def test_query_skips_sent_mail():
+    # The user's own replies ("unfortunately I can't make Tuesday") are never candidates.
+    assert "-in:sent" in match.build_query(SETTINGS, 14)
 
 
 # --- accept / dismiss ----------------------------------------------------------------------

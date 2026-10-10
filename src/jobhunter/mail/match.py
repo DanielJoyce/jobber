@@ -72,18 +72,24 @@ ATS_SENDER_DOMAINS = (
 
 # Order matters: first kind with a hit wins. A rejection often also says "thank you for
 # applying", and a confirmation often says "if selected for an interview", so the strong,
-# specific kinds are tested first and the loose ones last.
+# specific kinds are tested first and the loose ones last. Every rejection phrase here is
+# specific; the loose rejection words are in WEAK_REJECTION and count only when no phrase of
+# any kind matched (bug d28c8de: "unfortunately we are unable to respond to every applicant"
+# in a confirmation, or "if you are not selected", made confirmations into rejections).
 PHRASES: dict[str, tuple[str, ...]] = {
     "rejection": (
-        "unfortunately",
         "not moving forward",
         "not be moving forward",
+        "won't be moving forward",
+        "not move forward",
+        "not to move forward",
         "will not be proceeding",
         "decided to pursue other candidates",
         "decided to move forward with other",
+        "move forward with other candidates",
+        "moving forward with other candidates",
         "no longer under consideration",
         "position has been filled",
-        "not selected",
         "regret to inform",
         "unable to offer you",
     ),
@@ -131,6 +137,9 @@ PHRASES: dict[str, tuple[str, ...]] = {
 }
 # Too loose to count unless the sender is a known ATS.
 WEAK_PHRASES = {"thank you for your interest", "application status", "your availability"}
+# Loose rejection words: a rejection only when nothing in PHRASES matched, and then a *weak*
+# one, recorded as pending until the user confirms it on /rejections.
+WEAK_REJECTION = ("unfortunately", "not selected")
 
 URL_RE = re.compile(r"https?://[^\s<>\")\]]+", re.I)
 _WS = re.compile(r"\s+")
@@ -170,6 +179,9 @@ class Classification:
     in_subject: bool
     phrase: str | None = None
     source: str = "rules"
+    # For a rejection: matched a specific phrase (not only a loose word like "unfortunately").
+    # Only strong rejections become a rejection fact without the user's confirmation.
+    strong: bool = True
 
 
 # Hook for an optional LLM classifier later (a separate bug). Called only when the rules say
@@ -240,6 +252,10 @@ def classify(msg: Message, fallback: Classifier | None = None) -> Classification
         for p in phrases:
             if p in body and not (p in WEAK_PHRASES and not ats):
                 return Classification(kind, ats, False, p)
+    for where, text in ((True, subject), (False, body)):
+        for p in WEAK_REJECTION:
+            if p in text:
+                return Classification("rejection", ats, where, p, strong=False)
     if fallback is not None:
         out = fallback(msg)
         if out is not None and out.kind in KINDS:
@@ -255,7 +271,7 @@ def build_query(settings: Settings, days: int) -> str:
     words = "application OR applying OR applied OR interview OR candidacy OR position OR offer"
     label = settings.mail.label.strip().replace("/", "-").replace(" ", "-")
     return (
-        f"newer_than:{days}d -label:{label} -in:spam -in:trash "
+        f"newer_than:{days}d -label:{label} -in:spam -in:trash -in:sent "
         f"(from:({domains}) OR subject:({words}))"
     )
 
