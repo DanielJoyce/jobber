@@ -52,9 +52,14 @@ def _load_migrations() -> list[tuple[int, str, str]]:
         if m:
             found.append((int(m.group(1)), m.group(2), entry.read_text(encoding="utf-8")))
     found.sort()
-    versions = [v for v, _, _ in found]
-    if len(versions) != len(set(versions)):
-        raise RuntimeError("duplicate migration version numbers")
+    by_version: dict[int, list[str]] = {}
+    for v, name, _ in found:
+        by_version.setdefault(v, []).append(f"{v:04d}_{name}.sql")
+    clashes = [", ".join(files) for files in by_version.values() if len(files) > 1]
+    if clashes:
+        # Parallel branches that each add a migration with the next number merge cleanly in
+        # git; renumber all but one of these files to an unused version.
+        raise RuntimeError(f"duplicate migration version numbers: {'; '.join(clashes)}")
     return found
 
 

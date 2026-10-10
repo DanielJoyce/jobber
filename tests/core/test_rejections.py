@@ -172,11 +172,13 @@ def test_pending_rows_count_for_nothing_until_confirmed(conn):
         rec(conn, "Acme", "X", state="maybe")
 
 
-def test_migration_0026_marks_loose_phrase_email_rows_pending(monkeypatch):
+def test_migration_0028_marks_loose_phrase_email_rows_pending(monkeypatch):
     import json
 
     real = db._load_migrations
-    monkeypatch.setattr(db, "_load_migrations", lambda: [m for m in real() if m[0] < 26])
+    monkeypatch.setattr(
+        db, "_load_migrations", lambda: [m for m in real() if m[1] != "rejection_state"]
+    )
     c = db.connect(":memory:")
     db.migrate(c)
     rows = [

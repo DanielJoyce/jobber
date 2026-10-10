@@ -1,4 +1,4 @@
--- 0026_rejection_state: a rejection read from a loose phrase needs the user's confirmation
+-- 0028_rejection_state: a rejection read from a loose phrase needs the user's confirmation
 -- (specs/007 "Gmail matching", bug d28c8de). 'confirmed' rows are facts that hide the posting
 -- and flag other roles; 'pending' rows do nothing until confirmed on /rejections. Specific
 -- phrases ("decided to move forward with other candidates") are confirmed when recorded;
@@ -22,6 +22,10 @@ WHERE source = 'email'
   AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%no longer under consideration%'
   AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%has been filled%'
   AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%regret to inform%'
-  AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%unable to offer you%';
+  AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%unable to offer you%'
+  AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%extend an offer%'
+  AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%another candidate%'
+  AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%decided not to proceed%'
+  AND lower(COALESCE(json_extract(evidence, '$.snippet'), '')) NOT LIKE '%not be advancing%';
 
 CREATE INDEX idx_rejection_state ON rejection(state);
