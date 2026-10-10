@@ -254,6 +254,37 @@ def test_undo_keeps_progressed_application(seeded):
     assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 1
 
 
+def test_undo_with_manual_rejection_on_the_application(seeded):
+    # Regression: a manual rejection stores application_id; undoing the shortlist label then
+    # deleted the application and failed with "FOREIGN KEY constraint failed" (HTTP 500).
+    from jobhunter.core import rejections
+
+    inbox.set_label(seeded, 1, "interesting")
+    app_id = seeded.execute("SELECT id FROM application").fetchone()[0]
+    rejections.record(
+        seeded, received_at=NOW.isoformat(), employer="Acme", title=None, source="manual",
+        now=NOW, job_group_id=1, application_id=app_id,
+    )  # fmt: skip
+    inbox.undo_label(seeded, 1)
+    assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 0
+    row = seeded.execute("SELECT job_group_id, application_id FROM rejection").fetchone()
+    assert tuple(row) == (1, None)  # the rejection fact stays, on the posting
+
+
+def test_undo_keeps_application_a_mail_proposal_points_at(seeded):
+    inbox.set_label(seeded, 1, "interesting")
+    app_id = seeded.execute("SELECT id FROM application").fetchone()[0]
+    seeded.execute(
+        "INSERT INTO mail_proposal (gmail_message_id, received_at, kind, proposed_action, "
+        "application_id, job_group_id, proposed_status, confidence, evidence, created_at) "
+        "VALUES ('m1', ?, 'rejection', 'add_event', ?, 1, 'rejected', 0.9, '{}', ?)",
+        (NOW.isoformat(), app_id, NOW.isoformat()),
+    )
+    inbox.undo_label(seeded, 1)
+    assert seeded.execute("SELECT COUNT(*) FROM label").fetchone()[0] == 0
+    assert seeded.execute("SELECT COUNT(*) FROM application").fetchone()[0] == 1
+
+
 # ─── HTTP ───────────────────────────────────────────────────────────────────
 
 
