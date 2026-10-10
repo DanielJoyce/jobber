@@ -284,6 +284,17 @@ def test_inbox_bucket_and_state_params(client):
     assert ">Bullseye</a>" not in client.get("/inbox?state=TX").text
 
 
+def test_shortlist_toast_links_to_the_pipeline_but_dismiss_does_not(client):
+    # The shortlist is otherwise invisible: say where it went.
+    r = client.post("/inbox/1/label?label=interesting")
+    assert '<a href="/pipeline">see it in Pipeline</a>' in r.text
+    assert client.get("/pipeline").status_code == 200
+    r = client.post("/inbox/2/label?label=not_interesting")
+    assert "Pipeline" not in r.text
+    r = client.post("/inbox/bulk", data={"label": "interesting", "group_id": [3, 4]})
+    assert r.text.count('<a href="/pipeline">see it in Pipeline</a>') == 2
+
+
 def test_label_and_undo_routes(client):
     r = client.post("/inbox/1/label?label=interesting")
     assert r.status_code == 200

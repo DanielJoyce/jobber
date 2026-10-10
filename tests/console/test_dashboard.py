@@ -664,6 +664,16 @@ def test_series_not_enough_data():
     c.close()
 
 
+def test_mix_chart_slots_are_named_not_lettered(conn):
+    s = dash.series(conn, PROFILE, 7, NOW)
+    assert [(x["key"], x["label"]) for x in s["mix"]["slots"]] == [
+        ("a", "Bullseye"),
+        ("b", "Strong"),
+        ("other", "Other fits"),
+        ("f", "Stale match"),
+    ]
+
+
 def test_series_enough_flag_needs_three_points(conn):
     s = dash.series(conn, PROFILE, 7, NOW)
     assert s["line"]["enough"] is True  # 3 days with A+B
@@ -713,6 +723,26 @@ def test_dark_sequential_ramp_tokens(client):
         lum = [_luminance(ramp[k]) for k in sorted(ramp, key=int)]
         assert lum == sorted(lum)  # dark ramp climbs: low recedes, high is brightest
         assert _contrast(ramp["700"], surface) > 8
+
+
+def test_link_tokens_are_readable_in_every_theme(client):
+    css = client.get("/static/app.css").text
+    # light :root, the dark media-query block, and the forced-dark block
+    dark_at = css.index("@media (prefers-color-scheme: dark)")
+    forced_at = css.index(':root[data-theme="dark"]')
+    scopes = {
+        "light": css[:dark_at],
+        "dark": css[dark_at:forced_at],
+        "forced dark": css[forced_at : css.index("* { box-sizing")],
+    }
+    for name, scope in scopes.items():
+        tokens = dict(re.findall(r"--([\w-]+): (#[0-9a-f]{6});", scope))
+        for link in ("link", "link-visited"):
+            for ground in ("surface-1", "page"):
+                assert _contrast(tokens[link], tokens[ground]) >= 4.5, (name, link, ground)
+    # Bare links use the tokens; the browser default is what was unreadable in dark mode.
+    assert re.search(r"^a \{ color: var\(--link\); \}", css, re.M)
+    assert "a:where(:visited) { color: var(--link-visited); }" in css
 
 
 # ─── outcomes Sankey ───────────────────────────────────────────────────────
