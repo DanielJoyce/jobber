@@ -229,6 +229,7 @@ class ScanResult:
     stored: int = 0
     rejections_stored: int = 0
     thread_duplicates: int = 0
+    rematched: int = 0  # stored rejections proposed for an application created since
 
 
 # --- classification ------------------------------------------------------------------------
@@ -857,6 +858,81 @@ def store(conn: sqlite3.Connection, proposals: list[Proposal], now: datetime) ->
     return n
 
 
+def rematch_rejections(conn: sqlite3.Connection, app_id: int, now: datetime) -> int:
+    """Link stored, unmatched rejection emails to an application created after them, and
+    propose each as a 'rejected' event (accept/dismiss as usual). Returns proposals stored.
+
+    A rejection row is never fetched from Gmail again, so without this an application that
+    appears later (the user accepts its confirmation) would never learn it was rejected. A
+    rejection qualifies when it is at the same normalized employer, not older than the
+    application (one day of slack, as in ``_recent_enough``), and either names the same
+    title or names none while this is the user's only application at that employer.
+    """
+    app = conn.execute(
+        "SELECT a.id, a.job_group_id, a.status, COALESCE(a.applied_at, a.created_at) AS since, "
+        "j.title, COALESCE(j.employer, j.agency_raw, '') AS employer "
+        "FROM application a JOIN job_group g ON g.id = a.job_group_id "
+        "JOIN job j ON j.id = g.canonical_job_id WHERE a.id = ?",
+        (app_id,),
+    ).fetchone()
+    if app is None or app["status"] in ("rejected", "withdrawn", "closed"):
+        return 0
+    norm = rej.employer_norm(app["employer"])
+    if not norm:
+        return 0
+    cands = conn.execute(
+        "SELECT * FROM rejection WHERE source = 'email' AND gmail_message_id IS NOT NULL "
+        "AND job_group_id IS NULL AND application_id IS NULL AND employer_norm = ? "
+        "ORDER BY received_at, id",
+        (norm,),
+    ).fetchall()
+    if not cands:
+        return 0
+    others = conn.execute(
+        "SELECT COALESCE(j.employer, j.agency_raw, '') FROM application a "
+        "JOIN job_group g ON g.id = a.job_group_id JOIN job j ON j.id = g.canonical_job_id "
+        "WHERE a.id != ?",
+        (app_id,),
+    ).fetchall()
+    sole = not any(rej.employer_norm(r[0]) == norm for r in others)
+    since = rej.parse_time(app["since"])
+    props: list[Proposal] = []
+    for r in cands:
+        when = rej.parse_time(r["received_at"])
+        if since is not None and (when is None or when < since - timedelta(days=1)):
+            continue
+        if r["title"] and not rej.same_title(r["title"], app["title"]):
+            continue
+        if not r["title"] and not sole:
+            continue
+        conn.execute(
+            "UPDATE rejection SET job_group_id = ?, application_id = ? WHERE id = ?",
+            (app["job_group_id"], app_id, r["id"]),
+        )
+        try:
+            evidence = json.loads(r["evidence"] or "{}")
+        except ValueError:
+            evidence = {}
+        evidence["matched"] = ["employer", "title"] if r["title"] else ["employer"]
+        evidence["job"] = {"title": app["title"], "employer": app["employer"]}
+        evidence["rematched"] = True
+        props.append(
+            Proposal(
+                gmail_message_id=r["gmail_message_id"],
+                thread_id=r["thread_id"] or "",
+                received_at=r["received_at"],
+                kind="rejection",
+                proposed_action="add_event",
+                proposed_status="rejected",
+                confidence=0.6 if r["title"] else 0.5,
+                evidence=evidence,
+                application_id=app_id,
+                job_group_id=app["job_group_id"],
+            )
+        )
+    return store(conn, props, now)
+
+
 def scan(
     conn: sqlite3.Connection,
     service,
@@ -900,4 +976,9 @@ def scan(
     if not dry_run:
         result.stored = store(conn, result.proposals, now)
         result.rejections_stored = store_rejections(conn, result.rejections, now)
+        live = conn.execute(
+            "SELECT id FROM application WHERE status NOT IN ('rejected', 'withdrawn', 'closed')"
+        ).fetchall()
+        result.rematched = sum(rematch_rejections(conn, r[0], now) for r in live)
+        result.stored += result.rematched
     return result

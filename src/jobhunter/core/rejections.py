@@ -78,7 +78,7 @@ def same_title(a: str | None, b: str | None) -> bool:
     return sorted(wa) == sorted(wb) or "".join(wa) == "".join(wb)
 
 
-def _parse(ts: str | None) -> datetime | None:
+def parse_time(ts: str | None) -> datetime | None:
     if not ts:
         return None
     try:
@@ -243,7 +243,7 @@ class RejectionIndex:
             return None
         since = self.now - timedelta(days=self.days)
         for r in self.by_employer.get(employer_norm(employer), ()):  # newest first
-            when = _parse(r.received_at)
+            when = parse_time(r.received_at)
             if when is not None and since <= when <= self.now + timedelta(days=1):
                 return r
         return None

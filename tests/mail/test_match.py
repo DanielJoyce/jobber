@@ -917,3 +917,59 @@ def test_accepting_a_rejection_proposal_confirms_the_rejection_row(conn, client)
     pid = rows(conn)[0]["id"]
     assert client.post(f"/proposals/{pid}/accept").status_code == 303
     assert conn.execute("SELECT state FROM rejection").fetchone()[0] == "confirmed"
+
+
+def test_rejection_stored_before_the_application_is_proposed_once_it_exists(conn, client):
+    # Regression (bug d28c8de): a rejection row is never fetched again, so when the
+    # application only appears later (the user accepts the confirmation), the stored
+    # rejection must be linked to it and proposed as a 'rejected' event then.
+    confirm = raw(
+        "c1",
+        "Contoso <no-reply@ashbyhq.com>",
+        "Thanks for applying to Contoso",
+        "Thanks for applying to the Senior Platform Engineer role at Contoso.",
+        days_ago=5,
+    )
+    run_scan(conn, [confirm, msg_contoso_reject()])
+    (p,) = rows(conn)
+    assert p["proposed_action"] == "create_application"
+    assert conn.execute("SELECT job_group_id FROM rejection").fetchone()[0] is None
+    assert client.post(f"/proposals/{p['id']}/accept").status_code == 303
+    app = conn.execute("SELECT id, job_group_id FROM application").fetchone()
+    r = conn.execute("SELECT job_group_id, application_id FROM rejection").fetchone()
+    assert tuple(r) == (app["job_group_id"], app["id"])
+    new = [x for x in rows(conn) if x["state"] == "pending"]
+    assert [(x["kind"], x["proposed_action"], x["application_id"]) for x in new] == [
+        ("rejection", "add_event", app["id"])
+    ]
+    assert client.post(f"/proposals/{new[0]['id']}/accept").status_code == 303
+    assert t.events(conn, app["id"])[0]["status"] == "rejected"
+
+
+def test_rematch_skips_other_roles_and_older_rejections(conn):
+    run_scan(conn, [msg_contoso_reject("old", days_ago=40)])
+    add_job(conn, 1, "Contoso", "Senior Platform Engineer", applied="applied")
+    add_job(conn, 2, "Contoso", "Welder", applied="applied")
+    app2 = conn.execute("SELECT id FROM application WHERE job_group_id = 2").fetchone()[0]
+    assert match.rematch_rejections(conn, app2, NOW) == 0  # a different title
+    app1 = conn.execute("SELECT id FROM application WHERE job_group_id = 1").fetchone()[0]
+    conn.execute("UPDATE application SET applied_at = ? WHERE id = ?", (NOW.isoformat(), app1))
+    assert match.rematch_rejections(conn, app1, NOW) == 0  # older than the application
+    assert rows(conn) == []
+
+
+def test_scan_proposes_stored_rejections_for_applications_added_since(conn):
+    # An application entered some other way after the rejection was stored (or before
+    # this fix) is caught up on the next scan, even with no new mail.
+    run_scan(conn, [msg_contoso_reject()])
+    app_id = add_job(conn, 1, "Contoso", "Senior Platform Engineer", applied="applied")
+    _, res = run_scan(conn, [])
+    assert res.rematched == 1
+    (p,) = rows(conn)
+    assert (p["kind"], p["application_id"], p["proposed_status"]) == (
+        "rejection",
+        app_id,
+        "rejected",
+    )
+    _, res = run_scan(conn, [])  # idempotent
+    assert res.rematched == 0 and len(rows(conn)) == 1

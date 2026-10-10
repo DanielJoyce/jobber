@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from jobhunter.console import tracking as t
+from jobhunter.mail import match
 
 MANUAL_SOURCE = "email-manual"
 
@@ -171,5 +172,7 @@ def accept(
             app_id = int(cur.lastrowid or 0)
         conn.commit()
         t.add_event(conn, app_id, "applied", note, at, source="email")
+        # A rejection email stored before this application existed is proposed now.
+        match.rematch_rejections(conn, int(app_id), now)
     _decide(conn, pid, "accepted", now)
     return int(app_id)

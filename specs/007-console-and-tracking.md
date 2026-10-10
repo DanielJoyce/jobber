@@ -201,7 +201,12 @@ is also common in confirmations and interview mail, so it counts only when no ph
 other kind matched, and the row is stored `pending` (migration 0026, bug d28c8de): it hides
 no posting, flags no other role and reaches no scorer until you confirm it on `/rejections`.
 Accepting the matching `add_event` proposal confirms the row; dismissing it deletes the row.
-The scan skips sent mail (`-in:sent`), so your own replies are never read. Employer and
+The scan skips sent mail (`-in:sent`), so your own replies are never read. A rejection email
+is never fetched twice, so one stored before its application existed (you accept the
+confirmation later) is linked to that application when it appears, on accept and on every
+scan (`match.rematch_rejections`: same employer, not older than the application, and the
+same title, or no title while it is your only application there), and proposed as a
+`rejected` event. Employer and
 title come from the matched job, else from the email (`parse_employer_title`: subject shapes
 first, then the sender's "Acme Hiring Team" name, then body sentences); `employer_norm`
 is the normalized employer used for matching. Evidence is sender, subject, a snippet of at most
