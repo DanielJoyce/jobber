@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 
 import pytest
@@ -374,3 +375,200 @@ def test_sankey_labels_never_overlap_on_real_data_shapes(page, server, width):
     assert page.locator("#chart-sankey text.slabel", has_text="Untriaged").count() == 1
     assert page.evaluate(OVERLAPS_JS) == []
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+# ─── map color scale: grey for none, green growing more intense with the count ───────────
+
+_TOKEN_JS = "n => getComputedStyle(document.documentElement).getPropertyValue(n).trim()"
+
+
+def _rgb(page, color: str) -> tuple[int, int, int]:
+    return tuple(page.evaluate("c => { const r = d3.rgb(c); return [r.r, r.g, r.b]; }", color))
+
+
+def _lum(rgb) -> float:
+    def ch(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * ch(rgb[0]) + 0.7152 * ch(rgb[1]) + 0.0722 * ch(rgb[2])
+
+
+def _state_counts(page) -> dict[str, int]:
+    rows = page.eval_on_selector_all(
+        "#state-table tr[data-state]",
+        "rs => rs.map(r => [r.dataset.state, r.querySelector('td.num').textContent.trim()])",
+    )
+    return {st: int(n) for st, n in rows if n.isdigit()}
+
+
+def _fill_of(page, state):
+    return page.get_attribute(f'#map g.targets path[data-state="{state}"]', "fill")
+
+
+def _contrast(a, b) -> float:
+    hi, lo = max(_lum(a), _lum(b)), min(_lum(a), _lum(b))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_map_scale_is_grey_for_zero_and_greener_with_more_jobs(dash, scheme):
+    dash.emulate_media(color_scheme=scheme)
+    dash.reload()
+    dash.wait_for_selector(PATHS)
+    counts = _state_counts(dash)
+    assert counts, "state table should list per-state counts"
+    top = max(counts.values())
+    assert top > 0
+    zero_state = next(s for s, n in counts.items() if n == 0)
+    top_state = next(s for s, n in counts.items() if n == top)
+    tok = lambda n: dash.evaluate(_TOKEN_JS, n)  # noqa: E731
+    assert _fill_of(dash, zero_state) == tok("--map-0")  # neutral grey
+    assert _fill_of(dash, top_state) == tok("--map-5")  # strongest green
+    r, g, b = _rgb(dash, tok("--map-0"))
+    assert max(r, g, b) - min(r, g, b) < 12
+    steps = [_rgb(dash, tok(f"--map-{i}")) for i in range(6)]
+    for r, g, b in steps[1:]:
+        assert g > r and g > b
+    # Every neighbouring pair (including zero vs the lowest class) differs clearly in
+    # lightness, and the ramp is monotonic: darker in light mode, brighter in dark mode.
+    for a, b in itertools.pairwise(steps):
+        assert _contrast(a, b) >= 1.25, (a, b)
+    lum = [_lum(s) for s in steps]
+    assert lum == sorted(lum, reverse=(scheme == "light"))
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_map_labels_stay_readable_on_every_step(dash, scheme):
+    """Read the rendered label ink against the rendered cell fill, so inkOn regressions fail."""
+    dash.emulate_media(color_scheme=scheme)
+    dash.reload()
+    dash.wait_for_selector(PATHS)
+    rows = dash.evaluate(
+        """() => {
+          const out = [];
+          document.querySelectorAll('#map g.labels text.lbl').forEach(t => {
+            const cell = document.querySelector(
+              '#map g.targets [data-state="' + t.textContent.trim() + '"]');
+            if (!cell) return;
+            out.push([getComputedStyle(t).fill, getComputedStyle(cell).fill]);
+          });
+          return out;
+        }"""
+    )
+    assert len(rows) > 10
+    for ink, cell in rows:
+        assert _contrast(_rgb(dash, ink), _rgb(dash, cell)) >= 4.5, (ink, cell)
+
+
+def test_map_legend_swatches_run_grey_then_green_then_no_data(dash):
+    swatches = dash.eval_on_selector_all(
+        "#map-legend .legend-scale .swatch", "ns => ns.map(n => n.style.backgroundColor)"
+    )
+    tok = lambda n: dash.evaluate(_TOKEN_JS, n)  # noqa: E731
+    rgbs = [_rgb(dash, s) for s in swatches[:-1]]
+    assert rgbs[0] == _rgb(dash, tok("--map-0"))
+    assert len(rgbs) >= 2 and all(c != rgbs[0] for c in rgbs[1:])
+    # The last swatch (no data) is hatched, not a flat color.
+    nodata = dash.locator("#map-legend .swatch.nodata")
+    expect(nodata).to_have_count(1)
+    assert "repeating-linear-gradient" in nodata.evaluate(
+        "n => getComputedStyle(n).backgroundImage"
+    )
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_no_data_cells_are_hatched_and_distinct_from_every_scale_step(page, server, scheme):
+    page.emulate_media(color_scheme=scheme)
+    page.goto(f"{server.url}/?metric=response_rate")
+    page.wait_for_selector(PATHS)
+    paints = set(fills(page))
+    assert "url(#map-nodata)" in paints, "seed has states with no response-rate data"
+    # A pattern paint is not a flat color, so no hue/lightness coincidence with a step is possible,
+    # and the pattern itself carries visible line marks against the surface.
+    assert page.locator("#map pattern#map-nodata line.nodata-hatch").count() == 1
+    line = page.eval_on_selector("#map-nodata line", "n => getComputedStyle(n).stroke")
+    surface = page.evaluate(_TOKEN_JS, "--surface-1")
+    assert _contrast(_rgb(page, line), _rgb(page, surface)) >= 2.5
+    for n in range(6):
+        assert "url(" not in page.evaluate(_TOKEN_JS, f"--map-{n}")
+
+
+# ─── synthetic data covering null, zero and every class ──────────────────────────────────
+
+# value per state; breaks [2, 4, 6, 8, 10] make class i hold values in (2(i-1), 2i].
+_CLASS_STATES = {"AK": 1, "AZ": 3, "AR": 5, "CA": 7, "CO": 9}  # classes 1..5
+_ZERO_STATE, _NODATA_STATE = "AL", "TX"
+
+
+def _load_synthetic(page, server, scheme):
+    def handler(route):
+        payload = route.fetch().json()
+        for row in payload["states"]:
+            if row["state"] == "REMOTE":
+                continue
+            row["value"] = _CLASS_STATES.get(row["state"], 0)
+            if row["state"] == _NODATA_STATE:
+                row["value"] = None
+        payload["kind"] = "count"
+        payload["breaks"] = [2, 4, 6, 8, 10]
+        route.fulfill(json=payload)
+
+    page.emulate_media(color_scheme=scheme)
+    page.route("**/api/dash/map*", handler)
+    page.goto(f"{server.url}/")
+    page.wait_for_selector(PATHS)
+    page.wait_for_function("() => !document.querySelector('.map-loading')")
+    return page
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_legend_swatch_i_matches_map_class_i_and_classes_are_monotonic(page, server, scheme):
+    _load_synthetic(page, server, scheme)
+    swatches = page.eval_on_selector_all(
+        "#map-legend .legend-scale .swatch",
+        "ns => ns.map(n => getComputedStyle(n).backgroundColor)",
+    )
+    assert len(swatches) == 7  # zero, five classes, no data
+    sw = [_rgb(page, c) for c in swatches[:6]]
+    assert _rgb(page, _fill_of(page, _ZERO_STATE)) == sw[0]
+    class_fills = [_rgb(page, _fill_of(page, st)) for st in _CLASS_STATES]
+    assert class_fills == sw[1:], "legend swatch i must be the fill of a class-i cell"
+    assert len(set(sw)) == 6
+    assert _fill_of(page, _NODATA_STATE) == "url(#map-nodata)"
+    lum = [_lum(c) for c in sw]
+    assert lum == sorted(lum, reverse=(scheme == "light"))
+    legend = page.inner_text("#map-legend .legend-scale")
+    for text in ("1\u20132", "3\u20134", "5\u20136", "7\u20138", "9\u201310"):
+        assert text in legend
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_rendered_label_ink_is_readable_on_every_class_and_no_data(page, server, scheme):
+    _load_synthetic(page, server, scheme)
+    surface = _rgb(page, page.evaluate(_TOKEN_JS, "--surface-1"))
+    seen = set()
+    for st in [*_CLASS_STATES, _ZERO_STATE, _NODATA_STATE]:
+        fill = _fill_of(page, st)
+        base = surface if fill.startswith("url(") else _rgb(page, fill)
+        ink = page.evaluate(
+            "s => { const t = Array.from(document.querySelectorAll('#map g.labels text.lbl'))"
+            ".find(t => t.textContent.trim() === s); return t ? getComputedStyle(t).fill : null; }",
+            st,
+        )
+        assert ink, f"{st} has a label"
+        assert _contrast(_rgb(page, ink), base) >= 4.5, (st, ink, fill)
+        seen.add(fill)
+    assert len(seen) == 7
+
+
+def test_no_data_hatch_line_is_inside_its_tile_and_has_ink(dash):
+    geo = dash.evaluate(
+        "() => { const p = document.querySelector('#map-nodata');"
+        " const l = p.querySelector('line');"
+        " return {w: +p.getAttribute('width'), x: +l.getAttribute('x1'), x2: +l.getAttribute('x2'),"
+        " sw: parseFloat(getComputedStyle(l).strokeWidth)}; }"
+    )
+    half = geo["sw"] / 2
+    assert geo["sw"] >= 1 and geo["x"] == geo["x2"]
+    assert half <= geo["x"] <= geo["w"] - half, "line must not be clipped by the tile edge"
