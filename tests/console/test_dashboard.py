@@ -678,7 +678,7 @@ def test_sankey_empty_database():
 
 def test_sankey_node_links_point_at_real_lists(conn):
     nodes = {n["id"]: n for n in dash.sankey(conn, PROFILE)["nodes"]}
-    assert nodes["applied"]["href"] == "/tracking"
+    assert nodes["applied"]["href"] == "/pipeline"
     assert nodes["fetched"]["href"] is None
     assert any(n["href"] == "/inbox?bucket=A" for n in nodes.values())
 

@@ -32,21 +32,21 @@ _CAND = re.compile(
 )
 # "Min USD $130,000.00/Yr. Max USD $160,000.00/Yr."
 _MINMAX = re.compile(
-    rf"\bmin(?:imum)?\.?\s*(?:{_CUR})?\s*(?P<a>{_NUM})\s*(?P<ka>[kK])?[^\n]{{0,30}}?"
-    rf"\bmax(?:imum)?\.?\s*(?:{_CUR})?\s*(?P<b>{_NUM})\s*(?P<kb>[kK])?",
+    rf"\bmin(?:imum)?\.?\s*:?\s*(?:{_CUR})?\s*(?P<a>{_NUM})\s*(?P<ka>[kK])?[^\n]{{0,30}}?"
+    rf"\bmax(?:imum)?\.?\s*:?\s*(?:{_CUR})?\s*(?P<b>{_NUM})\s*(?P<kb>[kK])?",
     re.I,
 )
 
 _LEAD = r"^\s*(?:\(?USD\)?\s*)?"
 _PERIOD_POST: list[tuple[str, re.Pattern[str]]] = [
-    ("hour", re.compile(rf"{_LEAD}(?:(?:/|per\b|an?\b)\s*)h(?:ou)?rs?\b|^\s*hourly\b", re.I)),
+    ("hour", re.compile(rf"{_LEAD}(?:(?:/|per\b|an?\b)\s*)h(?:ou)?rs?\b|^\s*/?\s*hourly\b", re.I)),
     ("day", re.compile(rf"{_LEAD}(?:/|per\b|a\b)\s*day\b|^\s*daily\b", re.I)),
     ("week", re.compile(rf"{_LEAD}(?:/|per\b|a\b)\s*(?:wk|week)\b|^\s*weekly\b", re.I)),
     ("month", re.compile(rf"{_LEAD}(?:/|per\b|a\b)\s*(?:mo|month)\b|^\s*monthly\b", re.I)),
     (
         "year",
         re.compile(
-            rf"{_LEAD}(?:/\s*(?:yr|year|annum)\b|per\s+(?:year|annum|yr)\b|a\s+year\b"
+            rf"{_LEAD}(?:/\s*(?:yr|year|yearly|annum|annually)\b|per\s+(?:year|annum|yr)\b|a\s+year\b"
             r"|yearly\b|annual(?:ly)?\b|p\.?a\b)",
             re.I,
         ),
@@ -162,7 +162,10 @@ def _candidates(text: str) -> list[tuple[int, int, TextSalary]]:
         bad_pre = _BAD_PRE.search(pre_clean[-60:])
         if bad_pre and not _STRONG.search(bad_pre.group(0)):
             continue
-        if not explicit and _BAD_POST.search(after):
+        # "$94,900 - $135,600 Bonus eligible: No" is a salary range followed by another field,
+        # unlike "$5,000 sign-on bonus": a range right after a strong pay word keeps going.
+        strong_range = n2 is not None and _STRONG.search(pre_clean[-40:])
+        if not explicit and not strong_range and _BAD_POST.search(after):
             continue
         if period is None:
             for name, pat in _PERIOD_PRE:
@@ -199,6 +202,9 @@ def _candidates(text: str) -> list[tuple[int, int, TextSalary]]:
             + (0.15 if has_cur else 0.0)
             + (0.3 if usd_after else 0.0)
             + (0.15 if is_range else 0.0)
+            # An explicit period on a currency amount ("$156,600 - $215,400 per year") is pay
+            # even when the sentence before it has no pay word.
+            + (0.1 if explicit and has_cur else 0.0)
         )
         out.append((start, end, TextSalary(lo, hi, period, text[start:raw_end].strip(), score)))
     return out

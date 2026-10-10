@@ -107,11 +107,11 @@ def test_sankey_renders_nodes_links_and_table(dash):
 
 def test_sankey_node_hover_and_click_navigates(dash):
     dash.wait_for_selector(SANKEY_NODES)
-    hit = dash.locator("#chart-sankey .snode a[href='/tracking'] .hit").first
+    hit = dash.locator("#chart-sankey .snode a[href='/pipeline'] .hit").first
     hit.hover()
     expect(dash.locator("#chart-sankey .chart-tip")).to_be_visible()
     hit.click()
-    dash.wait_for_url("**/tracking**")
+    dash.wait_for_url("**/pipeline**")
 
 
 def test_sankey_dark_mode_keeps_marks_and_label_contrast(dash):
