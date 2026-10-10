@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791597239,"nonce":"skajYloE2Fqx6W8aBRh+w57BH1Q=","message":"Landed in PR #71 (05bd19a). Extractor with context gating, period detection and bonus/funding rejection; structured pay wins; salary_source column; backfill-salary command; inbox hint.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791597239,"nonce":"YOO7MHxBLUr+F/W7C0vcTUoWgeo=","status":2}]}
