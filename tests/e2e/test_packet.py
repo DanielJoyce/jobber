@@ -233,3 +233,54 @@ def test_the_paid_button_sends_its_confirmation_and_a_second_click_runs_nothing(
     assert len(fake_claude.calls()) == 2  # the run and its confirmed entailment, once
     assert server.rows("SELECT count(*) FROM packet_document")[0][0] == 1
     assert not page.errors
+
+
+# ─── phase 1c: export ───────────────────────────────────────────────────────
+
+
+def test_export_prints_a_real_pdf_and_offers_the_files(page, server, fake_claude, claude_stream):
+    fake_claude.set([claude_stream(E2E_OUT), claude_stream({"lines": []})])
+    _new_packet(page, server)
+    page.click("#resume button[data-runner=cli]")
+    page.wait_for_url(re.compile(r"#resume$"))
+    expect(page.locator("#export-refusal-resume")).to_be_visible()  # unconfirmed line blocks it
+    page.click("#resume-editor .confirm-btn")
+    page.wait_for_load_state()
+    page.click("#export-btn-resume")
+    expect(page.locator("#export-msg")).to_contain_text("as PDF, text, Markdown and HTML")
+    expect(page.locator("#dl-resume-pdf")).to_be_visible()
+    with page.expect_download() as dl:
+        page.click("#dl-resume-pdf")
+    assert dl.value.suggested_filename.endswith("Resume.pdf")
+    with open(dl.value.path(), "rb") as fh:
+        assert fh.read(5) == b"%PDF-"
+    pid = int(re.search(r"/packet/(\d+)", page.url).group(1))
+    rendered = server.rows("SELECT rendered_path FROM packet_document")[0][0]
+    assert rendered == f"packets/{pid}/resume-v1.pdf"
+    assert not page.errors
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_export_section_fits_a_phone_and_is_readable(
+    browser, server, fake_claude, claude_stream, scheme
+):
+    fake_claude.set([claude_stream(E2E_OUT), claude_stream({"lines": []})])
+    ctx = browser.new_context(viewport={"width": 375, "height": 800}, color_scheme=scheme)
+    ctx.route("**/*", lambda r: r.continue_() if "127.0.0.1" in r.request.url else r.abort())
+    pg = ctx.new_page()
+    try:
+        _new_packet(pg, server)
+        pg.click("#resume button[data-runner=cli]")
+        pg.wait_for_url(re.compile(r"#resume$"))
+        pg.click("#resume-editor .confirm-btn")
+        pg.wait_for_load_state()
+        pg.click("#export-btn-resume")
+        pg.locator(".export-text summary").click()
+        overflow = pg.evaluate(
+            "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        assert overflow <= 1, f"export section scrolls sideways by {overflow}px"
+        for sel in ("#dl-resume-pdf", "#export .muted", "#export-resume h3", "#text-resume"):
+            assert pg.locator(sel).first.evaluate(CONTRAST_JS) >= 4.5, sel
+    finally:
+        ctx.close()
