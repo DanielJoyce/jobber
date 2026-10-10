@@ -6,13 +6,18 @@ One ``claude -p`` subprocess per drafting call, on the user's Claude subscriptio
            --model opus --effort medium            (no --effort for the Haiku call)
            --system-prompt <prompt> --json-schema <schema>
            --tools '' --strict-mcp-config --setting-sources '' --safe-mode
-           --disable-slash-commands --no-session-persistence --max-budget-usd 1.00
+           --disable-slash-commands --no-session-persistence --restricted
+           --max-budget-usd 1.00            (lower for a confirmed paid run)
 
 Safety properties, each enforced here and tested with a fake ``claude`` on ``PATH``:
 
 - **Environment built, not inherited** (:func:`child_env`): only an allowlist passes, so an
   ``ANTHROPIC_API_KEY`` loaded from ``.env`` can never reach the child and bill the API while
   we log $0. Non-essential traffic (telemetry, error reporting, auto-update) is turned off.
+- **The prompt is data.** ``CLAUDE_CODE_DISABLE_ATTACHMENTS=1`` and ``--restricted`` stop
+  @-mention file attachments, and :func:`neutralize` rewrites every token that starts with
+  ``@`` and puts a plain sentence first, so a posting cannot attach a file or run a command.
+  CLAUDE.md files and auto-memory are off by environment as well as by ``--safe-mode``.
 - **One fixed, empty working directory** (``<cache dir>/apply-cli/``), checked before each call.
 - **The ``system``/``init`` line is checked before the model is called**: ``apiKeySource`` must
   be ``none``, ``tools`` exactly ``["StructuredOutput"]`` and ``mcp_servers`` empty. On a

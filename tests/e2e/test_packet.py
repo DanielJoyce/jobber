@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -175,3 +176,60 @@ def test_documents_fit_a_phone_and_badges_are_readable(
             assert pg.locator(sel).first.evaluate(CONTRAST_JS) >= 4.5, sel
     finally:
         ctx.close()
+
+
+def test_enter_in_an_editor_box_saves_and_never_confirms(page, server, fake_claude, claude_stream):
+    out = json.loads(json.dumps(E2E_OUT))
+    out["resume"]["sections"][0]["entries"][0]["bullets"].append(
+        {"text": "Ran synthetic hosts", "sources": ["L2"]}
+    )
+    fake_claude.set([claude_stream(out), claude_stream({"lines": []})])
+    _new_packet(page, server)
+    page.click("#resume button[data-runner=cli]")
+    page.wait_for_url(re.compile(r"#resume$"))
+    box = page.locator('#resume-editor input[name="b.0.1.sources"]')
+    box.fill("L2, L1")
+    box.press("Enter")
+    page.wait_for_load_state()
+    rows = server.rows("SELECT version, origin, check_report FROM packet_document ORDER BY version")
+    assert [(r[0], r[1]) for r in rows] == [(1, "generated"), (2, "edited")]
+    report = json.loads(rows[-1][2])
+    assert all(i["status"] != "confirmed" for i in report["items"])
+    assert not page.errors
+
+
+def test_the_paid_button_sends_its_confirmation_and_a_second_click_runs_nothing(
+    page, server, fake_claude, claude_stream
+):
+    from jobhunter.apply import runner_state
+
+    runner_state.set_overage(server.app.state.settings.paths.data_dir)
+    slow = claude_stream(E2E_OUT, overage=True)
+    slow["steps"].insert(1, {"sleep": 1.5})
+    fake_claude.set([slow, claude_stream({"lines": []})])
+    _new_packet(page, server)
+    page.on("dialog", lambda d: d.accept())
+    btn = page.locator("#resume button[data-runner=cli]")
+    assert btn.get_attribute("data-paid") == "1"
+    posts = []
+    page.on(
+        "request",
+        lambda r: posts.append(r.post_data) if r.method == "POST" and "generate" in r.url else None,
+    )
+    # Click, then click again while the run is in flight (the fake takes 1.5 s).
+    disabled = page.evaluate(
+        """async () => {
+          const b = document.querySelector('#resume button[data-runner=cli]');
+          b.click();
+          await new Promise(r => setTimeout(r, 100));
+          const off = b.disabled;
+          b.click();
+          return off;
+        }"""
+    )
+    assert disabled is True
+    page.wait_for_url(re.compile(r"#resume$"), timeout=15000)
+    assert len(posts) == 1 and "confirm_paid=1" in posts[0]
+    assert len(fake_claude.calls()) == 2  # the run and its confirmed entailment, once
+    assert server.rows("SELECT count(*) FROM packet_document")[0][0] == 1
+    assert not page.errors

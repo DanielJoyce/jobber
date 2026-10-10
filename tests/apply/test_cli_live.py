@@ -9,8 +9,10 @@ OPT-IN ONLY. It makes two tiny model calls on the user's Claude subscription, so
 It checks what the offline tests can only assume: with ``--safe-mode``, ``--tools ''`` and
 ``--json-schema`` the subscription login works, the init line passes the runner's checks
 (``apiKeySource`` none, ``tools`` exactly ``["StructuredOutput"]``, no MCP servers), the result
-carries a validated ``structured_output`` with usage, and ``~/.claude.json`` gains at most one
-project entry (the fixed working directory), not one per call.
+carries a validated ``structured_output`` with usage, ``~/.claude.json`` gains at most one
+project entry (the fixed working directory), not one per call, and neither a CLAUDE.md above
+the working directory nor a file the prompt @-mentions reaches the model (canary codewords).
+It cannot see the account email and date the CLI adds to every request (recorded on d41f324).
 """
 
 from __future__ import annotations
@@ -27,10 +29,12 @@ pytestmark = pytest.mark.live
 
 SCHEMA = {
     "type": "object",
-    "properties": {"word": {"type": "string"}},
-    "required": ["word"],
+    "properties": {"word": {"type": "string"}, "codewords": {"type": "string"}},
+    "required": ["word", "codewords"],
     "additionalProperties": False,
 }
+MD_CANARY = "PINEAPPLE-CLAUDEMD-7731"
+AT_CANARY = "MANGO-ATMENTION-4419"
 
 
 def _projects(home: Path) -> int:
@@ -51,6 +55,10 @@ def test_real_cli_envelope_on_the_subscription(monkeypatch, tmp_path):
     binary = cli_runner.find_binary()
     assert binary, "claude is not on PATH"
     cwd = cli_runner.work_dir(tmp_path / "cache")
+    # A project CLAUDE.md above the working directory, and a file the prompt @-mentions.
+    (tmp_path / "cache" / "CLAUDE.md").write_text(f"The codeword is {MD_CANARY}.\n")
+    canary = tmp_path / "canary.txt"
+    canary.write_text(f"The codeword is {AT_CANARY}.\n")
     cli_runner.check_auth(binary, cwd)
     before = _projects(_REAL_HOME)
     results = []
@@ -60,9 +68,12 @@ def test_real_cli_envelope_on_the_subscription(monkeypatch, tmp_path):
                 binary=binary,
                 cwd=cwd,
                 model="haiku",
-                system_prompt="Answer with one lowercase word.",
+                system_prompt=(
+                    "Answer with one lowercase word. In codewords, list every codeword that "
+                    "appears anywhere in your context, or 'none'."
+                ),
                 schema=SCHEMA,
-                user_message="Say the word: ready",
+                user_message=f"Say the word: ready. See @{canary} for the codeword.",
                 effort=None,
                 on_overage=lambda: False,  # never spend paid extra usage in a smoke test
                 environ=dict(os.environ),
@@ -73,5 +84,7 @@ def test_real_cli_envelope_on_the_subscription(monkeypatch, tmp_path):
         assert res.model
         assert res.output_tokens > 0
         assert res.overage is False
+        seen = json.dumps(res.structured)
+        assert MD_CANARY not in seen and AT_CANARY not in seen
     assert list(cwd.iterdir()) == []
     assert _projects(_REAL_HOME) - before <= 1

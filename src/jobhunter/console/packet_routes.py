@@ -210,7 +210,9 @@ def register(
         settings = request.app.state.settings
         view = view or {}
         out: dict[str, Any] = {
-            "runner": packet_docs.runner_status(conn, settings, now()),
+            "runner": packet_docs.runner_status(
+                conn, settings, now(), request_chars=request_sizes(conn, p)
+            ),
             "gen": gen,
             "doc_message": doc_message,
             "numeric": numeric,
@@ -234,6 +236,23 @@ def register(
                 "view": viewer(shown) if shown is not None else None,
             }
         return out
+
+    def request_sizes(conn: sqlite3.Connection, p: packets.Packet) -> dict[str, int]:
+        """This packet's real request sizes, so a button's estimate is for what it sends."""
+        profile, _error = load_console_profile(app.state.settings)
+        if profile is None or not profile.resume_text.strip():
+            return {}
+        try:
+            ctx = generator.load_context(conn, profile, p.id)
+            sizes = {
+                k: generator.build_request(conn, ctx, k).chars for k in ("resume", "cover_letter")
+            }
+            sizes["question_draft"] = generator.build_request(
+                conn, ctx, "question_draft", question="x" * 200
+            ).chars
+            return sizes
+        except generator.ApplyRefused:
+            return {}
 
     def render_packet(
         request: Request,
@@ -287,6 +306,12 @@ def register(
             if runner not in ("cli", "api"):
                 raise generator.ApplyRefused("pick a runner")
             profile = apply_profile(request)
+            if kind == "cover_letter" and "notes" in form:
+                # Notes typed beside Add cover letter go with it (saved first, as N1-N3).
+                lines = answers.clean_lines(form.get("notes", ""))
+                answers.save_packet_answer(
+                    conn, p.id, answers.NOTES_KEY, "Employer notes", "\n".join(lines)
+                )
             if kind == "question_draft":
                 if labels.never_store(question) is not None:
                     raise generator.ApplyRefused(labels.YOURS)
@@ -391,14 +416,23 @@ def register(
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
         return back(packet_id, "letter")
 
+    def safe_next(target: str) -> str:
+        ok = target.startswith("/") and not target.startswith("//") and "\\" not in target
+        return target if ok else "/costs"
+
+    @app.post("/apply/runner/clear-overage")
+    def runner_clear_overage(request: Request, form: Form) -> Response:
+        """The user says the subscription is back within its plan: lift the paid-usage hold.
+        Its own action, never a side effect of Turn back on or of a later call."""
+        runner_state.clear_overage(request.app.state.settings.paths.data_dir)
+        return RedirectResponse(safe_next(form.get("next", "")), status_code=303)
+
     @app.post("/apply/runner/on")
     def runner_on(request: Request, form: Form) -> Response:
-        """Turn back on: clears the CLI runner's off state and the paid-usage hold."""
+        """Turn back on: clears the CLI runner's off state. A paid-usage hold stays."""
         runner_state.turn_on(request.app.state.settings.paths.data_dir)
         cli_runner.reset_auth_cache()
-        target = form.get("next", "")
-        safe = target.startswith("/") and not target.startswith("//") and "\\" not in target
-        return RedirectResponse(target if safe else "/costs", status_code=303)
+        return RedirectResponse(safe_next(form.get("next", "")), status_code=303)
 
     @app.get("/packet/{packet_id}", response_class=HTMLResponse)
     def packet_page(

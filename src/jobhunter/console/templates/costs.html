@@ -36,8 +36,12 @@
     <p><strong>CLI runner off.</strong> {{ runner.off_reason }}</p>
     <form method="post" action="/apply/runner/on"><input type="hidden" name="next" value="/costs"><button type="submit" id="runner-on">Turn back on</button></form>
   </div>
-  {% elif runner.overage %}
-  <p class="callout" id="runner-overage">Your subscription reported paid extra usage on the last packet call: CLI runs are charged against the apply cap and wait for your click.</p>
+  {% endif %}
+  {% if runner.overage %}
+  <div class="callout" id="runner-overage">
+    <p>Your subscription reported paid extra usage on a packet call: CLI runs are charged against the apply cap and each waits for a click that says so. Turning the runner back on does not change this.</p>
+    <form method="post" action="/apply/runner/clear-overage"><input type="hidden" name="next" value="/costs"><button type="submit" id="clear-overage">My plan has reset: clear</button></form>
+  </div>
   {% endif %}
 
   <h2>Daily scoring spend</h2>

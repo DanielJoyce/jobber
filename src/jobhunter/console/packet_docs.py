@@ -108,9 +108,22 @@ def resume_view(v: Version) -> dict[str, Any]:
                 )
                 for k, b in enumerate(e.get("bullets") or [])
             ]
+            heading_row = None
+            if ej == 0:
+                heading_row = _row(
+                    f"h.{si}",
+                    "heading",
+                    sec.get("heading") or "",
+                    [],
+                    si,
+                    report,
+                    f"s{si}.h",
+                    lines,
+                )
             entries.append(
                 {
                     "i": flat,
+                    "heading_row": heading_row,
                     "heading": sec.get("heading") or "",
                     "row": entry_row,
                     "bullets": bullets,

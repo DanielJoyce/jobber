@@ -157,7 +157,7 @@ class Forms(HTMLParser):
             self._ta = a["name"]
             self.forms[self._cur][self._ta] = ""
         elif tag == "button":
-            self.buttons.append({**a, "form": self._cur or ""})
+            self.buttons.append({**a, "in_form": self._cur or ""})
 
     def handle_data(self, data):
         if self._cur and self._ta:
@@ -174,6 +174,12 @@ def parse(html: str) -> Forms:
     f = Forms()
     f.feed(html)
     return f
+
+
+def target(page_html: str, btn: dict[str, str]) -> str:
+    """Where a button posts: its own form= form's action (never the editor's)."""
+    assert btn.get("form") and "formaction" not in btn, btn
+    return parse(page_html).forms[btn["form"]]["__action"]
 
 
 # ─── buttons and runners ────────────────────────────────────────────────────
@@ -321,8 +327,8 @@ def test_confirm_then_mark_ready(env, fake_claude, claude_stream):
     page = env.client.get(f"/packet/{env.pid}").text
     (btn,) = [b for b in parse(page).buttons if b.get("name") == "ckey"]
     doc_id = docs(env)[0]["id"]
-    assert btn["formaction"] == f"/packet/{env.pid}/doc/{doc_id}/confirm"
-    r = env.client.post(btn["formaction"], data={"ckey": btn["value"]})
+    assert target(page, btn) == f"/packet/{env.pid}/doc/{doc_id}/confirm"
+    r = env.client.post(target(page, btn), data={"ckey": btn["value"]})
     assert r.status_code == 303
     assert len(docs(env)) == 1  # a confirmation is recorded, not a new version
     assert env.client.post(f"/packet/{env.pid}/ready").status_code == 303
@@ -337,7 +343,7 @@ def test_edit_saves_a_new_version_rechecks_and_carries_confirmations(
     generate(env)
     page = env.client.get(f"/packet/{env.pid}").text
     (btn,) = [b for b in parse(page).buttons if b.get("name") == "ckey"]
-    env.client.post(btn["formaction"], data={"ckey": btn["value"]})
+    env.client.post(target(page, btn), data={"ckey": btn["value"]})
     page = env.client.get(f"/packet/{env.pid}").text
     form = _editor(page)
     assert form["b.0.1.text"] == LED and form["b.0.1.sources"] == "L7"
@@ -393,7 +399,7 @@ def test_restore_an_omitted_line(env, fake_claude, claude_stream):
     page = env.client.get(f"/packet/{env.pid}").text
     (btn,) = [b for b in parse(page).buttons if b.get("name") == "line"]
     assert btn["value"] == "L8"
-    r = env.client.post(btn["formaction"], data={"line": "L8"})
+    r = env.client.post(target(page, btn), data={"line": "L8"})
     assert r.status_code == 303
     doc = json.loads(docs(env)[-1]["doc_json"])
     bullets = doc["resume"]["sections"][0]["entries"][0]["bullets"]
@@ -529,3 +535,86 @@ def test_packet_page_is_not_cached_and_every_link_resolves(env, fake_claude, cla
         assert env.client.get(href).status_code == 200, href
     for f in parse(page.text).forms.values():
         assert f["__action"].startswith("/"), f
+
+
+# ─── review round ───────────────────────────────────────────────────────────
+
+
+def test_turn_back_on_keeps_the_paid_hold_and_the_page_shows_both(env, fake_claude, claude_stream):
+    d = env.settings.paths.data_dir
+    runner_state.set_overage(d)
+    runner_state.turn_off(d, "auth check failed")
+    page = env.client.get(f"/packet/{env.pid}").text
+    assert 'id="runner-off"' in page and 'id="runner-overage"' in page
+    env.client.post("/apply/runner/on", data={"next": f"/packet/{env.pid}"})
+    assert runner_state.load(d).overage
+    page = env.client.get(f"/packet/{env.pid}").text
+    cli = [b for b in parse(page).buttons if b.get("data-runner") == "cli"]
+    assert cli and all(b.get("data-paid") == "1" and b.get("data-confirm") for b in cli)
+    fake_claude.set([claude_stream(RESUME_OUT)])
+    r = generate(env)  # a plain click without confirm_paid is refused, nothing runs
+    assert r.status_code == 409 and fake_claude.calls(auth=None) == []
+    r = env.client.post("/apply/runner/clear-overage", data={"next": f"/packet/{env.pid}"})
+    assert r.status_code == 303 and not runner_state.load(d).overage
+    assert (
+        env.client.post("/apply/runner/clear-overage", data={"next": "//evil"}).headers["location"]
+        == "/costs"
+    )
+
+
+def test_confirm_and_restore_post_their_own_forms_and_save_is_the_default(
+    env, fake_claude, claude_stream
+):
+    fake_claude.set([claude_stream(RESUME_OUT), claude_stream(ENTAIL)])
+    generate(env)
+    page = env.client.get(f"/packet/{env.pid}").text
+    f = parse(page)
+    editor_buttons = [b for b in f.buttons if b["in_form"] == "resume-editor"]
+    # The first submit button of the editor, the one Enter presses, is a Save with no form=.
+    first = editor_buttons[0]
+    assert "default-save" in first.get("class", "") and "form" not in first
+    for b in editor_buttons:
+        if b.get("name") in ("ckey", "line"):
+            assert b.get("form", "").startswith(("confirm-", "restore-")), b
+
+
+def test_add_cover_letter_saves_the_notes_typed_beside_it(env, fake_claude, claude_stream):
+    env.client.post(f"/packet/{env.pid}/base")
+    fake_claude.set([claude_stream(LETTER_OUT), claude_stream({"lines": []})])
+    r = generate(env, kind="cover_letter", notes="Their docs taught me Terraform.")
+    assert r.status_code == 303
+    assert "N1: Their docs taught me Terraform." in fake_claude.calls()[0]["stdin"]
+    row = env.conn.execute(
+        "SELECT value FROM packet_answer WHERE field_key = 'notes:employer'"
+    ).fetchone()
+    assert row[0] == "Their docs taught me Terraform."
+
+
+def test_api_estimate_is_for_this_packets_request(env, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
+    small = env.client.get(f"/packet/{env.pid}").text
+    env.conn.execute(
+        "UPDATE job SET description_text = ? WHERE id = (SELECT max(id) FROM job)",
+        (POSTING + "\n" + "Long federal announcement text. " * 4000,),
+    )
+    big = env.client.get(f"/packet/{env.pid}").text
+
+    def est(html):
+        return float(re.search(r"Generate resume \(API, &asymp; \$(\d+\.\d\d)\)", html).group(1))
+
+    assert est(big) > est(small) + 0.1
+
+
+def test_an_edit_never_confirms_a_line_nobody_confirmed(env, fake_claude, claude_stream):
+    fake_claude.set([claude_stream(RESUME_OUT), claude_stream(ENTAIL)])
+    generate(env)
+    form = _editor(env.client.get(f"/packet/{env.pid}").text)
+    form["summary.text"] = "Platform engineer who moves services onto Kubernetes."
+    env.client.post(f"/packet/{env.pid}/doc/{docs(env)[0]['id']}/save", data=form)
+    v2 = docs(env)[-1]
+    report = json.loads(v2["check_report"])
+    items = {i["key"]: i for i in report["items"]}
+    assert items["s0.e0.b1"]["status"] == "unsupported"
+    assert report["confirmed"] == []
+    # The unchanged line keeps its advisory verdict across the edit.
+    assert items["s0.e0.b1"]["entail"] == "partly"
