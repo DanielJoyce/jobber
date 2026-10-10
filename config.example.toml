@@ -1,15 +1,19 @@
-# Copy to ~/.config/jobhunter/config.toml (or point $JOBHUNTER_CONFIG at your copy).
+# Copy to ~/.config/jobhunter/config.toml, i.e. $XDG_CONFIG_HOME/jobhunter/config.toml
+# (or point $JOBHUNTER_CONFIG at your copy).
 # Every value below is the built-in default; uncomment only what you want to change.
 # Placeholders only; never commit real values.
 # Secrets: ANTHROPIC_API_KEY comes from the environment, never from this file.
 
 [paths]
-# Relative paths resolve against the directory you run jobhunter from.
-# data_dir = "data"
-# cache_dir = "data/cache"
-# db_path = "data/jobhunter.db"
-# profile_dir = "profile"
-# resume_path = "resume"          # a directory or a single file
+# Defaults follow the XDG spec; `jobhunter paths` shows what is in effect. Relative paths
+# you set here resolve against the directory you run jobhunter from.
+# data_dir = "~/.local/share/jobhunter"        # $XDG_DATA_HOME/jobhunter
+# cache_dir = "~/.cache/jobhunter"             # $XDG_CACHE_HOME/jobhunter
+# db_path = "~/.local/share/jobhunter/jobhunter.db"   # default: <data_dir>/jobhunter.db
+# profile_dir = "~/.local/share/jobhunter/profile"    # default: <data_dir>/profile
+# resume_path = "~/.local/share/jobhunter/resume"     # a directory or a single file
+# The environment wins over this file: JOBHUNTER_DATA_DIR, JOBHUNTER_CACHE_DIR,
+# JOBHUNTER_DB_PATH, JOBHUNTER_PROFILE_DIR, JOBHUNTER_RESUME_PATH.
 
 [fetch]
 # respect_robots = true
@@ -49,7 +53,7 @@
 # referer = ""                                 # HTTP-Referer, omitted when empty
 # provider = { require_parameters = true, data_collection = "deny" }
 # max_concurrency = 2
-# catalog_cache = "data/openrouter_models.json"
+# catalog_cache = "~/.cache/jobhunter/openrouter_models.json"   # default: <cache_dir>/openrouter_models.json
 # jobs_per_request = 8                         # packed requests (specs/016); 1 = one job each, max 16
 # max_input_tokens_per_request = 40000        # split a pack above this estimated input size
 # est_cost_per_request_usd = 0.04             # spend-cap estimate until a mean is measured

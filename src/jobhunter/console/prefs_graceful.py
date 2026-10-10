@@ -25,6 +25,7 @@ from jobhunter.scoring.profile import (
     salvage_preferences,
     validate_profile_data,
 )
+from jobhunter.xdg import mkdir_private
 
 MAX_RESUME_BYTES = 1024 * 1024
 TEXT_SUFFIXES = (".md", ".markdown", ".txt")
@@ -207,9 +208,7 @@ def resume_target(settings: Settings, profile: Profile) -> Path:
 
 
 def _private_dir(path: Path) -> None:
-    if not path.exists():
-        path.mkdir(parents=True, mode=0o700)
-        os.chmod(path, 0o700)
+    mkdir_private(path)  # each directory it creates is 0700, the data dir too
 
 
 def store_resume(target: Path, filename: str, text: str, now: datetime) -> Path:

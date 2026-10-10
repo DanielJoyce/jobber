@@ -9,6 +9,12 @@ config.toml
 data/
 !specs/data/
 
+# Old folders that `jobhunter migrate-paths --apply` renamed in place (data.migrated-YYYYMMDD
+# and so on). They still hold the DB, backups, contact details and salary targets.
+data.migrated-*/
+profile.migrated-*/
+resume.migrated-*/
+
 # Python
 __pycache__/
 *.py[cod]

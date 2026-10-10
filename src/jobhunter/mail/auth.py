@@ -19,6 +19,7 @@ import keyring
 from keyring.backends import null
 
 from jobhunter.config import Settings, resolve_path
+from jobhunter.xdg import config_home
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -261,7 +262,7 @@ def run_manual_flow(
 
 
 def token_file_path() -> Path:
-    return Path.home() / ".config" / "jobhunter" / TOKEN_FILE_NAME
+    return config_home() / TOKEN_FILE_NAME
 
 
 def _keyring_usable() -> bool:

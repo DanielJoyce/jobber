@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from collections.abc import Iterator
@@ -10,15 +11,24 @@ from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 
+from jobhunter.xdg import mkdir_private
+
 MIGRATIONS_PACKAGE = "jobhunter.core.migrations"
 FK_OFF_MARKER = "-- migrate: foreign_keys=off"
 _MIGRATION_RE = re.compile(r"^(\d{4})_([A-Za-z0-9_]+)\.sql$")
 
 
 def connect(path: Path | str) -> sqlite3.Connection:
-    """Open a connection with the project's PRAGMAs. Accepts ``":memory:"``."""
+    """Open a connection with the project's PRAGMAs. Accepts ``":memory:"``.
+
+    A database created here is owner-only (0600; SQLite gives its -wal and -shm the same mode)
+    in directories created owner-only (0700): it holds mail, contacts and applications.
+    """
     if str(path) != ":memory:":
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        mkdir_private(Path(path).parent)
+        if not Path(path).exists():
+            # An empty file is a valid empty database; creating it first sets the mode.
+            os.close(os.open(path, os.O_CREAT | os.O_WRONLY, 0o600))
     # isolation_level=None: autocommit; transactions are explicit via transaction().
     # check_same_thread=False: FastAPI opens a request's connection in one threadpool
     # thread and may run the endpoint in another. Each connection is still owned by a

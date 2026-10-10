@@ -41,6 +41,7 @@ from ruamel.yaml.scalarstring import LiteralScalarString
 from jobhunter.config import Settings, resolve_path
 from jobhunter.core.geo import normalize_state
 from jobhunter.core.models import EmploymentType, Remote
+from jobhunter.xdg import mkdir_private
 
 logger = logging.getLogger(__name__)
 
@@ -788,9 +789,7 @@ def write_preferences_data(
 def write_preferences_text(profile_dir: Path, text: str, *, backup_stamp: str) -> Path:
     """Write raw YAML ``text`` as ``preferences.yaml`` (caller has validated it)."""
     profile_dir = Path(profile_dir).expanduser()
-    if not profile_dir.exists():
-        profile_dir.mkdir(parents=True, mode=0o700)
-        os.chmod(profile_dir, 0o700)
+    mkdir_private(profile_dir)  # each directory it creates is 0700, the data dir too
     backup_preferences(profile_dir, backup_stamp)
     prefs_file = profile_dir / PREFERENCES_FILE
     _atomic_private_write(prefs_file, text if text.endswith("\n") else text + "\n")

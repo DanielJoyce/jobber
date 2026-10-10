@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -31,10 +32,36 @@ app.add_typer(llm_app, name="llm")
 NOT_IMPLEMENTED = "not implemented yet"
 
 
+# Commands that run while old-layout data is unmigrated: they report on it, move it, or do
+# not touch user data at all (schedule only writes systemd units).
+UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule"}
+
+
 @app.callback()
-def _load_env() -> None:
-    """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs."""
+def _load_env(ctx: typer.Context) -> None:
+    """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
+    against a new database while the real one is still in the old layout."""
     load_env_files()
+    if ctx.resilient_parsing or ctx.invoked_subcommand in UNGUARDED_COMMANDS:
+        return
+    if "--help" in sys.argv[1:]:
+        return
+    _refuse_split_data()
+
+
+def _refuse_split_data() -> None:
+    from jobhunter import legacy_data
+
+    try:
+        settings = load_settings()
+    except (ValueError, OSError):
+        return  # a broken config file: the command itself reports it
+    status = legacy_data.check(settings)
+    if status.blocked:
+        typer.echo(f"error: {status.message}", err=True)
+        raise typer.Exit(1)
+    for note in status.warnings:
+        typer.echo(note, err=True)
 
 
 def _stub() -> None:
@@ -90,7 +117,6 @@ def run(
         return
 
     db_path = resolve_path(settings.paths.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(db_path)
     try:
         db.migrate(conn)
@@ -469,7 +495,6 @@ def backfill(
         )
 
     db_path = resolve_path(settings.paths.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(db_path)
     try:
         db.migrate(conn)
@@ -527,8 +552,6 @@ def dedupe(
 
     settings = load_settings()
     db_path = resolve_path(settings.paths.db_path)
-    if not dry_run:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(db_path)
     try:
         if not dry_run:
@@ -562,6 +585,135 @@ def backfill_salary_cmd() -> None:
         conn.close()
     for label, counts in (("before", before), ("after", after)):
         typer.echo(f"{label}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+
+
+@app.command(name="paths")
+def paths_cmd(
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Show each path, where it came from (default, config file, env) and whether it exists."""
+    from jobhunter import legacy_data
+    from jobhunter.config import config_file, config_file_source
+
+    settings = load_settings()
+    config_file_path = config_file(None)
+    sources = settings.paths.sources
+    router = settings.scoring.openrouter
+    catalog_source = (
+        "config file" if "catalog_cache" in router.model_fields_set else "under cache_dir"
+    )
+    rows = [
+        ("config_file", config_file_path, config_file_source()),
+        ("data_dir", settings.paths.data_dir, sources["data_dir"]),
+        ("db_path", settings.paths.db_path, sources["db_path"]),
+        ("profile_dir", settings.paths.profile_dir, sources["profile_dir"]),
+        ("resume_path", settings.paths.resume_path, sources["resume_path"]),
+        ("cache_dir", settings.paths.cache_dir, sources["cache_dir"]),
+        ("openrouter_catalog", router.catalog_cache, catalog_source),
+    ]
+    resolved = [(name, resolve_path(path), source) for name, path, source in rows]
+    status = legacy_data.check(settings)
+    if as_json:
+        info: dict[str, object] = {
+            name: {"path": str(path), "source": source, "exists": path.exists()}
+            for name, path, source in resolved
+        }
+        info["old_layout"] = {
+            "state": status.kind,
+            "unmigrated": [str(p) for p in status.unmigrated],
+            "stale": [str(p) for p in status.stale],
+            "message": status.message,
+        }
+        typer.echo(json.dumps(info, indent=2))
+        return
+    for name, path, source in resolved:
+        mark = "exists" if path.exists() else "missing"
+        typer.echo(f"{name:<19} {mark:<8} {path}  [{source}]")
+    if status.blocked:
+        typer.echo(f"stopped: {status.message}")
+    for note in status.warnings:
+        typer.echo(note)
+
+
+@app.command(name="migrate-paths")
+def migrate_paths_cmd(
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Do the move (default: a dry run that changes nothing).")
+    ] = False,
+    from_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--from",
+            help="Folder holding the old data/, profile/ and resume/ (default: the main "
+            "checkout or the working directory, wherever data/jobhunter.db is).",
+        ),
+    ] = None,
+) -> None:
+    """Move the old ./data, ./profile and ./resume to the XDG locations (dry run unless --apply).
+
+    --apply needs the database closed everywhere (stop the console and the timers). It copies,
+    verifies, then renames the old folders to *.migrated-YYYYMMDD; it never deletes anything.
+    """
+    from jobhunter.ops import migrate_paths as mp
+
+    settings = load_settings()
+    plan = mp.plan(settings, from_dir=from_dir)
+    for line in mp.render_plan(plan, apply=apply):
+        typer.echo(line)
+    if plan.problems:
+        raise typer.Exit(1)
+    if not apply:
+        return
+    if plan.nothing_to_do:
+        if mp.secure_data(settings):
+            typer.echo("checked: the data directory and its files are owner-only.")
+        return
+    try:
+        for line in mp.apply(plan, settings):
+            typer.echo(line)
+    except mp.MigrateError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+@app.command()
+def init() -> None:
+    """Set up a fresh install: the data directory (0700) and an empty database (0600).
+
+    Refuses while data from the old repo-relative layout exists; `jobhunter migrate-paths`
+    moves that instead.
+    """
+    from jobhunter import legacy_data
+    from jobhunter.ops.migrate_paths import secure_data
+    from jobhunter.xdg import mkdir_private
+
+    settings = load_settings()
+    status = legacy_data.check(settings)
+    if status.unmigrated:
+        old = ", ".join(map(str, status.unmigrated))
+        typer.echo(
+            f"error: your data is still in {old}; run `jobhunter migrate-paths` to move it "
+            "instead of starting a new database.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    db_path = resolve_path(settings.paths.db_path)
+    existed = db_path.exists()
+    mkdir_private(resolve_path(settings.paths.data_dir))
+    conn = db.connect(db_path)
+    try:
+        db.migrate(conn)
+    finally:
+        conn.close()
+    secure_data(settings)
+    if existed:
+        typer.echo(f"already set up: {db_path} (schema up to date, permissions checked)")
+        return
+    typer.echo(f"created {db_path}")
+    typer.echo(
+        f"next: put your resume (.md) in {resolve_path(settings.paths.resume_path)} or upload "
+        "it in `jobhunter console`, then set your preferences there."
+    )
 
 
 @app.command()
@@ -871,7 +1023,6 @@ def mail_sync(
         return
     adapter = MailAlertsAdapter(rows=rows, limit=limit)
     db_path = resolve_path(settings.paths.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(db_path)
     try:
         db.migrate(conn)

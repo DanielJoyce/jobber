@@ -88,6 +88,16 @@ One time, about ten minutes. No billing is involved.
    (it may show an error page), and you paste that full URL back at the prompt. The state is
    checked; a stale or wrong paste is rejected. Google retired the copy-the-code flow, so this
    loopback paste is the fallback. `--manual --port N` changes the port in the URL.
+   **Containers and file locations.** toolbox and distrobox share `$HOME` with the host, so
+   `~/.config/jobhunter`, `~/.local/share/jobhunter` and `~/.cache/jobhunter` (the token
+   fallback file, the database, the resume, the cache) are the same files inside and outside the
+   container. In a container with a throwaway home, point `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
+   `XDG_CACHE_HOME` (or `JOBHUNTER_DATA_DIR`, `JOBHUNTER_CACHE_DIR`) at a mounted volume;
+   otherwise they vanish with the container. `jobhunter paths` shows what is in effect. The
+   systemd timers get the `XDG_*` values the shell resolved at `jobhunter schedule install`
+   time, so a timer finds the same token file and database as your shell; reinstall the units
+   after changing them. While old repo-relative data is unmigrated, mail commands stop like every
+   other command until `jobhunter migrate-paths --apply` has moved it (specs/002).
    **Production mode.** In Testing, refresh tokens expire after 7 days. Set the consent
    screen's publishing status to **In production** (no verification needed for personal use of
    an unverified app); sign-in then shows an "unverified app" warning, click Advanced, then

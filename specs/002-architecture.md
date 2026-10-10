@@ -51,7 +51,12 @@ only triage and application state. SQLite in WAL mode handles that concurrency f
 
 Scheduling is a `systemd` **user** timer (`~/.config/systemd/user/jobhunter.timer`), not cron:
 it gives logs via `journalctl`, `OnFailure=` hooks, and `Persistent=true` so a missed run
-catches up after the laptop wakes.
+catches up after the laptop wakes. The units keep `WorkingDirectory=` at the checkout so
+`./.env` is read, and `jobhunter schedule install` writes `Environment=XDG_CONFIG_HOME=`,
+`XDG_DATA_HOME=` and `XDG_CACHE_HOME=` with the values the installing shell resolved, so the
+timers use the same config, database and cache as `jobhunter paths` shows even when the systemd
+user manager does not see `XDG_*` from a login shell. Reinstall after changing them.
+`JOBHUNTER_*` path variables are not copied; set those in `config.toml` or `.env`.
 
 ## The pipeline is stages over a database, not a dataflow graph
 
@@ -71,7 +76,7 @@ Every HTTP response — listing page, detail page, JSON payload, CSV export — 
 content-addressed and gzipped:
 
 ```
-data/cache/ab/cd/abcdef…sha256.gz
+~/.cache/jobhunter/ab/cd/abcdef…sha256.gz
 ```
 
 with a `fetch_log` row recording URL, source, timestamp, status, content hash, and the
@@ -97,12 +102,6 @@ Cache is never auto-evicted. Text compresses ~8x; a year of 50 states is single-
 jobhunter/
 ├── pyproject.toml
 ├── specs/                        ← these documents
-├── profile/                      ← YOUR data. gitignored.
-│   ├── resume.md
-│   └── preferences.yaml
-├── data/                         ← gitignored
-│   ├── jobhunter.db
-│   └── cache/
 ├── src/jobhunter/
 │   ├── cli.py                    Typer entrypoint
 │   ├── config.py                 settings, paths, policy flags
@@ -139,14 +138,97 @@ jobhunter/
     └── fixtures/<source>/        frozen HTML/JSON per adapter
 ```
 
+### Where files live
+
+Your files are **not** in the checkout. Defaults follow the XDG base directory spec
+(`src/jobhunter/xdg.py`); `jobhunter paths` prints the resolved value, its source and whether
+it exists.
+
+```
+$XDG_CONFIG_HOME/jobhunter/        (~/.config/jobhunter)
+├── config.toml                    machine settings
+├── google_client_secret.json      Gmail OAuth client (optional)
+└── gmail_token.json               fallback token store when no keyring
+$XDG_DATA_HOME/jobhunter/          (~/.local/share/jobhunter)   user data, mode 0700
+├── jobhunter.db
+├── profile/preferences.yaml       edited by the console; dated backups beside it
+├── resume/                        one .md; older versions in .previous/
+└── backups/                       sqlite backups (migrate-paths brings the old data/backups)
+$XDG_CACHE_HOME/jobhunter/         (~/.cache/jobhunter)
+├── ab/cd/<sha256>.gz              the raw cache (still never auto-evicted by jobhunter)
+└── openrouter_models.json
+```
+
+Decisions: `profile/preferences.yaml` stays with the resume under the data directory rather than
+in the config directory. It is rewritten by the console (with backups and content-hash
+snapshots) and its relative `resume_path` resolves against the profile directory's parent, so
+keeping `profile/` and `resume/` side by side preserves both. The raw cache moved to the cache
+directory as asked; it is still permanent as far as jobhunter is concerned, but a cache-cleaning
+tool may remove `~/.cache`, which only costs re-fetching.
+
+Precedence for each `[paths]` key: caller overrides, then `JOBHUNTER_DATA_DIR`,
+`JOBHUNTER_CACHE_DIR`, `JOBHUNTER_DB_PATH`, `JOBHUNTER_PROFILE_DIR`, `JOBHUNTER_RESUME_PATH`,
+then `config.toml`, then the XDG default. `db_path`, `profile_dir` and `resume_path` default to
+names inside `data_dir`, so setting `data_dir` moves all three. Relative explicit paths still
+resolve against the working directory.
+
+**The old layout: detect and stop, never guess.** The previous defaults were `./data`,
+`./profile` and `./resume`, relative to the working directory. Path resolution has no fallback
+to them: an explicit setting, else the XDG default. Instead `src/jobhunter/legacy_data.py` looks
+for an old database, narrowly: only `data/jobhunter.db` counts (a `resume/` or `profile/` alone
+is not a jobhunter checkout), and only in two places, the main checkout of the repository the
+package runs from (`git rev-parse --git-common-dir`, so every worktree maps to the same main
+checkout) and the working directory. Every command except `paths`, `migrate-paths`, `init` and
+`schedule` checks first (the Typer root callback):
+
+| Old `data/jobhunter.db` | Configured database | Result |
+|---|---|---|
+| none | missing | runs; the database is created (a fresh install; `jobhunter init` does it explicitly) |
+| exists, no `MOVED.txt` in `data/` | missing | stops: "your data is still in <path>; run jobhunter migrate-paths". Nothing is created. |
+| exists, no `MOVED.txt` | exists, default location | stops: two databases, jobhunter will not pick one |
+| exists, no `MOVED.txt` | exists, set explicitly | runs, with a note (a one-off run against a copy) |
+| exists, `MOVED.txt` beside it | exists | runs, with a note that the old one is stale |
+| is the configured one (`data_dir = "data"`) | | runs: the user chose it |
+
+`jobhunter init` creates the data directory (0700) and the database (0600) and refuses while old
+data exists.
+
+**`migrate-paths`.** A dry run by default; `--from DIR` names the old folder, otherwise the one
+found above (two different old databases need `--from`). `--apply`:
+
+1. refuses while any other process has the old database open: a scan of `/proc/*/fd` names the
+   process, and an exclusive SQLite lock (`locking_mode=EXCLUSIVE` plus `BEGIN EXCLUSIVE`, which
+   in WAL mode fails while any other connection is open) is taken and held to the end, so
+   nothing can open the database meanwhile. It says to stop `jobhunter console` and
+   `systemctl --user stop` the timers;
+2. copies the database with SQLite's online backup API into a temp file beside the destination,
+   and `data/backups`, `data/cache`, `profile/` and `resume/` into staging names;
+3. verifies: `integrity_check`, the same tables, schema and row counts for the database, the same
+   sha256 for every file of every tree; then moves the copies into place;
+4. makes the data directory 0700 and the database, backups, profile and resume 0600 (existing
+   ones too);
+5. renames the old folders in their parent to `data.migrated-YYYYMMDD`,
+   `profile.migrated-YYYYMMDD`, `resume.migrated-YYYYMMDD` (with `-2` and so on if taken) and
+   writes a `MOVED.txt` inside each. A rename is atomic and reversible, and no process can keep
+   using the old path. There is no `--remove-old`: the user deletes the `.migrated` folders by
+   hand; the command prints the `rm -rf` line. The archives still hold personal data, so
+   `.gitignore` and the forbid-personal-paths hook cover `<name>.migrated-*/` as well.
+
+A failure before step 5 removes this run's copies and leaves the old layout untouched. A
+destination that exists and differs (a database that exists at all) is a conflict: nothing
+happens until the user moves one aside. A rerun after success prints "nothing to migrate" and
+the archive folders still present. The tests' isolation guard (`tests/conftest.py`) blocks the
+real XDG locations as well as the repo-relative ones, and points the main-checkout detector away
+from the developer's checkout.
+
 ## Configuration
 
 Three layers, most specific wins:
 
 1. `src/jobhunter/config.py` — defaults in code.
-2. `~/.config/jobhunter/config.toml` — machine settings: paths, rate limits, model choice,
+2. `$XDG_CONFIG_HOME/jobhunter/config.toml` (`~/.config/jobhunter/config.toml`) — machine settings: paths, rate limits, model choice,
    spend cap, `respect_robots`, contact email for the User-Agent.
-3. `profile/preferences.yaml` — what you want in a job. Versioned by content hash so scores
+3. `<data dir>/profile/preferences.yaml` — what you want in a job. Versioned by content hash so scores
    record which profile produced them.
 
 Secrets: `ANTHROPIC_API_KEY` from the environment, or an `ant auth login` profile — the SDK

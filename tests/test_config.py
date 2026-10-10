@@ -19,11 +19,12 @@ def _write(path: Path, text: str) -> Path:
 def test_defaults_when_no_file(tmp_path):
     s = load_settings(config_path=tmp_path / "missing.toml")
     assert isinstance(s, Settings)
-    assert s.paths.data_dir == Path("data")
-    assert s.paths.cache_dir == Path("data/cache")
-    assert s.paths.db_path == Path("data/jobhunter.db")
-    assert s.paths.profile_dir == Path("profile")
-    assert s.paths.resume_path == Path("resume")
+    home = Path.home()  # a tmp dir under the isolation fixture
+    assert s.paths.data_dir == home / ".local/share/jobhunter"
+    assert s.paths.cache_dir == home / ".cache/jobhunter"
+    assert s.paths.db_path == home / ".local/share/jobhunter/jobhunter.db"
+    assert s.paths.profile_dir == home / ".local/share/jobhunter/profile"
+    assert s.paths.resume_path == home / ".local/share/jobhunter/resume"
     assert s.fetch.respect_robots is True
     assert s.fetch.default_rps == 0.2
     assert s.fetch.global_concurrency == 8
@@ -47,7 +48,7 @@ def test_toml_overrides_one_nested_key_keeps_siblings(tmp_path):
     assert s.fetch.respect_robots is True
     assert s.fetch.global_concurrency == 8
     assert s.fetch.max_retries == 5
-    assert s.paths.data_dir == Path("data")
+    assert s.paths.data_dir == Path.home() / ".local/share/jobhunter"
 
 
 def test_overrides_dict_wins_over_toml(tmp_path):
