@@ -22,11 +22,12 @@
       <span>comp {{ i.comp if i.comp is not none else "n/a" }}</span>
       <span>loc {{ i.location_fit }}</span>
     </div>
-    {% if i.shape_flags or i.evidence_unverified or i.partial %}
+    {% if i.shape_flags or i.evidence_unverified or i.partial or i.employer_rejection %}
     <div class="row-flags">
       {% for f in i.shape_flags %}<span class="flag" title="shape flag">&#9873; {{ f }}</span>{% endfor %}
       {% if i.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
       {% if i.partial %}<span class="flag partial" title="scored from an email alert summary; capped at bucket B">partial: open to confirm</span>{% endif %}
+      {% if i.employer_rejection %}<a class="flag employer-rejection" href="/rejections" title="a rejection from this employer for a different role; the score is not capped">{{ i.employer_rejection }}</a>{% endif %}
     </div>
     {% endif %}
     <div class="row-detail" hidden>

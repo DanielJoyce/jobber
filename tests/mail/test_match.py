@@ -518,3 +518,212 @@ def test_cli_dry_run_prints_and_writes_nothing(monkeypatch, tmp_path):
     c.close()
     res = CliRunner().invoke(cli_app, ["mail", "match"])
     assert "stored 1" in res.output
+
+
+# --- employer rejections (rejection table) -------------------------------------------------
+
+
+def rejections_rows(conn):
+    return conn.execute("SELECT * FROM rejection ORDER BY id").fetchall()
+
+
+SEEQ_REJECT = (
+    "Thank you for your interest in the Senior Platform Engineer position at Seeq. "
+    "Unfortunately, we have decided to move forward with other candidates."
+)
+
+
+def msg_seeq_reject(mid="rj1", thread=None, days_ago=1):
+    m = raw(mid, "Seeq <no-reply@ashbyhq.com>", "Your application to Seeq", SEEQ_REJECT, days_ago)
+    if thread:
+        m["threadId"] = thread
+    return m
+
+
+def test_unmatched_rejection_is_stored_not_dropped(conn):
+    add_job(conn, 1, "Fabrikam Robotics", "Welder")
+    _, res = run_scan(conn, [msg_seeq_reject()])
+    assert rows(conn) == []  # no proposal: nothing to change in the pipeline
+    (r,) = rejections_rows(conn)
+    assert (r["employer"], r["employer_norm"], r["title"]) == (
+        "Seeq",
+        "seeq",
+        "Senior Platform Engineer",
+    )
+    assert r["job_group_id"] is None and r["application_id"] is None
+    assert (r["source"], r["gmail_message_id"], r["thread_id"]) == ("email", "rj1", "th-rj1")
+    ev = json.loads(r["evidence"])
+    assert set(ev) >= {"sender", "subject", "snippet", "phrase"}
+    assert len(ev["snippet"]) <= match.SNIPPET_MAX
+    assert res.rejections_stored == 1
+
+
+def test_matched_rejection_stores_row_and_still_proposes_event(conn):
+    app_id = add_job(conn, 1, "Northwind Analytics", "Senior Data Engineer", applied="applied")
+    rej = raw(
+        "r1",
+        "Northwind Analytics <no-reply@greenhouse.io>",
+        "Your application to Northwind Analytics",
+        "Unfortunately we will not be moving forward with your application for the "
+        "Senior Data Engineer role.",
+    )
+    run_scan(conn, [rej])
+    (p,) = rows(conn)
+    assert (p["proposed_action"], p["application_id"]) == ("add_event", app_id)
+    (r,) = rejections_rows(conn)
+    assert (r["job_group_id"], r["application_id"]) == (1, app_id)
+    assert (r["employer"], r["title"]) == ("Northwind Analytics", "Senior Data Engineer")
+    # The fact is recorded, but the application's status is only changed on accept.
+    assert t.events(conn, app_id)[0]["status"] == "applied"
+
+
+def test_rejection_rescan_is_idempotent_and_not_refetched(conn):
+    run_scan(conn, [msg_seeq_reject()])
+    svc, res = run_scan(conn, [msg_seeq_reject()])
+    assert len(rejections_rows(conn)) == 1
+    assert res.rejections_stored == 0
+    assert svc.gets == []
+
+
+def test_rejection_dry_run_lists_and_writes_nothing(conn):
+    _, res = run_scan(conn, [msg_seeq_reject()], dry_run=True)
+    assert [r.employer for r in res.rejections] == ["Seeq"]
+    assert rejections_rows(conn) == []
+
+
+def test_one_rejection_per_thread(conn):
+    run_scan(conn, [msg_seeq_reject("a", "T1", 3), msg_seeq_reject("b", "T1", 1)])
+    assert [r["gmail_message_id"] for r in rejections_rows(conn)] == ["a"]
+
+
+def test_repeated_confirmations_in_one_thread_make_one_proposal(conn):
+    msgs = []
+    for i in range(5):
+        m = raw(
+            f"s{i}",
+            "Seeq <no-reply@ashbyhq.com>",
+            "Thanks for applying to Seeq",
+            "Thanks for applying to the Platform Engineer role at Seeq.",
+            days_ago=5 - i,
+        )
+        m["threadId"] = "T-seeq"
+        msgs.append(m)
+    _, res = run_scan(conn, msgs)
+    (p,) = rows(conn)
+    assert p["gmail_message_id"] == "s0"  # the earliest
+    assert res.thread_duplicates == 4
+    # A later rescan with a new message in the same thread adds nothing either.
+    extra = dict(msgs[0], id="s9")
+    _, res2 = run_scan(conn, [extra])
+    assert len(rows(conn)) == 1 and res2.thread_duplicates == 1
+
+
+# --- Gmail rate limits ---------------------------------------------------------------------
+
+
+def http_error(status, reason="rateLimitExceeded", retry_after=None):
+    import httplib2
+    from googleapiclient.errors import HttpError
+
+    headers = {"status": status}
+    if retry_after is not None:
+        headers["retry-after"] = str(retry_after)
+    body = json.dumps(
+        {"error": {"code": status, "errors": [{"reason": reason}], "message": "Units per minute"}}
+    ).encode()
+    return HttpError(httplib2.Response(headers), body)
+
+
+class FlakyGmail(FakeGmail):
+    """messages.get fails with the given errors first, then succeeds."""
+
+    def __init__(self, messages, errors):
+        super().__init__(messages)
+        self.errors = list(errors)
+
+    def users(self):
+        users = super().users()
+        msgs = users.messages()
+        flaky = self
+
+        class M:
+            def list(self, **kw):
+                return msgs.list(**kw)
+
+            def get(self, **kw):
+                call = msgs.get(**kw)
+
+                def run():
+                    if flaky.errors:
+                        raise flaky.errors.pop(0)
+                    return call.execute()
+
+                return _Call(run)
+
+        users.messages = lambda: M()
+        return users
+
+
+def test_rate_limit_backs_off_then_succeeds(conn):
+    sleeps: list[float] = []
+    svc = FlakyGmail(
+        [msg_seeq_reject()],
+        [http_error(429), http_error(403, "userRateLimitExceeded"), http_error(429, retry_after=7)],
+    )
+    res = match.scan(conn, svc, SETTINGS, now=NOW, sleep=sleeps.append)
+    assert sleeps == [1.0, 2.0, 7.0]  # exponential, then Retry-After honoured
+    assert res.rejections_stored == 1
+
+
+def test_rate_limit_exhausted_raises_clean_error(conn):
+    from jobhunter.mail.gmail_api import MAX_RETRIES, GmailRateLimited
+
+    sleeps: list[float] = []
+    svc = FlakyGmail([msg_seeq_reject()], [http_error(429)] * (MAX_RETRIES + 1))
+    with pytest.raises(GmailRateLimited, match="rate limit"):
+        match.scan(conn, svc, SETTINGS, now=NOW, sleep=sleeps.append)
+    assert len(sleeps) == MAX_RETRIES
+
+
+def test_other_http_errors_are_not_retried(conn):
+    from googleapiclient.errors import HttpError
+
+    sleeps: list[float] = []
+    svc = FlakyGmail([msg_seeq_reject()], [http_error(403, "insufficientPermissions")])
+    with pytest.raises(HttpError):
+        match.scan(conn, svc, SETTINGS, now=NOW, sleep=sleeps.append)
+    assert sleeps == []
+
+
+def test_cli_rate_limit_prints_message_not_traceback(monkeypatch, tmp_path):
+    from jobhunter.mail.gmail_api import GmailRateLimited
+
+    path = tmp_path / "cli.db"
+    settings = Settings.model_validate({"paths": {"db_path": str(path)}})
+    monkeypatch.setattr("jobhunter.config.load_settings", lambda *a, **k: settings)
+    monkeypatch.setattr(auth, "load_token", lambda: "tok")
+    monkeypatch.setattr(auth, "build_service", lambda s: FakeGmail([]))
+
+    def boom(*a, **k):
+        raise GmailRateLimited("Gmail rate limit: still refused after 6 retries (HTTP 429).")
+
+    monkeypatch.setattr(match, "scan", boom)
+    res = CliRunner().invoke(cli_app, ["mail", "match", "--days", "60"])
+    assert res.exit_code == 1
+    assert "Gmail rate limit" in res.output
+    assert "Traceback" not in res.output
+
+
+def test_cli_dry_run_lists_employer_rejections(monkeypatch, tmp_path):
+    path = tmp_path / "cli.db"
+    settings = Settings.model_validate({"paths": {"db_path": str(path)}})
+    monkeypatch.setattr("jobhunter.config.load_settings", lambda *a, **k: settings)
+    monkeypatch.setattr(auth, "load_token", lambda: "tok")
+    monkeypatch.setattr(auth, "build_service", lambda s: FakeGmail([msg_seeq_reject()]))
+    res = CliRunner().invoke(cli_app, ["mail", "match", "--dry-run"])
+    assert res.exit_code == 0, res.output
+    assert "employer rejection: Seeq | Senior Platform Engineer" in res.output
+    assert "would store 0 proposals and 1 employer rejections" in res.output
+    c = db.connect(path)
+    assert c.execute("SELECT COUNT(*) FROM rejection").fetchone()[0] == 0
+    c.close()

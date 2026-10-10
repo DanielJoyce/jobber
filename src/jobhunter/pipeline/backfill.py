@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from jobhunter.config import Settings
+from jobhunter.core import rejections
 from jobhunter.core.models import SourceRow
 from jobhunter.pipeline import runner
 from jobhunter.pipeline.listing import to_iso
@@ -60,6 +61,7 @@ WHERE NOT EXISTS (
     WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier
       AND b.model = :model AND b.prompt_version = :prompt_version
       AND b.scoring_version = :scoring_version)
+  AND g.id NOT IN (SELECT value FROM json_each(:rejected))
 """
 
 _RESOLVE_BACKLOG = """
@@ -213,6 +215,7 @@ def estimate(
         "model": scorer.name,
         "prompt_version": screen.PROMPT_VERSION,
         "scoring_version": profile.scoring_version,
+        "rejected": rejections.rejected_json(conn),
     }
     eligible = conn.execute(_COUNT_ELIGIBLE, params).fetchone()[0]
     spent = conn.execute(

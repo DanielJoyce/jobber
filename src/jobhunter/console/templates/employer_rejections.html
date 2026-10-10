@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ url_for('static', path='tracking.css') }}">
+<div class="followups">
+  <h1>Employer rejections ({{ items|length }})</h1>
+  <p class="muted">Rejections from employers, read from your mail by <code>jobhunter mail match</code> or added here. A posting you were rejected for is never sent to a scorer and stays out of the inbox; other roles at the same employer show a flag. Not the same as <a href="/rejected">jobs we filtered out</a>.</p>
+
+  <form method="post" action="/rejections" class="inline-form" aria-label="add an employer rejection">
+    <input name="employer" value="{{ form.employer or '' }}" placeholder="employer" aria-label="employer" required>
+    <input name="title" value="{{ form.title or '' }}" placeholder="job title (optional)" aria-label="job title">
+    <input name="date" type="date" value="{{ form.date or today }}" aria-label="date">
+    <input name="group_id" value="{{ form.group_id or '' }}" placeholder="job id (optional)" aria-label="job id" size="10">
+    <button type="submit" class="act">add rejection</button>
+  </form>
+  {% if error %}<p class="banner" role="alert">{{ error }}</p>{% endif %}
+
+  {% if items %}
+  <ul class="fu-list">
+    {% for r in items %}
+    <li class="fu-row" id="rej-{{ r.id }}">
+      <span class="fu-due">{{ r.received_at[:10] }}<br><span class="muted">{{ r.source }}</span></span>
+      <span class="fu-body">
+        <strong>{{ r.employer or "employer unknown" }}</strong>: {{ r.title or "title unknown" }}
+        {% if r.job_group_id %}<br><a href="/job/{{ r.job_group_id }}">matched job: {{ r.job_title or ("job " ~ r.job_group_id) }}</a>{% if r.application_id %} &middot; <a href="/pipeline/{{ r.application_id }}">application</a>{% endif %}{% else %}<br><span class="muted">no matching job in jobhunter</span>{% endif %}
+        {% if r.evidence.subject %}<br><span class="muted">From {{ r.evidence.sender }}: {{ r.evidence.subject }}</span>{% endif %}
+        {% if r.evidence.snippet %}<br><em>{{ r.evidence.snippet }}</em>{% endif %}
+      </span>
+      <span class="fu-actions">
+        <form method="post" action="/rejections/{{ r.id }}/delete"><button type="submit" class="act" title="remove a wrongly recorded rejection">delete</button></form>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No employer rejections recorded. Run <code>jobhunter mail match</code> or add one above.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -2,6 +2,9 @@
 
 Buckets, overall and the dimension numbers are recomputed on read from the stored model
 dimensions and the *current* profile, so preference edits re-sort the inbox for free.
+
+A posting the employer already rejected you for is left out; a job at an employer that
+rejected you for another role recently carries a flag (``core/rejections``).
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from jobhunter.core import rejections
 from jobhunter.core.models import Bucket
 from jobhunter.pipeline.locations import jobs_in_state, load_job_group_locations, location_summary
 from jobhunter.scoring.buckets import compute_row
@@ -62,6 +66,7 @@ class InboxItem:
     blockers: list[str] = field(default_factory=list)
     stale_skills: list[str] = field(default_factory=list)
     labeled: str | None = None
+    employer_rejection: str | None = None  # "rejected for <title> on <date>" (other role)
 
 
 @dataclass
@@ -132,7 +137,22 @@ LEFT JOIN label l ON l.job_group_id = g.id
 """
 
 
-def _item(conn: sqlite3.Connection, row: sqlite3.Row, profile: Profile, now: datetime) -> InboxItem:
+def _employer_flag(index: rejections.RejectionIndex | None, row: sqlite3.Row) -> str | None:
+    if not index:
+        return None
+    hit = index.prior(row["group_id"], row["employer"] or row["agency_raw"], row["title"])
+    if hit is None:
+        return None
+    return f"employer rejected you for {hit.title or 'another role'} on {hit.day}"
+
+
+def _item(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    profile: Profile,
+    now: datetime,
+    index: rejections.RejectionIndex | None = None,
+) -> InboxItem:
     locs = load_job_group_locations(conn, row["job_id"])
     fit = compute_row(row, row, locs, profile)
     dims = _json(row["dimensions"], {})
@@ -174,6 +194,7 @@ def _item(conn: sqlite3.Connection, row: sqlite3.Row, profile: Profile, now: dat
         blockers=fit.blockers,
         stale_skills=_strs(dims.get("stale_skills")),
         labeled=row["label_value"],
+        employer_rejection=_employer_flag(index, row),
     )
 
 
@@ -200,20 +221,26 @@ def inbox_items(
     include_triaged: bool = False,
     limit: int = 500,
     now: datetime | None = None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> Inbox:
     """Group untriaged job groups by bucket A..G (G only when ``bucket="G"``).
 
     ``counts`` cover every group matching the state filter; ``limit`` caps rows per bucket.
+    Postings an employer already rejected you for are left out unless ``include_triaged``.
     """
     now = now or datetime.now(UTC)
     where = "" if include_triaged else " WHERE l.job_group_id IS NULL"
     rows = conn.execute(_SQL + where).fetchall()
     keep = _state_groups(conn, profile, state) if state else None
+    index = rejections.RejectionIndex.load(conn, now, rejection_days)
+    rejected = rejections.rejected_group_ids(conn, index) if index and not include_triaged else ()
     buckets: dict[str, list[InboxItem]] = {b: [] for b in BUCKETS}
     for row in rows:
         if keep is not None and row["group_id"] not in keep:
             continue
-        item = _item(conn, row, profile, now)
+        if row["group_id"] in rejected:
+            continue
+        item = _item(conn, row, profile, now, index)
         buckets[item.bucket].append(item)
     for items in buckets.values():
         items.sort(key=lambda i: (-i.overall, i.group_id))
@@ -234,7 +261,10 @@ def inbox_items(
 def inbox_item(conn: sqlite3.Connection, profile: Profile, group_id: int) -> InboxItem | None:
     """One group's row (regardless of label), for re-rendering after undo."""
     row = conn.execute(_SQL + " WHERE g.id = ?", (group_id,)).fetchone()
-    return _item(conn, row, profile, datetime.now(UTC)) if row else None
+    if not row:
+        return None
+    now = datetime.now(UTC)
+    return _item(conn, row, profile, now, rejections.RejectionIndex.load(conn, now))
 
 
 def group_title(conn: sqlite3.Connection, group_id: int) -> str:

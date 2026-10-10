@@ -25,6 +25,7 @@
 # daily_cap_usd = 2.0
 # weekly_cap_usd = 10.0
 # deep_shortlist = 40
+# employer_rejection_days = 90   # tell the scorer about a recent rejection by the same employer
 
 # Only used when screen_scorer = "openai-compat:<model>". Switching scorer sends your resume
 # profile and the postings to base_url (specs/008). The API key is read from the env var named

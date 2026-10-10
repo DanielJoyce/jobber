@@ -13,6 +13,12 @@
   </div>
   {% endif %}
 
+  {% if d.posting_rejection %}
+  <div class="banner employer-rejection" role="note">
+    <strong>Rejected.</strong> {{ d.posting_rejection }} It is not scored and not shown in the inbox. <a href="/rejections">Employer rejections</a>
+  </div>
+  {% endif %}
+
   <header class="job-head">
     <h1>{{ d.job["title"] }}</h1>
     <div class="job-sub">
@@ -31,6 +37,7 @@
       {% if d.evidence_unverified %}<span class="flag" title="a quoted evidence snippet was not found in the posting">unverified evidence</span>{% endif %}
       {% if d.partial %}<span class="flag partial" title="scored from an email alert summary; capped at bucket B">partial: open to confirm</span>{% endif %}
       {% if d.pasted %}<span class="badge" title="description pasted by you">pasted description</span>{% endif %}
+      {% if d.employer_rejection %}<a class="flag employer-rejection" href="/rejections" title="a rejection from this employer for a different role; the score is not capped">{{ d.employer_rejection }}</a>{% endif %}
     </div>
     {% else %}
     <div class="muted">Not scored yet.</div>

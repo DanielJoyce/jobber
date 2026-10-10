@@ -24,6 +24,7 @@ from jobhunter.console import (
     pages_routes,
     prefs_routes,
     proposals_routes,
+    rejections_routes,
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
@@ -46,6 +47,7 @@ PAGES: list[tuple[str, str | None, str]] = [
     ("/inbox", "Inbox", "Inbox"),
     ("/pipeline", "Pipeline", "Pipeline"),
     ("/followups", "Follow-ups", "Follow-ups"),
+    ("/rejections", "Employer rejections", "Employer rejections"),
     ("/sources", "Sources", "Sources"),
     ("/rejected", None, "Rejected"),
     ("/search", "Search", "Search"),
@@ -247,6 +249,7 @@ def create_app(
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
     proposals_routes.register(app, templates, get_conn, NAV, now)
+    rejections_routes.register(app, templates, get_conn, NAV, now)
     alerts_routes.register(app, templates, get_conn, NAV, now)
 
     # Placeholders last, only for nav pages no module has claimed yet. New pages need no

@@ -42,7 +42,8 @@ def register(
         bucket = (bucket or "").strip().upper() or None
         data = None
         if profile is not None:
-            data = inbox.inbox_items(conn, profile, state=state, bucket=bucket)
+            days = request.app.state.settings.scoring.employer_rejection_days
+            data = inbox.inbox_items(conn, profile, state=state, bucket=bucket, rejection_days=days)
         return templates.TemplateResponse(
             request,
             "inbox.html",

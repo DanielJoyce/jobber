@@ -5,7 +5,8 @@ First run (no watermark): ``users.messages.list(labelIds=[label])``, newest firs
 If Gmail no longer has that history (404, roughly a week), fall back to a full listing.
 Messages already in ``mail_message`` are skipped either way, so a replay costs nothing.
 
-Read-only: the gmail.readonly scope; nothing here modifies the mailbox.
+Read-only: the gmail.readonly scope; nothing here modifies the mailbox. Every call backs off
+on Gmail rate limits (``gmail_api.execute``).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from email.utils import getaddresses
 from pathlib import Path
 from typing import Any
 
+from jobhunter.mail.gmail_api import execute as gmail_execute
 from jobhunter.mail.message import MailMessage, from_eml, from_gmail, gmail_raw_to_eml, scrub
 from jobhunter.mail.setup import _find_label
 from jobhunter.pipeline.listing import to_iso
@@ -106,7 +108,7 @@ def _list_all(
         }
         if token:
             kwargs["pageToken"] = token
-        resp = service.users().messages().list(**kwargs).execute()
+        resp = gmail_execute(service.users().messages().list(**kwargs))
         page = [m["id"] for m in resp.get("messages") or [] if m.get("id")]
         if conn is not None:
             done = _processed(conn, page)
@@ -134,7 +136,7 @@ def _history_since(service: Any, label_id: str, start: str) -> tuple[list[str], 
         }
         if token:
             kwargs["pageToken"] = token
-        resp = service.users().history().list(**kwargs).execute()
+        resp = gmail_execute(service.users().history().list(**kwargs))
         latest = str(resp.get("historyId") or latest or start)
         for rec in resp.get("history") or []:
             for item in (rec.get("messagesAdded") or []) + (rec.get("labelsAdded") or []):
@@ -165,7 +167,7 @@ def plan_batch(
             ids = None
     if ids is None:
         # Read the mailbox's history id first, so mail arriving mid-listing is caught next run.
-        profile = service.users().getProfile(userId="me").execute()
+        profile = gmail_execute(service.users().getProfile(userId="me"))
         batch.history_id = str(profile["historyId"]) if profile.get("historyId") else None
         ids, batch.truncated = _list_all(service, label_id, limit, conn)
     seen: set[str] = set()
@@ -181,7 +183,7 @@ def plan_batch(
 
 
 def fetch_message(service: Any, message_id: str) -> MailMessage:
-    raw = service.users().messages().get(userId="me", id=message_id, format="full").execute()
+    raw = gmail_execute(service.users().messages().get(userId="me", id=message_id, format="full"))
     return from_gmail(raw)
 
 
