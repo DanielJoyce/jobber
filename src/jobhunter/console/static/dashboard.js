@@ -5,8 +5,10 @@
   var SMALL = ["VT", "NH", "MA", "RI", "CT", "NJ", "DE", "MD", "DC"];
   var TERRITORIES = ["PR", "GU", "MP", "VI", "AS"];
   var REMOTE = "REMOTE";
-  // Sequential ramp steps for the five quantile classes; zero gets --seq-100, no data --axis.
-  var STEPS = ["--seq-200", "--seq-350", "--seq-500", "--seq-600", "--seq-700"];
+  // Sequential ramp steps for the five quantile classes; zero gets grey --map-0, no data --axis.
+  // Fewest = lightest green, most = most intense green (brighter in dark theme).
+  var ZERO = "--map-0";
+  var STEPS = ["--map-1", "--map-2", "--map-3", "--map-4", "--map-5"];
   var COVERAGE = {
     critical: ["⚠", "source broken"],
     serious: ["⚠", "source suspect"],
@@ -105,14 +107,14 @@
   }
 
   function stepFor(cls, n) {
-    if (n <= 1) return STEPS[2];
+    if (n <= 1) return STEPS[STEPS.length - 1];
     return STEPS[Math.round(((cls - 1) * (STEPS.length - 1)) / (n - 1))];
   }
 
   function fillFor(row) {
     var cls = classOf(row ? row.value : null, data.breaks);
     if (cls < 0) return token("--axis");
-    if (cls === 0) return token("--seq-100");
+    if (cls === 0) return token(ZERO);
     return token(stepFor(cls, data.breaks.length));
   }
 
@@ -326,7 +328,7 @@
     title.className = "legend-title";
     title.textContent = data.label + (data.label.indexOf(":") >= 0 ? "" : ":");
     scale.appendChild(title);
-    scale.appendChild(swatch(token("--seq-100"), "0"));
+    scale.appendChild(swatch(token(ZERO), "0"));
     var prev = 0;
     data.breaks.forEach(function (b, i) {
       var color = token(stepFor(i + 1, data.breaks.length));

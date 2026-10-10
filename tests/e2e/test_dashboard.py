@@ -374,3 +374,88 @@ def test_sankey_labels_never_overlap_on_real_data_shapes(page, server, width):
     assert page.locator("#chart-sankey text.slabel", has_text="Untriaged").count() == 1
     assert page.evaluate(OVERLAPS_JS) == []
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+# ─── map color scale: grey for none, green growing more intense with the count ───────────
+
+_TOKEN_JS = "n => getComputedStyle(document.documentElement).getPropertyValue(n).trim()"
+
+
+def _rgb(page, color: str) -> tuple[int, int, int]:
+    return tuple(page.evaluate("c => { const r = d3.rgb(c); return [r.r, r.g, r.b]; }", color))
+
+
+def _lum(rgb) -> float:
+    def ch(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * ch(rgb[0]) + 0.7152 * ch(rgb[1]) + 0.0722 * ch(rgb[2])
+
+
+def _state_counts(page) -> dict[str, int]:
+    rows = page.eval_on_selector_all(
+        "#state-table tr[data-state]",
+        "rs => rs.map(r => [r.dataset.state, r.querySelector('td.num').textContent.trim()])",
+    )
+    return {st: int(n) for st, n in rows if n.isdigit()}
+
+
+def _fill_of(page, state):
+    return page.get_attribute(f'#map g.targets path[data-state="{state}"]', "fill")
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_map_scale_is_grey_for_zero_and_greener_with_more_jobs(dash, scheme):
+    dash.emulate_media(color_scheme=scheme)
+    dash.reload()
+    dash.wait_for_selector(PATHS)
+    counts = _state_counts(dash)
+    assert counts, "state table should list per-state counts"
+    top = max(counts.values())
+    assert top > 0
+    zero_state = next(s for s, n in counts.items() if n == 0)
+    top_state = next(s for s, n in counts.items() if n == top)
+    tok = lambda n: dash.evaluate(_TOKEN_JS, n)  # noqa: E731
+    assert _fill_of(dash, zero_state) == tok("--map-0")  # neutral grey
+    assert _fill_of(dash, top_state) == tok("--map-5")  # strongest green
+    # Zero grey is not the no-data fill, and the grey is actually grey.
+    assert tok("--map-0") != tok("--axis")
+    r, g, b = _rgb(dash, tok("--map-0"))
+    assert max(r, g, b) - min(r, g, b) < 12
+    # The greens are green, and intensity (distance from the grey) rises monotonically:
+    # lighter surface-ward in light mode, brighter in dark mode.
+    steps = [_rgb(dash, tok(f"--map-{i}")) for i in range(6)]
+    for r, g, b in steps[1:]:
+        assert g > r and g > b
+    lum = [_lum(s) for s in steps[1:]]
+    assert lum == sorted(lum, reverse=(scheme == "light"))
+    assert len(set(lum)) == 5
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_map_labels_stay_readable_on_every_step(dash, scheme):
+    dash.emulate_media(color_scheme=scheme)
+    dash.reload()
+    dash.wait_for_selector(PATHS)
+    fills_ = [dash.evaluate(_TOKEN_JS, f"--map-{i}") for i in range(6)]
+    ink = dash.evaluate(_TOKEN_JS, "--text-primary")
+    inverse = "#0b0b0b" if _lum(_rgb(dash, ink)) > 0.5 else "#ffffff"
+    for f in fills_:
+        lf = _lum(_rgb(dash, f))
+        best = max(
+            (max(_lum(_rgb(dash, c)), lf) + 0.05) / (min(_lum(_rgb(dash, c)), lf) + 0.05)
+            for c in (ink, inverse)
+        )
+        assert best >= 4.5, (f, best)
+
+
+def test_map_legend_swatches_run_grey_then_green_then_no_data(dash):
+    swatches = dash.eval_on_selector_all(
+        "#map-legend .legend-scale .swatch", "ns => ns.map(n => n.style.backgroundColor)"
+    )
+    toks = [dash.evaluate(_TOKEN_JS, n) for n in ("--map-0", "--axis")]
+    rgbs = [_rgb(dash, s) for s in swatches]
+    assert rgbs[0] == _rgb(dash, toks[0])
+    assert rgbs[-1] == _rgb(dash, toks[1])
+    assert rgbs[1] != rgbs[0] and rgbs[-2] == _rgb(dash, dash.evaluate(_TOKEN_JS, "--map-5"))
