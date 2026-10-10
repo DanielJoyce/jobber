@@ -151,20 +151,9 @@ def cost_per_job(conn: sqlite3.Connection, spec: str) -> tuple[float, str]:
     return screen.ESTIMATED_COST_PER_REQUEST_USD, "default"
 
 
-def weekly_remaining(conn: sqlite3.Connection, cap_usd: float, now: datetime) -> float:
-    since = (now - timedelta(days=6)).date().isoformat()
-    spent = conn.execute(
-        "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day >= ?", (since,)
-    ).fetchone()[0]
-    return cap_usd - spent
-
-
-def remaining_budget(conn: sqlite3.Connection, scoring: Scoring, now: datetime) -> float:
-    """The tighter of the daily and weekly spend caps."""
-    return min(
-        screen.remaining_daily_budget(conn, scoring.daily_cap_usd, now),
-        weekly_remaining(conn, scoring.weekly_cap_usd, now),
-    )
+# The same caps the daily run checks (screen.remaining_budget: tighter of daily and weekly).
+weekly_remaining = screen.weekly_remaining
+remaining_budget = screen.remaining_budget
 
 
 def max_usd_for(estimated_usd: float) -> float:

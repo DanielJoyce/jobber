@@ -19,11 +19,12 @@ import sqlite3
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from pydantic import ValidationError
 
+from jobhunter.config import Scoring
 from jobhunter.core import rejections
 from jobhunter.core.models import LocationScope, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
@@ -360,7 +361,10 @@ WHERE NOT EXISTS (
       WHERE f.job_group_id = g.id AND f.tier = :tier AND f.input_rev = g.description_rev)
     AND NOT EXISTS (
       SELECT 1 FROM score_batch_item i JOIN score_batch b ON b.id = i.batch_id
-      WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier)))
+      WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier)
+    AND g.id NOT IN (
+      SELECT c.value FROM rescore_request r, json_each(r.group_ids) c
+      WHERE r.status IN ('pending', 'running') AND r.group_ids IS NOT NULL)))
 ORDER BY j.posted_at IS NULL, j.posted_at DESC, g.id
 LIMIT :limit
 """
@@ -385,9 +389,12 @@ def eligible_groups(
     ``group_ids`` narrows the result to those groups (a re-score runs only its confirmed plan).
 
     ``new_only`` is the daily run's rule: only groups with no screen score at all for their
-    current description revision (under any model, prompt or ``scoring_version``) and none in
-    an uncollected batch. Re-scoring an already scored group costs money, so it happens only
-    through a confirmed re-score, never automatically (specs/006, specs/014).
+    current description revision (under any model, prompt or ``scoring_version``), none in
+    an uncollected batch, and none listed in the confirmed plan of a pending or running
+    re-score. Re-scoring an already scored group costs money, so it happens only through a
+    confirmed re-score, never automatically (specs/006, specs/014). A group a plan covers is
+    left to that plan: the plan checks eligibility per scorer, so a daily score with another
+    model would not stop the plan paying for the same group again.
     """
     return conn.execute(
         _ELIGIBLE,
@@ -410,15 +417,38 @@ def only_json(group_ids: Sequence[int] | None) -> str | None:
     return None if group_ids is None else json.dumps([int(g) for g in group_ids])
 
 
+def _pending_batch_usd(conn: sqlite3.Connection) -> float:
+    """Estimated cost of submitted batches not yet collected (not in ``llm_spend`` yet)."""
+    pending = conn.execute(
+        "SELECT coalesce(sum(request_count), 0) FROM score_batch WHERE collected_at IS NULL"
+    ).fetchone()[0]
+    return pending * ESTIMATED_COST_PER_REQUEST_USD
+
+
 def remaining_daily_budget(conn: sqlite3.Connection, cap_usd: float, now: datetime) -> float:
     """``cap_usd`` minus today's recorded spend and an estimate for uncollected batches."""
     spent = conn.execute(
         "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ?", (to_iso(now)[:10],)
     ).fetchone()[0]
-    pending = conn.execute(
-        "SELECT coalesce(sum(request_count), 0) FROM score_batch WHERE collected_at IS NULL"
+    return cap_usd - spent - _pending_batch_usd(conn)
+
+
+def weekly_remaining(conn: sqlite3.Connection, cap_usd: float, now: datetime) -> float:
+    """``cap_usd`` minus the last seven days' spend and an estimate for uncollected batches."""
+    since = (now - timedelta(days=6)).date().isoformat()
+    spent = conn.execute(
+        "SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day >= ?", (since,)
     ).fetchone()[0]
-    return cap_usd - spent - pending * ESTIMATED_COST_PER_REQUEST_USD
+    return cap_usd - spent - _pending_batch_usd(conn)
+
+
+def remaining_budget(conn: sqlite3.Connection, scoring: Scoring, now: datetime) -> float:
+    """The tighter of the daily and weekly spend caps (``scoring.daily_cap_usd`` and
+    ``scoring.weekly_cap_usd``). Every automatic or confirmed scoring run checks this."""
+    return min(
+        remaining_daily_budget(conn, scoring.daily_cap_usd, now),
+        weekly_remaining(conn, scoring.weekly_cap_usd, now),
+    )
 
 
 def _summary_for(conn: sqlite3.Connection, job: Mapping[str, Any]) -> str:

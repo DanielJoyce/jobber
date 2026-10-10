@@ -263,9 +263,7 @@ def score(
                         gid,
                         now=now,
                         scorer=deep_scorer,
-                        remaining_usd=lambda: screen.remaining_daily_budget(
-                            conn, settings.scoring.daily_cap_usd, now
-                        ),
+                        remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                         rejection_days=settings.scoring.employer_rejection_days,
                     )
                 except anthropic.APIError as exc:
@@ -286,9 +284,7 @@ def score(
                     profile,
                     limit=limit,
                     now=now,
-                    remaining_usd=lambda: screen.remaining_daily_budget(
-                        conn, settings.scoring.daily_cap_usd, now
-                    ),
+                    remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                     rejection_days=settings.scoring.employer_rejection_days,
                 )
             except ScorerError as exc:
@@ -303,9 +299,7 @@ def score(
                 limit=limit,
                 now=now,
                 scorer=scorer,
-                remaining_usd=lambda: screen.remaining_daily_budget(
-                    conn, settings.scoring.daily_cap_usd, now
-                ),
+                remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                 rejection_days=settings.scoring.employer_rejection_days,
             )
             typer.echo(f"submitted batch {batch_id}" if batch_id else "nothing to submit")
