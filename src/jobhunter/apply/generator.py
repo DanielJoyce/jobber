@@ -700,6 +700,7 @@ def write_version(
     now: datetime,
     posting: str,
     employer: str,
+    title: str = "",
     base_text: str = "",
     question_key: str = "",
     runner: str | None = None,
@@ -725,6 +726,7 @@ def write_version(
             doc,
             posting=posting,
             employer=employer,
+            title=title,
             confirmed=[*carried, *extra_confirmed],
             entail=entail,
             entailment=entailment,
@@ -1058,6 +1060,7 @@ def _generate_locked(
         now=now,
         posting=ctx.posting,
         employer=ctx.employer,
+        title=ctx.title,
         question_key=qkey,
         runner=runner,
         call=call,
@@ -1095,6 +1098,7 @@ def use_base_resume(
         now=now,
         posting=ctx.posting,
         employer=ctx.employer,
+        title=ctx.title,
         base_text=ctx.resume_text,
     )
     return doc_id

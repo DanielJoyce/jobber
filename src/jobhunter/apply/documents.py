@@ -103,6 +103,8 @@ def items_of(doc: Mapping[str, Any]) -> list[Item]:
         if r.summary.text.strip():
             items.append(Item("summary", "summary", "Summary", r.summary.text, r.summary.sources))
         for i, sec in enumerate(r.sections):
+            # A heading cites nothing; the checker reads it against the whole resume.
+            items.append(Item(f"s{i}.h", "heading", "Section heading", sec.heading, []))
             for j, e in enumerate(sec.entries):
                 head = " | ".join(x for x in (e.title, e.employer, e.dates) if x)
                 items.append(

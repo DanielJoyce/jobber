@@ -100,11 +100,11 @@ def question_drafts(conn: sqlite3.Connection, packet_id: int) -> list[Version]:
     return [_version(r) for r in rows]
 
 
-def posting_of(conn: sqlite3.Connection, packet_id: int) -> tuple[str, str]:
-    """(posting text, employer) of the packet's group, as the checker reads them."""
+def posting_of(conn: sqlite3.Connection, packet_id: int) -> tuple[str, str, str]:
+    """(posting text, employer, title) of the packet's group, as the checker reads them."""
     row = conn.execute(
         "SELECT coalesce(j.description_text, '') AS text, "
-        "coalesce(j.employer, j.agency_raw, '') AS employer "
+        "coalesce(j.employer, j.agency_raw, '') AS employer, coalesce(j.title, '') AS title "
         "FROM application_packet p JOIN application a ON a.id = p.application_id "
         "JOIN job_group g ON g.id = a.job_group_id JOIN job j ON j.id = g.canonical_job_id "
         "WHERE p.id = ?",
@@ -112,7 +112,7 @@ def posting_of(conn: sqlite3.Connection, packet_id: int) -> tuple[str, str]:
     ).fetchone()
     if row is None:
         raise ReviewError("no such packet")
-    return row["text"], row["employer"]
+    return row["text"], row["employer"], row["title"]
 
 
 def _require_current(conn: sqlite3.Connection, packet_id: int, doc_id: int) -> Version:
@@ -165,7 +165,7 @@ def save_edit(
         doc, ticked = editor.doc_from_form(v.doc, form)
     except editor.EditError as exc:
         raise ReviewError(str(exc)) from exc
-    posting, employer = posting_of(conn, packet_id)
+    posting, employer, title = posting_of(conn, packet_id)
     new_id, _ver, _rep = write_version(
         conn,
         packet_id,
@@ -174,6 +174,7 @@ def save_edit(
         now=now,
         posting=posting,
         employer=employer,
+        title=title,
         question_key=v.question_key,
         extra_confirmed=ticked,
     )
@@ -189,9 +190,16 @@ def restore(
         doc = editor.restore_line(v.doc, line_id.strip().upper())
     except editor.EditError as exc:
         raise ReviewError(str(exc)) from exc
-    posting, employer = posting_of(conn, packet_id)
+    posting, employer, title = posting_of(conn, packet_id)
     new_id, _ver, _rep = write_version(
-        conn, packet_id, doc, origin="edited", now=now, posting=posting, employer=employer
+        conn,
+        packet_id,
+        doc,
+        origin="edited",
+        now=now,
+        posting=posting,
+        employer=employer,
+        title=title,
     )
     return new_id
 

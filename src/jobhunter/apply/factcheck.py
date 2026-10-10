@@ -2,16 +2,17 @@
 
 Runs on every version, generated or edited, and writes its ``check_report``. It catches
 **mechanical** invention: a missing or non-existent citation, a changed employer, title or
-date, a number, skill, technology or credential not in the cited lines (or not in the
-resume), a stronger claim class than any cited line uses ("contributed to" -> "led"), a
-sentence about the employer without a verified posting quote, and a posting quote that is not
-in the posting. It cannot judge whether a rephrasing is fair; every line shows its cited lines
-so the user can.
+date, a number, quantity, skill, technology, name or credential not in the cited lines (or not
+in the resume), a stronger claim class than any cited line uses ("contributed to" -> "leads"),
+a sentence about the employer without a meaningful verified posting quote, and a posting quote
+that is not in the posting. It cannot judge whether a rephrasing is fair; every line shows its
+cited lines so the user can.
 
 ``check_report`` (JSON)::
 
     {"ok": bool,
-     "items": [{"key", "role", "label", "text", "sources", "status", "reasons", "entail"}],
+     "items": [{"key", "ckey", "role", "label", "text", "sources", "status", "reasons",
+                "entail"}],
      "confirmed": ["<confirm key>", ...],     # "This is true, keep it", by item text
      "entailment": {"status": "done|skipped|failed|off", "detail": "...", ...}}
 
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from jobhunter.apply import claims
@@ -36,16 +38,122 @@ ALLOWED_PREFIXES = {
     "cover_letter": ("L", "N"),
     "question_draft": ("L", "N", "S"),
 }
-STRUCTURE_WINDOW = 2  # an entry's employer, title and dates may sit on the cited line or the next 2
-
-_WORD = re.compile(r"[a-z0-9][a-z0-9+#.\-/']*")
-_NUM = re.compile(
-    r"(?<![\w.])(\$)?(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(%|percent\b|\+|k\b|m\b|million\b|"
-    r"billion\b|x\b)?",
+# An entry's employer, title and dates may sit on the cited line or the next 2 lines, but never
+# on a line another entry cites (that is the next job).
+STRUCTURE_WINDOW = 2
+RESUME_ROLES = {"summary", "bullet", "heading"}
+# Section headings that make no claim.
+PLAIN_HEADINGS = {
+    "experience",
+    "work experience",
+    "professional experience",
+    "relevant experience",
+    "other experience",
+    "additional experience",
+    "employment",
+    "employment history",
+    "work history",
+    "education",
+    "skills",
+    "technical skills",
+    "projects",
+    "selected projects",
+    "summary",
+    "profile",
+    "additional",
+    "publications",
+    "volunteer",
+    "volunteering",
+    "awards",
+    "certifications",
+    "training",
+}
+# A posting quote that backs a sentence about the employer must say something: at least this
+# many words, at least two of them not stopwords or the employer's own name.
+MIN_QUOTE_WORDS = 4
+MIN_QUOTE_CONTENT = 2
+STOPWORDS = frozenset(
+    [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "has",
+        "have",
+        "i",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "our",
+        "that",
+        "the",
+        "their",
+        "this",
+        "to",
+        "we",
+        "will",
+        "with",
+        "you",
+        "your",
+        "yours",
+        "us",
+    ]
+)
+ABOUT_EMPLOYER = re.compile(
+    r"\b(you|your|yours|the company|this company|the organization|the organisation|"
+    r"the agency|the team|this team|their team|their mission|their work)\b",
     re.IGNORECASE,
 )
+NAME_STOP = frozenset(
+    [
+        "i",
+        "i'm",
+        "i've",
+        "i'd",
+        "i'll",
+        "ok",
+        "am",
+        "pm",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ]
+)
+
+_NUM = re.compile(
+    r"(?<![\w.])(\$)?(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*"
+    r"(%|percent\b|\+|k\b|m\b|million\b|billion\b|x\b)?(?:\s*([A-Za-z][A-Za-z\-]*))?",
+    re.IGNORECASE,
+)
+_PHONE = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)")
 _SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])")
-_YOU = re.compile(r"\b(you|your|yours)\b", re.IGNORECASE)
+_TOKEN = re.compile(r"\.?[A-Za-z0-9][A-Za-z0-9+#&'\-]*[A-Za-z0-9+#]|\.?[A-Za-z0-9]")
 
 
 def _norm(text: str) -> str:
@@ -54,7 +162,9 @@ def _norm(text: str) -> str:
 
 def _has_phrase(haystack_norm: str, phrase: str) -> bool:
     words = [re.escape(w) for w in phrase.split()]
-    pat = r"(?<![a-z0-9])" + r"[\s\-]+".join(words) + r"(?![a-z0-9])"
+    if not words:
+        return False
+    pat = r"(?<![a-z0-9])" + r"[\s\-]+".join(words) + r"(?![a-z0-9+#])"
     return re.search(pat, haystack_norm) is not None
 
 
@@ -65,15 +175,28 @@ def _words_in(norm: str, words: Iterable[str]) -> list[str]:
 # ─── numbers ────────────────────────────────────────────────────────────────
 
 
-def _numbers(text: str) -> list[tuple[float, str, str]]:
-    """(value, suffix) for each number in ``text``; spelled-out small numbers included.
-    Suffix is ``%``, ``+``, ``$`` or ``""``; k/m/million scale the value."""
-    t = text or ""
+@dataclass(frozen=True)
+class Num:
+    value: float
+    kind: str  # "%", "+", "$" or ""
+    unit: str  # the next word, singular, lowercased ("" when none)
+    shown: str
+
+    @property
+    def is_year(self) -> bool:
+        return self.kind == "" and self.value.is_integer() and 1900 <= self.value <= 2100
+
+
+_UNIT_SKIP = {"of", "in", "to", "and", "or", "the", "a", "an", "per", "across", "for"}
+
+
+def _numbers(text: str) -> list[Num]:
+    t = _PHONE.sub(" ", text or "")
     for word, digit in claims.NUMBER_WORDS.items():
         t = re.sub(rf"\b{word}\b", digit, t, flags=re.IGNORECASE)
-    out: list[tuple[float, str, str]] = []
+    out: list[Num] = []
     for m in _NUM.finditer(t):
-        dollar, raw, suffix = m.group(1), m.group(2), (m.group(3) or "").lower()
+        dollar, raw, suffix, unit = m.group(1), m.group(2), (m.group(3) or "").lower(), m.group(4)
         try:
             value = float(raw.replace(",", ""))
         except ValueError:
@@ -81,28 +204,46 @@ def _numbers(text: str) -> list[tuple[float, str, str]]:
         scale = {"k": 1e3, "m": 1e6, "million": 1e6, "billion": 1e9}.get(suffix, 1.0)
         kind = "%" if suffix in ("%", "percent") else "+" if suffix == "+" else ""
         kind = kind or ("$" if dollar else "")
-        out.append((value * scale, kind, m.group(0).strip()))
+        u = (unit or "").casefold()
+        if u in _UNIT_SKIP:
+            u = ""
+        if len(u) > 3 and u.endswith("s"):
+            u = u[:-1]
+        shown = (m.group(0) if not unit else m.group(0)[: -len(unit)]).strip()
+        out.append(Num(value * scale, kind, u, shown))
     return out
 
 
 def _number_reasons(text: str, cited: str) -> list[str]:
     have = _numbers(cited)
-    values = {v for v, _, _ in have}
     reasons: list[str] = []
-    for value, kind, shown in _numbers(text):
-        if kind == "+":
-            # "5+ years" restates any cited number of at least 5.
-            ok = any(v >= value for v in values)
-        elif kind == "%":
-            ok = any(v == value and k == "%" for v, k, _ in have)
+    for n in _numbers(text):
+        if n.kind == "+":
+            # "40+ services" restates "40 services" (or more), with the same unit; never a year,
+            # a phone number or a number about something else.
+            ok = any(
+                not c.is_year
+                and c.kind in ("", "+")
+                and c.value >= n.value
+                and (c.unit == n.unit if n.unit else c.value == n.value and c.kind == "+")
+                for c in have
+            )
+        elif n.kind == "%":
+            ok = any(c.value == n.value and c.kind == "%" for c in have)
+        elif n.kind == "$":
+            ok = any(c.value == n.value and c.kind == "$" for c in have)
         else:
-            ok = value in values
+            ok = any(c.value == n.value and c.kind in ("", "+") for c in have)
         if not ok:
-            reasons.append(f"the number {shown} is not in the cited lines")
+            reasons.append(f"the number {n.shown} is not in the cited lines")
+    tn, cn = _norm(text), _norm(cited)
+    for word in claims.VAGUE_QUANTITIES:
+        if _has_phrase(tn, word) and not _has_phrase(cn, word):
+            reasons.append(f"'{word}' is a quantity no cited line states")
     return reasons
 
 
-# ─── skills and technologies ────────────────────────────────────────────────
+# ─── skills, technologies and names ─────────────────────────────────────────
 
 
 def _canonical(term: str) -> str:
@@ -114,26 +255,8 @@ def _aliases(canonical: str) -> list[str]:
     return [canonical, *(a for a, c in claims.SYNONYMS.items() if c == canonical)]
 
 
-def _in_resume(term: str, resume_norm: str) -> bool:
-    return any(_has_phrase(resume_norm, _norm(a)) for a in _aliases(_canonical(term)))
-
-
-def _skill_reasons(name: str, resume_norm: str) -> list[str]:
-    n = norm_text(name)
-    if not n:
-        return ["the skill is empty"]
-    if _in_resume(n, resume_norm):
-        return []
-    # "Terraform and Ansible", "Python / Go": each named part must be in the resume.
-    parts = [p for p in re.split(r"\s*(?:,|/|&|\band\b|\(|\))\s*", n) if p.strip()]
-    missing = [p for p in parts if not _in_resume(p, resume_norm)]
-    if len(parts) > 1 and not missing:
-        return []
-    return [f"'{p}' is not anywhere in your resume" for p in (missing if len(parts) > 1 else [n])]
-
-
-# Ordinary words that are also technology names count in prose only in their written-name case
-# and not as a sentence's first word ("Go", "TS"; never "go" or "Go further").
+# Ordinary words that are also technology names count only in their written-name case, not
+# inside a hyphenated word ("go-live"), and in prose not as a sentence's first word.
 _NAME_CASE = {
     "go": "Go",
     "ts": "TS",
@@ -145,23 +268,58 @@ _NAME_CASE = {
     "swift": "Swift",
     "spark": "Spark",
     "chef": "Chef",
+    "excel": "Excel",
+    "spring": "Spring",
+    "vue": "Vue",
 }
+
+
+def _name_hits(name: str, text: str) -> list[int]:
+    rx = rf"(?<![A-Za-z0-9\-]){re.escape(name)}(?![A-Za-z0-9\-])"
+    return [m.start() for m in re.finditer(rx, text)]
+
+
+def _in_resume(term: str, resume_norm: str, resume_raw: str) -> bool:
+    canon = _canonical(term)
+    for alias in _aliases(canon):
+        if alias in _NAME_CASE:
+            if _name_hits(_NAME_CASE[alias], resume_raw):
+                return True
+        elif _has_phrase(resume_norm, _norm(alias)):
+            return True
+    return False
+
+
+def _skill_reasons(name: str, resume_norm: str, resume_raw: str) -> list[str]:
+    n = norm_text(name)
+    if not n:
+        return ["the skill is empty"]
+    if _in_resume(n, resume_norm, resume_raw):
+        return []
+    # "Terraform and Ansible", "Python / Go": each named part must be in the resume.
+    parts = [p for p in re.split(r"\s*(?:,|/|&|\band\b|\(|\))\s*", n) if p.strip()]
+    missing = [p for p in parts if not _in_resume(p, resume_norm, resume_raw)]
+    if len(parts) > 1 and not missing:
+        return []
+    return [f"'{p}' is not anywhere in your resume" for p in (missing if len(parts) > 1 else [n])]
+
+
+def _sentence_start(text: str, pos: int) -> bool:
+    before = text[:pos].rstrip(" \t\"'(")
+    return not before or before.endswith((".", "!", "?", ":", ";", "\n", "-", "•"))
 
 
 def _named_in_prose(term: str, text: str) -> bool:
     name = _NAME_CASE.get(term)
     if name is None:
         return True
-    for m in re.finditer(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", text):
-        before = text[: m.start()].rstrip()
-        if before and not before.endswith((".", "!", "?", ":")):
-            return True
-    return False
+    return any(not _sentence_start(text, i) for i in _name_hits(name, text))
 
 
-def _tech_reasons(text: str, resume_norm: str) -> list[str]:
+def _tech_reasons(text: str, resume_norm: str, resume_raw: str) -> tuple[list[str], set[str]]:
     norm = _norm(text)
     reasons: list[str] = []
+    flagged: set[str] = set()
     seen: set[str] = set()
     for term in (*claims.TECH, *claims.SYNONYMS):
         if not _has_phrase(norm, _norm(term)) or not _named_in_prose(term, text):
@@ -170,18 +328,68 @@ def _tech_reasons(text: str, resume_norm: str) -> list[str]:
         if canon in seen:
             continue
         seen.add(canon)
-        if not _in_resume(canon, resume_norm):
+        if not _in_resume(canon, resume_norm, resume_raw):
             reasons.append(f"'{term}' is not anywhere in your resume")
+            flagged.update(_norm(a) for a in _aliases(canon))
+    return reasons, flagged
+
+
+def _name_like(tok: str, text: str, pos: int) -> bool:
+    core = tok.lstrip(".")
+    letters = [c for c in core if c.isalpha()]
+    if not letters or (len(core) < 2 and not tok.startswith(".")):
+        return False
+    if any(c.isdigit() for c in core):
+        return True  # S3, EC2, Python3
+    if tok.startswith(".") or (len(letters) >= 2 and core.isupper()):
+        return True  # .NET, AWS
+    if any(c.isupper() for c in core[1:]) and any(c.islower() for c in core):
+        return True  # PyTorch, iOS
+    return core[0].isupper() and not _sentence_start(text, pos)
+
+
+def _name_reasons(
+    text: str,
+    *,
+    context_norm: str,
+    posting_norm: str,
+    allowed_norm: str,
+    already: set[str],
+) -> list[str]:
+    """Names, products and organisations in prose ("Airflow", "PyTorch", "Google") that are
+    in none of the lines this document may cite. A name copied from the posting is the most
+    likely tailoring invention; one from nowhere is worse."""
+    reasons: list[str] = []
+    seen: set[str] = set()
+    for m in _TOKEN.finditer(text):
+        for part in re.split(r"(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])", m.group(0)):
+            pos = m.start() + m.group(0).find(part)
+            part = part.rstrip("'")
+            if part.endswith("'s"):
+                part = part[:-2]
+            key = _norm(part)
+            if not key or key in seen or key in NAME_STOP or not _name_like(part, text, pos):
+                continue
+            seen.add(key)
+            if key in already or _has_phrase(context_norm, key) or _has_phrase(allowed_norm, key):
+                continue
+            if _has_phrase(posting_norm, key):
+                reasons.append(f"'{part}' comes from the posting, not from your lines")
+            else:
+                reasons.append(f"'{part}' is not in your resume or notes")
     return reasons
 
 
 # ─── claims ─────────────────────────────────────────────────────────────────
 
 
-def _claim_reasons(text: str, cited: str) -> list[str]:
+def _claim_reasons(text: str, cited: str, *, seniority: bool) -> list[str]:
     tn, cn = _norm(text), _norm(cited)
     reasons: list[str] = []
-    for cls, words in claims.CLAIM_CLASSES.items():
+    classes = dict(claims.CLAIM_CLASSES)
+    if seniority:
+        classes["seniority"] = claims.SENIORITY
+    for cls, words in classes.items():
         used = _words_in(tn, words)
         if used and not _words_in(cn, words):
             reasons.append(f"'{used[0]}' claims more ({cls}) than any cited line says")
@@ -195,26 +403,38 @@ def _claim_reasons(text: str, cited: str) -> list[str]:
 
 
 def _employer_words(employer: str) -> list[str]:
-    return [
-        t for t in employer_tokens(employer or "") if t not in claims.EMPLOYER_STOP and len(t) > 2
-    ]
+    toks = [t for t in employer_tokens(employer or "") if t not in claims.EMPLOYER_STOP]
+    long = [t for t in toks if len(t) > 2]
+    return long or [t for t in toks if len(t) >= 2]  # 3M, GE, HP
+
+
+def _meaningful_quote(quote: str, employer: str) -> bool:
+    words = re.findall(r"[a-z0-9][a-z0-9+#'\-]*", _norm(quote))
+    names = set(_employer_words(employer)) | set(employer_tokens(employer or ""))
+    content = [w for w in words if w not in STOPWORDS and w not in names]
+    return len(words) >= MIN_QUOTE_WORDS and len(content) >= MIN_QUOTE_CONTENT
 
 
 def _employer_claim_reasons(
     text: str, quotes: list[str], posting_norm: str, employer: str
 ) -> list[str]:
-    good = [q for q in quotes if quote_found(q, posting_norm)]
+    good = [
+        _norm(q).strip("\"' ")
+        for q in quotes
+        if quote_found(q, posting_norm) and _meaningful_quote(q, employer)
+    ]
     names = _employer_words(employer)
     reasons: list[str] = []
     for sentence in _SENT.split(norm_text(text)):
         sn = _norm(sentence)
-        about = bool(_YOU.search(sentence)) or any(_has_phrase(sn, n) for n in names)
+        about = bool(ABOUT_EMPLOYER.search(sentence)) or any(_has_phrase(sn, n) for n in names)
         if not about:
             continue
-        if not any(_norm(q).strip("\"' ") in sn for q in good):
+        if not any(q in sn for q in good):
             short = sentence if len(sentence) <= 80 else sentence[:77] + "..."
             reasons.append(
-                f'"{short}" is about the employer but quotes nothing verified from the posting'
+                f'"{short}" is about the employer but contains no verified posting quote of '
+                f"{MIN_QUOTE_WORDS}+ words"
             )
     return reasons
 
@@ -235,55 +455,87 @@ def _citation_reasons(item: Item, kind: str, lines: Mapping[str, str]) -> list[s
         if not SOURCE_RE.match(s) or s not in lines:
             reasons.append(f"cites {s}, which does not exist")
         elif not s.startswith(allowed):
-            reasons.append(
-                f"cites {s}; a {kind.replace('_', ' ')} may cite only {'/'.join(allowed)}"
-            )
+            what = kind.replace("_", " ")
+            reasons.append(f"cites {s}; a {what} may cite only {'/'.join(allowed)}")
     return reasons
 
 
-def _structure_reasons(item: Item, lines: Mapping[str, str]) -> list[str]:
+def _structure_reasons(item: Item, lines: Mapping[str, str], entry_lines: set[str]) -> list[str]:
     src = item.sources[0] if item.sources else ""
     if src not in lines:
         return []  # reported by the citation check
     n = int(src[1:])
-    window = " ".join(lines.get(f"L{i}", "") for i in range(n, n + STRUCTURE_WINDOW + 1))
-    wn = _norm(window)
+    window = [lines.get(src, "")]
+    for i in range(n + 1, n + STRUCTURE_WINDOW + 1):
+        if f"L{i}" in entry_lines:
+            break  # the next job starts here
+        window.append(lines.get(f"L{i}", ""))
+    wn = _norm(" ".join(window))
     reasons = []
     for name in ("employer", "title", "dates"):
         value = _norm(item.fields.get(name, ""))
-        if value and value not in wn:
+        if value and not _has_phrase(wn, value):
             reasons.append(f"{name} '{item.fields[name]}' differs from {src}")
     return reasons
 
 
-def check_item(
-    item: Item,
-    kind: str,
-    *,
-    lines: Mapping[str, str],
-    posting: str,
-    employer: str,
-    resume_norm: str,
-) -> list[str]:
-    reasons = _citation_reasons(item, kind, lines)
-    cited = _cited_text(item, lines)
+@dataclass
+class _Ctx:
+    kind: str
+    lines: Mapping[str, str]
+    posting_norm: str
+    employer: str
+    resume_norm: str
+    resume_raw: str
+    context_norm: str
+    allowed_norm: str  # employer name and job title: names prose may use freely
+    entry_lines: set[str]
+
+
+def check_item(item: Item, c: _Ctx) -> list[str]:
+    if item.role == "heading":
+        return _heading_reasons(item.text, c)
+    reasons = _citation_reasons(item, c.kind, c.lines)
+    cited = _cited_text(item, c.lines)
     if item.role == "header":
         return reasons
     if item.role == "entry":
-        return reasons + _structure_reasons(item, lines)
+        return reasons + _structure_reasons(item, c.lines, c.entry_lines)
     if item.role == "skill":
-        return reasons + _skill_reasons(item.text, resume_norm)
-    reasons += _number_reasons(item.text, cited)
-    reasons += _tech_reasons(item.text, resume_norm)
-    reasons += _claim_reasons(item.text, cited)
+        return reasons + _skill_reasons(item.text, c.resume_norm, c.resume_raw)
+    reasons += _prose_reasons(item.text, cited, c, item.role, item.quotes)
     if item.role in ("paragraph", "sentence"):
-        posting_norm = _norm(posting)
         for q in item.quotes:
-            if not quote_found(q, posting_norm):
+            if not quote_found(q, c.posting_norm):
                 short = q if len(q) <= 60 else q[:57] + "..."
                 reasons.append(f'the quote "{short}" is not in the posting')
-        reasons += _employer_claim_reasons(item.text, item.quotes, posting_norm, employer)
+        reasons += _employer_claim_reasons(item.text, item.quotes, c.posting_norm, c.employer)
     return list(dict.fromkeys(reasons))
+
+
+def _prose_reasons(text: str, cited: str, c: _Ctx, role: str, quotes: list[str]) -> list[str]:
+    reasons = _number_reasons(text, cited)
+    tech, flagged = _tech_reasons(text, c.resume_norm, c.resume_raw)
+    reasons += tech
+    verified = " ".join(q for q in quotes if quote_found(q, c.posting_norm))
+    reasons += _name_reasons(
+        text,
+        context_norm=c.context_norm,
+        posting_norm=c.posting_norm,
+        allowed_norm=f"{c.allowed_norm} {_norm(verified)}",
+        already=flagged,
+    )
+    reasons += _claim_reasons(text, cited, seniority=role in RESUME_ROLES)
+    return reasons
+
+
+def _heading_reasons(heading: str, c: _Ctx) -> list[str]:
+    """A section heading cites nothing, so it is checked against the whole resume and may
+    make no claim the resume does not."""
+    h = norm_text(heading)
+    if not h or _norm(h) in PLAIN_HEADINGS:
+        return []
+    return list(dict.fromkeys(_prose_reasons(h, c.resume_raw, c, "heading", [])))
 
 
 def check(
@@ -291,6 +543,7 @@ def check(
     *,
     posting: str,
     employer: str,
+    title: str = "",
     confirmed: Iterable[str] = (),
     entail: Mapping[str, str] | None = None,
     entailment: Mapping[str, Any] | None = None,
@@ -301,14 +554,24 @@ def check(
     lines: Mapping[str, str] = (doc.get("context") or {}).get("lines") or {}
     if doc.get("base"):
         return {"ok": True, "base": True, "items": [], "confirmed": [], "entailment": None}
-    resume_norm = _norm("\n".join(v for k, v in lines.items() if k.startswith("L")))
+    resume_raw = "\n".join(v for k, v in lines.items() if k.startswith("L"))
+    items = items_of(doc)
+    c = _Ctx(
+        kind=kind,
+        lines=lines,
+        posting_norm=_norm(posting),
+        employer=employer,
+        resume_norm=_norm(resume_raw),
+        resume_raw=resume_raw,
+        context_norm=_norm("\n".join(lines.values())),
+        allowed_norm=_norm(f"{employer} {title}"),
+        entry_lines={i.sources[0] for i in items if i.role == "entry" and i.sources},
+    )
     wanted = set(confirmed)
     out_items: list[dict[str, Any]] = []
     kept: list[str] = []
-    for item in items_of(doc):
-        reasons = check_item(
-            item, kind, lines=lines, posting=posting, employer=employer, resume_norm=resume_norm
-        )
+    for item in items:
+        reasons = check_item(item, c)
         status = "pass"
         if reasons:
             status = "confirmed" if item.ckey in wanted else "unsupported"
