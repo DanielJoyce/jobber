@@ -15,6 +15,7 @@ An unconfirmed line blocks export of that document, the same gate as Mark ready.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sqlite3
@@ -69,9 +70,13 @@ def person_name(first_line: str) -> str:
     return "-".join(p for p in parts if p)
 
 
+_HEADING = re.compile(r"^#{1,6}\s+")
+
+
 def _first_line_of(v: review.Version) -> str:
     if v.doc.get("base"):
-        return next((ln for ln in v.body_md.splitlines() if ln.strip()), "")
+        first = next((ln for ln in v.body_md.splitlines() if ln.strip()), "")
+        return _HEADING.sub("", first.strip())  # a base resume may open with "# Name"
     header = (v.doc.get("resume") or {}).get("header") or []
     return str(v.lines.get(header[0], "")) if header else ""
 
@@ -84,13 +89,14 @@ def file_stem(kind: str, name: str) -> str:
 
 
 def to_text(md: str) -> str:
-    """Plain text for "paste your resume" boxes: headings uppercased, markup dropped."""
+    """Plain text for "paste your resume" boxes: markup dropped, ``##`` sections uppercased."""
     out: list[str] = []
     for line in md.splitlines():
-        if line.startswith("## "):
-            out.append(line[3:].strip().upper())
-        elif line.startswith("### "):
-            out.append(line[4:].strip())
+        m = _HEADING.match(line)
+        if m:
+            level = len(m.group(0).strip())
+            body = line[m.end() :].strip()
+            out.append(body.upper() if level == 2 else body)
         else:
             out.append(line.rstrip())
     return "\n".join(out).strip() + "\n"
@@ -111,7 +117,7 @@ def parse_md(md: str, *, resume: bool, plain: bool) -> tuple[list[str], list[Blo
     ``## `` heading.
     """
     lines = md.splitlines()
-    if plain:
+    if plain:  # raw text with no Markdown in it: keep its lines as they are
         nonblank = [ln for ln in lines if ln.strip()]
         if not nonblank:
             return [], []
@@ -122,7 +128,7 @@ def parse_md(md: str, *, resume: bool, plain: bool) -> tuple[list[str], list[Blo
     if resume:
         while i < len(lines) and not lines[i].startswith("## "):
             if lines[i].strip():
-                header.append(lines[i].strip())
+                header.append(_HEADING.sub("", lines[i].strip()))
             i += 1
     blocks: list[Block] = []
     para: list[str] = []
@@ -133,13 +139,13 @@ def parse_md(md: str, *, resume: bool, plain: bool) -> tuple[list[str], list[Blo
             para.clear()
 
     for line in lines[i:]:
-        if line.startswith("### "):
+        if line.startswith(("### ", "#### ")):
             flush()
-            blocks.append(Block("h3", line[4:].strip()))
-        elif line.startswith("## "):
+            blocks.append(Block("h3", _HEADING.sub("", line).strip()))
+        elif line.startswith(("## ", "# ")):
             flush()
-            blocks.append(Block("h2", line[3:].strip()))
-        elif line.startswith("- "):
+            blocks.append(Block("h2", _HEADING.sub("", line).strip()))
+        elif line.startswith(("- ", "* ")):
             flush()
             if blocks and blocks[-1].tag == "ul":
                 blocks[-1].items.append(line[2:].strip())
@@ -198,8 +204,13 @@ pre { font: inherit; white-space: pre-wrap; margin: 0; }
 )
 
 
+def _is_markdown(md: str) -> bool:
+    return any(ln.startswith(("#", "- ", "* ")) for ln in md.splitlines())
+
+
 def to_html(md: str, kind: str, *, title: str, plain: bool = False) -> str:
-    header, blocks = parse_md(md, resume=kind == "resume", plain=plain and kind == "resume")
+    plain = plain and kind == "resume" and not _is_markdown(md)
+    header, blocks = parse_md(md, resume=kind == "resume", plain=plain)
     return _TEMPLATE.render(title=title, header=header, blocks=blocks)
 
 
@@ -264,6 +275,69 @@ def versioned_path(data_dir: Path, packet_id: int, exp: Export, fmt: str) -> Pat
     return packet_dir(data_dir, packet_id) / f"{VERSIONED[exp.kind]}-v{exp.version.version}.{fmt}"
 
 
+def packet_refusal(status: str) -> str | None:
+    return (
+        "This packet was abandoned; nothing is exported for it." if status == "abandoned" else None
+    )
+
+
+def _private_dir(path: Path) -> None:
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def _private_file(path: Path) -> None:
+    os.chmod(path, 0o600)
+
+
+def named_files(data_dir: Path, packet_id: int, kind: str) -> list[Path]:
+    """Employer-named copies of ``kind`` in the packet folder (any name, any version)."""
+    d = packet_dir(data_dir, packet_id)
+    if not d.is_dir():
+        return []
+    return sorted(f for ext in FORMATS for f in d.glob(f"*{SUFFIX[kind]}.{ext}") if f.is_file())
+
+
+def sync_named(conn: sqlite3.Connection, data_dir: Path, packet_id: int) -> None:
+    """Make the employer-named copies match the current version, or remove them.
+
+    Those are the files you attach, so a copy of a version that is no longer current must not
+    stay. Every named copy is dropped, then the current version's are restored from its
+    versioned files when that version was exported and still passes the gate. Run after
+    anything that can move the current version (generate, edit, restore, base, abandon) and
+    before the packet page is drawn. Idempotent; a packet never exported is untouched.
+    """
+    data_dir = Path(data_dir)
+    if not packet_dir(data_dir, packet_id).is_dir():
+        return
+    row = conn.execute(
+        "SELECT status FROM application_packet WHERE id = ?", (packet_id,)
+    ).fetchone()
+    live = row is not None and packet_refusal(row["status"]) is None
+    for kind in KINDS:
+        stale = named_files(data_dir, packet_id, kind)
+        exp = current_export(conn, packet_id, kind) if live else None
+        keep: dict[str, Path] = {}
+        if exp is not None and refusal(exp) is None:
+            for fmt in FORMATS:
+                src = versioned_path(data_dir, packet_id, exp, fmt)
+                if src.is_file():
+                    keep[exp.download_name(fmt)] = src
+        for f in stale:
+            if keep.get(f.name) is None or f.read_bytes() != keep[f.name].read_bytes():
+                f.unlink(missing_ok=True)
+        for name, src in keep.items():
+            dst = packet_dir(data_dir, packet_id) / name
+            if not dst.exists():
+                shutil.copyfile(src, dst)
+                _private_file(dst)
+
+
+def named_version(data_dir: Path, packet_id: int, exp: Export) -> int | None:
+    """The version the employer-named copies hold (always the current one, by ``sync_named``)."""
+    return exp.version.version if named_files(data_dir, packet_id, exp.kind) else None
+
+
 @dataclass
 class Written:
     files: dict[str, Path] = field(default_factory=dict)  # fmt -> the employer-named file
@@ -286,16 +360,14 @@ def write_export(
     if msg:
         raise ExportError(msg)
     data_dir = Path(data_dir)
-    base = packet_dir(data_dir, packet_id)
-    base.mkdir(parents=True, exist_ok=True)
+    _private_dir(data_dir / "packets")
+    _private_dir(packet_dir(data_dir, packet_id))
     written = Written()
     for fmt, body in (("md", exp.md), ("txt", exp.text), ("html", exp.html)):
         vp = versioned_path(data_dir, packet_id, exp, fmt)
         vp.write_text(body, encoding="utf-8")
-        shutil.copyfile(vp, base / exp.download_name(fmt))
-        written.files[fmt] = base / exp.download_name(fmt)
+        _private_file(vp)
     vpdf = versioned_path(data_dir, packet_id, exp, "pdf")
-    pdf_target = base / exp.download_name("pdf")
     err: str | None = None
     if renderer is None:
         err = "PDF export is not available here."
@@ -304,21 +376,25 @@ def write_export(
             renderer(exp.html, vpdf)
             if not vpdf.is_file() or vpdf.stat().st_size == 0:
                 raise RuntimeError("the renderer wrote no file")
+            _private_file(vpdf)
         except Exception as exc:  # a renderer fault must not lose the other formats
             err = str(exc) or type(exc).__name__
-    if err is None:
-        shutil.copyfile(vpdf, pdf_target)
-        written.files["pdf"] = pdf_target
-        with db.transaction(conn):
-            conn.execute(
-                "UPDATE packet_document SET rendered_path = ? WHERE id = ?",
-                (str(vpdf.relative_to(data_dir)), exp.version.id),
-            )
-    else:
-        # A PDF left from an older version must not be attached by mistake.
-        pdf_target.unlink(missing_ok=True)
+    if err is not None:
         vpdf.unlink(missing_ok=True)
         written.pdf_error = err
+    with db.transaction(conn):
+        conn.execute(
+            "UPDATE packet_document SET rendered_path = ? WHERE id = ?",
+            (str(vpdf.relative_to(data_dir)) if err is None else None, exp.version.id),
+        )
+    # Replaces any copy from an older version or an older name.
+    for f in named_files(data_dir, packet_id, exp.kind):
+        f.unlink(missing_ok=True)
+    sync_named(conn, data_dir, packet_id)
+    for fmt in FORMATS:
+        f = packet_dir(data_dir, packet_id) / exp.download_name(fmt)
+        if f.is_file():
+            written.files[fmt] = f
     return written
 
 

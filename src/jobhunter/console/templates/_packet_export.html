@@ -33,9 +33,18 @@
       </li>
       {% endfor %}
     </ul>
+    {% if not slot.refusal %}
     <p><button type="button" class="act copy-btn" id="copy-{{ slug }}" data-copy="{{ exp.text }}">Copy as plain text</button>
        <span class="muted">for "paste your resume" boxes and email</span></p>
     <details class="export-text"><summary>Show the plain text</summary><pre id="text-{{ slug }}">{{ exp.text }}</pre></details>
+    {% endif %}
+    {% if slot.named_version %}
+    <p class="muted" id="named-{{ slug }}">The files named for employers (<code>{{ exp.stem }}.*</code>) hold v{{ slot.named_version }}, the current version.</p>
+    {% elif not slot.refusal %}
+    <p class="muted" id="named-{{ slug }}">No files named for employers yet for v{{ exp.version.version }}: press Export files{% if p.status == "ready" %} before you attach anything{% endif %}.</p>
+    {% else %}
+    <p class="muted" id="named-{{ slug }}">No files named for employers: the current version cannot be exported.</p>
+    {% endif %}
   </div>
   {% endif %}
   {% endfor %}

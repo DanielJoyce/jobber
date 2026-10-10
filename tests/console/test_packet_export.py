@@ -45,7 +45,20 @@ def pdir(env) -> Path:
 
 
 def export_kind(env, kind="resume"):
-    return env.client.post(f"/packet/{env.pid}/export", data={"kind": kind})
+    """Press Export: a success redirects to the packet page, which is returned."""
+    r = env.client.post(f"/packet/{env.pid}/export", data={"kind": kind})
+    if r.status_code == 303:
+        assert r.headers["location"] == f"/packet/{env.pid}#export"
+        return env.client.get(f"/packet/{env.pid}")
+    return r
+
+
+def confirm_all(env):
+    """Confirm every unsupported line of the current version (the button on the page)."""
+    page = env.client.get(f"/packet/{env.pid}").text
+    doc_id = docs(env)[-1]["id"]
+    for btn in [b for b in parse(page).buttons if b.get("name") == "ckey"]:
+        env.client.post(f"/packet/{env.pid}/doc/{doc_id}/confirm", data={"ckey": btn["value"]})
 
 
 def generated_and_confirmed(env, fake_claude, claude_stream):
@@ -393,3 +406,165 @@ def test_export_section_copy_button_links_and_forms_resolve(env, renderer):
     for f in parsed.forms.values():
         assert f["__action"].startswith("/"), f  # same-origin posts only
     assert f"/packet/{env.pid}/export" in {f["__action"] for f in parsed.forms.values()}
+
+
+# ─── review round: gate, stale files, formats ───────────────────────────────
+
+NAMED = ("pdf", "txt", "md", "html")
+
+
+def named(env, stem="Synthetic-Person-Resume"):
+    return sorted(f.name for f in pdir(env).glob(f"{stem}.*"))
+
+
+def test_a_refused_version_offers_no_copy_button_or_text(env, fake_claude, claude_stream, renderer):
+    fake_claude.set([claude_stream(RESUME_OUT), claude_stream(ENTAIL)])
+    generate(env)  # one line is unsupported and unconfirmed
+    page = env.client.get(f"/packet/{env.pid}").text
+    assert 'id="export-refusal-resume"' in page
+    assert 'id="copy-resume"' not in page and 'id="text-resume"' not in page
+    assert "Show the plain text" not in page
+    assert "Led the Terraform work" not in page.split('id="export"')[1]
+    confirm_all(env)
+    page = env.client.get(f"/packet/{env.pid}").text
+    assert 'id="copy-resume"' in page and 'id="text-resume"' in page
+
+
+def test_named_files_never_hold_an_older_version_than_the_current_one(
+    env, fake_claude, claude_stream, renderer
+):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    assert named(env) == [f"Synthetic-Person-Resume.{x}" for x in sorted(NAMED)]
+    assert "hold v1, the current version" in env.client.get(f"/packet/{env.pid}").text
+    # A new, unconfirmed version becomes current: the files to attach are gone at once.
+    fake_claude.set([claude_stream(RESUME_OUT), claude_stream(ENTAIL)])
+    generate(env)
+    assert named(env) == []
+    assert (pdir(env) / "resume-v1.pdf").is_file()  # history stays
+    assert export_kind(env).status_code == 409 and named(env) == []
+    # Confirmed and marked ready, but not exported: still nothing to attach, and the page says so.
+    confirm_all(env)
+    assert env.client.post(f"/packet/{env.pid}/ready").status_code == 303
+    page = env.client.get(f"/packet/{env.pid}").text
+    assert named(env) == []
+    assert "No files named for employers yet for v2: press Export files before you attach" in page
+    export_kind(env)
+    assert named(env) == [f"Synthetic-Person-Resume.{x}" for x in sorted(NAMED)]
+    md = (pdir(env) / "Synthetic-Person-Resume.md").read_text(encoding="utf-8")
+    assert "Led the Terraform work" in md and "hold v2, the current version" in (
+        env.client.get(f"/packet/{env.pid}").text
+    )
+
+
+def test_editing_or_restoring_moves_the_named_files_off_the_old_version(
+    env, fake_claude, claude_stream, renderer
+):
+    generated_and_confirmed(env, fake_claude, claude_stream)
+    export_kind(env)
+    assert named(env)
+    form = base._editor(env.client.get(f"/packet/{env.pid}").text)
+    form["summary.text"] = "Platform engineer who moves services onto Kubernetes."
+    doc_id = docs(env)[-1]["id"]
+    assert env.client.post(f"/packet/{env.pid}/doc/{doc_id}/save", data=form).status_code == 303
+    assert named(env) == []  # v2 is current and not exported
+    confirm_all(env)
+    export_kind(env)
+    text = (pdir(env) / "Synthetic-Person-Resume.txt").read_text(encoding="utf-8")
+    assert "moves services onto Kubernetes" in text
+    assert "moves services to Kubernetes" not in text
+    assert (pdir(env) / "resume-v1.txt").read_text(encoding="utf-8").count("moves services to") == 1
+    # Restoring the omitted line (L8) is a new version too, and shows up once exported.
+    assert "Cut deploy time by 35%" not in text
+    page = env.client.get(f"/packet/{env.pid}").text
+    (btn,) = [b for b in parse(page).buttons if b.get("name") == "line"]
+    assert env.client.post(base.target(page, btn), data={"line": "L8"}).status_code == 303
+    assert named(env) == []
+    confirm_all(env)
+    export_kind(env)
+    text = (pdir(env) / "Synthetic-Person-Resume.txt").read_text(encoding="utf-8")
+    assert "- Cut deploy time by 35%" in text and "moves services onto Kubernetes" in text
+
+
+def test_a_name_change_removes_the_old_named_files_and_the_letters_too(
+    env, fake_claude, claude_stream, renderer
+):
+    env.client.post(f"/packet/{env.pid}/base")
+    fake_claude.set([claude_stream(LETTER_OUT), claude_stream({"lines": []})])
+    generate(env, kind="cover_letter")
+    export_kind(env)
+    export_kind(env, "cover_letter")
+    assert named(env, "Synthetic-Person-Cover-Letter")
+    env.conn.execute(
+        "UPDATE packet_document SET body_md = replace(body_md, 'Synthetic Person', 'Other Name')"
+    )
+    env.conn.commit()
+    env.client.get(f"/packet/{env.pid}")
+    assert named(env) == [] and named(env, "Synthetic-Person-Cover-Letter") == []
+    export_kind(env)
+    export_kind(env, "cover_letter")
+    assert named(env, "Other-Name-Resume") and named(env, "Other-Name-Cover-Letter")
+    assert named(env) == [] and named(env, "Synthetic-Person-Cover-Letter") == []
+
+
+def test_exported_files_and_folders_are_private(env, renderer):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    for d in (pdir(env), pdir(env).parent):
+        assert d.stat().st_mode & 0o777 == 0o700
+    files = list(pdir(env).iterdir())
+    assert len(files) == 8
+    for f in files:
+        assert f.stat().st_mode & 0o777 == 0o600, f.name
+
+
+def test_a_failed_pdf_on_re_export_clears_rendered_path(env, renderer):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    assert docs(env)[0]["rendered_path"]
+
+    def boom(html, out):
+        raise OSError("no browser today")
+
+    env.app.state.packet_pdf_renderer = boom
+    export_kind(env)
+    assert docs(env)[0]["rendered_path"] is None
+    assert not (pdir(env) / "resume-v1.pdf").exists()
+
+
+def test_post_export_redirects_and_the_message_shows_once(env, renderer):
+    env.client.post(f"/packet/{env.pid}/base")
+    r = env.client.post(f"/packet/{env.pid}/export", data={"kind": "resume"})
+    assert (r.status_code, r.headers["location"]) == (303, f"/packet/{env.pid}#export")
+    assert 'id="export-msg"' in env.client.get(f"/packet/{env.pid}").text
+    assert 'id="export-msg"' not in env.client.get(f"/packet/{env.pid}").text
+
+
+def test_an_abandoned_packet_refuses_export_and_downloads(env, renderer):
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    env.conn.execute("UPDATE application_packet SET status = 'abandoned'")
+    env.conn.commit()
+    r = env.client.post(f"/packet/{env.pid}/export", data={"kind": "resume"})
+    assert r.status_code == 409 and "abandoned" in r.text
+    assert named(env) == []
+    assert env.client.get(f"/packet/{env.pid}/export/resume/pdf").status_code == 404
+
+
+def test_markdown_headings_become_a_clean_name_header_and_text(env, renderer):
+    md = (
+        "# Jane Doe\njane@example.com | Denver\n\n## Experience\n\n"
+        "### Engineer, Acme (2020)\n\n- Ran things\n"
+    )
+    text = export.to_text(md)
+    assert text.splitlines()[0] == "Jane Doe" and "EXPERIENCE" in text and "#" not in text
+    html = export.to_html(md, "resume", title="t", plain=True)
+    assert "<h1>Jane Doe</h1>" in html and "<h2>Experience</h2>" in html
+    assert "<li>Ran things</li>" in html
+    assert "# " not in html.split("</style>")[1]
+    # A base resume that opens "# Jane Doe" still names its files Jane-Doe-Resume.*.
+    (env.settings.paths.profile_dir / "resume.md").write_text(md, encoding="utf-8")
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    assert named(env, "Jane-Doe-Resume")
+    assert "#" not in (pdir(env) / "Jane-Doe-Resume.txt").read_text(encoding="utf-8")
