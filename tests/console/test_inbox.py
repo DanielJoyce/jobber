@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -322,7 +323,11 @@ def test_set_labels_is_atomic(seeded):
 def test_bulk_routes(client):
     r = client.post("/inbox/bulk", data={"label": "not_interesting", "group_id": [1, 2, 2]})
     assert r.status_code == 200
-    assert r.text.count('hx-swap-oob="true"') == 3  # two rows (deduped) and the toast
+    assert r.text.count('hx-swap-oob="true"') == 2  # two rows (deduped)
+    # The toast goes into the page's standing role=status node. A replacement node (outerHTML)
+    # is not announced by screen readers.
+    assert r.text.count('hx-swap-oob="innerHTML:#bulk-toast"') == 1
+    assert 'id="bulk-toast"' not in r.text and 'role="status"' not in r.text
     assert "Dismissed: Bullseye" in r.text and "Dismissed: Strong" in r.text
     assert 'name="group_id" value="1"' in r.text and "/inbox/bulk/undo" in r.text
     page = client.get("/inbox").text
@@ -331,6 +336,8 @@ def test_bulk_routes(client):
     assert r.status_code == 200
     assert 'id="row-1"' in r.text and ">Bullseye</a>" in r.text and ">Strong</a>" in r.text
     assert "Undone: 2 jobs restored." in r.text
+    assert r.text.count('hx-swap-oob="innerHTML:#bulk-toast"') == 1
+    assert 'id="bulk-toast"' not in r.text and 'role="status"' not in r.text
     assert ">Bullseye</a>" in client.get("/inbox").text
 
 
@@ -362,6 +369,8 @@ def test_bulk_validation(client, tmp_path):
 
 def test_page_has_bulk_controls(client):
     t = client.get("/inbox").text
+    assert t.count('id="bulk-toast"') == 1  # the one standing live region the toasts swap into
+    assert 'id="bulk-toast" class="bulk-toast" role="status"' in t
     assert 'id="select-all"' in t and 'id="bulk-bar"' in t and "Clear selection" in t
     assert 'type="checkbox" class="sel" name="group_id" value="1"' in t
     assert "Select Bullseye" in t
@@ -482,6 +491,30 @@ def test_inbox_page_multi_bucket_chips(client):
     assert 'class="chip on" data-bucket="B" href="#bucket-B"' in t
     # Buckets not on the page link to that bucket (a dead #anchor would do nothing).
     assert 'data-bucket="F" href="/inbox?bucket=F"' in t
+
+
+def _chips(html: str) -> dict[str, str]:
+    """data-bucket letter -> the chip's visible text."""
+    found = re.findall(r'<a class="chip[^"]*" data-bucket="([A-G])"[^>]*>(.*?)</a>', html, re.S)
+    return {
+        b: " ".join(re.sub(r"<[^>]+>", " ", text).replace("&middot;", "·").split())
+        for b, text in found
+    }
+
+
+def test_inbox_chips_read_bucket_names_with_counts(client):
+    # The chips, not the job titles in the rows below (seeded as "Bullseye" and "Mismatch").
+    assert _chips(client.get("/inbox").text) == {
+        "A": "Bullseye 1",
+        "B": "Strong 1",
+        "C": "Stretch Up 0",
+        "D": "Lateral 0",
+        "E": "Downlevel 0",
+        "F": "Stale Match 2",
+        "G": "Mismatch ·hidden· 1",
+    }
+    picked = _chips(client.get("/inbox?bucket=A,B").text)  # chips for sections off the page too
+    assert picked["A"] == "Bullseye 1" and picked["F"] == "Stale Match 2"
 
 
 def test_inbox_chips_keep_the_state_filter(client):

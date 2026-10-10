@@ -5,13 +5,15 @@
 {% if r.item %}{% with i = r.item, oob = True %}{% include "_inbox_row.html" %}{% endwith %}
 {% else %}<div class="row triaged" id="row-{{ r.group_id }}" hx-swap-oob="true">Undone.</div>{% endif %}
 {% endfor %}
-<div id="bulk-toast" class="bulk-toast" role="status" hx-swap-oob="true">Undone: {{ ids | length }} job{{ "" if ids | length == 1 else "s" }} restored.</div>
+{# innerHTML swap into the page's standing live region: screen readers announce changes inside
+   an existing role=status node, not a freshly inserted one. #}
+<div hx-swap-oob="innerHTML:#bulk-toast">Undone: {{ ids | length }} job{{ "" if ids | length == 1 else "s" }} restored.</div>
 {% else %}
 {% for t in triaged %}{% with group_id = t.group_id, job_title = t.job_title, oob = True %}{% include "_inbox_triaged.html" %}{% endwith %}
 {% endfor %}
-<form id="bulk-toast" class="bulk-toast" role="status" hx-post="/inbox/bulk/undo" hx-swap="none" hx-swap-oob="true">
+<div hx-swap-oob="innerHTML:#bulk-toast"><form class="bulk-toast-form" hx-post="/inbox/bulk/undo" hx-swap="none">
   <span>{% if label == "interesting" %}Shortlisted{% else %}Dismissed{% endif %} {{ ids | length }} job{{ "" if ids | length == 1 else "s" }}.</span>
   {% for g in ids %}<input type="hidden" name="group_id" value="{{ g }}">{% endfor %}
   <button type="submit" class="act bulk-undo">undo all (u)</button>
-</form>
+</form></div>
 {% endif %}

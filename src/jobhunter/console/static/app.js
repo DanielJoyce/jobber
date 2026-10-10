@@ -3,15 +3,26 @@
 
   var keymap = {};
 
+  // Input types that take no typed text. A checkbox you just clicked keeps focus, and the
+  // keys must still work then (mouse-select, then press x is the main bulk workflow).
+  var NON_TEXT = ["checkbox", "radio", "button", "submit", "reset", "image"];
+
   function typing(el) {
     if (!el) return false;
     var tag = el.tagName;
-    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+    if (tag === "INPUT") return NON_TEXT.indexOf((el.type || "").toLowerCase()) === -1;
+    return tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+  }
+
+  function isCheckbox(el) {
+    return !!el && el.tagName === "INPUT" && (el.type || "").toLowerCase() === "checkbox";
   }
 
   document.addEventListener("keydown", function (ev) {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if (typing(ev.target)) return;
+    // Space on a focused checkbox is the browser's own toggle; do not also toggle the row.
+    if (ev.key === " " && isCheckbox(ev.target)) return;
     var fn = keymap[ev.key];
     if (fn) {
       ev.preventDefault();
