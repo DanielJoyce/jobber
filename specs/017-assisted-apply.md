@@ -1,10 +1,11 @@
 # 017 — Assisted apply: targeted resume, cover letter, resume-first fill
 
-Status: **design, revision 6, awaiting your approval.** Bug `7fa29db`. Proposed as a new
+Status: **design, revision 7, awaiting your approval.** Your open-question decisions of 2026-10-10 are folded in. Bug `7fa29db`. Proposed as a new
 milestone M10 ([Deviations](#deviations-from-earlier-specs)). Phase 1a is in progress; no other
-code yet. Revisions 2 to 6 and why are at the end ([History](#history)). Revision 5 replaced
+code yet. Revisions 2 to 7 and why are at the end ([History](#history)). Revision 5 replaced
 phase 2's Claude in Chrome design with jobhunter's own Chrome extension and recorded your
-drafting, export and cap decisions in phase 1; revision 6 takes the review of revision 5.
+drafting, export and cap decisions in phase 1; revision 6 takes the review of revision 5;
+revision 7 takes the check of revision 6 and your answers, including coexistence with Jobright.
 
 You asked: *"Is there any way to automate the application part of the process? Filling out web
 forms?"* Then you added that most sites now parse an uploaded resume and fill themselves, that
@@ -128,10 +129,9 @@ write. The `/prefs` form save is the other writer of `answers:`; there is no sin
 which is why the check sits in the model.
 
 **Packets read from it**: the packet page offers `answers:` entries to copy next to matching questions. They
-are never sent to the model (see Never sent). **Proposed for phase 2** ([open question 2](#open-questions)):
-the extension also fills empty mapped form fields from it, on your click, entirely on your machine
-([Field classification](#field-classification), row 6). If you say copy only, row 6 is dropped and those
-fields are `listed`.
+are never sent to the model (see Never sent). In phase 2 (your decision) the extension also fills
+empty mapped form fields from it, on your click, entirely on your machine
+([Field classification](#field-classification), row 6).
 
 ## Phase 1: packets
 
@@ -208,7 +208,7 @@ ingested group; unscored pasted groups appear only in the pipeline.
 | | |
 |---|---|
 | Model | `[apply] cli_model = "opus"` (the CLI alias, whichever Opus your subscription serves) and `[apply] api_model = "claude-opus-5"` for the fallback: two keys, because one value cannot be both. A handful per week; wording quality is the point |
-| Runner (your decision, 2026-10-10) | **The Claude Code CLI on your subscription first**, the official `anthropic` SDK with `ANTHROPIC_API_KEY` second ([CLI runner](#cli-runner)). `[apply] runner = "auto"` (default), `"cli"` or `"api"`. In `auto`, when the CLI is missing or fails, **the page offers the API run with its estimate and waits for your click**; it never switches silently |
+| Runner (your decision, 2026-10-10) | **The Claude Code CLI on your subscription first**, the official `anthropic` SDK with `ANTHROPIC_API_KEY` second ([CLI runner](#cli-runner)). `[apply] runner = "cli"` (default, your decision) or `"api"`. With `cli`, when the CLI is missing or fails, **the page offers the API run with its estimate and waits for your click**; it never switches silently |
 | API fallback | `messages.stream`, structured output via `output_config`, adaptive thinking, **effort `medium`** (`[apply] effort`) |
 | Caching | API fallback only: system prompt + numbered resume as the cached prefix. The 5-minute TTL usually expires while you review, so regenerate is costed uncached |
 | Prompt version | `apply-v1`, stored on every `packet_document` with its `runner` (`cli` or `api`) and `model` (the model the response reports) |
@@ -218,22 +218,27 @@ ingested group; unscored pasted groups appear only in the pipeline.
 
 ```
 claude -p --output-format stream-json --verbose
-       --model opus --effort medium
+       --model opus --effort medium            (no --effort for the Haiku entailment call)
        --system-prompt <jobhunter's apply prompt> --json-schema <output schema>
-       --tools '' --strict-mcp-config --setting-sources '' --disable-slash-commands
-       --no-session-persistence --max-budget-usd 1.00
+       --tools '' --strict-mcp-config --setting-sources '' --safe-mode
+       --disable-slash-commands --no-session-persistence --max-budget-usd 1.00
 ```
 
 | | |
 |---|---|
-| Where | A subprocess in a fresh empty temp directory, removed afterwards; the user message (numbered resume, posting, notes) on stdin; timeout 180 s |
-| Environment | **Built explicitly, not inherited.** Only `PATH`, `HOME`, `LANG`, `TMPDIR` and `XDG_*` pass through, so `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDECODE` (a console started from a Claude Code shell) never reach it. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set, which turns off Claude Code's telemetry, error reporting and auto-update for the call. Without this, `jobhunter`'s `.env` loading would put the API key in the child, and the CLI would bill the API while we logged $0 |
-| Output | `stream-json` lines. The `system`/`init` line carries `apiKeySource`, `model`, `tools` and `mcp_servers`; the final `result` line carries `is_error`, `structured_output` (the object `--json-schema` validated), `usage` (input, output and cache tokens), `modelUsage` and `total_cost_usd`. jobhunter validates `structured_output` with the same pydantic model as the API path |
-| Checks | The call **fails** unless `apiKeySource` is `none` (subscription login), `tools` and `mcp_servers` are empty, and `is_error` is false. A call that reports API-key auth may already have been billed: its `total_cost_usd` is logged under tier `packet` against `[apply] daily_cap_usd`, the CLI runner is turned off until you look, and the page says why. Otherwise `total_cost_usd` (an API-equivalent figure) is shown on `/costs` for information only |
-| Same request | `--system-prompt` replaces Claude Code's default agentic prompt, so both runners send jobhunter's system prompt, the same user message and the same schema; `--effort medium` matches the API path. One difference is known: the CLI may add a small context block of its own. The live smoke test below records what reaches the model |
-| Not proven yet | That `--setting-sources ''` keeps your user `CLAUDE.md` and auto-memory out (`--bare` would, but it cannot use the subscription login), and that `--json-schema` works with `--tools ''`. 1b starts by checking both with the live smoke test; if user memory still loads, it is recorded as a known limitation (it is your own file, and the call has no tools) |
-| Tests | No test runs the real binary. A fake `claude` script first on `PATH` asserts its argv, its cwd is empty, and that none of the scrubbed variables are in its environment, then prints a recorded `stream-json` transcript (init and result lines, captured once from the real CLI and stored as a fixture). Failure cases: missing binary, non-zero exit, timeout, invalid `structured_output`, `apiKeySource` not `none`. An **autouse conftest guard** makes the runner's binary lookup raise unless a test installed the fake, so a route test that forgets it cannot exec the real CLI; the guard has its own test. One `@pytest.mark.live` smoke test (opt-in, `JOBHUNTER_LIVE_TESTS=1`) runs the real CLI on a tiny schema and checks the envelope fields above |
-| Command | `jobhunter apply draft <packet_id> [--letter] [--question "<text>"]` runs the same generator from the shell and writes the same `packet_document` rows. It is the command 018 tells container users to run on the host, where the CLI and your login are |
+| Where | A subprocess with one fixed, empty working directory, `<cache dir>/apply-cli/` (created once, checked empty before each call), so Claude Code's per-project state in `~/.claude.json` gets one entry instead of one per call; the user message (numbered resume, posting, notes) on stdin; timeout 180 s |
+| Environment | **Built explicitly, not inherited.** Passed through: `PATH`, `HOME`, `LANG`, `TMPDIR`, `XDG_*`, `CLAUDE_CONFIG_DIR` (where your login lives, if moved), `CLAUDE_CODE_OAUTH_TOKEN` (a subscription token from `claude setup-token`, so subscription auth), and the network settings `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`. Everything else is dropped, so `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDECODE` (a console started from a Claude Code shell) never reach it. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set, which turns off Claude Code's telemetry, error reporting and auto-update for the call. Without this, `jobhunter`'s `.env` loading would put the API key in the child, and the CLI would bill the API while we logged $0 |
+| Customizations | `--safe-mode` turns off `CLAUDE.md`, skills, plugins, hooks, MCP servers, custom commands and agents while keeping normal auth, so your own Claude Code setup cannot change the prompt or act. `--setting-sources ''` and `--strict-mcp-config` stay as a second layer. The live smoke test confirms it |
+| Auth check before the first call of a console process | `claude auth status` (JSON) must report a claude.ai login (`authMethod` claude.ai, `apiProvider` firstParty). Anything else (a third-party provider or a bearer token) turns the CLI runner off with the reason shown. Cached for the process |
+| Output | `stream-json` lines, read as they arrive. The `system`/`init` line carries `apiKeySource`, `model`, `tools` and `mcp_servers`. `rate_limit_event` lines carry `rate_limit_info`. The final `result` line carries `is_error`, `structured_output` (the object `--json-schema` validated), `usage` (input, output and cache tokens), `modelUsage` and `total_cost_usd`. jobhunter validates `structured_output` with the same pydantic model as the API path |
+| Checks on `init`, before the model is called | `apiKeySource` must be `none`, `tools` must be exactly `["StructuredOutput"]` (Claude Code adds that tool for `--json-schema` after `--tools ''` filtering; any other tool fails), and `mcp_servers` must be `[]`. On a mismatch jobhunter **kills the child at once**, before the request reaches the model, so nothing is billed; the CLI runner is turned off and the page says why |
+| Paid usage | If a `rate_limit_event` reports `isUsingOverage` or `overageInUse` (your subscription's extra usage, which is paid), the call is treated as paid: its `total_cost_usd` is logged under tier `packet` against `[apply] daily_cap_usd`, and further CLI calls wait for your click with "subscription is on paid extra usage". If the cap is already reached when overage shows, the child is killed |
+| Result | Fails unless `is_error` is false and `structured_output` validates. Otherwise `total_cost_usd` (an API-equivalent figure) is shown on `/costs` for information only |
+| Runner off | "CLI runner off" is stored in `<data dir>/apply-runner.json` (reason and time; there is no general key-value table in the database), shown on the packet page and `/costs` with **Turn back on**. It survives restarts until you clear it |
+| Same request | `--system-prompt` replaces Claude Code's default agentic prompt, so both runners send jobhunter's system prompt, the same user message and the same schema. `--effort medium` matches the API path for Opus calls; the Haiku entailment call sets no effort on either runner (Haiku rejects it). The CLI may add a small context block of its own; the live smoke test records what reaches the model |
+| Not proven yet | That `--safe-mode` keeps your user `CLAUDE.md` and auto-memory out while the subscription login works (`--bare` would skip them, but it cannot use the login), and that `--json-schema` works with `--tools ''`. 1b starts by checking both with the live smoke test, which also checks that `~/.claude.json` does not grow per call |
+| Tests | No test runs the real binary. A fake `claude` script first on `PATH` asserts its argv, its cwd, and that none of the dropped variables are in its environment (the pass-through ones are), then prints a recorded `stream-json` transcript (init, rate-limit and result lines, captured once from the real CLI and stored as a fixture). Failure cases: missing binary, non-zero exit, timeout, invalid `structured_output`, `apiKeySource` not `none` (child killed before any result line is read), `tools` other than `["StructuredOutput"]`, an MCP server, overage reported, `auth status` not claude.ai. An **autouse conftest guard** makes the runner's binary lookup raise unless a test installed the fake, so a route test that forgets it cannot exec the real CLI; the guard has its own test. One `@pytest.mark.live` smoke test (opt-in, `JOBHUNTER_LIVE_TESTS=1`) runs the real CLI on a tiny schema and checks the envelope fields above |
+| Command | `jobhunter apply draft <packet_id> [--letter] [--question "<text>"]` runs the same generator from the shell and writes the same `packet_document` rows. This is the canonical name; 018 aligns to it for container users, who run it on the host where the CLI and your login are |
 
 **Sent** (the same request body on either runner): your base resume as numbered lines (`L1`...`Ln`), header included, exactly as Stage 2
 already sends it ([008](008-compliance.md#personal-data)); `current_focus`, `done_with` and
@@ -243,8 +248,8 @@ for a cover letter or "Why us?" draft, your employer notes; for a behavioral dra
 facts.
 
 **Never sent:** saved answers (`packet_answer` values other than notes and story facts), everything under
-`answers:` on `/prefs` (links, notice period, work authorization, templates; it is shown to you to copy and, if
-open question 2 is approved, filled locally by the extension on your click), salary
+`answers:` on `/prefs` (links, notice period, work authorization, templates; it is shown to you to copy and, in
+phase 2, filled locally by the extension on your click), salary
 preferences, filters and weights, other jobs, application history, email content.
 
 The model returns structure, not prose, so every line can be checked. The resume and the cover
@@ -460,8 +465,7 @@ shortlist undo keeps an application that has a packet.
 Phase 2 is built only when both hold:
 
 1. **Use.** After 4 weeks of phase 1, `jobhunter apply stats` shows at least **8 packets marked
-   ready** for postings on the four public ATSs ([open question](#open-questions) on the
-   threshold), and you say the remainder after the resume parse and your fill helpers still
+   ready** for postings on the four public ATSs (threshold confirmed 2026-10-10), and you say the remainder after the resume parse and your fill helpers still
    costs real time. Per-ATS support is built in order of count.
 2. **Spike** (2a below), in two parts.
    - **Offline, plumbing only**, on hand-written pages served by `context.route` on real ATS
@@ -561,16 +565,26 @@ content scripts for granted optional hosts, and to re-inject into open tabs afte
    in 015 (an embed's `for` and `token`, or a `gh_jid`), against `apply_link` and `job.url`; with
    no match, your `ready` packets are offered to pick. No ATS frame answers (for example after
    the extension was reloaded): the worker injects the content script into the tab's frames with
-   `chrome.scripting.executeScript({allFrames: true})` and asks again.
+   `chrome.scripting.executeScript({allFrames: true})` and asks again. On an employer page that
+   embeds the form, the extension has no access to the top frame, so this may not reach the
+   iframe; if no frame answers after injection, the panel says **Reload this page to continue**
+   (before anything was typed, nothing is lost; the panel warns that typed values may be).
 3. **Start.** The console opens a `fill_session` only if the packet is `ready` with a rendered
    resume PDF ([Resume attach](#resume-attach)), the posting is not `expired`, and today's count
    is under the cap (10, hard cap 25). An earlier session still open (a crash, a closed panel, a
    fetch-based submit that left the thank-you view up) is shown and, on your click, closed as
    `aborted`; any session idle for 2 hours is closed as `aborted` by the console. The session
    records each frame's `documentId` and URL. Login wall, account wall or challenge on the page:
-   the panel says so and stops (`challenge`).
+   the panel says so and stops (`challenge`). If the console restarts mid-session, the in-memory
+   snapshots are gone: the next request gets `409 session lost`, the session is closed as
+   `aborted`, and the panel offers **Start again** (a new before-snapshot; fields already filled
+   then count as `keep`).
 4. **Snapshot before, in two steps.** Each frame sends **descriptors without values** (frame,
-   selector, id, name, label, help text, type, option texts) to
+   selector, id, name, label, help text, type, option texts) with a **field key** that does not
+   depend on generated ids (React `:r3:`-style ids, numeric suffixes): the `ats_forms.py` field
+   name when known, else `name`, else a hash of the normalized label plus type plus its position
+   among fields with the same label. The selector is kept only for writing, per document. They go
+   to
    `POST /ext/v1/sessions/{sid}/fields`. The console runs the never-store match on label, name,
    id and, for a choice group, its option texts, and answers with the field keys that may send
    values. The frames then send `value_present` for every field and the value only for the
@@ -579,12 +593,18 @@ content scripts for granted optional hosts, and to re-inject into open tabs afte
    field it did not clear, and keeps snapshots **in memory for the session only**, never in
    SQLite or logs.
 5. **Attach resume** ([below](#resume-attach)). Or you attach it yourself and click **Attached**.
-6. **Settle.** Wait for the ATS's `parse_done` signal from `ats_forms.py` (a named spinner gone,
-   a named field populated, or a parse request finished as seen in the DOM); for an ATS with no
-   parse (classic Greenhouse), there is nothing to wait for. Without a known signal: wait for the
-   first change to a non-file field, up to 15 seconds. Then wait until no value has changed for
-   3 seconds, with a 45-second cap; on the cap the panel says `parse did not settle` and
-   continues. The file input's own value (`C:\fakepath\...`) is never counted as a change.
+6. **Settle.** Wait for the ATS's `parse_done` signal from `ats_forms.py`. Signals are of three
+   kinds, each with a named mechanism: a **request finished** (a `PerformanceObserver` on
+   `resource` entries whose URL matches the ATS's upload or parse path; the content script sees
+   its own frame's requests without any extra permission), an **element gone or present** (a
+   `MutationObserver` on the form for a named spinner or chip), or a **named field populated**
+   (the same observer plus `input` events). For an ATS with no parse (classic Greenhouse), there
+   is nothing to wait for. Without a known signal: wait for the first change to a non-file field,
+   up to 15 seconds. Then wait until no value has changed for 3 seconds (value polling every
+   250 ms plus the `MutationObserver`), with a 45-second cap; on the cap the panel says `parse
+   did not settle` and continues. The file input's own value (`C:\fakepath\...`) is never
+   counted as a change. Fields that **appear** during the parse (an extra work-history block)
+   are treated as empty before the attach.
 7. **Snapshot after** (same two steps, `phase = after`). The console diffs the two and returns
    an action per field ([Field classification](#field-classification)).
 8. The panel shows **Filled** (`ok`, `fill`, `keep`), **Needs you** (`yours`, `differs`,
@@ -622,7 +642,7 @@ Drafted (2)     "Why Acme?" draft ready [Insert] · "Kubernetes in production?" 
 | 3 | Non-empty before the attach and **changed by the parse** | `differs`: before, after and packet values shown; **Restore previous value** or **Use packet value** on your click |
 | 4 | Empty before, filled by the parse, matches the packet resume's entries | `ok` |
 | 5 | Empty before, filled by the parse, differs (split job, wrong phone, mangled title) | `differs`: both values listed; **Use packet value** writes one field on your click |
-| 6 | Empty, mapped deterministically by `ats_forms.py` field names or `labels.py` synonyms to a value in the packet or (pending [open question 2](#open-questions)) `/prefs` answers (links, notice period, relocation, work authorization yes/no), and settable by a vetted helper | `fill`: ticked in the panel, written on **Fill gaps** |
+| 6 | Empty, mapped deterministically by `ats_forms.py` field names or `labels.py` synonyms to a value in the packet or `/prefs` answers (your decision) (links, notice period, relocation, work authorization yes/no), and settable by a vetted helper | `fill`: ticked in the panel, written on **Fill gaps** |
 | 7 | Empty free-text question with a saved answer or draft on this packet, matched by known field name or an unambiguous label | `paste`: **Insert** on your click |
 | 8 | Empty, unknown free-text question, or an unknown choice field | `draft`: **Draft** on your click sends it to jobhunter ([below](#what-leaves-the-machine)) |
 | 9 | Anything else (extra file inputs, a widget no vetted helper can set) | `listed` |
@@ -649,8 +669,8 @@ jobhunter's normal question-draft call (same runner, cap, factcheck and editor a
 field's label, help text, type and options, plus the packet data phase 1 already sends (resume
 lines, posting, notes, story facts). Not the page HTML, other fields' values, the URL beyond the
 posting already in the packet, or any screenshot; the extension has no capture permission. A
-choice-field draft is one of the given options with its cited lines, checked like any draft
-([open question 4](#open-questions)); a numeric-experience question shows the evidence lines
+choice-field draft is one of the given options with its cited lines, checked like any draft,
+and applied only on your **Insert** (your decision); a numeric-experience question shows the evidence lines
 instead, as in phase 1. The never-store check runs again on the Draft request. This retires
 revision 4's open question 10.
 
@@ -663,11 +683,16 @@ printed the HTML yourself, choose **I'll attach it myself** at Start; the sessio
 
 **Attach resume** asks the service worker for the PDF with
 `POST /ext/v1/packets/{id}/resume` (the packet's rendered PDF, named
-`<First>-<Last>-Resume.pdf`, with its SHA-256 in a response header). Chrome's extension
+`<First>-<Last>-Resume.pdf`, with its SHA-256 in the `X-Resume-SHA256` header). Chrome's extension
 messaging serializes to JSON, so the worker passes the bytes to the frame **base64-encoded**,
 and the content script decodes them and checks size and hash before building the `File`. It
 then sets the control `ats_forms.py` names: `new DataTransfer()`, add the `File`, assign
-`input.files`, dispatch `input` and `change`. The method is per ATS:
+`input.files`, dispatch `input` and `change`. Where an ATS has two file controls, `ats_forms.py`
+names which one: on **Ashby**, the "Autofill from resume" box (`parse_control`) gets the file,
+because only it triggers the parse, and the Resume field (`attachment_field`) is checked
+afterwards, since Ashby normally fills it from the same upload; if it stays empty the panel
+offers **Attach to Resume field too**. The live spike confirms this per ATS. The method is per
+ATS:
 
 | `attach` | Used when |
 |---|---|
@@ -702,14 +727,17 @@ All page writes go through the vetted helpers in `extension/content/act.js`; not
   `role=combobox`, `role=option` or inside a `role=listbox`, through `safeDispatch`, and only
   where a fixture and the live check showed it works. Ashby's yes/no questions are `<button
   type=button>` pairs; buttons are never a dispatch target, so they are `listed` for you
-  ([open question 5](#open-questions)).
+  (your decision: widgets that cannot be set this way are yours).
 - **`safeDispatch(target, type)`**, the one function that may construct `MouseEvent`,
   `PointerEvent` or `DragEvent`, refuses (and logs) any target that is or sits inside: a
   submitter (`button` with no type or `type=submit`, `input[type=submit|image|button|reset]`),
   any `button` or `a[href]` except a `role=option` inside a listbox, anything matching the
-  ATS's Submit selector or the outlined control, and anything whose text, `value` or
-  `aria-label` matches submit / apply / send / finish / next / continue / review (en, es, fr, de,
-  pt). `type` must be one of `click`, `mousedown`, `dragenter`, `dragover`, `drop`.
+  ATS's Submit selector or the outlined control, and any target whose own text, `value` or
+  `aria-label`, or that of its nearest enclosing `button`, `a` or `[role=button]`, matches submit
+  / apply / send / finish / next / continue / review (en, es, fr, de, pt). The word rule looks at
+  the target and that one enclosing control only, never at other ancestors, so an option inside
+  a listbox labelled "Next steps" is not refused. `type` must be one of `click`, `mousedown`,
+  `dragenter`, `dragover`, `drop`.
 
 **Synthetic events are `isTrusted = false`.** A page can tell them apart, and some widgets ignore
 them. When a field ignores the write (the re-read shows the old value), it becomes `listed` for
@@ -724,7 +752,8 @@ any other way.
 - The extension's code has **no path to Submit**. Outside `act.js`, a lint test fails on
   `.click(`, `.submit(`, `requestSubmit`, `prototype.submit`, `SubmitEvent`, `Event('submit'`,
   `new Event(` with a click or submit type, `MouseEvent`, `PointerEvent`, `DragEvent`,
-  `KeyboardEvent`, `dispatchEvent(`, `form.action`, `location =`, `location.assign` and
+  `KeyboardEvent`, `CustomEvent`, `new Event('click'`, `.click.call(`, `prototype.click`,
+  `["click"]`, `dispatchEvent(`, `form.action`, `location =`, `location.assign` and
   `location.replace`. Inside `act.js`, only `safeDispatch` constructs mouse, pointer or drag
   events, and it refuses submit targets as above. Widget behavior is code in the repo, reviewed
   like any other change; console data only picks a target and a helper.
@@ -748,20 +777,61 @@ request from a browser must name a loopback `Host` and come from the console's o
 are not checked, so a DNS-rebinding page (a hostile name that resolves to 127.0.0.1) can read
 any console page today. 017 adds packets, letters, notes and story facts to those pages, so
 **phase 1d extends the loopback-`Host` check to every method on every route** when not
-`--allow-remote` (a small change to `cross_site_reason`, with tests). `/ext/v1/` adds an
-authenticated door for one client:
+`--allow-remote` (a small change to `cross_site_reason`, with tests). The rule keeps today's
+shape: it applies to any request that carries browser fetch metadata (`Sec-Fetch-Site`, which
+every current browser sends on every request, a rebinding page's GET included, or `Origin`).
+Requests with neither (curl, the CLI, FastAPI's `TestClient` with its `testserver` Host) pass as
+today, so existing tests need no change; new tests that send `Sec-Fetch-Site` set
+`Host: 127.0.0.1:8808` explicitly, and one test checks that `testserver` with `Sec-Fetch-Site`
+is refused. `/ext/v1/` adds an authenticated door for one client:
 
 | Control | How |
 |---|---|
 | **POST only** | Every `/ext/v1/` route is a `POST`, including reads (version, packet lookup, resume PDF). Chrome adds `Origin` to non-GET requests from an extension; on a GET to a host in `host_permissions` it most likely sends none, which would make an Origin check refuse every read. The spike records the headers on both |
 | **Pairing, once per install** | **Pair browser extension** on `/prefs` (a same-origin console POST) or `jobhunter ext pair` creates a one-time code of **10 base32 characters (50 bits)**, valid 10 minutes, shown once. Its hash and expiry are written to `<data dir>/extension.json` (mode 0600), because the CLI and the console are separate processes (in container mode, run the CLI inside the container or use `/prefs`). You type it on the extension's options page; the service worker sends it to `POST /ext/v1/pair`. The console accepts only the **pinned extension ID** (the one the manifest `key` produces; a test ties the two), with `Origin` equal to `chrome-extension://<that id>`; five wrong codes void the pending code. It returns a random 256-bit token and stores only its SHA-256 and the ID in `extension.json`, removing the pending code. Pairing again revokes the old token; `jobhunter ext unpair` revokes it |
 | **Token storage in Chrome** | `chrome.storage.local`, with `setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"})` called on worker start so content scripts cannot read it (a lint check requires the call). If the spike shows Chrome does not support that on `local`, the token goes in `storage.session` too and you pair again after a browser restart; the decision is recorded |
-| **Every `/ext/v1/` request** | `Authorization: Bearer <token>`, compared in constant time; `Origin` exactly the paired `chrome-extension://<id>`; `Host` exactly `127.0.0.1:<port>` or `localhost:<port>`, **even with `--allow-remote`**, so a DNS-rebinding page under its own name is refused. Missing or wrong: 401/403, logged without the token |
-| **CORS** | The service worker's fetches to a host in `host_permissions` are not subject to CORS, so no `Access-Control-Allow-*` should be needed. If the spike shows a preflight, `/ext/v1/` answers it for the paired origin only, never `*`, never with credentials. Never `Access-Control-Allow-Private-Network`. Every other console route still sends none |
+| **Every `/ext/v1/` request** | `Authorization: Bearer <token>`, compared in constant time; `Origin` exactly the paired `chrome-extension://<id>`; `Host` exactly `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, where `<port>` is the port the browser connects to (the console's own port, or in a container the published host port, set by `[console] public_port`, default 8808), **even with `--allow-remote`**, so a DNS-rebinding page under its own name is refused. Missing or wrong: 401/403, logged without the token |
+| **CORS** | The service worker's fetches to a host in `host_permissions` are not subject to CORS, so no `Access-Control-Allow-*` should be needed. If the spike shows a preflight, `/ext/v1/` answers it for the paired origin only, never `*`, never with credentials: `Access-Control-Allow-Origin: chrome-extension://<id>`, `Access-Control-Allow-Methods: POST`, `Access-Control-Allow-Headers: Authorization, Content-Type, X-Jobhunter-Ext`, `Access-Control-Expose-Headers: X-Resume-SHA256`, `Vary: Origin`. Never `Access-Control-Allow-Private-Network`. Every other console route still sends none |
 | **Web pages** | Chrome already limits public-page requests to loopback; the token, Origin and Host checks hold regardless. The token is never in a URL, cookie or page |
 | **Content script boundary** | Content scripts never use the network. Messaging is `chrome.runtime` only; no `window.postMessage`, no listeners for page messages, no `externally_connectable`, and no `runtime.onMessageExternal` or `onConnectExternal` listener (lint). A content script receives one value at the moment you approve writing it into one field, and keeps nothing. Nothing is written to the DOM except form values you approved and the outline and label, which carry no data |
 | **Side panel rendering** | Labels, help text, options and drafts are untrusted page or model text, rendered with `textContent` only. Lint fails on `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` and `srcdoc` anywhere in `extension/` |
 | **Existing routes** | `same_origin_writes` (with the extended Host check) is unchanged outside `/ext/`. Under `/ext/` the stricter check above replaces it: a request from the console's own pages or from curl, without the token, is refused |
+
+### Coexisting with Jobright
+
+Your fill helper is **Jobright** (2026-10-10). It fills only when you click **Autofill** in its
+sidebar, reuses your answers to earlier questions, and puts a **Customize** button in the corner
+of resume and cover-letter upload widgets. jobhunter's extension is built to sit beside it:
+
+- **Click-only, like Jobright.** Neither acts on page load, so they never race.
+- **Order: the site's parse, then Jobright, then jobhunter.** The panel's checklist says: attach
+  (jobhunter or by hand), let the parse settle, click Jobright's Autofill, then click **Start**
+  in jobhunter's panel, or **Re-snapshot** if a session is already open. Fields Jobright filled are
+  non-empty in the snapshot and so count as filled (`keep`); jobhunter fills only what both left.
+  If Jobright fills after jobhunter's before-snapshot, those fields are re-read before any write
+  and are not touched (Flow step 8).
+- **Corner buttons on upload widgets, mirroring Jobright's pattern.** On the resume and
+  cover-letter file widgets that `ats_forms.py` names, jobhunter adds a small button (closed
+  shadow root, offset from Jobright's corner so neither covers the other; placement confirmed in
+  the live spike): **jobhunter resume** attaches the packet's targeted PDF to that widget, and
+  **jobhunter letter** attaches the packet letter, or, when there is none, opens the packet page
+  to **Add cover letter** (a click, with its runner shown). Both only on your click, through the
+  same attach path and checks.
+- **Fixtures** include a Jobright-like mimic: a sidebar button that, when clicked, fills contact
+  and link fields with `isTrusted = false` events after a short delay and adds a corner button
+  to upload widgets. The e2e runs it before Start and between snapshot and Fill gaps, and asserts
+  jobhunter never overwrites its values and that the two corner buttons do not overlap.
+
+### Multi-step forms (prerequisite for Workday and NEOGOV)
+
+The four public ATSs are single-page forms. Workday and NEOGOV spread the application over
+several steps behind **Next**, which the extension never clicks. Before their optional hosts are
+added, a short design is due (its own bug) covering: the session surviving **your** Next click
+within the same ATS flow (a navigation or view change to a URL that `ats_forms.py` marks as the
+same application keeps the session; anything else ends it); classification per step, with the
+before-snapshot taken when a step appears and no attach after the first step; the attach on the
+step that holds the upload; and the confirmation view as the end. Until then, Workday and
+NEOGOV get the checklist only.
 
 ### Chrome profile
 
@@ -867,10 +937,9 @@ as "ready, not applied?".
   working directory and a scrubbed environment with non-essential traffic off, so a
   prompt-injected posting cannot make it read or write files, and it cannot bill an API key.
 - **Subscription terms.** Calls on the CLI runner fall under your Claude subscription's
-  consumer terms, not the API's commercial terms: whether conversations may be used to improve
-  models follows your claude.ai privacy setting. The resume, header included, goes with every
-  packet call. Check that setting before choosing `runner = "cli"` ([open question
-  9](#open-questions)).
+  consumer terms, not the API's commercial terms; the resume, header included, goes with every
+  packet call. You said on 2026-10-10 that this is fine, training included, so `cli` is the
+  default.
 - **Nothing personal in the repo.** Packets, saved answers, exports and `extension.json` live
   under `<data dir>` and the database; fixtures are captured logged out and linted
   ([Testing](#testing)).
@@ -908,7 +977,9 @@ and NEOGOV's candidate terms are checked before their optional hosts are added. 
 
 ### Deviations from earlier specs
 
-Recorded on `7fa29db`; each needs your approval and an amendment:
+Recorded on `7fa29db`. **You approved all of them on 2026-10-10**; the amendments to 001, 002,
+008, 009 and 015 and a note on the `CLAUDE.md` SDK exception land with phase 1 (in the bug that
+first needs each):
 
 | Spec | Today | Proposed | Why |
 |---|---|---|---|
@@ -930,7 +1001,11 @@ The 008 row above is new in revision 6 and is about the CLI runner, not the exte
 |---|---|
 | Generator returns invalid output or times out | Nothing saved. CLI runner: the page shows the reason and offers **Run on the API (≈ $0.15)**, which waits for your click. API: retry; error on the page |
 | `claude` not on `PATH`, not logged in, or over the subscription's limit | Known only by running it (a missing binary is known up front and the button says so). The page offers the API run on your click; with no `ANTHROPIC_API_KEY` either, Generate is disabled with the reason |
-| CLI reports API-key auth (`apiKeySource` not `none`), despite the scrubbed environment | The call's `total_cost_usd` is charged to tier `packet` and the apply cap; the CLI runner is turned off until you look; the page says why |
+| CLI init line shows API-key auth (`apiKeySource` not `none`), other tools than `StructuredOutput`, or an MCP server | Child killed before the model is called, so nothing is billed; the CLI runner is turned off until you look; the page says why |
+| Subscription on paid extra usage (`isUsingOverage` / `overageInUse`) | That call is logged as paid (tier `packet`, apply cap); further CLI calls wait for your click; over the cap the child is killed |
+| `claude auth status` is not a claude.ai login | CLI runner off with the reason; the API offered on click |
+| Console restarts mid-session | `409 session lost`; session `aborted`; **Start again** |
+| Extension reloaded on an employer page with an embedded form | Re-injection may not reach the iframe; the panel says **Reload this page to continue** |
 | Generator invents or inflates a fact | Badged by factcheck; Mark ready blocked until fixed or confirmed |
 | Overstatement the lexicon misses | Not detected; the cited line beside every line, and the entailment pass |
 | Over `[apply] daily_cap_usd` on the API fallback | API generation disabled; the CLI runner and **Use base resume** still work; scoring unaffected |
@@ -971,7 +1046,7 @@ spends credits or subscription allowance; the one live CLI smoke test is `@pytes
 | Area | How |
 |---|---|
 | Generator | Canned JSON from a mocked client; streaming; effort and thinking set; resume and letter are separate calls with separate schemas, and Add cover letter creates no resume version; the request body contains no saved `packet_answer` values and no `answers:` content (seeded with a link, notice period and template; none appears in the body) |
-| CLI runner | As in [CLI runner](#cli-runner): exact argv including `--output-format stream-json --verbose --system-prompt --effort medium --max-budget-usd`; empty temp cwd removed afterwards; the child environment lacks `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDECODE` (the test sets all of them in the parent first) and has `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; the recorded `stream-json` transcript is parsed for `structured_output`, `usage` and `model`; `apiKeySource` other than `none` fails and charges `total_cost_usd`; on any failure the page offers the API run and **no SDK call happens without the click**; logs tier `packet-cli` at `cost_usd = 0`; the autouse guard has its own test |
+| CLI runner | As in [CLI runner](#cli-runner): exact argv including `--output-format stream-json --verbose --system-prompt --effort medium --safe-mode --max-budget-usd` (and no `--effort` on the Haiku call); the fixed cwd is empty before each call; the pass-through variables arrive and the child environment lacks `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDECODE` (the test sets all of them in the parent first) and has `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; the recorded `stream-json` transcript is parsed for `structured_output`, `usage` and `model`; `apiKeySource` other than `none`, `tools` other than exactly `["StructuredOutput"]` or a non-empty `mcp_servers` kills the child before any further line is read; an overage `rate_limit_event` logs the call as paid; a non-claude.ai `auth status` turns the runner off and the state persists in `apply-runner.json`; on any failure the page offers the API run and **no SDK call happens without the click**; logs tier `packet-cli` at `cost_usd = 0`; the autouse guard has its own test |
 | Factcheck | Table tests: new employer, changed date, invented number, unlisted skill, invented certification, "contributed" → "led", added team size, added "expert", employer sentence without a quote (with and without notes), bad posting quote, behavioral sentence without `S*`/`L*`, confirmed line |
 | Editor | Sources and confirmations carry forward for unchanged items; an edited item is re-checked and keeps its badge if it still fails; a new item without a source blocks Mark ready; adding a letter to a `ready` packet returns it to `draft` |
 | Never-store | One test per entry point: Save as answer, `save_packet_answer`, Promote to /prefs, `/prefs` answers save, loading a hand-edited `preferences.yaml` with a 'Desired salary' answer (entry dropped with a warning, `Profile` and a daily run unaffected, packets do not offer it), question draft (no client call), the `/ext/v1` fields step (no value requested), a value sent anyway (dropped), classify row 1 beats every other row, a Draft request for a never-store label. The vector file runs word-boundary negatives ("managed", "language", "design", "generate", "collaborate", "trace") and option-text groups ("Decline to self-identify") |
@@ -984,7 +1059,7 @@ spends credits or subscription allowance; the one live CLI smoke test is `@pytes
 | Export | HTML render golden file; PDF when the `browser` extra is present (`e2e`) |
 | *Phase 2:* API contract | FastAPI `TestClient` on every `/ext/v1/` route: GET refused (POST only), no token, wrong token, wrong Origin, an `https://` page Origin, no Origin, rebinding Host (`evil.example:8808`), `--allow-remote` still refusing a non-loopback Host, preflight answered only for the paired origin, 426 below `min_extension`; pairing: code single-use, expiring, five failures void it, a code made by the CLI process accepted by the console process, an extension ID other than the pinned one refused, re-pair revokes. Request and response models exported to `extension/api/v1.schema.json`; a test fails if the checked-in file differs |
 | *Phase 2:* classifier | `fill_classify` on before/after field lists recorded from fixtures and the spike: prefilled and unchanged kept, prefilled and overwritten by the parse `differs`, parser-filled compared, gaps mapped, never-store first, base-resume entries, settle timeout; snapshots never written to SQLite |
-| *Phase 2:* fixtures | `tests/fixtures/ats_forms/<ats>/`: rendered DOM of public, empty forms, plus small hand-written pages that mimic a resume-parse prefill (with a delayed parse), a parse that overwrites a prefilled value, a returning-candidate prefill, a React-controlled input, a checkbox, a react-select combobox, Ashby-style yes/no buttons, a dropzone, an `isTrusted` check, an employer page embedding a Greenhouse iframe, an EEO radio group whose options are "Female" / "Male" / "Decline to self-identify", and a `fetch` submit from a labelled `type=button` |
+| *Phase 2:* fixtures | `tests/fixtures/ats_forms/<ats>/`: rendered DOM of public, empty forms, plus small hand-written pages that mimic a resume-parse prefill (with a delayed parse), a parse that overwrites a prefilled value, a returning-candidate prefill, a React-controlled input, a checkbox, a react-select combobox, Ashby-style yes/no buttons, a dropzone, an `isTrusted` check, an employer page embedding a Greenhouse iframe, an EEO radio group whose options are "Female" / "Male" / "Decline to self-identify", a Jobright-like click-time filler with corner buttons, React-generated ids that change on re-render, a field that appears during the parse, and a `fetch` submit from a labelled `type=button` |
 | *Phase 2:* fixture lint | Fails on emails other than `@example.com`, phone numbers, long tokens in attributes, `<script>` in captured fixtures, hidden inputs |
 | *Phase 2:* extension lint | Parses `manifest.json`: permissions and hosts exactly as derived above, pinned `key`, no `externally_connectable` or `web_accessible_resources`. Scans `extension/` for the submit-path list in [The stop before Submit](#the-stop-before-submit) outside `act.js`, and for mouse, pointer or drag event construction in `act.js` outside `safeDispatch`; for `postMessage`, `onMessageExternal`, `onConnectExternal`, `chrome.debugger`, `eval`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` and `srcdoc` anywhere; for `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` and `sendBeacon` in content scripts; and requires the `setAccessLevel` call in the worker |
 | *Phase 2:* extension e2e (`e2e` marker) | Playwright `launch_persistent_context` with `channel="chromium"` (headless extensions need it; the existing session `browser` fixture cannot load extensions), `--disable-extensions-except` / `--load-extension`, and `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"`, so any non-loopback request from a page, the service worker or Chromium itself fails at the browser. `context.route` serves fixtures on their real ATS URLs. The side panel is driven as `chrome-extension://<id>/panel/index.html?tab=<tabId>` in an ordinary tab, bound to the fixture's tab. The console runs in-process on an ephemeral loopback port with a mocked drafting client, paired through the options page. Covers pairing, the two-step snapshot (the EEO group's value never reaches the console), attach by `DataTransfer` and by drop with the received file's size and hash equal to the packet PDF, a delayed parse settled by `parse_done`, fill on a React input and a checkbox (ends checked), Ashby-style buttons `listed`, no write to `yours` or `keep` fields, a write refused after the field filled itself, a write refused after navigation, the iframe case matched by frame URL, the worker stopped mid-session (CDP `ServiceWorker.stopAllWorkers`) before Fill gaps, re-injection after an extension reload, the Submit outline, and the **submit counters** of [The stop before Submit](#the-stop-before-submit) at zero across a full session on every fixture, then moving when the test submits |
@@ -1004,18 +1079,21 @@ Agent-effort estimates, in the style of [009](009-roadmap.md):
 | Phase | Work | Effort |
 |---|---|---|
 | **1a** | Packet migration `0029`, merge and undo handling, Prepare (`p`, detail button), **New packet** (`paste-manual` at `normalized`, dedup, robots-aware fetch), Score this group now, Pasted Sankey node, packet page (in progress on `bug/288631b-apply-1a`) | **1-1.5 d** |
-| **1b** | Generator: CLI runner (scrubbed env, `stream-json` parsing, auth check, autouse guard, recorded transcript, live smoke test, `apply draft` command) and API fallback on click (schema validation, effort, caching, own cap), `packet_runner` migration, two model keys, separate resume and letter calls, measured estimate per kind; factcheck with claim strength and employer claims; structured cited-line editor; versions; cover letter on request; employer notes; question drafts with story facts; entailment pass on by default; packet tiers excluded at every scoring-cap site; `/costs` lines | **3-3.5 d** |
+| **1b** | Generator: CLI runner (env allowlist, `--safe-mode`, `auth status` check, `stream-json` parsing with init-line kill and overage handling, runner-off state, autouse guard, recorded transcript, live smoke test, `apply draft` command) and API fallback on click (schema validation, effort, caching, own cap), `packet_runner` migration, two model keys, separate resume and letter calls, measured estimate per kind; factcheck with claim strength and employer claims; structured cited-line editor; versions; cover letter on request; employer notes; question drafts with story facts; entailment pass on by default; packet tiers excluded at every scoring-cap site; `/costs` lines | **3-3.5 d** |
 | **1c** | Export: PDF, text, Markdown | **0.5 d** |
 | **1d** | Never-store table (word-boundary matcher, vector file) and its enforcement, `Answers` model loaded apart from `Profile`, saved answers with reuse, the `/prefs` Application answers section, checklists, `attach_sent_packet` on every applied path including `answer_prompt`, loopback-Host check on every method, Workable rule in `ats_rules.py`, `/followups` item, `apply stats` | **1-1.5 d** |
 | | *Gate: 4 weeks of use, plus the spike* | |
 | **2a** | **Extension spike**: offline plumbing (pinned key, pairing, headers on GET and POST, Local Network Access, `setAccessLevel`, iframe injection and frame URL, base64 transfer, `safeDispatch` refusals), then the live check with you on Lever or Ashby and `job-boards.greenhouse.io` | **1-1.5 d** |
 | **2b** | Console side: `/ext/v1/` routes (POST only), pairing on `/prefs` and CLI, versioning, `fill_session` with idle close, two-step snapshot held in memory, `fill_classify`, base resume parse, `ats_forms.py` mappings, attach methods and signals, Draft for row-8 fields, API contract tests | **2-2.5 d** |
-| **2c** | Extension: stateless worker, panel-held session bound to its tab, content scripts across frames with re-injection, `act.js` helpers and `safeDispatch`, attach with fallbacks, settle, `documentId`-bound writes, Submit outline, optional hosts | **2-2.5 d** |
+| **2c** | Extension: stateless worker, panel-held session bound to its tab, content scripts across frames with re-injection and the reload fallback, stable field keys, `act.js` helpers and `safeDispatch`, attach with fallbacks, settle observers, `documentId`-bound writes, Submit outline, corner buttons beside Jobright's, optional hosts | **2-2.5 d** |
 | **2d** | Fixture capture and mimic pages, fixture and extension lint, Playwright e2e with submit counters; supervised dry run per ATS | **1-1.5 d** |
 | | **Total** | **≈ 11.5-15 d** (phase 1 ≈ 5.5-7 d, phase 2 ≈ 6-8 d) |
 
-Phase 1 is useful on its own and ships first. Workday and NEOGOV support comes after the four
-public ATSs, as its own bug, once you have signed in and a fixture can be captured.
+Phase 1 is finished before any phase 2 work starts (your decision). Workday support comes
+after the four public ATSs, then NEOGOV (your decision), each as its own bug after the
+multi-step design, once you have signed in and a fixture can be captured. The per-ATS order is
+recounted from `apply_link` once packets resolve real apply URLs: today's database holds
+aggregator URLs only, so it cannot rank them yet.
 
 ## Decisions recorded on 7fa29db
 
@@ -1088,8 +1166,8 @@ public ATSs, as its own bug, once you have signed in and a fixture can be captur
     lint over every submit and synthetic-event path; e2e counters on clicks, submit events and
     submit endpoints, with a positive control.** Reason: the revision 5 lint and its "no submit
     event" test passed even if the extension clicked a fetch-based Apply.
-  - **Ashby-style button pairs are `listed`.** Reason: buttons are never a dispatch target; a
-    narrower toggle helper is [open question 5](#open-questions), not assumed.
+  - **Ashby-style button pairs are `listed`.** Reason: buttons are never a dispatch target; you
+    confirmed in revision 7 that such widgets are yours.
   - **Settle on a per-ATS `parse_done` signal, attach judged by `attach_ok`, the file input never
     counts as a change, writes re-check emptiness.** Reason: server-side parses finish after a
     3-second quiet window, and a generic diff misreads both attach success and failure.
@@ -1122,6 +1200,35 @@ public ATSs, as its own bug, once you have signed in and a fixture can be captur
     parse check moves to Lever or Ashby rather than dropping Greenhouse; "use `setAccessLevel`
     on `storage.local`" depends on Chrome support, so the spike decides between that and
     session storage.
+- **Revision 7, from the check of revision 6 and your answers (2026-10-10):**
+  - **The `init` check requires `tools == ["StructuredOutput"]` exactly and `mcp_servers == []`,
+    and kills the child on any mismatch or on `apiKeySource` other than `none`, before the model
+    call.** Reason: `--json-schema` adds that one tool after `--tools ''`, so "empty" would fail
+    every call; killing on `init` means a misconfigured auth bills nothing.
+  - **Overage counts as paid; `claude auth status` must show a claude.ai first-party login;
+    `--safe-mode` added; Haiku gets no `--effort`; one fixed empty cwd; the env allowlist passes
+    `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth) and proxy and CA
+    settings; runner-off state in a data-dir file.** Reason: the check's minors; `apiKeySource`
+    alone does not catch third-party providers or paid extra usage.
+  - **`runner = "cli"` by default.** Reason: you said subscription data use, training included,
+    is fine.
+  - **`jobhunter apply draft <packet_id>` is the canonical host command; 018 aligns.**
+  - **Host check on every method applies to requests with browser fetch metadata; `TestClient`
+    is unaffected.** Reason: keeps today's rule shape and existing tests, while a rebinding
+    page's GET always carries `Sec-Fetch-Site`.
+  - **`/ext/v1` Host allowlist adds `[::1]` and uses the published port; CORS headers named;
+    `safeDispatch`'s word rule looks only at the target and its enclosing control; lint adds
+    other click forms; settle mechanisms named; appearing fields count as empty; Ashby attaches
+    to the Autofill box; stable field keys; console restart and re-injection fallbacks; a
+    multi-step design is a prerequisite for Workday and NEOGOV.**
+  - **Coexist with Jobright:** click-only, run after Jobright, treat its fills as filled, and add
+    jobhunter corner buttons on resume and cover-letter widgets beside Jobright's Customize.
+    Reason: you use Jobright, which fills on click and reuses earlier answers.
+  - **Your answers:** fill empty mapped fields from `/prefs` answers on click; Draft suggests an
+    option for unknown selects and radios, applied on click; widgets that ignore synthetic events
+    are listed and `chrome.debugger` stays out; Workday before NEOGOV, recounted once packets hold
+    real apply URLs; pairing by one-time code; phase 1 finished before phase 2; gate of 8 ready
+    packets in 4 weeks; the deviations approved.
 - Carried: salary, EEO and self-ID never stored or filled; New packet standalone; Opus for
   generation; claim-strength and employer-claims checks with the cited line beside every line;
   `paste-manual` source; USAJOBS evidence lines only; Open application through `/apply/{id}`;
@@ -1129,31 +1236,11 @@ public ATSs, as its own bug, once you have signed in and a fixture can be captur
 
 ## Open questions
 
-1. **Phase 2 gate.** 8 ready packets in 4 weeks to the four ATSs: right threshold?
-2. **Gap filling from `/prefs` answers.** Revision 4 offered `answers:` only to copy. Proposed:
-   the extension also fills empty mapped fields from it on your **Fill gaps** click, locally
-   (row 6). OK, or copy only?
-3. **Your other fill helper.** Which one is it, and does it fill on page load or on click? The
-   e2e fixtures should include its behavior so the two do not fight over a field.
-4. **Unknown choice fields.** Should **Draft** suggest an option for an unknown select or radio
-   (with cited lines), or only list it for you?
-5. **Button-style answers and trusted input.** Ashby's yes/no buttons, and any widget that
-   ignores synthetic events, are `listed` for you. Is that fine, or should a narrow toggle helper
-   (an `aria-pressed` button pair inside a labelled question, never a submit-like button) be
-   built after the spike? `chrome.debugger` stays out unless you say otherwise.
-6. **After the four ATSs.** Workday or NEOGOV first?
-7. **Pairing.** One-time code typed into the extension (proposed), or paste the token itself?
-8. **Amend 001, 002, 008, 009 and 015, and note the `CLAUDE.md` SDK exception,** as in
-   [Deviations](#deviations-from-earlier-specs)?
-9. **Subscription terms.** Drafting on your subscription sends your resume (header included)
-   under consumer terms. Is your claude.ai "help improve Claude" setting off, or should
-   `runner` default to `"api"`?
-10. **Estimate.** Revision 6 raises 017 to ≈ 11.5-15 d (phase 2 ≈ 6-8 d after its gate). Still
-    worth it, or should phase 2 start with Lever and Ashby only?
-
-Answered in revision 5 and removed: export format, cover letters, entailment default, the
-`[apply] daily_cap_usd`, Workday and NEOGOV scope, the apply profile and its setup, your helper
-in that profile, and sharing page contents with a browser agent.
+None for you right now. Everything revision 6 asked was answered on 2026-10-10 (see the revision
+7 decisions). What remains is for the phase 2 spike to measure, listed in the
+[Phase 2 gate](#phase-2-gate): the headers Chrome sends, Local Network Access, `setAccessLevel`
+on `storage.local`, `--safe-mode` with the subscription login, `--json-schema` with
+`--tools ''`, Ashby's file controls, and where the corner buttons sit beside Jobright's.
 
 ## History
 
@@ -1215,3 +1302,19 @@ covers GETs. Names now match phase 1a on `bug/288631b-apply-1a` (`0029_applicati
 `apply/packets.py`, `apply/paste.py`, `apply/score.py`, `core/manual_sources.py`). Estimate
 ≈ 11.5-15 d (was 9-12 d): +1-1.5 d in phase 1 (runner hardening, spend sites, Host check, loop
 fix), +1.5-2 d in phase 2 (two-part spike, dispatch helper, session binding, e2e counters).
+
+### Revision 7: check of revision 6, and your answers
+
+An Opus check at xhigh effort (2026-10-10) found eight of revision 6's nine blockers resolved and
+the ninth resolved for its flags, plus one new blocker. With `--json-schema`, Claude Code adds a
+`StructuredOutput` tool after `--tools ''` filtering, so revision 6's "tools must be empty" check
+would have failed every call. Revision 7 requires exactly that one tool, kills the CLI on its
+`init` line before the model call when anything is wrong, and takes the 20 minor findings (see
+the revision 7 decisions). You answered the open questions. Your fill helper is Jobright, which
+fills on click from its sidebar and adds a Customize button to upload widgets, so jobhunter
+runs after it, treats its fills as filled, and adds its own corner buttons for the targeted
+resume and the letter. Subscription data use is fine, so `runner = "cli"` is the default. The
+remaining questions were settled on the defaults: fill from `/prefs` answers on click, option
+suggestions on click, Workday before NEOGOV, a one-time pairing code, phase 1 before phase 2, a
+gate of 8 packets in 4 weeks, and the deviations approved. The estimate is unchanged at
+≈ 11.5-15 d. The multi-step design for Workday and NEOGOV is new work outside that figure.
