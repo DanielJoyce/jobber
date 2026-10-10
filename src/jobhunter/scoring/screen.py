@@ -24,6 +24,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from jobhunter.core import rejections
 from jobhunter.core.models import LocationScope, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
@@ -86,6 +87,9 @@ def posting_text(job: Mapping[str, Any], locations_summary: str) -> str:
         f"Stated salary: {salary}",
         f"Employment type: {_employment(job.get('employment_type'))}",
     ]
+    if job.get("prior_rejection"):
+        # A neutral fact (specs/006 "Employer rejections"); never pay or location.
+        lines.append(f"Candidate history with this employer: {job['prior_rejection']}.")
     if job.get("description_completeness") == "partial":
         lines.append(
             "Note: the description below is partial (a summary or truncated listing, such as "
@@ -348,6 +352,7 @@ WHERE NOT EXISTS (
     WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier
       AND b.model = :model AND b.prompt_version = :prompt_version
       AND b.scoring_version = :scoring_version)
+  AND g.id NOT IN (SELECT value FROM json_each(:rejected))
 ORDER BY j.posted_at IS NULL, j.posted_at DESC, g.id
 LIMIT :limit
 """
@@ -361,7 +366,8 @@ def eligible_groups(
     "Yet" is per description revision: pasting a description bumps
     ``job_group.description_rev`` and the group is screened again (specs/012); the earlier
     score stays. A job with no prefilter_result row is not yet eligible. Groups already in an
-    uncollected batch for the same key are skipped so they are never submitted twice.
+    uncollected batch for the same key are skipped so they are never submitted twice. A
+    posting the candidate was rejected for (``core/rejections``) is never eligible.
     """
     return conn.execute(
         _ELIGIBLE,
@@ -372,6 +378,7 @@ def eligible_groups(
             "prompt_version": PROMPT_VERSION,
             "scoring_version": profile.scoring_version,
             "limit": limit,
+            "rejected": rejections.rejected_json(conn),
         },
     ).fetchall()
 
@@ -395,15 +402,34 @@ def _row(job: sqlite3.Row) -> dict[str, Any]:
     return dict(job)
 
 
+def _context_rows(
+    conn: sqlite3.Connection,
+    groups: Sequence[Mapping[str, Any]],
+    now: datetime | None,
+    rejection_days: int,
+) -> list[dict[str, Any]]:
+    """Job rows as dicts, each carrying ``prior_rejection`` when the employer turned the
+    candidate down for another role recently. Not part of any version key: adding a fact
+    never forces a re-score (specs/006 "Employer rejections")."""
+    rows = [dict(g) for g in groups]
+    rejections.annotate(conn, rows, now=now, days=rejection_days)
+    return rows
+
+
 # ─── Batch submit / collect ─────────────────────────────────────────────────
 
 
 def _score_requests(
-    conn: sqlite3.Connection, groups: list[sqlite3.Row], profile: Profile
+    conn: sqlite3.Connection,
+    groups: list[sqlite3.Row],
+    profile: Profile,
+    *,
+    now: datetime | None = None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> list[ScoreRequest]:
     return [
-        build_score_request(_row(g), _summary_for(conn, g), profile, custom_id=f"g{g['group_id']}")
-        for g in groups
+        build_score_request(row, _summary_for(conn, row), profile, custom_id=f"g{row['group_id']}")
+        for row in _context_rows(conn, groups, now, rejection_days)
     ]
 
 
@@ -416,6 +442,7 @@ def submit_batch(
     now: datetime,
     scorer: str = DEFAULT_SCORER,
     remaining_usd: Callable[[], float] | None = None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> str | None:
     """Submit one Message Batch for eligible groups. Returns the batch id, or None.
 
@@ -433,7 +460,7 @@ def submit_batch(
     if not groups:
         return None
 
-    requests = _score_requests(conn, groups, profile)
+    requests = _score_requests(conn, groups, profile, now=now, rejection_days=rejection_days)
     batch_id = AnthropicScorer(client, scorer).submit(requests)
     with _txn(conn):
         conn.execute(
@@ -664,14 +691,19 @@ def score_with(
     group_id: int,
     *,
     now: datetime,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> int | None:
-    """Screen one group now through any scorer's ``score_one`` (standard pricing)."""
+    """Screen one group now through any scorer's ``score_one`` (standard pricing).
+
+    Raises ``ScreenError`` for a posting the candidate was rejected for: no credits spent.
+    """
     job = _canonical_job(conn, group_id)
     if job is None:
         raise ValueError(f"job group {group_id} has no canonical job")
-    request = build_score_request(
-        _row(job), _summary_for(conn, job), profile, custom_id=f"g{group_id}"
-    )
+    if group_id in rejections.rejected_group_ids(conn):
+        raise ScreenError(f"group {group_id}: the employer already rejected this posting")
+    (row,) = _context_rows(conn, [{**dict(job), "group_id": group_id}], now, rejection_days)
+    request = build_score_request(row, _summary_for(conn, job), profile, custom_id=f"g{group_id}")
     result = scorer.score_one(request)
     if result.status != "succeeded":
         raise ScreenError(f"{result.status}: {result.detail}")
@@ -725,6 +757,7 @@ def score_sync(
     limit: int,
     now: datetime,
     remaining_usd: Callable[[], float] | None = None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> SyncResult:
     """Screen eligible groups through a non-batching scorer and write fit_score rows now.
 
@@ -737,12 +770,24 @@ def score_sync(
         from jobhunter.scoring.decisions import score_decisions
 
         return score_decisions(
-            conn, scorer, profile, limit=limit, now=now, remaining_usd=remaining_usd
+            conn,
+            scorer,
+            profile,
+            limit=limit,
+            now=now,
+            remaining_usd=remaining_usd,
+            rejection_days=rejection_days,
         )
     out = SyncResult()
     if int(getattr(scorer, "jobs_per_request", 1) or 1) > 1:
         return _score_sync_packed(
-            conn, scorer, profile, limit=limit, now=now, remaining_usd=remaining_usd
+            conn,
+            scorer,
+            profile,
+            limit=limit,
+            now=now,
+            remaining_usd=remaining_usd,
+            rejection_days=rejection_days,
         )
     if remaining_usd is not None:
         affordable = math.floor(max(remaining_usd(), 0.0) / ESTIMATED_COST_PER_REQUEST_USD)
@@ -755,7 +800,9 @@ def score_sync(
     if not groups:
         return out
     by_id = {f"g{g['group_id']}": g for g in groups}
-    results = scorer.submit(_score_requests(conn, groups, profile))
+    results = scorer.submit(
+        _score_requests(conn, groups, profile, now=now, rejection_days=rejection_days)
+    )
     if isinstance(results, str):
         raise ValueError(f"scorer {scorer.name} batches; use submit_batch")
     out.submitted = len(groups)
@@ -989,6 +1036,7 @@ def _score_sync_packed(
     limit: int,
     now: datetime,
     remaining_usd: Callable[[], float] | None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> SyncResult:
     """``score_sync`` with several jobs per request.
 
@@ -1005,7 +1053,10 @@ def _score_sync_packed(
     if not groups:
         return out
     by_id = {f"g{g['group_id']}": g for g in groups}
-    texts = [(f"g{g['group_id']}", posting_text(_row(g), _summary_for(conn, g))) for g in groups]
+    texts = [
+        (f"g{row['group_id']}", posting_text(row, _summary_for(conn, row)))
+        for row in _context_rows(conn, groups, now, rejection_days)
+    ]
     packs = pack_items(
         texts,
         profile,

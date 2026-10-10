@@ -439,6 +439,7 @@ def _score_stage(
                 remaining_usd=lambda: screen.remaining_daily_budget(
                     conn, settings.scoring.daily_cap_usd, now
                 ),
+                rejection_days=settings.scoring.employer_rejection_days,
             )
         except Exception as exc:  # scoring trouble must not fail the ingest exit code
             logger.warning("score failed: %s", exc)
@@ -463,6 +464,7 @@ def _score_stage(
             now=now,
             scorer=settings.scoring.screen_scorer,
             remaining_usd=lambda: screen.remaining_daily_budget(conn, cap, now),
+            rejection_days=settings.scoring.employer_rejection_days,
         )
     except Exception as exc:  # scoring trouble must not fail the ingest exit code
         logger.warning("score submit failed: %s", exc)

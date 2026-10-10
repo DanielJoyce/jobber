@@ -373,3 +373,89 @@ def test_no_profile_banner(tmp_path, seeded):
     assert r.status_code == 200
     assert "preferences.yaml" in r.text
     assert "Bullseye" not in r.text
+
+
+# ─── Employer rejections ────────────────────────────────────────────────────
+
+
+def _reject(conn, title, gid=None, days_ago=5):
+    from jobhunter.core import rejections
+
+    rejections.record(
+        conn,
+        received_at=(NOW - timedelta(days=days_ago)).isoformat(),
+        employer="Acme Inc",
+        title=title,
+        source="email",
+        now=NOW,
+        job_group_id=gid,
+        evidence={"sender": "Acme <no-reply@ashbyhq.com>", "subject": "Your application"},
+    )
+
+
+def test_rejected_posting_left_out_and_other_roles_flagged(seeded, profile):
+    _reject(seeded, "Bullseye", gid=1)
+    data = inbox.inbox_items(seeded, profile)
+    shown = [i.group_id for items in data.buckets.values() for i in items]
+    assert 1 not in shown
+    strong = data.buckets["B"][0]
+    day = (NOW - timedelta(days=5)).date().isoformat()
+    assert strong.employer_rejection == f"employer rejected you for Bullseye on {day}"
+    # Outside the window: no flag.
+    data = inbox.inbox_items(seeded, profile, rejection_days=1)
+    assert data.buckets["B"][0].employer_rejection is None
+
+
+def test_unmatched_rejection_excludes_by_employer_and_title(seeded, profile):
+    _reject(seeded, "Stale one")  # no job group id: matched on Acme + title
+    data = inbox.inbox_items(seeded, profile)
+    assert "Stale one" not in [i.title for i in data.buckets["F"]]
+
+
+def test_rejections_page_lists_and_adds_manual(client, seeded):
+    _reject(seeded, "Bullseye", gid=1)
+    seeded.commit()
+    r = client.get("/rejections")
+    assert r.status_code == 200
+    assert "Employer rejections (1)" in r.text
+    assert 'href="/job/1"' in r.text and "Acme Inc" in r.text
+    assert 'href="/rejections"' in r.text  # in the nav
+    r = client.post(
+        "/rejections",
+        data={"employer": "Globex", "title": "Analyst", "date": "2026-09-30", "group_id": ""},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    row = seeded.execute("SELECT * FROM rejection WHERE employer = 'Globex'").fetchone()
+    assert (row["source"], row["title"], row["received_at"][:10]) == (
+        "manual",
+        "Analyst",
+        "2026-09-30",
+    )
+    assert row["gmail_message_id"] is None and row["employer_norm"] == "globex"
+    assert "no matching job in jobhunter" in client.get("/rejections").text
+
+
+def test_rejections_form_validation_and_delete(client, seeded):
+    assert client.post("/rejections", data={"employer": ""}).status_code == 422
+    assert client.post("/rejections", data={"employer": "X", "date": "nope"}).status_code == 422
+    assert client.post("/rejections", data={"employer": "X", "group_id": "999"}).status_code == 422
+    r = client.post(
+        "/rejections",
+        data={"employer": "Acme", "title": "Bullseye", "group_id": "1"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    (rid,) = seeded.execute("SELECT id FROM rejection").fetchone()
+    assert 'id="row-1"' not in client.get("/inbox").text
+    assert "rejected you for this posting" in client.get("/job/1").text
+    assert "employer rejected you for Bullseye" in client.get("/job/2").text
+    assert client.post(f"/rejections/{rid}/delete", follow_redirects=False).status_code == 303
+    assert client.post(f"/rejections/{rid}/delete").status_code == 404
+    assert 'id="row-1"' in client.get("/inbox").text
+
+
+def test_rejected_page_is_still_the_prefilter_page(client):
+    # /rejected (jobs we filtered out) is unchanged and distinct from /rejections.
+    assert client.get("/rejected").status_code == 200
+    assert "Employer rejections" not in client.get("/rejected").text.split("<main")[-1]

@@ -189,3 +189,25 @@ employers and application references and proposes `application_event` rows
 **Proposals only — never auto-applied.** An automated misread that silently moves a live
 application to `rejected` is worse than no automation at all. Each proposal shows the matched
 email and an accept/dismiss control. Milestone 9.
+
+**Employer rejections are recorded, matched or not (bug eab09ec).** A real 60-day scan showed
+most applications happen outside jobhunter (Ashby, Greenhouse, Workday, Lever, Workable), so a
+rejection email that matched no job group used to be dropped and its outcome lost.
+`jobhunter mail match` now writes every rejection email to the `rejection` table (migration
+0023) directly: it is a recorded fact, not a status change, so it needs no accept. Employer and
+title come from the matched job, else from the email (`parse_employer_title`); `employer_norm`
+is the normalized employer used for matching. Evidence is sender, subject, a snippet of at most
+`SNIPPET_MAX` characters and the matched phrase; never bodies. Matched applications still get
+the usual `add_event` proposal. Rows are idempotent by Gmail message id, one per thread, and
+`--dry-run` lists them. Proposals are likewise one per (thread, kind): an ATS that sends
+"Thanks for applying" five times in a thread yields one proposal.
+
+`/rejections` ("Employer rejections" in the nav) lists them with a manual add form
+(`source='manual'`). Do not confuse it with `/rejected`, which lists jobs *we* filtered out.
+How scoring uses them: [006](006-fit-scoring.md#employer-rejections).
+
+Gmail rate limits: a long scan can hit the per-minute quota (HTTP 429, or 403
+`rateLimitExceeded` / `userRateLimitExceeded`). Every Gmail call goes through
+`mail/gmail_api.execute`, which backs off exponentially (1, 2, 4 ... 32 s) and honours
+`Retry-After`; when retries run out the CLI prints one line and exits 1. `format="metadata"` and
+batch requests were considered and rejected: both cost the same quota units per message.

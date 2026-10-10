@@ -45,7 +45,8 @@ def register(
 
     @app.get("/job/{group_id}", response_class=HTMLResponse)
     def job_page(request: Request, conn: Conn, group_id: int) -> HTMLResponse:
-        d = detail.load_detail(conn, get_profile(), group_id, now())
+        days = request.app.state.settings.scoring.employer_rejection_days
+        d = detail.load_detail(conn, get_profile(), group_id, now(), rejection_days=days)
         if d is None:
             raise HTTPException(404, "no such job group")
         return templates.TemplateResponse(

@@ -21,6 +21,7 @@ from typing import Any, Literal
 from anthropic import transform_schema
 from pydantic import BaseModel, Field, ValidationError
 
+from jobhunter.core import rejections
 from jobhunter.core.models import Bucket, Evidence, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
 from jobhunter.pipeline.locations import load_job_group_locations
@@ -114,7 +115,8 @@ class DeepError(Exception):
 class DeepResult:
     """Outcome of one ``deep_score`` call.
 
-    status: scored | existing | refused | invalid | capped. Only scored and existing carry a
+    status: scored | existing | refused | invalid | capped | rejected (the employer already
+    rejected this posting; nothing sent). Only scored and existing carry a
     ``row``; every other status leaves the group eligible for another try.
     """
 
@@ -221,7 +223,10 @@ def shortlist(
         (profile.scoring_version, scorer, DEEP_PROMPT_VERSION, profile.scoring_version),
     ).fetchall()
     scored: list[tuple[int, int]] = []
+    rejected = rejections.rejected_group_ids(conn)
     for row in rows:
+        if row["gid"] in rejected:
+            continue
         job = stage2._canonical_job(conn, row["gid"])
         if job is None:
             continue
@@ -251,6 +256,7 @@ def deep_score(
     now: datetime,
     scorer: str = DEFAULT_SCORER,
     remaining_usd: Callable[[], float] | None = None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> DeepResult:
     """Run the deep pass for one group and store it as ``fit_score`` tier 'deep'.
 
@@ -264,11 +270,15 @@ def deep_score(
     job = stage2._canonical_job(conn, group_id)
     if job is None:
         raise ValueError(f"job group {group_id} has no canonical job")
+    if group_id in rejections.rejected_group_ids(conn):
+        return DeepResult("rejected", detail="the employer already rejected this posting")
     if remaining_usd is not None and remaining_usd() < ESTIMATED_COST_PER_REQUEST_USD:
         logger.warning("spend cap reached: deep pass skipped for group %d", group_id)
         return DeepResult("capped", detail="daily spend cap reached")
 
-    job_d = stage2._row(job)
+    (job_d,) = stage2._context_rows(
+        conn, [{**dict(job), "group_id": group_id}], now, rejection_days
+    )
     params = build_request(job_d, stage2._summary_for(conn, job), profile, scorer=scorer)
     message = _stream_message(client, params)
     usage = message.usage

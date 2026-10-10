@@ -123,6 +123,9 @@ class Scoring(BaseModel):
     daily_cap_usd: float = 2.0
     weekly_cap_usd: float = 10.0
     deep_shortlist: int = 40
+    # A job at an employer that rejected you for a different role within this many days is
+    # still scored, with that fact in the prompt (specs/006 "Employer rejections").
+    employer_rejection_days: int = Field(default=90, ge=0)
     openai_compat: OpenAICompat = Field(default_factory=OpenAICompat)
     openrouter: OpenRouter = Field(default_factory=OpenRouter)
     local: Local = Field(default_factory=Local)

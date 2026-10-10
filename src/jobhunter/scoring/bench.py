@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from jobhunter.core import rejections
 from jobhunter.scoring.profile import Profile
 from jobhunter.scoring.scorers import FitScorer, _usage_int
 from jobhunter.scoring.screen import (
@@ -35,6 +36,7 @@ SELECT g.id AS group_id, j.*
 FROM job_group g
 JOIN job j ON j.id = g.canonical_job_id
 JOIN prefilter_result p ON p.job_id = j.id AND p.passed = 1 AND p.filter_version = ?
+WHERE g.id NOT IN (SELECT value FROM json_each(?))
 ORDER BY j.posted_at IS NULL, j.posted_at DESC, g.id
 LIMIT ?
 """
@@ -170,7 +172,9 @@ def run_bench(
     """Score up to ``n`` prefiltered groups, one at a time, writing nothing."""
     conn.execute("PRAGMA query_only = ON")
     try:
-        groups = conn.execute(_GROUPS, (profile.filter_version, n)).fetchall()
+        groups = conn.execute(
+            _GROUPS, (profile.filter_version, rejections.rejected_json(conn), n)
+        ).fetchall()
         report = BenchReport(scorer=scorer.name, requested=n, night_hours=night_hours)
         per_request = jobs_per_request or int(getattr(scorer, "jobs_per_request", 1) or 1)
         if per_request > 1:

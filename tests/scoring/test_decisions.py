@@ -633,3 +633,90 @@ def test_bench_writes_nothing(conn, profile):
     assert report.cost_usd == pytest.approx(0.0006)
     assert fit_rows(conn) == []
     assert conn.execute("SELECT count(*) FROM llm_spend").fetchone()[0] == 0
+
+
+# ─── Employer rejections (specs/006 "Employer rejections") ──────────────────
+
+
+def set_job(conn, gid: int, employer: str, title: str) -> None:
+    conn.execute(
+        "UPDATE job SET employer = ?, title = ? WHERE job_group_id = ?", (employer, title, gid)
+    )
+
+
+def reject(conn, employer, title, *, gid=None, day="2026-09-01"):
+    from jobhunter.core import rejections
+
+    rejections.record(
+        conn,
+        received_at=f"{day}T12:00:00+00:00",
+        employer=employer,
+        title=title,
+        source="email",
+        now=NOW,
+        job_group_id=gid,
+    )
+
+
+def test_rejected_posting_is_never_sent_to_jev(conn, profile):
+    g1, g2, g3 = (add_group(conn, n, profile) for n in (1, 2, 3))
+    set_job(conn, g2, "Northwind Analytics, Inc.", "Senior Data Engineer")
+    reject(conn, "Synthetic Agency", "Systems Engineer 1", gid=g1)  # matched by mail
+    reject(conn, "Northwind Analytics", "Senior Data Engineer")  # unmatched: by employer+title
+    api = FakeAPI()
+    res = run(conn, make(api), profile)
+    assert len(api.bodies) == 1
+    (body,) = api.bodies
+    assert [j["id"] for j in body["state"]["jobs"]] == [f"g{g3}"]
+    assert not [q for q in body["questions"] if q.startswith((f"g{g1}.", f"g{g2}."))]
+    assert "Northwind" not in json.dumps(body)
+    assert (res.submitted, res.written) == (1, 1)
+    # A second run spends nothing: the rejected postings are still not eligible.
+    run(conn, make(api), profile)
+    assert len(api.bodies) == 1
+    assert decisions.eligible(conn, profile, SPEC, 10) == []
+
+
+def test_all_rejected_means_no_request(conn, profile):
+    gid = add_group(conn, 1, profile)
+    reject(conn, "Synthetic Agency", "Systems Engineer 1", gid=gid)
+    api = FakeAPI()
+    res = run(conn, make(api), profile)
+    assert api.bodies == [] and res.requests == 0
+
+
+def test_same_employer_other_role_is_scored_with_the_fact(conn, profile):
+    g1, g2 = add_group(conn, 1, profile), add_group(conn, 2, profile)
+    set_job(conn, g1, "Northwind Analytics", "Platform Engineer")
+    reject(conn, "Northwind Analytics Inc", "Senior Data Engineer", day="2026-09-01")
+    api = FakeAPI()
+    res = run(conn, make(api), profile)
+    assert res.written == 2
+    jobs = {j["id"]: j for j in api.bodies[0]["state"]["jobs"]}
+    assert jobs[f"g{g1}"]["employer_history"] == (
+        "candidate was rejected by this employer for Senior Data Engineer on 2026-09-01"
+    )
+    assert "employer_history" not in jobs[f"g{g2}"]
+    # No question asks about it; pay and location never reach the model.
+    assert not [q for q in api.bodies[0]["questions"] if "reject" in q]
+    assert str(SALARY_FLOOR) not in json.dumps(api.bodies[0])
+
+
+def test_old_employer_rejection_is_outside_the_window(conn, profile):
+    gid = add_group(conn, 1, profile)
+    set_job(conn, gid, "Northwind Analytics", "Platform Engineer")
+    reject(conn, "Northwind Analytics", "Senior Data Engineer", day="2026-03-01")
+    api = FakeAPI()
+    decisions.score_decisions(conn, make(api), profile, limit=10, now=NOW, rejection_days=90)
+    assert "employer_history" not in api.bodies[0]["state"]["jobs"][0]
+
+
+def test_new_rejection_context_does_not_force_a_paid_rescore(conn, profile):
+    gid = add_group(conn, 1, profile)
+    set_job(conn, gid, "Northwind Analytics", "Platform Engineer")
+    api = FakeAPI()
+    run(conn, make(api), profile)
+    assert len(api.bodies) == 1
+    reject(conn, "Northwind Analytics", "Senior Data Engineer")  # a different role
+    run(conn, make(api), profile)
+    assert len(api.bodies) == 1  # no version key changed, so nothing is re-sent

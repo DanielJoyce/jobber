@@ -301,6 +301,30 @@ The `verdict` field is retained as a coarse rollup beneath the buckets: `strong 
 `possible ≥ 60`, `weak ≥ 40`, else `mismatch`. Buckets are what the console sorts by; thresholds
 live in config, not the prompt, so tuning either costs nothing and re-scores nothing.
 
+## Employer rejections
+
+Rows in the `rejection` table ([007](007-console-and-tracking.md#optional-gmail-matching),
+`core/rejections.py`) affect scoring in two ways, both decided in Python:
+
+- **The same posting is never scored.** A group the rejection matched, or a group at the same
+  normalized employer whose title is a near match (rapidfuzz `token_sort_ratio` >= 90 with the
+  same level words and numbers, so "Engineer II" is not "Engineer III"), is excluded from every
+  eligibility query (`screen._ELIGIBLE` for Haiku, chat and Jev scorers, the bench, the
+  backfill count, the deep shortlist), so no credits are spent. It is also left out of the
+  inbox, and its detail page says so. No time window: rejected stays rejected.
+- **Same employer, different role, within `scoring.employer_rejection_days` (default 90)**: the
+  job is still scored, and the prompt carries one neutral sentence ("candidate was rejected by
+  this employer for <title> on <date>"): a `Candidate history with this employer` line in the
+  Haiku/chat posting text, an `employer_history` field in the Jev job state. No question asks
+  about it, and pay and location remain Python's job. The bucket is **not** capped: a
+  rejection for another role says little about fit for this one, so the inbox row and detail
+  page show a flag instead and you decide.
+
+Neither changes `prompt_version`, `scoring_version` or `filter_version`, on purpose: those key
+the paid re-score, and a new rejection must not re-send every job. Skipping is filter-level and
+free; the context sentence reaches jobs scored after the rejection arrives, and older scores
+stand.
+
 ## Stage 3 — deep pass (Opus 5)
 
 Top N by screen score (default 40/week, configurable), plus anything you manually promote.

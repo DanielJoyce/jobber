@@ -827,13 +827,17 @@ def sankey(
     conn: sqlite3.Connection,
     profile: Profile,
     extra_rejected: Collection[int] = (),
+    elsewhere_rejected: int = 0,
 ) -> dict[str, Any]:
     """Outcome flows over every job group (deduped, not postings), all time.
 
     Each group takes exactly one path, so flow is conserved: for every node that has outgoing
     links, in == out. ``extra_rejected`` is a hook for job-group ids known to be rejected from
     other evidence (employer rejection emails); they land on the Rejected node whatever their
-    application status says. Zero-value nodes and links are dropped from the payload.
+    application status says; one with no applied application here was applied for elsewhere
+    (the rejection proves an application) and flows Applied elsewhere -> Applied -> Rejected.
+    ``elsewhere_rejected`` counts rejection emails that matched no job group: they take that
+    same path. Zero-value nodes and links are dropped from the payload.
     """
     facts = {f.group_id: f for f in group_facts(conn, profile, "")}
     apps = {a.group_id: a for a in application_facts(conn)}
@@ -854,6 +858,10 @@ def sankey(
         app = apps.get(gid)
         label = labels.get(gid)
         if m is None:
+            continue
+        if gid in rejected_extra and (app is None or app.applied_on is None):
+            links[("elsewhere", "applied")] += 1
+            links[("applied", "rejected")] += 1
             continue
         elsewhere = m["source_key"] == MANUAL_SOURCE
         shortlisted = app is not None or label in ("interesting", "applied")
@@ -889,6 +897,9 @@ def sankey(
         outcome = "rejected" if gid in rejected_extra else _OUTCOME_NODE.get(app.status)
         links[("applied", outcome or "awaiting")] += 1
 
+    if elsewhere_rejected > 0:
+        links[("elsewhere", "applied")] += elsewhere_rejected
+        links[("applied", "rejected")] += elsewhere_rejected
     value: dict[str, int] = defaultdict(int)
     for (a, b), n in links.items():
         value[b] += n

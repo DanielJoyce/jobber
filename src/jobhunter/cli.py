@@ -228,6 +228,7 @@ def score(
                         remaining_usd=lambda: screen.remaining_daily_budget(
                             conn, settings.scoring.daily_cap_usd, now
                         ),
+                        rejection_days=settings.scoring.employer_rejection_days,
                     )
                 except anthropic.APIError as exc:
                     typer.echo(f"group {gid}: API error: {exc}", err=True)
@@ -250,6 +251,7 @@ def score(
                     remaining_usd=lambda: screen.remaining_daily_budget(
                         conn, settings.scoring.daily_cap_usd, now
                     ),
+                    rejection_days=settings.scoring.employer_rejection_days,
                 )
             except ScorerError as exc:
                 typer.echo(f"scorer error: {exc}", err=True)
@@ -266,6 +268,7 @@ def score(
                 remaining_usd=lambda: screen.remaining_daily_budget(
                     conn, settings.scoring.daily_cap_usd, now
                 ),
+                rejection_days=settings.scoring.employer_rejection_days,
             )
             typer.echo(f"submitted batch {batch_id}" if batch_id else "nothing to submit")
         elif collect_pending:
@@ -666,10 +669,14 @@ def mail_match(
         bool, typer.Option("--dry-run", help="Print proposals; write nothing.")
     ] = False,
 ) -> None:
-    """Propose application events/records from recent mail (never applied automatically)."""
+    """Propose application events/records from recent mail (never applied automatically).
+
+    Rejection emails are also recorded as employer rejections (matched to a job or not).
+    """
     from jobhunter.config import load_settings, resolve_path
     from jobhunter.core import db
     from jobhunter.mail import auth, match
+    from jobhunter.mail.gmail_api import GmailRateLimited
 
     settings = load_settings()
     if auth.load_token() is None:
@@ -681,7 +688,7 @@ def mail_match(
         result = match.scan(
             conn, auth.build_service(settings), settings, days=days, dry_run=dry_run
         )
-    except auth.MailAuthError as exc:
+    except (auth.MailAuthError, GmailRateLimited) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     finally:
@@ -692,11 +699,21 @@ def mail_match(
             f"{p.confidence:.2f} {p.kind:<15} {p.proposed_action} -> {p.proposed_status} "
             f"| {ev.get('sender', '')} | {ev.get('subject', '')}"
         )
+    for r in result.rejections:
+        where = f"job group {r.job_group_id}" if r.job_group_id else "no known job"
+        typer.echo(
+            f"employer rejection: {r.employer or 'employer unknown'} | "
+            f"{r.title or 'title unknown'} | {r.received_at[:10]} | {where}"
+        )
     verb = "would store" if dry_run else "stored"
     n = len(result.proposals) if dry_run else result.stored
+    n_rej = len(result.rejections) if dry_run else result.rejections_stored
+    dupes = f"; {result.thread_duplicates} repeats in a thread skipped" * bool(
+        result.thread_duplicates
+    )
     typer.echo(
         f"scanned {result.scanned} new messages ({result.already_seen} seen before); "
-        f"{verb} {n} proposals"
+        f"{verb} {n} proposals and {n_rej} employer rejections{dupes}"
     )
 
 
@@ -707,6 +724,7 @@ def mail_sync(
     """Ingest job-alert emails: list, resolve (robots permitting), normalize, dedupe."""
     from jobhunter.config import load_settings
     from jobhunter.mail import auth, sync
+    from jobhunter.mail.gmail_api import GmailRateLimited
     from jobhunter.sources.adapters.mailalerts import SOURCE_KEY, MailAlertsAdapter
 
     settings = load_settings()
@@ -733,7 +751,7 @@ def mail_sync(
             profile_loader=lambda: None,
             stages=["list", "resolve", "normalize", "dedupe"],
         )
-    except (auth.MailAuthError, sync.MailSyncError) as exc:
+    except (auth.MailAuthError, sync.MailSyncError, GmailRateLimited) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     finally:

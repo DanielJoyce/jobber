@@ -602,3 +602,94 @@ def test_stored_row_feeds_buckets(conn, profile):
     job = conn.execute("SELECT * FROM job WHERE job_group_id = 1").fetchone()
     computed = buckets.compute_row(dict(row), dict(job), [], profile)
     assert computed.raw_skills == 90
+
+
+# ─── Employer rejections (specs/006 "Employer rejections") ──────────────────
+
+
+def _reject(conn, employer, title, *, gid=None, day="2026-09-01"):
+    from jobhunter.core import rejections
+
+    rejections.record(
+        conn,
+        received_at=f"{day}T12:00:00+00:00",
+        employer=employer,
+        title=title,
+        source="manual",
+        now=NOW,
+        job_group_id=gid,
+    )
+
+
+def _set_job(conn, gid, employer, title):
+    conn.execute(
+        "UPDATE job SET employer = ?, title = ? WHERE job_group_id = ?", (employer, title, gid)
+    )
+
+
+def test_batch_never_includes_a_rejected_posting(conn, profile):
+    g1, g2, g3 = (add_group(conn, n, profile) for n in (1, 2, 3))
+    _set_job(conn, g2, "Northwind Analytics", "Data Engineer II")
+    _reject(conn, "Synthetic Agency", "Systems Engineer 1", gid=g1)
+    _reject(conn, "Northwind Analytics LLC", "Data Engineer II")
+    client = FakeClient()
+    screen.submit_batch(conn, client, profile, limit=10, now=NOW, scorer=SCORER)
+    [requests] = client.messages.batches.created
+    assert [r["custom_id"] for r in requests] == [f"g{g3}"]
+
+
+class RecordingScorer:
+    """A non-batching FitScorer that records what it was asked and answers nothing."""
+
+    name = "openai-compat:fake"
+    supports_batching = False
+
+    def __init__(self, jobs_per_request: int = 1):
+        self.jobs_per_request = jobs_per_request
+        self.requests: list = []
+
+    def submit(self, requests):
+        self.requests += list(requests)
+        return []
+
+    def cost(self, usage, *, batch=False):
+        return 0.0
+
+
+@pytest.mark.parametrize("per_request", [1, 4])
+def test_sync_and_packed_paths_skip_rejected_and_carry_the_fact(conn, profile, per_request):
+    g1, g2 = add_group(conn, 1, profile), add_group(conn, 2, profile)
+    g3 = add_group(conn, 3, profile)
+    _set_job(conn, g2, "Northwind Analytics", "Platform Engineer")
+    _set_job(conn, g3, "Northwind Analytics", "Senior Data Engineer")
+    _reject(conn, "Northwind Analytics", "Senior Data Engineer", gid=g3)
+    _reject(conn, "Synthetic Agency", "Systems Engineer 1", gid=g1)
+    scorer = RecordingScorer(per_request)
+    screen.score_sync(conn, scorer, profile, limit=10, now=NOW)
+    text = "\n".join(r.posting for r in scorer.requests)
+    assert len(scorer.requests) == 1
+    assert "Platform Engineer" in text
+    assert "Title: Senior Data Engineer" not in text
+    assert "Title: Systems Engineer 1" not in text
+    assert (
+        "Candidate history with this employer: candidate was rejected by this employer for "
+        "Senior Data Engineer on 2026-09-01." in text
+    )
+    assert str(SALARY_FLOOR) not in text
+
+
+def test_posting_text_without_rejection_has_no_history_line(conn, profile):
+    add_group(conn, 1, profile)
+    client = FakeClient()
+    screen.submit_batch(conn, client, profile, limit=10, now=NOW, scorer=SCORER)
+    body = client.messages.batches.created[0][0]["params"]["messages"][0]["content"]
+    assert "Candidate history" not in body
+
+
+def test_score_with_refuses_a_rejected_posting(conn, profile):
+    gid = add_group(conn, 1, profile)
+    _reject(conn, "Synthetic Agency", "Systems Engineer 1", gid=gid)
+    scorer = RecordingScorer()
+    with pytest.raises(screen.ScreenError):
+        screen.score_with(conn, scorer, profile, gid, now=NOW)
+    assert scorer.requests == []

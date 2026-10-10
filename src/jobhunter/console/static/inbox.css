@@ -44,3 +44,4 @@ summary.bucket-head { cursor: pointer; }
 .act:hover { color: var(--text-primary); border-color: var(--axis); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 24px; font-size: 0.8rem; color: var(--text-secondary); }
 kbd { font-family: inherit; font-size: 0.75rem; border: 1px solid var(--axis); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; margin-right: 3px; color: var(--text-primary); background: var(--surface-1); }
+.flag.employer-rejection { text-decoration: none; border-color: var(--status-warning); }

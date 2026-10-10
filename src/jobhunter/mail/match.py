@@ -3,7 +3,10 @@
 Scans recent general mail (never the alerts label), classifies each candidate with
 deterministic rules (ATS sender domains plus subject/body phrase tables), matches it to a known
 application or job group, and writes ``mail_proposal`` rows for the user to accept or dismiss.
-Nothing is ever applied here. Only a snippet of at most ``SNIPPET_MAX`` characters, the sender,
+Nothing is ever applied here, with one exception: every rejection email also becomes a
+``rejection`` row (a recorded fact, matched to a job or not; see ``core/rejections.py``), since
+most applications happen outside jobhunter and their outcome would otherwise be lost.
+Only a snippet of at most ``SNIPPET_MAX`` characters, the sender,
 the subject and ids are stored; message bodies are held in memory for matching and dropped.
 Email content is never sent anywhere.
 """
@@ -14,6 +17,7 @@ import base64
 import json
 import re
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -22,6 +26,11 @@ from email.utils import parseaddr
 from rapidfuzz import fuzz
 
 from jobhunter.config import Settings
+from jobhunter.core import rejections as rej
+from jobhunter.core.rejections import employer_tokens as _employer_tokens
+from jobhunter.core.rejections import tokens as _tokens
+from jobhunter.mail.gmail_api import Sleep
+from jobhunter.mail.gmail_api import execute as gmail_execute
 from jobhunter.pipeline.ats_rules import host_of
 
 SNIPPET_MAX = 200
@@ -57,6 +66,8 @@ ATS_SENDER_DOMAINS = (
     "taleo.net",
     "jobvite.com",
     "breezy.hr",
+    "workable.com",
+    "workablemail.com",
 )
 
 # Order matters: first kind with a hit wins. A rejection often also says "thank you for
@@ -123,11 +134,9 @@ WEAK_PHRASES = {"thank you for your interest", "application status", "your avail
 
 URL_RE = re.compile(r"https?://[^\s<>\")\]]+", re.I)
 _WS = re.compile(r"\s+")
-_NONWORD = re.compile(r"[^a-z0-9]+")
-_CORP_WORDS = {"inc", "llc", "corp", "corporation", "co", "company", "ltd", "the", "plc", "lp"}
 _GENERIC_NAMES = re.compile(
-    r"\b(careers?|jobs?|recruit(?:ing|ment|er)?|talent|hr|human resources|no-?reply|"
-    r"notifications?|team|via \w+|workday|greenhouse|lever|icims|ashby|smartrecruiters)\b",
+    r"\b(careers?|jobs?|recruit(?:ing|ment|er)?|talent|hiring|hr|human resources|no-?reply|"
+    r"notifications?|team|via \w+|workday|greenhouse|lever|icims|ashby|smartrecruiters|workable)\b",
     re.I,
 )
 
@@ -183,11 +192,28 @@ class Proposal:
 
 
 @dataclass
+class RejectionRecord:
+    """A rejection email as a ``rejection`` row (matched to a job group or not)."""
+
+    gmail_message_id: str
+    thread_id: str
+    received_at: str
+    employer: str | None
+    title: str | None
+    evidence: dict
+    job_group_id: int | None = None
+    application_id: int | None = None
+
+
+@dataclass
 class ScanResult:
     proposals: list[Proposal] = field(default_factory=list)
+    rejections: list[RejectionRecord] = field(default_factory=list)
     scanned: int = 0
     already_seen: int = 0
     stored: int = 0
+    rejections_stored: int = 0
+    thread_duplicates: int = 0
 
 
 # --- classification ------------------------------------------------------------------------
@@ -269,9 +295,10 @@ def parse_message(raw: dict) -> Message:
     )
 
 
-def _alerts_label_id(service, settings: Settings) -> str | None:
+def _alerts_label_id(service, settings: Settings, sleep: Sleep = time.sleep) -> str | None:
     try:
-        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+        resp = gmail_execute(service.users().labels().list(userId="me"), sleep=sleep)
+        labels = resp.get("labels", [])
     except Exception:
         return None
     for lab in labels:
@@ -281,14 +308,21 @@ def _alerts_label_id(service, settings: Settings) -> str | None:
 
 
 def fetch_candidates(
-    service, settings: Settings, days: int, skip_ids: set[str], limit: int = MAX_MESSAGES
+    service,
+    settings: Settings,
+    days: int,
+    skip_ids: set[str],
+    limit: int = MAX_MESSAGES,
+    sleep: Sleep = time.sleep,
 ) -> tuple[list[Message], int]:
     """Messages from the last ``days`` days not in ``skip_ids``, minus the alerts label.
 
     Returns (messages, count of ids listed). Read-only: list + get with gmail.readonly.
+    Every call backs off on Gmail rate limits (``gmail_api.execute``); exhausted retries
+    raise ``GmailRateLimited``.
     """
     q = build_query(settings, days)
-    alerts_id = _alerts_label_id(service, settings)
+    alerts_id = _alerts_label_id(service, settings, sleep)
     out: list[Message] = []
     listed = 0
     token: str | None = None
@@ -296,12 +330,13 @@ def fetch_candidates(
         kwargs = {"userId": "me", "q": q, "maxResults": 100}
         if token:
             kwargs["pageToken"] = token
-        page = service.users().messages().list(**kwargs).execute()
+        page = gmail_execute(service.users().messages().list(**kwargs), sleep=sleep)
         for ref in page.get("messages", []):
             listed += 1
             if ref["id"] in skip_ids or listed > limit:
                 continue
-            raw = service.users().messages().get(userId="me", id=ref["id"], format="full").execute()
+            get = service.users().messages().get(userId="me", id=ref["id"], format="full")
+            raw = gmail_execute(get, sleep=sleep)
             msg = parse_message(raw)
             if alerts_id and alerts_id in msg.label_ids:
                 continue
@@ -351,15 +386,6 @@ def load_groups(conn: sqlite3.Connection) -> list[Group]:
             )
         )
     return out
-
-
-def _tokens(s: str) -> list[str]:
-    return [t for t in _NONWORD.split(s.lower()) if t]
-
-
-def _employer_tokens(name: str) -> list[str]:
-    toks = _tokens(name)
-    return [t for t in toks if t not in _CORP_WORDS] or toks
 
 
 def employer_signal(employer: str, haystack_tokens: list[str]) -> float:
@@ -470,7 +496,7 @@ def match_groups(msg: Message, groups: list[Group]) -> Match | None:
     return scored[0]
 
 
-# --- extracting employer/title for unmatched confirmations ---------------------------------
+# --- extracting employer/title for unmatched confirmations and rejections ------------------
 
 _TITLE_PATTERNS = (
     re.compile(
@@ -480,6 +506,11 @@ _TITLE_PATTERNS = (
         r"application (?:for|to) (?:the )?(?P<t>.+?) (?:position |role )?at (?P<e>[^.,!|]+)", re.I
     ),
     re.compile(r"your application (?:to|with) (?P<e>[^.,!|-]+?)(?: - |: )(?P<t>[^.,!|]+)", re.I),
+    # Rejections: "Thank you for your interest in the Data Engineer position at Acme".
+    re.compile(
+        r"interest in (?:the )?(?P<t>.+?) (?:position |role |opening )?(?:at|with) (?P<e>[^.,!|]+)",
+        re.I,
+    ),
     re.compile(r"for the (?P<t>[^.,!|]+?) (?:position|role)\b", re.I),
 )
 
@@ -540,7 +571,14 @@ def _worth_event(g: Group, kind: str, msg: Message) -> bool:
     return True
 
 
-def build_proposal(msg: Message, cls: Classification, groups: list[Group]) -> Proposal | None:
+_NO_MATCH = object()
+
+
+def build_proposal(
+    msg: Message, cls: Classification, groups: list[Group], found: object = _NO_MATCH
+) -> Proposal | None:
+    """The proposal for one classified email, or None. ``found`` is a precomputed
+    ``match_groups`` result (``Match`` or None); omitted, it is computed here."""
     if cls.kind == "other":
         return None
     status = KIND_STATUS[cls.kind]
@@ -560,8 +598,8 @@ def build_proposal(msg: Message, cls: Classification, groups: list[Group]) -> Pr
         "kind": cls.kind,
         "proposed_status": status,
     }
-    match = match_groups(msg, groups)
-    if match is not None:
+    match = match_groups(msg, groups) if found is _NO_MATCH else found
+    if isinstance(match, Match):
         g = match.group
         evidence["matched"] = match.matched
         evidence["signals"] = match.signals
@@ -600,8 +638,79 @@ def build_proposal(msg: Message, cls: Classification, groups: list[Group]) -> Pr
     )
 
 
+def build_rejection(msg: Message, cls: Classification, found: Match | None) -> RejectionRecord:
+    """Every rejection email is recorded, matched or not. Employer and title come from the
+    matched job when there is one, else from the email itself."""
+    employer, title = parse_employer_title(msg)
+    evidence = {
+        "sender": msg.sender[:200],
+        "subject": msg.subject[:200],
+        "snippet": make_snippet(msg, cls.phrase),
+        "phrase": cls.phrase,
+    }
+    rec = RejectionRecord(
+        gmail_message_id=msg.message_id,
+        thread_id=msg.thread_id,
+        received_at=_iso(msg.received_at),
+        employer=employer,
+        title=title,
+        evidence=evidence,
+    )
+    if found is not None:
+        rec.job_group_id = found.group.group_id
+        rec.application_id = found.group.app_id
+        rec.employer = found.group.employer or employer
+        rec.title = found.group.title or title
+        evidence["parsed"] = {"employer": employer, "title": title}
+        evidence["matched"] = found.matched
+    return rec
+
+
 def existing_message_ids(conn: sqlite3.Connection) -> set[str]:
-    return {r[0] for r in conn.execute("SELECT gmail_message_id FROM mail_proposal")}
+    """Messages already turned into a proposal or a rejection: never fetched again."""
+    ids = {r[0] for r in conn.execute("SELECT gmail_message_id FROM mail_proposal")}
+    ids |= {
+        r[0]
+        for r in conn.execute(
+            "SELECT gmail_message_id FROM rejection WHERE gmail_message_id IS NOT NULL"
+        )
+    }
+    return ids
+
+
+def existing_threads(conn: sqlite3.Connection) -> tuple[set[tuple[str, str]], set[str]]:
+    """((thread_id, kind) pairs with a proposal, thread ids with a rejection row)."""
+    props = {
+        (r[0], r[1])
+        for r in conn.execute("SELECT thread_id, kind FROM mail_proposal WHERE thread_id != ''")
+    }
+    rejs = {r[0] for r in conn.execute("SELECT thread_id FROM rejection WHERE thread_id != ''")}
+    return props, rejs
+
+
+def store_rejections(
+    conn: sqlite3.Connection, records: list[RejectionRecord], now: datetime
+) -> int:
+    """Insert rejection rows directly (a recorded fact, not a status change). Idempotent by
+    Gmail message id."""
+    n = 0
+    for r in records:
+        new = rej.record(
+            conn,
+            gmail_message_id=r.gmail_message_id,
+            thread_id=r.thread_id,
+            received_at=r.received_at,
+            employer=r.employer,
+            title=r.title,
+            job_group_id=r.job_group_id,
+            application_id=r.application_id,
+            source="email",
+            evidence=r.evidence,
+            now=now,
+        )
+        n += int(new is not None)
+    conn.commit()
+    return n
 
 
 def store(conn: sqlite3.Connection, proposals: list[Proposal], now: datetime) -> int:
@@ -647,17 +756,39 @@ def scan(
     dry_run: bool = False,
     now: datetime | None = None,
     fallback: Classifier | None = None,
+    sleep: Sleep = time.sleep,
 ) -> ScanResult:
-    """Scan, classify, match and (unless ``dry_run``) store proposals. Idempotent."""
+    """Scan, classify, match and (unless ``dry_run``) store proposals and rejections.
+
+    Idempotent by Gmail message id. One proposal per (thread, kind): an ATS that sends
+    "Thanks for applying" five times in one thread yields one proposal, from the earliest
+    message; likewise one rejection row per thread.
+    """
     now = now or datetime.now(UTC)
     seen = existing_message_ids(conn)
-    messages, listed = fetch_candidates(service, settings, days, seen)
+    messages, listed = fetch_candidates(service, settings, days, seen, sleep=sleep)
     groups = load_groups(conn)
+    thread_kinds, rejected_threads = existing_threads(conn)
     result = ScanResult(scanned=len(messages), already_seen=listed - len(messages))
-    for msg in messages:
-        prop = build_proposal(msg, classify(msg, fallback), groups)
-        if prop is not None:
-            result.proposals.append(prop)
+    for msg in sorted(messages, key=lambda m: (m.received_at, m.message_id)):
+        cls = classify(msg, fallback)
+        if cls.kind == "other":
+            continue
+        found = match_groups(msg, groups)
+        if cls.kind == "rejection" and not (msg.thread_id and msg.thread_id in rejected_threads):
+            result.rejections.append(build_rejection(msg, cls, found))
+            if msg.thread_id:
+                rejected_threads.add(msg.thread_id)
+        prop = build_proposal(msg, cls, groups, found)
+        if prop is None:
+            continue
+        key = (msg.thread_id, cls.kind)
+        if msg.thread_id and key in thread_kinds:
+            result.thread_duplicates += 1
+            continue
+        thread_kinds.add(key)
+        result.proposals.append(prop)
     if not dry_run:
         result.stored = store(conn, result.proposals, now)
+        result.rejections_stored = store_rejections(conn, result.rejections, now)
     return result

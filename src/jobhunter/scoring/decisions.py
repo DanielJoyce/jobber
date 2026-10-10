@@ -41,6 +41,7 @@ from typing import Any
 import httpx
 
 from jobhunter.config import OpenRouter
+from jobhunter.core import rejections
 from jobhunter.core.models import LocationScope, Verdict
 from jobhunter.pipeline.listing import _txn, to_iso
 from jobhunter.scoring.profile import Profile
@@ -298,6 +299,10 @@ def job_state(job: Mapping[str, Any], custom_id: str, locations_summary: str) ->
         entry["description_note"] = (
             "partial: a summary or truncated listing; the full posting may say more"
         )
+    if job.get("prior_rejection"):
+        # A neutral fact about a different role at this employer (specs/006 "Employer
+        # rejections"). No question asks about it; it is context, never pay or location.
+        entry["employer_history"] = str(job["prior_rejection"])
     return entry
 
 
@@ -849,7 +854,8 @@ def _write(
 
 
 def eligible(conn: sqlite3.Connection, profile: Profile, scorer: str, limit: int) -> list[Any]:
-    """``screen.eligible_groups`` under the decisions prompt version."""
+    """``screen.eligible_groups`` under the decisions prompt version (rejected postings are
+    never eligible)."""
     from jobhunter.scoring import screen
 
     return conn.execute(
@@ -861,14 +867,21 @@ def eligible(conn: sqlite3.Connection, profile: Profile, scorer: str, limit: int
             "prompt_version": DECISIONS_PROMPT_VERSION,
             "scoring_version": profile.scoring_version,
             "limit": limit,
+            "rejected": rejections.rejected_json(conn),
         },
     ).fetchall()
 
 
-def _jobs(conn: sqlite3.Connection, groups: Sequence[Any]) -> list[tuple[str, dict[str, Any], str]]:
+def _jobs(
+    conn: sqlite3.Connection,
+    groups: Sequence[Any],
+    now: datetime | None = None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+) -> list[tuple[str, dict[str, Any], str]]:
     from jobhunter.scoring import screen
 
-    return [(f"g{g['group_id']}", dict(g), screen._summary_for(conn, g)) for g in groups]
+    rows = screen._context_rows(conn, groups, now, rejection_days)
+    return [(f"g{r['group_id']}", r, screen._summary_for(conn, r)) for r in rows]
 
 
 def score_decisions(
@@ -879,6 +892,7 @@ def score_decisions(
     limit: int,
     now: datetime,
     remaining_usd: Callable[[], float] | None = None,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> DecisionsResult:
     """Score up to ``limit`` eligible groups, ``scorer.jobs_per_request`` per request.
 
@@ -897,7 +911,7 @@ def score_decisions(
     items = profile_items(profile)
     batches = pack(
         profile,
-        _jobs(conn, groups),
+        _jobs(conn, groups, now, rejection_days),
         jobs_per_request=scorer.jobs_per_request,
         max_input_tokens=scorer.max_input_tokens,
     )
@@ -986,7 +1000,9 @@ def run_bench(
 
     conn.execute("PRAGMA query_only = ON")
     try:
-        groups = conn.execute(_GROUPS, (profile.filter_version, n)).fetchall()
+        groups = conn.execute(
+            _GROUPS, (profile.filter_version, rejections.rejected_json(conn), n)
+        ).fetchall()
         report = BenchReport(scorer=scorer.name, requested=n, night_hours=night_hours)
         items = profile_items(profile)
         batches = pack(

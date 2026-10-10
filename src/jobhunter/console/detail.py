@@ -15,6 +15,7 @@ from typing import Any
 from markupsafe import Markup, escape
 
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
+from jobhunter.core import rejections
 from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline.applylink import get_apply_link
 from jobhunter.pipeline.ats_rules import host_of
@@ -269,6 +270,9 @@ class Detail:
     pasted: bool = False
     button: ApplyButton | None = None
     prompt: bool = False
+    # Rejections from employers (core/rejections): this very posting, or another role here.
+    posting_rejection: str | None = None
+    employer_rejection: str | None = None
 
 
 def group_job(conn: sqlite3.Connection, group_id: int) -> sqlite3.Row | None:
@@ -330,7 +334,11 @@ def _decisions_view(d: Detail, report: Any) -> None:
 
 
 def load_detail(
-    conn: sqlite3.Connection, profile: Profile, group_id: int, now: datetime
+    conn: sqlite3.Connection,
+    profile: Profile,
+    group_id: int,
+    now: datetime,
+    rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
 ) -> Detail | None:
     job = group_job(conn, group_id)
     if job is None:
@@ -399,6 +407,16 @@ def load_detail(
         )
     d.button = apply_button(conn, group_id, now)
     d.prompt = did_you_apply(conn, group_id)
+    index = rejections.RejectionIndex.load(conn, now, rejection_days)
+    if index:
+        emp = job["employer"] or job["agency_raw"]
+        same = index.same_posting(group_id, emp, job["title"])
+        if same is not None:
+            d.posting_rejection = f"The employer rejected you for this posting on {same.day}."
+        elif (hit := index.prior(group_id, emp, job["title"])) is not None:
+            d.employer_rejection = (
+                f"employer rejected you for {hit.title or 'another role'} on {hit.day}"
+            )
     return d
 
 

@@ -24,10 +24,11 @@ from jobhunter.console import (
     pages_routes,
     prefs_routes,
     proposals_routes,
+    rejections_routes,
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
-from jobhunter.core import db, geo
+from jobhunter.core import db, geo, rejections
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ PAGES: list[tuple[str, str | None, str]] = [
     ("/inbox", "Inbox", "Inbox"),
     ("/pipeline", "Pipeline", "Pipeline"),
     ("/followups", "Follow-ups", "Follow-ups"),
+    ("/rejections", "Employer rejections", "Employer rejections"),
     ("/sources", "Sources", "Sources"),
     ("/rejected", None, "Rejected"),
     ("/search", "Search", "Search"),
@@ -202,7 +204,14 @@ def create_app(
             "tile_grid": json.dumps({k: list(v) for k, v in geo.TILE_GRID.items()}),
             "fips": json.dumps({s.fips: s.usps for s in geo.STATES}),
             "names": json.dumps({s.usps: s.name for s in geo.STATES}),
-            "sankey": json.dumps(dash.sankey(conn, get_profile())).replace("</", "<\\/"),
+            "sankey": json.dumps(
+                dash.sankey(
+                    conn,
+                    get_profile(),
+                    extra_rejected=rejections.rejected_group_ids(conn),
+                    elsewhere_rejected=rejections.unmatched_email_count(conn),
+                )
+            ).replace("</", "<\\/"),
             **kpi_context(conn, range_),
             **table_context(conn, range_, metric_, sort, dir),
         }
@@ -247,6 +256,7 @@ def create_app(
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
     proposals_routes.register(app, templates, get_conn, NAV, now)
+    rejections_routes.register(app, templates, get_conn, NAV, now)
     alerts_routes.register(app, templates, get_conn, NAV, now)
 
     # Placeholders last, only for nav pages no module has claimed yet. New pages need no
