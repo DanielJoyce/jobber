@@ -107,13 +107,17 @@ def test_answers_section_saves_alone_and_shows_the_new_row(page, server):
 def test_leaving_with_unsaved_edits_warns(browser, server):
     ctx = browser.new_context()
     page = ctx.new_page()
-    dialogs = []
-    page.on("dialog", lambda d: (dialogs.append(d.type), d.accept()))
     page.goto(f"{server.url}/prefs")
-    page.fill(FLOOR, "151000")
-    page.close(run_before_unload=True)
+    # A real click and key presses give the page user activation, which
+    # Chromium needs before it will show a beforeunload dialog.
+    page.click(FLOOR)
+    page.keyboard.type("151000")
+    with page.expect_event("dialog") as info:
+        page.close(run_before_unload=True)
+    dialog = info.value
+    dialog.accept()
+    assert dialog.type == "beforeunload"
     ctx.close()
-    assert "beforeunload" in dialogs
 
 
 def test_clean_page_leaves_without_a_warning(browser, server):
@@ -122,7 +126,9 @@ def test_clean_page_leaves_without_a_warning(browser, server):
     dialogs = []
     page.on("dialog", lambda d: (dialogs.append(d.type), d.accept()))
     page.goto(f"{server.url}/prefs")
-    page.fill(FLOOR, "151000")
+    # Same real gesture as the warning test, so a false warning would show here.
+    page.click(FLOOR)
+    page.keyboard.type("151000")
     save_btn(page, "pay").click()
     expect(page.locator("#status-pay")).to_contain_text("Saved")
     page.close(run_before_unload=True)
