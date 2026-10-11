@@ -78,6 +78,129 @@ _CREDENTIAL_PATTERNS: dict[str, tuple[str, ...]] = {
     ),
 }
 _COMPILED = {k: [re.compile(p, re.I) for p in v] for k, v in _CREDENTIAL_PATTERNS.items()}
+
+# Cheap necessary conditions per credential (bug 501fee8). The full patterns above have no
+# literal prefix, so ``re`` tries them at every position of a long description, which made the
+# /prefs live preview take seconds. Gates run first. Each is implied by every pattern of its
+# key, so a gate miss proves no pattern can match, and a hit runs the full patterns as before:
+# results are identical by construction.
+#
+# _FRAGMENTS: every alternative of every pattern of the key contains one of these fragments
+# verbatim, so wherever a pattern matches, a fragment matches characters inside that match:
+#   clearance: patterns 1 and 4 end ``clearance{_REQ}``; pattern 2 begins _MUST (``must`` or
+#     ``shall`` then the verb) then ``active``; pattern 3 begins ``requires?\s+(?:an?\s+)?``
+#     then ``active``.
+#   cdl: every pattern contains _CDL, whose alternatives begin ``cdl`` and
+#     ``commercial\s+driver``.
+#   rn: every pattern contains _RN: ``rn\s+licen[sc]e``, ``registered\s+nurse\s+licen[sc]e``,
+#     ``licen[sc]e\s+as\s+a\s+registered\s+nurse``.
+#   pe: three patterns contain _PE: ``pe\s+licen[sc]e``,
+#     ``professional\s+engineer(?:ing)?\s+licen[sc]e``,
+#     ``licen[sc]e\s+as\s+a\s+professional\s+engineer``; the fourth begins
+#     ``licensed\s+professional\s+engineer``.
+# Each fragment starts with a literal, which ``re`` can scan for quickly. Tests compare the
+# gated result with the patterns alone on generated phrasings of every alternative.
+#
+# _WORDS: every match of the key's patterns contains one of these plain substrings (every
+# clearance pattern has ``clearance``; _CDL has ``cdl`` or the ``licen`` of "commercial
+# driver's license"; every rn and pe alternative has ``licen``).
+#
+# Fast path, on ``text.lower()``: _WORDS as substrings, then the fragments compiled without
+# ``re.I``. This is sound because under ``re.I`` an ASCII letter matches a character whose
+# ``lower()`` is not that letter only for U+0130, U+0131 (i) and U+017F (s) (a test checks
+# every code point), ``lower()`` changes no whitespace, and changes length only for U+0130. A
+# text holding any of those three takes the slow path: the fragments with ``re.I`` on the
+# original text.
+_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "active_security_clearance": (
+        r"clearance(?:\s+is|\s+are)?\s+required",
+        r"must\s+(?:possess|have|hold|maintain)\s+(?:an?\s+)?active",
+        r"shall\s+(?:possess|have|hold|maintain)\s+(?:an?\s+)?active",
+        r"requires?\s+(?:an?\s+)?active",
+    ),
+    "cdl": (r"cdl", r"commercial\s+driver"),
+    "rn_license": (
+        r"rn\s+licen[sc]e",
+        r"registered\s+nurse\s+licen[sc]e",
+        r"licen[sc]e\s+as\s+a\s+registered\s+nurse",
+    ),
+    "pe_license": (
+        r"pe\s+licen[sc]e",
+        r"professional\s+engineer(?:ing)?\s+licen[sc]e",
+        r"licen[sc]e\s+as\s+a\s+professional\s+engineer",
+        r"licensed\s+professional\s+engineer",
+    ),
+}
+_WORDS: dict[str, tuple[str, ...]] = {
+    "active_security_clearance": ("clearance",),
+    "cdl": ("cdl", "licen"),
+    "rn_license": ("licen",),
+    "pe_license": ("licen",),
+}
+_FOLDS_TO_ASCII = (
+    "\N{LATIN CAPITAL LETTER I WITH DOT ABOVE}",
+    "\N{LATIN SMALL LETTER DOTLESS I}",
+    "\N{LATIN SMALL LETTER LONG S}",
+)
+_GATES = {k: [re.compile(f, re.I) for f in v] for k, v in _FRAGMENTS.items()}
+_FOLDED_GATES = {k: [re.compile(f) for f in v] for k, v in _FRAGMENTS.items()}
+
+
+def _fold(text: str) -> str | None:
+    """``text.lower()`` for the fast gates, or None when they cannot be trusted on ``text``."""
+    return None if any(ch in text for ch in _FOLDS_TO_ASCII) else text.lower()
+
+
+def _credential_match(text: str, folded: str | None, key: str) -> bool:
+    if folded is None:
+        if not any(g.search(text) for g in _GATES[key]):
+            return False
+    elif not any(w in folded for w in _WORDS[key]) or not any(
+        g.search(folded) for g in _FOLDED_GATES[key]
+    ):
+        return False
+    return any(p.search(text) for p in _COMPILED[key])
+
+
+def credential_in_text(text: str, key: str) -> bool:
+    """Whether ``text`` states credential ``key`` is required (KeyError for an unknown key)."""
+    return _credential_match(text, _fold(text), key)
+
+
+class _TextMemo:
+    """Per-key credential results for one description (they do not depend on the profile)."""
+
+    __slots__ = ("folded", "results", "text")
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.folded = _fold(text)
+        self.results: dict[str, bool] = {}
+
+    def match(self, key: str) -> bool:
+        hit = self.results.get(key)
+        if hit is None:
+            hit = self.results[key] = _credential_match(self.text, self.folded, key)
+        return hit
+
+
+_last_memo: _TextMemo | None = None
+
+
+def _memo_for(text: str) -> _TextMemo:
+    """The memo for this very ``text`` object, else a fresh one.
+
+    The /prefs preview evaluates each job under two profiles back to back, so remembering the
+    last description halves the credential work. Matching on identity (``is``) while holding a
+    reference is exact and cheap; one slot keeps memory flat. Threads at worst miss the slot.
+    """
+    global _last_memo
+    memo = _last_memo
+    if memo is None or memo.text is not text:
+        memo = _last_memo = _TextMemo(text)
+    return memo
+
+
 _warned_credentials: set[str] = set()
 
 
@@ -161,14 +284,16 @@ def rule_closed(job: Any, now: datetime) -> str | None:
 
 def rule_credential_required(job: Any, hard: Hard) -> str | None:
     text = _get(job, "description_text") or _get(job, "description_raw") or ""
+    memo: _TextMemo | None = None
     for key in hard.requires_i_lack:
-        patterns = _COMPILED.get(key)
-        if patterns is None:
+        if key not in _COMPILED:
             if key not in _warned_credentials:
                 _warned_credentials.add(key)
                 logger.warning("prefilter: unknown requires_i_lack credential %r ignored", key)
             continue
-        if any(p.search(text) for p in patterns):
+        if memo is None:
+            memo = _memo_for(text)
+        if memo.match(key):
             return CREDENTIAL_REQUIRED
     return None
 
