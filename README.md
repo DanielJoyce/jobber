@@ -62,6 +62,11 @@ uv sync
 scripts/setup-hooks.sh     # secret-scanning git hooks; asks before downloading Go
 ```
 
+## Running in containers
+
+Optional: run the console and the nightly jobs as rootless podman containers on Fedora atomic.
+Start at the *First run checklist* in [docs/containers.md](docs/containers.md).
+
 ## Running nightly
 
 The nightly run is a systemd **user** timer, not cron, so logs go to the journal and a failure
