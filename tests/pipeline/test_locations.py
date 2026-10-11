@@ -234,3 +234,22 @@ def test_load_group_locations_unions_members(conn):
         "INSERT INTO job_locations (job_id, state, is_primary) VALUES (?, 'TX', 1)", (solo,)
     )
     assert [loc.state for loc in load_job_group_locations(conn, solo)] == ["TX"]
+
+    # The batched loader (the /prefs preview) gives exactly the per-job answer, order included.
+    from jobhunter.pipeline.locations import load_many_job_group_locations
+
+    gid2 = conn.execute(
+        "INSERT INTO job_group (member_count, method, created_at) VALUES (1, 'exact_hash', 'x')"
+    ).lastrowid
+    bare = conn.execute(
+        "INSERT INTO job (source_key, external_id, url, title, job_group_id, stage, "
+        "first_seen_at, last_seen_at) VALUES ('wa', 'n', 'u', 't', ?, 'grouped', 'x', 'x')",
+        (gid2,),
+    ).lastrowid  # a group with no location rows at all
+    wanted = [*ids, solo, bare, 999_999]  # 999_999: no such job
+    many = load_many_job_group_locations(conn, wanted)
+    assert list(many) == wanted
+    for jid in wanted:
+        assert many[jid] == load_job_group_locations(conn, jid)
+    assert [loc.state for loc in many[ids[0]]] == ["OH", "MI"]
+    assert many[bare] == [] and many[999_999] == []
