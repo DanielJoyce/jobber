@@ -19,7 +19,7 @@
   <p>Preview against the last {{ days }} days ({{ buckets.total }} scored jobs):</p>
   {% if bucket_lines %}
   <ul class="plain deltas">
-    {% for b, before, after, delta in bucket_lines %}<li>{{ bucket_title(b) }} <span class="bucket-badge" title="Bucket {{ b }}">{{ b }}</span> {{ before }} → {{ after }} ({{ signed(delta) }})</li>{% endfor %}
+    {% for b, before, after, delta in bucket_lines %}<li>{{ bucket_title(b) }} {{ before }} → {{ after }} ({{ signed(delta) }})</li>{% endfor %}
   </ul>
   {% else %}<p class="muted">No bucket changes.</p>{% endif %}
   {% if prefilter.reasons %}

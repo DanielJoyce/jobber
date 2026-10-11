@@ -48,7 +48,8 @@
 }
 .draft-form { flex-direction: column; align-items: stretch; max-width: 75ch; }
 .draft-form .packet-btn { align-self: flex-start; }
-.notes-form { display: flex; flex-direction: column; gap: 6px; max-width: 75ch; margin: 8px 0; }
+.notes-form { display: flex; flex-direction: column; align-items: stretch; gap: 6px; max-width: 75ch; margin: 8px 0; }
+.notes-form textarea { width: 100%; }
 .notes-form .act { align-self: flex-start; }
 .doc-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 8px 0; }
 .versions a { margin-right: 6px; }

@@ -163,7 +163,7 @@
           <table class="bucket-rules">
             <thead><tr><th>Bucket</th><th>When</th><th>Fields</th></tr></thead>
             <tbody>
-              {% for b, text, keys in bucket_rules %}<tr><td><strong>{{ bucket_title(b) }}</strong> <span class="bucket-badge" title="Bucket {{ b }}">{{ b }}</span></td><td>{{ text }}</td><td><code>{{ keys }}</code></td></tr>{% endfor %}
+              {% for b, text, keys in bucket_rules %}<tr><td><strong>{{ bucket_title(b) }}</strong></td><td>{{ text }}</td><td><code>{{ keys }}</code></td></tr>{% endfor %}
             </tbody>
           </table>
         </div>
@@ -171,7 +171,7 @@
         <p class="hint">The preview panel shows which bucket counts change as you move these numbers.</p>
         {% for g in threshold_groups %}
         <fieldset class="threshold-group">
-          <legend>{{ g.title }}{% if g.letter %} <span class="bucket-badge" title="Bucket {{ g.letter }}">{{ g.letter }}</span>{% endif %}</legend>
+          <legend>{{ g.title }}</legend>
           <div class="thresholds">
             {% for k in g.fields %}
             <label title="{{ bucket_help[k] }}">{{ k | replace('_', ' ') }}

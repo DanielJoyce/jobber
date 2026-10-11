@@ -3,7 +3,7 @@
   {% if score_message %}<div class="banner banner-error" role="alert" id="score-message">{{ score_message }}</div>{% endif %}
   {% if score_ok %}<div class="banner banner-ok" role="status" id="score-ok">{{ score_ok }}</div>{% endif %}
   {% if d and d.scored %}
-  <p id="score-result"><span class="badge" title="Bucket {{ d.bucket }}">{{ bucket_name(d.bucket) }} <span class="bucket-badge">{{ d.bucket }}</span></span>
+  <p id="score-result"><span class="badge">{{ bucket_name(d.bucket) }}</span>
     <span class="badge">overall {{ d.overall }}</span>
     <a href="/job/{{ p.group_id }}">score breakdown on the job page</a></p>
   {% elif profile_error %}

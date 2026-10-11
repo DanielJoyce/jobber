@@ -12,9 +12,9 @@
       {# A chip scrolls to its section only when that section is on the page; otherwise it opens that bucket (same state). #}
       {% set on_page = (b in picked) or (not picked and b != "G") %}
       {% if on_page %}
-      <a class="chip{% if b in picked %} on{% endif %}" data-bucket="{{ b }}" href="#bucket-{{ b }}" title="{{ b }} &middot; {{ titles[b][1] }}">{{ titles[b][0] | title }} {{ data.counts[b] }}</a>
+      <a class="chip{% if b in picked %} on{% endif %}" data-bucket="{{ b }}" href="#bucket-{{ b }}" title="{{ titles[b][1] }}">{{ titles[b][0] | title }} {{ data.counts[b] }}</a>
       {% else %}
-      <a class="chip" data-bucket="{{ b }}" href="/inbox?{% if state %}state={{ state }}&amp;{% endif %}bucket={{ b }}" title="{{ b }} &middot; {{ titles[b][1] }}">{{ titles[b][0] | title }} <span class="muted">{% if b == "G" %}&middot;hidden&middot; {% endif %}{{ data.counts[b] }}</span></a>
+      <a class="chip" data-bucket="{{ b }}" href="/inbox?{% if state %}state={{ state }}&amp;{% endif %}bucket={{ b }}" title="{{ titles[b][1] }}">{{ titles[b][0] | title }} <span class="muted">{% if b == "G" %}&middot;hidden&middot; {% endif %}{{ data.counts[b] }}</span></a>
       {% endif %}
       {% endfor %}
       {% if bucket %}<a class="chip" href="/inbox{% if state %}?state={{ state }}{% endif %}">all</a>{% endif %}
@@ -46,7 +46,7 @@
   {% if b == "F" and not bucket %}
   <section class="bucket" id="bucket-F" data-bucket="F">
     <details id="stale-details">
-      <summary class="bucket-head"><span>{{ name | title }} &mdash; {{ action }} &middot; collapsed <span class="bucket-letter">F</span></span><span class="count">{{ data.counts["F"] }}</span></summary>
+      <summary class="bucket-head"><span>{{ name | title }} &mdash; {{ action }} &middot; collapsed</span><span class="count">{{ data.counts["F"] }}</span></summary>
       <p class="stale-note">{{ data.counts["F"] }} jobs matched on skills you last used 7+ years ago.
         {% if data.stale_summary %}<br><span class="muted">most common: {% for s, n in data.stale_summary %}{{ s }} ({{ n }}){% if not loop.last %} &middot; {% endif %}{% endfor %}</span>{% endif %}</p>
       {% if items and data.counts["F"] > items|length %}<p class="muted pad">Showing the first {{ items|length }} of {{ data.counts["F"] }}.</p>{% endif %}
@@ -56,7 +56,7 @@
   </section>
   {% else %}
   <section class="bucket" id="bucket-{{ b }}" data-bucket="{{ b }}">
-    <h2 class="bucket-head"><span>{{ name | title }} &mdash; {{ action }} <span class="bucket-letter">{{ b }}</span></span><span class="count">{{ data.counts[b] }}</span></h2>
+    <h2 class="bucket-head"><span>{{ name | title }} &mdash; {{ action }}</span><span class="count">{{ data.counts[b] }}</span></h2>
     {% if items and data.counts[b] > items|length %}<p class="muted pad">Showing the first {{ items|length }} of {{ data.counts[b] }}.</p>{% endif %}
     {% for i in items %}{% include "_inbox_row.html" %}{% else %}<p class="muted pad">None.</p>{% endfor %}
   </section>
