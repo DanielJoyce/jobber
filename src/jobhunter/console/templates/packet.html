@@ -2,6 +2,7 @@
 {% block main %}
 <link rel="stylesheet" href="{{ static_url('detail.css') }}">
 <link rel="stylesheet" href="{{ static_url('packet.css') }}">
+<link rel="stylesheet" href="{{ static_url('packet_answers.css') }}">
 <script src="{{ static_url('packet.js') }}" defer></script>
 <div class="detail packet" data-packet="{{ p.id }}">
   <p class="crumbs">
@@ -59,13 +60,17 @@
     {% endif %}
   </section>
 
+  {% if applied_before %}
+  <div class="banner banner-warn" role="alert" id="already-applied">
+    <p><strong>You already applied to this employer and title.</strong> Check before generating anything:</p>
+    <ul>{% for a in applied_before %}<li><a href="/pipeline/{{ a.app_id }}">{{ a.title }}, {{ a.employer }}</a> <span class="muted">{{ a.status }}{% if a.applied_at %}, applied {{ a.applied_at[:10] }}{% endif %}</span></li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
   {% include "_packet_docs.html" %}
 
   {% include "_packet_export.html" %}
 
-  <section class="card" id="answers">
-    <h2>Answers and checklist</h2>
-    <p class="coming">Coming in 1d: saved answers you can reuse, and a checklist for this board. Drafts for custom questions are above.</p>
-  </section>
+  {% include "_packet_answers.html" %}
 </div>
 {% endblock %}

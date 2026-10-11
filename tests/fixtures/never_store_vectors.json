@@ -1,0 +1,998 @@
+{
+ "_about": "specs/017 Never-store list: label vectors for apply/labels.py::never_store. expected is the category, or null for a label that must NOT match (a false positive refuses a question the user wanted drafted). The EEO, address and attestation blocks are the standard public wording of Greenhouse, Lever, Ashby and Workday application forms, written by hand; no captured page and no personal data.",
+ "vectors": [
+  {
+   "label": "Desired salary",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What are your salary expectations?*",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Compensation expectations",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Desired pay",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Desired wage",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Expected CTC",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Current CTC (in lakhs)",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What is your desired hourly rate?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Base pay expectation",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What pay range are you targeting?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Current pay",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Expected\u00a0Salary\u00a0(USD)",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Gender",
+   "options": [
+    "Male",
+    "Female",
+    "Decline to self-identify"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Are you Hispanic/Latino?",
+   "options": [
+    "Yes",
+    "No",
+    "Decline to self-identify"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Race",
+   "options": [
+    "American Indian or Alaskan Native",
+    "Asian",
+    "Black or African American",
+    "White",
+    "Two or More Races",
+    "Decline to self-identify"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Ethnicity",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Veteran Status",
+   "options": [
+    "I am not a protected veteran",
+    "I identify as one or more of the classifications of protected veteran",
+    "I don't wish to answer"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Disability Status",
+   "options": [
+    "Yes, I have a disability (or previously had a disability)",
+    "No, I do not have a disability",
+    "I do not want to answer"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Sexual orientation",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Do you identify as transgender?",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Do you identify as LGBTQ+?",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Voluntary self-identification",
+   "options": [
+    "Female",
+    "Male",
+    "Decline to self-identify"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "How would you describe yourself?",
+   "options": [
+    "Option A",
+    "Option B",
+    "Prefer not to say"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Please select one",
+   "options": [
+    "Yes",
+    "No",
+    "I don\u2019t wish to answer"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Are you a U.S. citizen?",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Citizenship",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "National origin",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Street address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Address Line 1",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Address line 2 (optional)",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Home address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Mailing Address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Current address*",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Street",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Zip",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "ZIP code",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Postal Code",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Pronouns",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Date of birth",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Birthdate",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Age",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "SSN",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Social Security Number (last 4 digits)",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "I consent to the processing of my personal data",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "I certify that the information provided is true and complete",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "Signature",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "Electronic signature",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "Please sign here",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "I acknowledge that I have read the privacy notice",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "I agree to the terms of use",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "Are you 18 years of age or older?",
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expected": null
+  },
+  {
+   "label": "Are you 18 or older?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Are you at least 18 years of age?",
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expected": null
+  },
+  {
+   "label": "Tell us about a time you managed a difficult migration",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "What programming languages do you know?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Which language do you prefer for tooling?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Describe a system design you are proud of",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How do you generate reports for stakeholders?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Give an example of how you collaborate across teams",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How do you trace a production incident to its cause?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Describe a time you had to address a conflict on your team",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Email address",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "What is your accurate availability?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Why do you want to work at Synthetic Widgets?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "LinkedIn profile",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Portfolio or GitHub link",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "What is your notice period?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Are you willing to relocate?",
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expected": null
+  },
+  {
+   "label": "Are you legally authorized to work in the United States?",
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expected": null
+  },
+  {
+   "label": "Will you now or in the future require sponsorship?",
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expected": null
+  },
+  {
+   "label": "How did you hear about us?",
+   "options": [
+    "LinkedIn",
+    "Referral",
+    "Other"
+   ],
+   "expected": null
+  },
+  {
+   "label": "Years of experience with Terraform",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Describe your ideal manager",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Tell us about your page design work",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Expected comp",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Total comp expectations",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What are your comp expectations?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Expected annual income",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Current income",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Desired income",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What is your expected OTE?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "On-target earnings",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What are your pay requirements?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Pay",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Current base",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Desired annual base",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Expected bonus",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What is your current package?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Day rate",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What rate are you looking for?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Military status",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Military service",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Have you served in the U.S. military?",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Religion",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Religion or belief",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Marital status",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Are you pregnant?",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Are you a member of a minority group?",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Indigenous status",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Address (optional)",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Your address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Full address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Residential address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Permanent address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Current residential address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Physical address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Postal address",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Apartment number",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Apt/Suite",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Zipcode",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Postcode",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Post code",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "PIN code",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Year of birth",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Birthday",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Place of birth",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Country of birth",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "How old are you?",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Nationality",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "What is your nationality?",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "National Insurance number",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Social Insurance Number",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "SIN",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Passport number",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Tax ID",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Driver's license number",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Age (you must be 18 or older)",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Age: at least 18",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "What is your age?",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Have you ever been convicted of a felony?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Have you ever been convicted of a crime?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Criminal history",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Criminal record",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Do you have any pending criminal charges?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Any misdemeanor convictions in the last 7 years?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Reference name",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Reference phone number",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Professional references",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Password",
+   "options": [],
+   "expected": "credentials"
+  },
+  {
+   "label": "Security question",
+   "options": [],
+   "expected": "credentials"
+  },
+  {
+   "label": "Mother's maiden name",
+   "options": [],
+   "expected": "credentials"
+  },
+  {
+   "label": "Credit card number",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Bank account number",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Certification",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "Applicant certification",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "Sign and date below",
+   "options": [],
+   "expected": "attestation"
+  },
+  {
+   "label": "Describe a time you debugged a race condition",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How do you prevent race conditions?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How would you rate your Python skills?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Rate your proficiency in SQL (1-5)",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Experience with rate limiting?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Do you have an AWS certification?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Do you hold a PMP certification?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How do you handle sign-off on releases?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Are you over the age of 18?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Are you above 18 years of age?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Is your age 18 or above?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Are you of legal working age?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How would you address a gap in requirements?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "E-mail address",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "What reference architecture do you prefer?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Website",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Please select one",
+   "options": [
+    "Yes",
+    "No",
+    "Decline to state"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Please select one",
+   "options": [
+    "Yes",
+    "No",
+    "I do not want to answer"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Please select one",
+   "options": [
+    "Yes",
+    "No",
+    "I do not wish to self-identify"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Please select one",
+   "options": [
+    "Yes",
+    "No",
+    "Prefer not to disclose"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Please select one",
+   "options": [
+    "Yes",
+    "No",
+    "I choose not to disclose"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "Please select one",
+   "options": [
+    "Yes",
+    "No",
+    "Decline to answer"
+   ],
+   "expected": "eeo"
+  },
+  {
+   "label": "How much do you expect to earn?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Earnings expectations",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Expected annual earnings",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Minimum pay you would accept",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Hourly expectation",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Annual package",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What pay are you looking for?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Have you ever been charged with a crime?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Have you pleaded guilty to an offense?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Name of reference 1",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Reference 2 email",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Bank details",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "How do you forecast quarterly earnings for a client?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How did you earn the trust of a new team?",
+   "options": [],
+   "expected": null
+  }
+ ]
+}

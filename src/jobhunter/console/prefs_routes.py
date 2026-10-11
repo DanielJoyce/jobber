@@ -11,7 +11,9 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.apply import answers as ans
 from jobhunter.console import prefs as pf
+from jobhunter.console import prefs_answers as pa
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.core import db
 from jobhunter.scoring import buckets as bk
@@ -39,6 +41,7 @@ SECTIONS = [
     ("recency", "Recency"),
     ("narrative", "Narrative"),
     ("resume", "Resume"),
+    ("answers", "Application answers"),
 ]
 
 
@@ -83,6 +86,7 @@ def register(
         raw_text: str | None = None,
         upload: dict[str, Any] | None = None,
         upload_error: str | None = None,
+        answers_form: pa.AnswersForm | None = None,
     ) -> HTMLResponse:
         settings = request.app.state.settings
         profile = st.profile
@@ -90,7 +94,11 @@ def register(
         errors = dict(errors or {})
         if st.errors and not errors:
             errors = pf.errors_for_form(ProfileValidationError(st.errors))
-        known = set(view) | {"weights"}
+        # Application answers: loaded on their own, never through Profile (specs/017).
+        loaded = ans.load_answers(profile_dir(request))
+        ans_view = answers_form.view if answers_form is not None else pa.view_of(loaded.answers)
+        known = set(view) | {"weights"} | set(ans_view)
+        known |= {k for k in errors if k.startswith("ans.")}
         ctx = {
             "title": "Preferences",
             "active": "/prefs",
@@ -129,6 +137,12 @@ def register(
             "upload": upload,
             "upload_error": upload_error,
             "max_upload_mb": gr.MAX_RESUME_BYTES // (1024 * 1024),
+            "ansv": ans_view,
+            "ans_warnings": loaded.warnings,
+            "ans_link_fields": ans.LINK_FIELDS,
+            "ans_text_fields": ans.TEXT_FIELDS,
+            "ans_work_auth_label": ans.WORK_AUTH_LABEL,
+            "ans_work_auth_choices": pa.WORK_AUTH_CHOICES,
         }
         return templates.TemplateResponse(request, "prefs.html", ctx, status_code=status)
 
@@ -177,6 +191,13 @@ def register(
         ctx: dict[str, Any] = {"errors": {}, "changes": {}, "conflict": False}
         ctx["conflict"] = pf.form_value(form, "mtime_ns") != str(mtime_of(request))
         after, changes, errors = submitted(form, profile)
+        af = pa.parse(form)
+        if af.present:
+            # Answers are free and score nothing: the preview only counts them.
+            errors = {**errors, **af.errors}
+            if af.answers is not None:
+                old = ans.load_answers(profile_dir(request)).answers
+                ctx["answer_changes"] = len(ans.answer_writes(af.answers, old))
         ctx.update(errors=errors, changes=changes)
         if after is None or not changes:
             return templates.TemplateResponse(request, "_prefs_preview.html", ctx)
@@ -216,15 +237,34 @@ def register(
                 validate_profile_data(data, base=st.profile)
             except ProfileValidationError as exc:
                 errors = pf.errors_for_form(exc)
+        af = pa.parse(form)
+        errors = {**errors, **af.errors}
         if errors:
             return render_page(
-                request, conn, st, view=view, errors=errors, mtime_ns=expected, status=422
+                request,
+                conn,
+                st,
+                view=view,
+                errors=errors,
+                mtime_ns=expected,
+                status=422,
+                answers_form=af,
             )
         if mtime_of(request) != expected:
             return render_page(
-                request, conn, st, view=view, conflict=True, mtime_ns=expected, status=409
+                request,
+                conn,
+                st,
+                view=view,
+                conflict=True,
+                mtime_ns=expected,
+                status=409,
+                answers_form=af,
             )
-        write_preferences_data(profile_dir(request), data, backup_stamp=stamp())
+        separate = None
+        if af.answers is not None:
+            separate = {"answers": af.answers.model_dump(mode="json")}
+        write_preferences_data(profile_dir(request), data, backup_stamp=stamp(), separate=separate)
         after = state_of(request)
         pf.save_snapshot(conn, after.profile, now())
         conn.commit()
@@ -247,12 +287,28 @@ def register(
         except ValueError:
             expected = -1
         _, changes, errors = submitted(form, profile)
+        # Application answers: validated by their own model (never-store first); a refusal
+        # writes nothing at all, profile changes included.
+        af = pa.parse(form)
+        errors = {**errors, **af.errors}
         if errors:
             return render_page(
-                request, conn, st, view=view, errors=errors, mtime_ns=expected, status=422
+                request,
+                conn,
+                st,
+                view=view,
+                errors=errors,
+                mtime_ns=expected,
+                status=422,
+                answers_form=af,
             )
-        if not changes:
+        answer_writes: dict[str, Any] = {}
+        if af.answers is not None:
+            old_answers = ans.load_answers(profile_dir(request)).answers
+            answer_writes = ans.answer_writes(af.answers, old_answers)
+        if not changes and not answer_writes:
             return RedirectResponse("/prefs?saved=0", status_code=303)
+        rerender = {"view": view, "mtime_ns": expected, "answers_form": af}
         try:
             new = pf.apply_changes(
                 conn,
@@ -262,36 +318,24 @@ def register(
                 source="ui",
                 now=now(),
                 require_resume=st.kind == "ok",
+                extra_writes=answer_writes,
             )
         except ProfileConflict:
-            return render_page(
-                request, conn, st, view=view, conflict=True, mtime_ns=expected, status=409
-            )
+            return render_page(request, conn, st, conflict=True, status=409, **rerender)
         except ProfileValidationError as exc:
             return render_page(
-                request,
-                conn,
-                st,
-                view=view,
-                errors=pf.errors_for_form(exc),
-                mtime_ns=expected,
-                status=422,
+                request, conn, st, errors=pf.errors_for_form(exc), status=422, **rerender
             )
         except ProfileError as exc:
             return render_page(
-                request,
-                conn,
-                st,
-                view=view,
-                errors={"profile": str(exc)},
-                mtime_ns=expected,
-                status=422,
+                request, conn, st, errors={"profile": str(exc)}, status=422, **rerender
             )
         scope = pf.form_value(form, "rescore", "none")
         queued = ""
         if any(pf.is_paid(p) for p in changes) and pf.record_rescore(conn, scope, new, now()):
             queued = f"&rescore={scope}"
-        return RedirectResponse(f"/prefs?saved={len(changes)}{queued}", status_code=303)
+        saved = len(changes) + len(answer_writes)
+        return RedirectResponse(f"/prefs?saved={saved}{queued}", status_code=303)
 
     @app.post("/prefs/raw", response_class=HTMLResponse)
     async def save_raw(request: Request, conn: Conn) -> Response:
@@ -309,6 +353,20 @@ def register(
             )
         if st.kind != "ok":
             return render_page(request, conn, st, mtime_ns=expected, status=422, raw_text=text)
+        refused = ans.refused_in_text(text)
+        if refused:
+            # The raw editor is a writer of answers: too: a never-store entry is refused here,
+            # not just dropped on the next load (specs/017 "Never-store list").
+            # Rendered over the file on disk (still broken), so the raw editor keeps the text.
+            return render_page(
+                request,
+                conn,
+                state_of(request),
+                mtime_ns=expected,
+                status=422,
+                raw_text=text,
+                errors={"answers": " ".join(refused)},
+            )
         write_preferences_text(profile_dir(request), text, backup_stamp=stamp())
         pf.save_snapshot(conn, state_of(request).profile, now())
         conn.commit()

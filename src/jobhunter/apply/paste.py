@@ -454,10 +454,13 @@ def guess_from_page_title(page_title: str | None) -> tuple[str | None, str | Non
 
 
 def guess_employer_from_url(url: str) -> str | None:
-    """The board slug of a Greenhouse, Lever or Ashby posting URL ("acme-corp" -> "Acme Corp")."""
+    """The board slug of a Greenhouse, Lever, Ashby or Workable posting URL ("acme-corp" ->
+    "Acme Corp")."""
     rule = match_ats(url)
-    if rule is None or rule.name not in ("greenhouse", "lever", "ashby"):
+    if rule is None or rule.name not in ("greenhouse", "lever", "ashby", "workable"):
         return None
+    if rule.name == "workable" and not rule.is_posting(url):
+        return None  # /j/<code> share links and /api/ widget URLs name no account
     seg = urlsplit(url).path.strip("/").split("/")[0]
     return seg.replace("-", " ").replace("_", " ").title() if seg else None
 

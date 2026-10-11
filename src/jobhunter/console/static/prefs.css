@@ -2,6 +2,7 @@
 
 .prefs-head { margin-bottom: 12px; }
 .prefs-head p { margin: 0 0 8px; }
+.prefs code { overflow-wrap: anywhere; } /* long file paths must not widen the page on a phone */
 .prefs-toc { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.875rem; }
 .prefs-toc a { color: var(--text-secondary); }
 .prefs-toc .paid-link { margin-left: 8px; padding-left: 12px; border-left: 1px solid var(--axis); }
@@ -125,3 +126,9 @@ label .hint { margin: 0; }
 /* Bucket names with the letter as a small secondary badge */
 .threshold-group { border: 0; border-top: 1px solid var(--border); padding: 8px 0 0; margin: 0 0 8px; }
 .threshold-group legend { font-weight: 600; font-size: 0.875rem; padding: 0 8px 0 0; }
+
+/* Application answers (specs/017) */
+.prefs-form h3.sub { font-size: 0.9375rem; margin: 12px 0 6px; }
+.answer-row { border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 0 0 8px; min-width: 0; }
+.answer-row.new { border-style: dashed; }
+.prefs .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

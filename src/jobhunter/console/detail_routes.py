@@ -134,5 +134,7 @@ def register(
         }
         if choice not in messages:
             raise HTTPException(422, "choice must be yes, not_yet or not_interested")
-        detail.answer_prompt(conn, group_id, choice, now())
+        detail.answer_prompt(
+            conn, group_id, choice, now(), request.app.state.settings.paths.data_dir
+        )
         return HTMLResponse(f'<div class="did-apply done" id="did-apply">{messages[choice]}</div>')

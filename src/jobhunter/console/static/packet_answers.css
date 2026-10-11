@@ -1,0 +1,29 @@
+/* Packet page, phase 1d (specs/017): answers, reuse, checklist, already-applied warning.
+   Loaded after packet.css; colors are app.css tokens, so dark mode follows them. */
+.banner-warn { border-color: var(--status-warning); }
+#already-applied { display: block; }
+#already-applied ul { margin: 4px 0 0; padding-left: 20px; }
+.answers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px 20px; }
+.answer-list { list-style: none; margin: 0; padding: 0; }
+.answer-list > li { border-top: 1px solid var(--grid); padding: 8px 0; min-width: 0; }
+.answer-list > li:first-child { border-top: 0; }
+.answer-q { font-weight: 600; margin: 0 0 2px; overflow-wrap: anywhere; }
+.answer-v { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); }
+.answer-actions { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.answer-actions form { display: inline; margin: 0; }
+.matched { border-left: 3px solid var(--series-1); padding-left: 8px; }
+.checklist ol { margin: 4px 0 8px; padding-left: 22px; }
+.checklist li { margin: 2px 0; }
+.answer-form { display: flex; flex-direction: column; gap: 6px; max-width: 75ch; }
+.answer-form label { display: flex; flex-direction: column; gap: 4px; }
+.answer-form input, .answer-form textarea {
+  font: inherit; width: 100%; box-sizing: border-box; padding: 6px 8px; color: var(--text-primary);
+  background: var(--page); border: 1px solid var(--axis); border-radius: 6px;
+}
+.kv-answers { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; gap: 4px 10px; align-items: baseline; margin: 0 0 8px; }
+.kv-answers dt { color: var(--text-secondary); }
+.kv-answers dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .kv-answers { grid-template-columns: minmax(0, 1fr) auto; }
+  .kv-answers dt { grid-column: 1 / -1; }
+}

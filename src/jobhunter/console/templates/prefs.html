@@ -263,6 +263,8 @@
         </div>
       </section>
 
+      {% include "_prefs_answers.html" %}
+
       <div class="actions">
         <a class="button" href="/prefs">Cancel</a>
         <button type="submit" class="button primary">{% if st.kind == "missing" %}Save and create profile{% else %}Save{% endif %}</button>

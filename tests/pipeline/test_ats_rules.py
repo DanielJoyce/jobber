@@ -12,6 +12,7 @@ LEVER = "https://jobs.lever.co/acme/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
 ASHBY = "https://jobs.ashbyhq.com/acme/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"
 NEOGOV = "https://www.governmentjobs.com/careers/acme/jobs/4567890/analyst"
 USAS = "https://apply.usastaffing.gov/Application/Apply?AnnouncementNumber=X-1&JobId=1"
+WORKABLE = "https://apply.workable.com/acme/j/1A2B3C4D5E/"
 
 
 @pytest.mark.parametrize(
@@ -40,6 +41,9 @@ USAS = "https://apply.usastaffing.gov/Application/Apply?AnnouncementNumber=X-1&J
         (NEOGOV, "neogov", NEOGOV + "/apply"),
         (NEOGOV + "/apply", "neogov", NEOGOV + "/apply"),
         (USAS, "usastaffing", None),
+        (WORKABLE, "workable", WORKABLE.rstrip("/") + "/apply"),
+        (WORKABLE + "apply/", "workable", WORKABLE.rstrip("/") + "/apply"),
+        ("https://apply.workable.com/acme/", "workable", None),
     ],
 )
 def test_ats_canonical(url, ats, canonical):
@@ -98,3 +102,11 @@ def test_unwrap(url, dest):
 )
 def test_unwrap_declines(url):
     assert unwrap(url) is None
+
+
+def test_workable_share_links_name_no_employer():
+    from jobhunter.apply.paste import guess_employer_from_url
+
+    assert guess_employer_from_url("https://apply.workable.com/acme-co/j/1A2B3C4D5E/") == "Acme Co"
+    assert guess_employer_from_url("https://apply.workable.com/j/1A2B3C4D5E") is None
+    assert guess_employer_from_url("https://apply.workable.com/api/v1/widget/x") is None

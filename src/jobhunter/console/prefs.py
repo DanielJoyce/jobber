@@ -443,11 +443,16 @@ def apply_changes(
     source: str,
     now: datetime,
     require_resume: bool = True,
+    extra_writes: Mapping[str, Any] | None = None,
 ) -> Profile:
-    """Write the changes to the file (atomic, conflict-checked), then log them."""
+    """Write the changes to the file (atomic, conflict-checked), then log them.
+
+    ``extra_writes`` (``answers.*`` paths from the Application answers section) go into the
+    same atomic write but are not profile changes: they are not logged in the history, so
+    answer values never reach the database."""
     new = save_profile_changes(
         profile_dir,
-        {path: new for path, (_, new) in changes.items()},
+        {path: new for path, (_, new) in changes.items()} | dict(extra_writes or {}),
         expected_mtime_ns=expected_mtime_ns,
         require_resume=require_resume,
     )

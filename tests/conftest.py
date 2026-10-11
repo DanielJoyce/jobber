@@ -274,6 +274,24 @@ def old_layout(tmp_path: Path):
 # (they are deselected and need JOBHUNTER_LIVE_TESTS=1). Do not weaken this guard.
 
 
+@pytest.fixture(autouse=True)
+def _loopback_test_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TestClient talks to the console the way a browser on this machine does.
+
+    The console refuses any non-loopback ``Host`` on every request (DNS rebinding, specs/017
+    phase 1d), and Starlette's TestClient sends ``Host: testserver`` by default. Default it to
+    ``http://127.0.0.1:8808`` instead; a test that wants another Host passes ``base_url``.
+    """
+    from starlette.testclient import TestClient
+
+    original = TestClient.__init__
+
+    def init(self, app, base_url: str = "http://127.0.0.1:8808", *args, **kwargs):
+        original(self, app, base_url, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "__init__", init)
+
+
 class RealClaudeBlocked(RuntimeError):
     """Raised when a test tries to launch a `claude` that is not the test's fake."""
 
