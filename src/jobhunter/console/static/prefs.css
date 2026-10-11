@@ -57,10 +57,10 @@ label .hint { margin: 0; }
 .tile:hover { border-color: var(--text-primary); }
 .tile:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
 .tile .rank { font-size: 0.6875rem; font-weight: 400; }
-.tile-ranked { background: var(--seq-450); color: #fff; border-color: var(--seq-550); }
+.tile-ranked { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-hover); }
 .tile-excluded { background: var(--grid); color: var(--status-critical); text-decoration: line-through; }
 .picker-summary { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.8125rem; color: var(--text-secondary); margin: 6px 0 0; }
-.swatch.tile-ranked { background: var(--seq-450); }
+.swatch.tile-ranked { background: var(--btn-primary-bg); }
 .swatch.tile-excluded { background: var(--grid); }
 
 .actions { display: flex; justify-content: flex-end; gap: 8px; margin: 8px 0 16px; }

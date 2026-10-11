@@ -20,19 +20,27 @@ def _packet_url(page, server) -> str:
     return page.url
 
 
-@pytest.mark.parametrize("scheme", ["light", "dark"])
+# "toggle-X": the OS prefers the opposite scheme and the theme button switches to X, so the
+# [data-theme=X] token block (not the media query) supplies the colors.
+@pytest.mark.parametrize("scheme", ["light", "dark", "toggle-dark", "toggle-light"])
 @pytest.mark.parametrize("which", ["prefs", "new_packet", "packet"])
 def test_primary_buttons_meet_text_contrast_in_every_state(
     page, server, fake_claude, scheme, which
 ):
-    page.emulate_media(color_scheme=scheme)
+    toggled = scheme.startswith("toggle-")
+    target = scheme.removeprefix("toggle-")
+    os_scheme = {"dark": "light", "light": "dark"}[target] if toggled else scheme
+    page.emulate_media(color_scheme=os_scheme)
     url = {
         "prefs": f"{server.url}/prefs",
         "new_packet": f"{server.url}/apply/new",
         "packet": None,
     }[which]
     page.goto(url or _packet_url(page, server))
-    buttons = page.locator(PRIMARY)
+    if toggled:
+        page.click("#theme-toggle")
+        assert page.get_attribute("html", "data-theme") == target
+    buttons = page.locator(f"{PRIMARY}, .tile-ranked")
     n = buttons.count()
     assert n > 0, f"no primary buttons found on {which}"
     measured = 0
