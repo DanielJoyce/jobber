@@ -28,6 +28,12 @@ if argv[:2] == ["secret", "ls"]:
         sys.exit(125)
     print(os.environ.get("FAKE_PODMAN_SECRETS", ""))
     sys.exit(0)
+if os.environ.get("FAKE_PODMAN_BAD_STDERR"):
+    sys.stderr.buffer.write(b"Error: \\xff\\xfe\\n")
+    sys.exit(125)
+if os.environ.get("FAKE_PODMAN_ECHO"):
+    print("Error: got " + stdin, file=sys.stderr)
+    sys.exit(125)
 if os.environ.get("FAKE_PODMAN_CREATE_FAIL"):
     print("Error: boom", file=sys.stderr)
     sys.exit(125)
@@ -144,6 +150,7 @@ def test_keep_local_also_stores(fake):
     r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s", "--keep-local"])
     assert r.exit_code == 0, r.output
     assert json.loads(_local_file(fake).read_text())["refresh_token"] == TOKEN
+    assert TOKEN not in r.output
 
 
 def test_keep_local_without_secret_rejected(fake):
@@ -168,3 +175,78 @@ def test_container_mode_still_refused(fake, monkeypatch):
     r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s"])
     assert r.exit_code == 2 and fake.consent == []
     assert fake.calls() == []
+
+
+def test_non_utf8_podman_output_still_keeps_token(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_PODMAN_BAD_STDERR", "1")
+    r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s"])
+    assert r.exit_code == 1
+    assert json.loads(_local_file(fake).read_text())["refresh_token"] == TOKEN
+    assert "--from-local" in r.output
+
+
+def test_keyboard_interrupt_during_write_keeps_token(fake, monkeypatch):
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(auth, "write_podman_secret", boom)
+    with pytest.raises(KeyboardInterrupt):
+        auth.authenticate_to_podman_secret(auth.Settings(), "s", echo=lambda m: None)
+    assert json.loads(_local_file(fake).read_text())["refresh_token"] == TOKEN
+
+
+def test_stderr_echo_of_token_is_redacted(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_PODMAN_ECHO", "1")
+    r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s"])
+    assert r.exit_code == 1 and TOKEN not in r.output and "[redacted]" in r.output
+
+
+def test_from_local_moves_token_without_consent(fake):
+    auth._write_token_file(TOKEN)
+    r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s", "--from-local"])
+    assert r.exit_code == 0, r.output
+    assert fake.consent == []
+    creates = [c for c in fake.calls() if c["argv"][:2] == ["secret", "create"]]
+    assert creates[0]["stdin"] == TOKEN
+    for c in fake.calls():
+        assert TOKEN not in json.dumps(c["argv"]) + json.dumps(c["env"])
+    assert TOKEN not in r.output
+
+
+def test_from_local_without_token_or_secret_flag(fake):
+    r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s", "--from-local"])
+    assert r.exit_code == 1 and "No locally stored" in r.output
+    assert runner.invoke(app, ["mail", "auth", "--from-local"]).exit_code == 2
+
+
+def test_new_secret_message_does_not_suggest_starting_a_run(fake):
+    r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s"])
+    assert "ctr-run" not in r.output and "jobhunter-console" in r.output
+
+
+def test_no_token_files_left_in_tmp(fake, monkeypatch, tmp_path):
+    import tempfile
+
+    tmpd = tmp_path / "t"
+    tmpd.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmpd))
+    monkeypatch.setenv("TMPDIR", str(tmpd))
+    runner.invoke(app, ["mail", "auth", "--podman-secret", "s"])
+    assert list(tmpd.iterdir()) == []
+
+
+def test_manual_flow_with_podman_secret(fake, monkeypatch):
+    monkeypatch.setattr(auth, "run_manual_flow", lambda s, port: TOKEN)
+    r = runner.invoke(app, ["mail", "auth", "--manual", "--podman-secret", "s"])
+    assert r.exit_code == 0, r.output
+
+
+def test_distrobox_host_exec_skipped_without_host_spawn(fake, monkeypatch, tmp_path):
+    bindir = tmp_path / "bin"
+    (bindir / "podman").unlink()
+    marker = tmp_path / "ran"
+    dbx = bindir / "distrobox-host-exec"
+    dbx.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+    dbx.chmod(0o755)
+    r = runner.invoke(app, ["mail", "auth", "--podman-secret", "s"])
+    assert r.exit_code == 1 and not marker.exists() and fake.consent == []

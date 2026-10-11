@@ -383,6 +383,7 @@ def _secret_names(prefix: list[str]) -> list[str] | None:
             [*prefix, "secret", "ls", "--format", "{{.Name}}"],
             capture_output=True,
             text=True,
+            errors="replace",
             stdin=subprocess.DEVNULL,
             timeout=PODMAN_PROBE_TIMEOUT_SECONDS,
             check=False,
@@ -401,6 +402,10 @@ def find_podman() -> tuple[list[str], list[str]]:
     """
     for chain in PODMAN_CHAINS:
         if shutil.which(chain[0]) is None:
+            continue
+        if chain[0] == "distrobox-host-exec" and shutil.which("host-spawn") is None:
+            # Without host-spawn it would download one from GitHub and sudo-install it, with
+            # no prompt, when stdout is captured. Never trigger that from a probe.
             continue
         names = _secret_names(list(chain))
         if names is not None:
@@ -431,6 +436,7 @@ def write_podman_secret(prefix: list[str], name: str, token: str) -> None:
             input=token,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=PODMAN_WRITE_TIMEOUT_SECONDS,
             check=False,
         )
@@ -450,17 +456,27 @@ def authenticate_to_podman_secret(
     port: int | None = None,
     open_browser: bool = True,
     keep_local: bool = False,
+    from_local: bool = False,
     echo: Callable[[str], None] = print,
 ) -> str:
-    """Host only: run the OAuth flow, then store the refresh token as a podman secret.
+    """Host only: store the refresh token as a podman secret.
 
-    podman is checked before consent. If the write fails afterwards the token is stored
-    locally (keyring or 0600 file) so the consent is not lost. Returns "new", "replaced"
-    or "local" (write failed, kept locally).
+    Normally runs the OAuth flow first; with `from_local` it moves the locally stored token
+    instead (no consent). podman is checked before consent. If the write fails after consent
+    the token is stored locally (keyring or 0600 file) so the consent is not lost, whatever
+    the failure was. Returns "new", "replaced" or "local" (write failed, kept locally).
     """
     if container.is_container():
         raise MailAuthError(container.refusal("mail auth"))
     check_secret_name(name)
+    if from_local:
+        token = load_token()
+        if not token:
+            raise MailAuthError("No locally stored Gmail token to move. Run without --from-local.")
+        prefix, existing = find_podman()
+        write_podman_secret(prefix, name, token)
+        return "replaced" if name in existing else "new"
+    # The client JSON stays on the host for the weekly re-auth (specs/018 Gmail).
     require_client_secrets(settings)
     prefix, existing = find_podman()
     if manual:
@@ -469,13 +485,16 @@ def authenticate_to_podman_secret(
         token = run_oauth_flow(settings, port=port or 0, open_browser=open_browser)
     try:
         write_podman_secret(prefix, name, token)
-    except MailAuthError as exc:
+    except BaseException as exc:
         where = store_token(token, echo)
+        reason = str(exc) if isinstance(exc, MailAuthError) else type(exc).__name__
         echo(
-            f"warning: could not write podman secret {name} ({exc}). The token was kept in the "
-            f"{where} so the consent is not lost. Fix podman, then run: "
-            f"jobhunter mail auth --podman-secret {name}"
+            f"warning: could not write podman secret {name} ({reason}). The token was kept in "
+            f"the {where} so the consent is not lost. Fix podman, then move it without a new "
+            f"consent: jobhunter mail auth --podman-secret {name} --from-local"
         )
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         return "local"
     if keep_local:
         store_token(token, echo)

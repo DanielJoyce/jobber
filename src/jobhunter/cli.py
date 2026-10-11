@@ -1283,6 +1283,13 @@ def mail_auth(
         bool,
         typer.Option("--keep-local", help="With --podman-secret, also keep a local copy."),
     ] = False,
+    from_local: Annotated[
+        bool,
+        typer.Option(
+            "--from-local",
+            help="With --podman-secret: move the locally stored token, no new consent.",
+        ),
+    ] = False,
 ) -> None:
     """Run the Gmail OAuth flow and store the refresh token (OS keyring, else a 0600 file).
 
@@ -1296,8 +1303,8 @@ def mail_auth(
 
     _host_only("mail auth", "jobhunter mail auth --podman-secret jobhunter_gmail_token")
     settings = load_settings()
-    if keep_local and podman_secret is None:
-        typer.echo("error: --keep-local only applies with --podman-secret.", err=True)
+    if (keep_local or from_local) and podman_secret is None:
+        typer.echo("error: --keep-local and --from-local need --podman-secret.", err=True)
         raise typer.Exit(2)
     if podman_secret is not None:
         try:
@@ -1308,6 +1315,7 @@ def mail_auth(
                 port=port,
                 open_browser=not no_browser,
                 keep_local=keep_local,
+                from_local=from_local,
                 echo=lambda line: typer.echo(line, err=True),
             )
         except auth.MailAuthError as exc:
@@ -1319,8 +1327,8 @@ def mail_auth(
             typer.echo(
                 f"Gmail authorised; created podman secret {podman_secret}. Next: rerun "
                 "`jobhunter container preflight`, then `systemctl --user daemon-reload` and "
-                "restart the jobhunter units (for example `systemctl --user restart "
-                "jobhunter-ctr-run`)."
+                "`systemctl --user restart jobhunter-console`. The scheduled runs pick the "
+                "secret up at their next run; nothing here starts a run."
             )
         else:
             typer.echo(
