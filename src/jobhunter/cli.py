@@ -10,6 +10,7 @@ from typing import Annotated
 
 import typer
 
+from jobhunter import container
 from jobhunter.config import load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
@@ -34,6 +35,13 @@ ext_app = typer.Typer(help="The jobhunter browser extension: pairing.", no_args_
 app.add_typer(ext_app, name="ext")
 
 NOT_IMPLEMENTED = "not implemented yet"
+
+
+def _host_only(command: str, host_command: str | None = None) -> None:
+    """Exit with the host command when running in container mode (specs/018 C1)."""
+    if container.is_container():
+        typer.echo(container.refusal(command, host_command), err=True)
+        raise typer.Exit(2)
 
 
 # Commands that run while old-layout data is unmigrated: they report on it, move it, or do
@@ -658,6 +666,8 @@ def paths_cmd(
     catalog_source = (
         "config file" if "catalog_cache" in router.model_fields_set else "under cache_dir"
     )
+    if container.is_container() and not as_json:
+        typer.echo("mode: container")
     rows = [
         ("config_file", config_file_path, config_file_source()),
         ("data_dir", settings.paths.data_dir, sources["data_dir"]),
@@ -680,6 +690,7 @@ def paths_cmd(
             "stale": [str(p) for p in status.stale],
             "message": status.message,
         }
+        info["mode"] = "container" if container.is_container() else "host"
         typer.echo(json.dumps(info, indent=2))
         return
     for name, path, source in resolved:
@@ -712,6 +723,7 @@ def migrate_paths_cmd(
     """
     from jobhunter.ops import migrate_paths as mp
 
+    _host_only("migrate-paths")
     settings = load_settings()
     plan = mp.plan(settings, from_dir=from_dir)
     for line in mp.render_plan(plan, apply=apply):
@@ -790,7 +802,11 @@ def console(
     bind_host = host or settings.console.host
     bind_port = port or settings.console.port
     try:
-        check_host(bind_host, allow_remote)
+        # JOBHUNTER_PUBLISHED_LOOPBACK_ONLY=1 (container mode) lets the bind be 0.0.0.0 because
+        # the unit publishes the port on host loopback only. The Host/Origin check still sees
+        # allow_remote=False, so a non-loopback Host is refused either way.
+        interlock = container.published_loopback_only() and bind_host == "0.0.0.0"
+        check_host(bind_host, allow_remote or interlock)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
@@ -978,6 +994,7 @@ def mail_auth(
     from jobhunter.config import load_settings
     from jobhunter.mail import auth
 
+    _host_only("mail auth", "jobhunter mail auth --podman-secret jobhunter_gmail_token")
     settings = load_settings()
     try:
         where = auth.authenticate(settings, manual=manual, port=port, open_browser=not no_browser)
@@ -1222,6 +1239,7 @@ def schedule_install(
     """Write systemd --user units to ~/.config/systemd/user (specs/002 Process model)."""
     from jobhunter.ops import schedule
 
+    _host_only("schedule install")
     try:
         inst = schedule.default_install()
         typer.echo(schedule.install(inst, dry_run=dry_run, enable=enable))
@@ -1235,6 +1253,7 @@ def schedule_status() -> None:
     """Show the jobhunter timers (systemctl --user list-timers, read-only)."""
     from jobhunter.ops import schedule
 
+    _host_only("schedule status")
     try:
         typer.echo(schedule.status())
     except schedule.ScheduleError as exc:
@@ -1247,6 +1266,7 @@ def schedule_uninstall() -> None:
     """Disable the timers and remove the unit files."""
     from jobhunter.ops import schedule
 
+    _host_only("schedule uninstall")
     try:
         typer.echo(schedule.uninstall())
     except schedule.ScheduleError as exc:
@@ -1394,6 +1414,7 @@ def apply_draft(
     from jobhunter.apply import answers, documents, export, generator, labels, runner_state
     from jobhunter.scoring.profile import ProfileError, load_profile_for
 
+    _host_only("apply draft")
     if letter and question:
         typer.echo("error: pick one of --letter and --question", err=True)
         raise typer.Exit(2)

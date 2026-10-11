@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 import keyring
 from keyring.backends import null
 
+from jobhunter import container
 from jobhunter.config import Settings, resolve_path
 from jobhunter.xdg import config_home
 
@@ -261,11 +262,19 @@ def run_manual_flow(
 # --- token storage ----------------------------------------------------------------------
 
 
+TOKEN_FILE_VAR = "JOBHUNTER_GMAIL_TOKEN_FILE"
+
+
 def token_file_path() -> Path:
+    if container.is_container():
+        # Container mode reads the token only from the podman secret file (specs/018 C1).
+        return Path(os.environ.get(TOKEN_FILE_VAR) or "/run/secrets/gmail_token")
     return config_home() / TOKEN_FILE_NAME
 
 
 def _keyring_usable() -> bool:
+    if container.is_container():
+        return False  # no keyring in a container (specs/018 C1)
     try:
         backend = keyring.get_keyring()
     except Exception:
@@ -284,16 +293,23 @@ def _write_token_file(refresh_token: str) -> Path:
 
 
 def _read_token_file() -> str | None:
-    try:
-        data = json.loads(token_file_path().read_text(encoding="utf-8"))
-        token = data.get("refresh_token")
-    except (OSError, ValueError, AttributeError):
+    if container.is_container() and not os.environ.get(TOKEN_FILE_VAR):
         return None
+    try:
+        text = token_file_path().read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        token = json.loads(text).get("refresh_token")
+    except (ValueError, AttributeError):
+        token = text.strip() if container.is_container() else None  # a bare-token secret
     return token or None
 
 
 def store_token(refresh_token: str, echo: Callable[[str], None] = print) -> str:
     """Store in the OS keyring, else a 0600 file. Returns "keyring" or "file"."""
+    if container.is_container():
+        raise MailAuthError(container.refusal("mail auth"))
     if _keyring_usable():
         try:
             keyring.set_password(KEYRING_SERVICE, KEYRING_KEY, refresh_token)
@@ -335,6 +351,8 @@ def authenticate(
     open_browser: bool = True,
 ) -> str:
     """Run the chosen flow and store the token; returns where it was stored."""
+    if container.is_container():
+        raise MailAuthError(container.refusal("mail auth"))
     if manual:
         token = run_manual_flow(settings, port=port or DEFAULT_PORT)
     else:

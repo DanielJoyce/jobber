@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
+from jobhunter import container
 from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
 
 CONFIG_ENV_VAR = "JOBHUNTER_CONFIG"
@@ -208,7 +209,11 @@ class Mail(BaseModel):
     # Google OAuth client secrets JSON (Desktop app), kept outside the repo. The env var
     # JOBHUNTER_GOOGLE_CLIENT_SECRETS overrides it.
     client_secrets_path: Path = Field(
-        default_factory=lambda: config_home() / "google_client_secret.json"
+        default_factory=lambda: (
+            Path(container.GOOGLE_CLIENT_JSON)
+            if container.is_container()
+            else config_home() / "google_client_secret.json"
+        )
     )
 
 
@@ -322,11 +327,14 @@ ENV_FILE_VAR = "JOBHUNTER_ENV_FILE"
 def env_files() -> list[Path]:
     """Candidate .env files, highest precedence first.
 
-    ``$JOBHUNTER_ENV_FILE``, then ``./.env`` in the working directory, then ``~/.env``.
+    ``$JOBHUNTER_ENV_FILE``, then ``./.env`` in the working directory, then ``~/.env``. In
+    container mode only ``$JOBHUNTER_ENV_FILE``.
     """
     files: list[Path] = []
     if explicit := os.environ.get(ENV_FILE_VAR):
         files.append(Path(explicit).expanduser())
+    if container.is_container():
+        return files  # container mode: only the explicit file (specs/018 C1)
     files += [Path.cwd() / ".env", Path.home() / ".env"]
     return files
 

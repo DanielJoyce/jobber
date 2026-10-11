@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from jobhunter import container
+
 APP_DIR = "jobhunter"
 
 CONFIG_HOME_VAR = "XDG_CONFIG_HOME"
@@ -37,14 +39,20 @@ def xdg_base(kind: str) -> Path:
 
 
 def config_home() -> Path:
+    if container.is_container():
+        return Path(container.CONFIG_DIR)
     return xdg_base("config") / APP_DIR
 
 
 def data_home() -> Path:
+    if container.is_container():
+        return Path(container.DATA_DIR)
     return xdg_base("data") / APP_DIR
 
 
 def cache_home() -> Path:
+    if container.is_container():
+        return Path(container.CACHE_DIR)
     return xdg_base("cache") / APP_DIR
 
 
@@ -69,6 +77,8 @@ def mkdir_private(path: Path) -> Path:
 
 def xdg_source(kind: str) -> str:
     """How the base for ``kind`` was chosen: the ``$XDG_*`` variable or the home default."""
+    if container.is_container():
+        return container.SOURCE_LABEL
     var, _ = _BASES[kind]
     value = os.environ.get(var, "")
     return f"default ({var})" if value and Path(value).is_absolute() else "default"
