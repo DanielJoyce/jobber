@@ -1019,7 +1019,9 @@ def _decide(
     dest_weak: list[paste.Duplicate] = []
     if a.destination and identifies_posting(a.destination):
         # Linked at once only when an ATS rule says the destination is one posting; a
-        # generic careers path is only offered. A careers home matches nothing.
+        # generic careers path is only offered, and only when the titles agree (one shared
+        # apply path would otherwise offer every later job of that employer). A careers home
+        # matches nothing.
         posting = is_posting_url(a.destination)
         ident = _ident(a)
         for d in paste.find_duplicates(conn, a.destination, "", ""):
@@ -1027,9 +1029,10 @@ def _decide(
                 continue
             if _said_not_same(conn, ident, d.group_id):
                 continue  # the user said Not the same for this posting and that group
-            if posting and _titles_agree(a.title, d.title):
+            agree = _titles_agree(a.title, d.title)
+            if posting and agree:
                 dest_strong.append(d)
-            else:
+            elif posting or agree:
                 dest_weak.append(d)
 
     def mk(outcome: str, message: str, gid: int | None = None, **kw: Any) -> CaptureResponse:

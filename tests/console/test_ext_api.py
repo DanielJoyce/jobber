@@ -866,6 +866,58 @@ def test_job_page_score_and_link_run_off_the_event_loop(client):
         assert not inspect.iscoroutinefunction(route.endpoint), route.path
 
 
+def test_job_page_score_under_uvicorn_leaves_the_console_responsive(client, token, captured):
+    """56d7fcf (2): with a real server, a Score now blocked in its synchronous scorer must not
+    stall other requests (a plain ``def`` route runs in the threadpool, not the event loop)."""
+    import socket
+
+    import httpx
+    import uvicorn
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    base = f"http://127.0.0.1:{port}"
+    srv = uvicorn.Server(
+        uvicorn.Config(client.app, host="127.0.0.1", port=port, log_level="warning")
+    )
+    server = threading.Thread(target=srv.run, daemon=True)
+    server.start()
+    scorer = BlockingScorer()
+    client.app.state.packet_scorer_factory = lambda spec: scorer
+    try:
+        deadline = time.monotonic() + 10
+        while not srv.started:
+            assert time.monotonic() < deadline, "uvicorn did not start"
+            time.sleep(0.02)
+        with httpx.Client(base_url=base, timeout=10) as http:
+            page = http.get(f"/job/{captured}").text
+            tok = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+            answer: dict[str, httpx.Response] = {}
+
+            def score() -> None:
+                answer["r"] = http.post(
+                    f"/job/{captured}/score",
+                    data={"token": tok},
+                    headers={"hx-request": "true", "Origin": base},
+                )
+
+            worker = threading.Thread(target=score)
+            worker.start()
+            assert scorer.started.wait(10), "the score never reached the scorer"
+            t0 = time.monotonic()
+            other = http.get("/captured", timeout=3)
+            assert other.status_code == 200 and time.monotonic() - t0 < 3
+            assert worker.is_alive()  # the score is still blocked in the scorer
+            scorer.release.set()
+            worker.join(10)
+        assert answer["r"].status_code == 200 and 'id="score-result"' in answer["r"].text
+    finally:
+        scorer.release.set()
+        srv.should_exit = True
+        server.join(timeout=10)
+
+
 def test_ext_routes_never_go_through_the_same_origin_check(client, token, monkeypatch):
     # Phase 1d makes cross_site_reason check every browser request, and it would refuse the
     # extension's chrome-extension:// Origin. /ext/ has its own door and must not depend on it:

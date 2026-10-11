@@ -200,6 +200,51 @@ def evaluate(
     return (not reasons, reasons)
 
 
+def orphaned_claims(conn: sqlite3.Connection, now: datetime) -> list[sqlite3.Row]:
+    """Canonical jobs of nightly-scored groups whose prefilter row is a dead Score now claim.
+
+    A Score now writes a ``user-requested`` row with ``passed = 1`` (the user's choice bypasses
+    the rules) and puts the old row back when it scores nothing. If its process is killed the
+    row stays. Once the claim is older than ``CLAIM_TTL``, no open batch item holds the group
+    and no score was written since the claim, nothing answered it; if the group is now scored
+    nightly (``score_on_request = 0``, after a link or an ingested copy cleared the flag), the
+    stale row would let the nightly screen pay for a posting the rules would reject, so the
+    prefilter evaluates the job again (specs/017 "Scored on request: a group flag").
+    """
+    from jobhunter.pipeline.dedupe import CLAIM_TTL, USER_REQUESTED_REASONS
+    from jobhunter.pipeline.listing import from_iso
+
+    marks = ",".join("?" for _ in _EVALUATE_STAGES)
+    rows = conn.execute(
+        "SELECT j.*, p.evaluated_at AS claim_at, g.id AS claim_group FROM job_group g "
+        "JOIN job j ON j.id = g.canonical_job_id JOIN prefilter_result p ON p.job_id = j.id "
+        f"WHERE g.score_on_request = 0 AND p.reasons = ? AND j.stage IN ({marks}) "
+        "AND NOT EXISTS (SELECT 1 FROM score_batch_item i JOIN score_batch b "
+        "ON b.id = i.batch_id WHERE i.job_group_id = g.id AND b.collected_at IS NULL) "
+        "ORDER BY j.id",
+        (USER_REQUESTED_REASONS, *_EVALUATE_STAGES),
+    ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            started = from_iso(r["claim_at"])
+        except (TypeError, ValueError):
+            continue
+        if now - started < CLAIM_TTL:
+            continue
+        answered = False
+        for (created,) in conn.execute(
+            "SELECT created_at FROM fit_score WHERE job_group_id = ?", (r["claim_group"],)
+        ):
+            try:
+                answered = answered or from_iso(created) >= started
+            except (TypeError, ValueError):
+                continue
+        if not answered:
+            out.append(r)
+    return out
+
+
 def run_prefilter(
     conn: sqlite3.Connection,
     profile: Profile,
@@ -208,7 +253,8 @@ def run_prefilter(
     limit: int | None = None,
     force: bool = False,
 ) -> dict[str, int]:
-    """Evaluate canonical jobs lacking a result for the current ``filter_version``.
+    """Evaluate canonical jobs lacking a result for the current ``filter_version``, and those
+    whose result is a dead Score now claim (``orphaned_claims``).
 
     Advances 'grouped' jobs to 'prefiltered'. Returns counts: evaluated, passed, rejected.
     """
@@ -230,7 +276,11 @@ def run_prefilter(
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
-    jobs = conn.execute(sql, params).fetchall()
+    jobs: list[Any] = conn.execute(sql, params).fetchall()
+    if limit is None or len(jobs) < limit:
+        seen = {job["id"] for job in jobs}
+        orphans = [j for j in orphaned_claims(conn, now) if j["id"] not in seen]
+        jobs += orphans if limit is None else orphans[: limit - len(jobs)]
 
     counts = {"evaluated": 0, "passed": 0, "rejected": 0}
     if not jobs:
