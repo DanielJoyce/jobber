@@ -313,7 +313,7 @@ set on /models".
   `scorer_problems` is what the run's score stage checks (`runner.py:434`). `score`'s mode
   check, `_check_scorer_override` (`cli.py:127`), calls `check_scorer_spec` on the configured
   spec directly, so M2 points it at `scorer_problems` too. M2 adds the check everywhere else
-  that spends: `score --submit` and `--collect`, `score --deep` and `--deep-group`, the
+  that spends: `score --submit`, `score --deep` and `--deep-group`, the
   re-score drain (`cli.py:712` checks only an explicit `--scorer`), `backfill`, `llm bench`
   when no `--scorer` is given (it calls the default scorer for real), Score now
   (`apply/score.py:130` checks only the spec's syntax), the extension's Score now, the re-score
@@ -342,7 +342,8 @@ set on /models".
   the reason shown. On the host the console and the nightly run can see different keys (019
   [What the nightly run sees](019-setup-and-readiness.md#what-the-nightly-run-sees)), so a key
   the console cannot see is not proof the run cannot.
-- **History and revert.** A migration adds `model_change` (`id`, `at`, `use`, `field`,
+- **History and revert.** A migration (the next free number at implementation time, as for
+  every migration in this spec) adds `model_change` (`id`, `at`, `use`, `field`,
   `old_value`, `new_value`, `source` in `ui`, `cli`, `reset`, `revert`). `/models` lists the
   last 20 with **Revert**, which is a new save, not a rewind. Model ids hold no personal data.
 - **Where a value came from.** `jobhunter paths` lists `models.toml`, and `doctor -v` prints the
@@ -555,9 +556,9 @@ Deep pass with Claude Opus 5.5
   ( ) Re-run my top groups with Opus 5.5: 4 of the top 10 have a report from Opus 5
 
   Would deep-score:  Acme, Staff Engineer (B) · Globex, Platform Lead (B) · … [show all]
-  Estimate  about $0.51   Ceiling  $0.65   Worst case per job  $0.67
-  Left today $1.41 of $2.00, this week $8.20 of $10.00
-                                          [ Cancel ]  [ Deep-score 10 jobs, up to $0.65 ]
+  Estimate  about $0.51   Worst case for one job  $0.85   Ceiling  $1.50
+  Left today $1.71 of $2.00, this week $8.20 of $10.00
+                                          [ Cancel ]  [ Deep-score 10 jobs, up to $1.50 ]
 ```
 
 - **N** defaults to 10, at most `deep_shortlist` (40). "Next unscored" lists exactly what
@@ -568,19 +569,31 @@ Deep pass with Claude Opus 5.5
   stored report per model (`_stored`, `deep.py:209`), so a group already done with this model
   is "existing" and costs nothing.
 - **Estimate**: per job from the measured `tier = 'deep'` average for this model, else the
-  price table at 006's typical deep tokens (M1), times the groups listed. The **ceiling** is
-  the estimate plus the re-score headroom (`rescore.max_usd_for`). The panel shows the
+  price table at 006's typical deep tokens (M1), times the groups listed. The panel shows the
   remaining daily and weekly cap (`screen.remaining_budget`, the tighter of the two, which the
   CLI path already uses).
-- **Worst case per call.** `deep.MAX_TOKENS` is 32,000 and caps thinking and output together,
-  so one Opus 5.5 call can cost about $0.67 (32,000 output tokens at $20/MTok plus the input).
-  Today's pre-check admits a call when $0.08 is left (`deep.py:300`,
-  `ESTIMATED_COST_PER_REQUEST_USD`). The console run admits a call only when **both** the
-  remaining cap and the confirmed ceiling still cover that worst case (from the price table
-  for the model), so no run can pass the cap or its ceiling even when a report runs long. The
-  cost of this rule: the last ~$0.67 of a day's cap is not used by deep runs. The panel shows
-  the worst case, and the plan says how many of the N fit now ("only 7 of 10 fit under today's
-  cap"). M11 applies the same admission rule to the CLI's `--deep`, so the two cannot differ.
+- **Worst case per call.** `deep.MAX_TOKENS` is 32,000 and caps thinking and output together.
+  The deep pass sends the server-side fallback beta (`deep.BETAS`), so a call may be answered by
+  a fallback model billed at its own rates (`compute_message_cost` sums `usage.iterations`).
+  The worst case is therefore priced at the **dearest of the model and its fallback targets** in
+  the price table, at 32,000 output tokens plus the typical input: for Opus 5.5 that is
+  `claude-opus-4-8` at $5/$25, about **$0.85** (Opus 5.5 alone would be about $0.67). A refused
+  attempt that is billed and then answered by a fallback bills both attempts, so in that rare
+  case one call can cost more than this figure; a refusal normally stops early, so its own
+  output is small. M11 records any call that exceeds the worst-case figure in the run's notes
+  and in the PR's measurements. Today's pre-check admits a call when $0.08 is left
+  (`deep.py:300`, `ESTIMATED_COST_PER_REQUEST_USD`).
+- **The ceiling** is `rescore.max_usd_for(estimate)` (the estimate plus 25% and a cent) **plus
+  one worst-case call**. Without that last term, a ceiling built from a $0.05 estimate could
+  never admit a $0.85 worst case, and a one-group run would never start. The confirm button
+  shows it as "up to $X".
+- **Admission.** The console run admits each call only when **both** the remaining cap and what
+  is left of the ceiling still cover the worst case. So no run can pass the cap or its ceiling
+  when a report runs long (except the refused-then-fallback case above). The cost of this rule:
+  the last ~$0.85 of a day's cap is not used by deep runs. The panel shows the worst case, and
+  the plan says how many of the N fit now ("only 7 of 10 fit under today's cap"). M11 applies
+  the same rule, with the same figure, to the CLI's `--deep` and `--deep-group`, so the two
+  cannot differ.
 - **Confirm.** The button names the count and the ceiling. The form posts a plan token (mode,
   model, `scoring_version`, group ids and ceiling, as `rescore.Plan.token` does). If the plan
   built at click time differs (new screen scores, a profile change, another model saved),
@@ -636,8 +649,12 @@ Run button and gives the command instead (`jobhunter score --deep N`, or `jobhun
   write no `deep_request` or `llm_spend` row.
 - The listed groups equal `deep.shortlist` for "next unscored"; "re-run" lists only reports from
   another model; a group already done with this model costs nothing.
-- **Worst case**: with a fake client returning 32,000 output tokens, a run never ends above the
+- **Worst case**: with a fake client returning 32,000 output tokens, and with one whose
+  `usage.iterations` show the fallback (`claude-opus-4-8`) answering, a run never ends above the
   cap or the ceiling; the CLI `--deep` obeys the same rule.
+- **A one-group run actually runs**: from the job page with a fresh cap, the plan admits the
+  group and the fake client is called once (a ceiling without the worst-case term would admit
+  nothing).
 - Run lock held: refused, nothing spent. Registry: Restart gets 409 while a deep run is in it.
 - Non-loopback peer: 403 on run and cancel, under `--allow-remote` too; the panel shows the
   command.
@@ -689,9 +706,11 @@ models`). 019's drift tests check every link and anchor.
   `apply draft`.
 - **Fail closed**: an invalid `screen_scorer` in `models.toml` (a bare name,
   `openrouter:jev:...`, an unpriced Anthropic model, Opus 5.5), and a file that is not TOML.
-  The run's score stage, the re-score drain, `score --submit`, `--collect`, `score --deep`,
+  The run's score stage, the re-score drain, `score --submit`, `score --deep`,
   `score --deep-group`, `backfill`, `llm bench` without `--scorer`, Score now (page and
-  extension), the re-score panel and the deep panel each skip with the message, and **no Anthropic client is
+  extension), the re-score panel and the deep panel each skip with the message. `score
+  --collect` is not blocked: it spends nothing new and collects each batch under the model
+  stored on it, and **no Anthropic client is
   constructed** (the factory is patched to fail the test). An invalid `[apply]` key falls back
   with the notice. An unknown key is a warning only. A sentinel value is never echoed.
 - **Writes**: two concurrent saves serialize under the lock; a stale digest gets 409 and writes
@@ -737,13 +756,13 @@ worker and reviewer per the CLAUDE.md table.
 | M2 | `models.toml`: `load_layers()`, key allowlist, per-key validation, unknown keys as warnings, fail closed for screening and deep through `scorer_problems` on every spending path (drain, backfill, Score now, extension, panel), drafting fallback with notice; atomic locked write with digest; changed-fields-only writes; `model_change` migration, history and revert; the queued re-score line and `keep` choice as functions; `jobhunter models show/set/reset/catalog`; `jobhunter paths` row; run summary line | hard (every process's config loading, a migration, it decides what the nightly run spends) | opus / opus at higher effort | M1 (use rules; may stub them and land first) |
 | M3 | `model_access.py` on `credential_for`: providers, the subscription order (login-file path confirmed on the real CLI), the per-mode table, `problems()`; the re-score panel's scorer list, `packet_docs.runner_status` and `generator._preflight` moved off bare `ANTHROPIC_API_KEY` | hard (credentials, the drafting money path) | opus / opus at higher effort | S1 `a1af329` |
 | M4 | `/models` page and its routes: nav, Access rows (S6 buttons when present, else commands), the local server check route, use rows with the effective value selected, preview, Save under `settings_lock` (field-only swap), Reset, Reset file, Load, History and Revert, digest swap, loopback-peer gating with the read-only command view, OpenRouter refresh, source labels, the `/models` banner, dark mode and 375 px | hard (a live settings swap under concurrent requests, like S12a) | opus / opus at higher effort | M1, M2, M3; S3a `9512dd7` (shared status partials); S6 `531b700` optional |
-| M5 | Save + re-run: inline re-score panel with the new scorer (no request until confirm), the queued re-score line in previews and the two Save buttons, deep `--deep-group` list with estimates, packet list and Save and go back; `available_scorers` from the catalog; `catalog.within_reservation` switched on once `026b50c` and `df51dff` are in, which offers Sonnet 5.5 and dearer OpenRouter slugs for screening | hard (re-score money path) | opus / opus at higher effort | M4; git-bug `026b50c` (PR 121) and `df51dff` |
+| M5 | Save + re-run: inline re-score panel with the new scorer (no request until confirm), the queued re-score line in previews and the two Save buttons, packet list and Save and go back; `available_scorers` from the catalog; `catalog.within_reservation` switched on once `026b50c` and `df51dff` are in, which offers Sonnet 5.5 and dearer OpenRouter slugs for screening | hard (re-score money path) | opus / opus at higher effort | M4; git-bug `026b50c` (PR 121) and `df51dff` |
 | M6 | Help: `help/models.md`; the headings the banners link in `scorers.md`, `openrouter.md` and `drafting.md` if missing; troubleshooting entries for a blocked use and a broken `models.toml` | mechanical | haiku / sonnet | S11a, S11b, S11c |
 | M7 | Banners on the re-score panel, packet page, captured page and Score now panels; blocked-use lines; the "no model access" line; link tests | normal | sonnet / opus | M3, M4, M6 |
 | M8 | Config watch on the layers: `models.toml` fingerprinted, layer diffs, "no effect: set on /models", problems as validation errors, exempt from the replaced-file rule, self-write baseline, the shared `settings_lock` in Apply, the queued re-score line next to Apply | normal | sonnet / opus | M2, M4, S12a |
 | M9 | Plain `score --submit` uses the nightly `new_only` rule unless `--scorer` is given, so a model change never re-screens scored jobs without a confirmed re-score; help and changelog note | normal | sonnet / opus | |
 | M10 | Readiness and `doctor`: the 019 inventory row "Model choices" (broken file, blocked use), model access lines in `doctor` and `--json`, `doctor -v` prints each model setting's source | normal | sonnet / opus | S1 `a1af329`, S2 `3cdd9d1`, M2, M3 |
-| M11 | Deep pass from the console: `_deep_panel.html` on `/models`, the job page and Today (inbox link); `deep_request` migration; plan with token (next unscored from `deep.shortlist`, re-run top groups, one group); price-table estimate, ceiling, remaining caps, worst-case admission per call (also applied to the CLI `--deep`); `DeepManager` with the run lock, heartbeat, 019 S12b work registry entry, cancel; activity band lines; routes gated on a loopback peer; tests that nothing is spent without the confirm POST, that a stale token runs nothing, and that a worst-case call never passes the cap | hard (a paid background run) | opus / opus at higher effort | M1, M3, M4; S12b optional (registry hook) |
+| M11 | Deep pass from the console: `_deep_panel.html` on `/models`, the job page and Today (inbox link); `deep_request` migration; plan with token (next unscored from `deep.shortlist`, re-run top groups, one group); price-table estimate, ceiling (`max_usd_for` plus one worst-case call, priced at the dearest of the model and its fallback targets), remaining caps, worst-case admission per call (also applied to the CLI `--deep` and `--deep-group`); `DeepManager` with the run lock, heartbeat, 019 S12b work registry entry, cancel; activity band lines; routes gated on a loopback peer; tests that nothing is spent without the confirm POST, that a stale token runs nothing, and that a worst-case call never passes the cap | hard (a paid background run) | opus / opus at higher effort | M1, M3, M4; S12b optional (registry hook) |
 
 Order: M1 and M9 can start now; M3 after S1. M2 after M1 (or against a stub). M6 whenever
 S11a-c land. M4 after M1, M2, M3. M5 after M4, `026b50c` and `df51dff`. M11 after M1, M3 and
@@ -786,7 +805,7 @@ and Today; N with the groups listed (next unscored from `deep.shortlist`, or re-
 groups per group); the cost against screening, the estimate, ceiling and remaining caps; an
 explicit confirm with a plan token; a background run on the re-score machinery (run lock, 019
 S12b registry, activity band); a worst-case-per-call admission rule, because `deep.MAX_TOKENS`
-lets one Opus 5.5 call cost about $0.67 while today's pre-check reserves $0.08. Ticket M11.
+lets one call cost about $0.85 at its dearest fallback model (Opus 4.8) while today's pre-check reserves $0.08; the ceiling is the usual headroom plus one worst-case call, so a one-group run can start. Migrations take the next free number when implemented. Ticket M11.
 
 Final check of revision 2: M0 duplicated git-bug `026b50c` (PR 121), so it is dropped and
 `026b50c` plus `df51dff` (the sync path's flat reservation and the `/prefs` estimate) are named
