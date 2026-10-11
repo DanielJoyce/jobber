@@ -6,14 +6,26 @@ moment a newer jobhunter moves the schema. ``migrate`` backs the database up bef
 anything (skipped for a new, version-0 database) and, while the deployment marker
 ``<data dir>/deployment.toml`` exists, refuses to migrate on its own: only an explicit
 ``jobhunter db migrate`` (run by ``jobhunter upgrade``) does.
+
+Concurrency (bug dd65f64): ``migrate`` serializes across processes with an exclusive
+``flock`` on ``<resolved db path>.migrate.lock``, held around re-check, backup, apply and
+record. A process that waited finds nothing pending and takes no backup. ``flock`` is on the
+shared inode, so it works across containers (PID namespaces) that bind-mount the data dir.
+
+Lock order, outermost first: run lock (``<db>.run.lock``, C5), console lock (C6), migrate
+lock. The migrate lock is innermost and held only inside ``migrate``, which never takes
+another lock, so no process can hold it while waiting for one of the others: no deadlock.
 """
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import functools
 import os
 import re
 import sqlite3
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -26,6 +38,9 @@ MIGRATIONS_PACKAGE = "jobhunter.core.migrations"
 FK_OFF_MARKER = "-- migrate: foreign_keys=off"
 _MIGRATION_RE = re.compile(r"^(\d{4})_([A-Za-z0-9_]+)\.sql$")
 DEPLOYMENT_MARKER = "deployment.toml"
+MIGRATE_LOCK_SUFFIX = ".migrate.lock"
+MIGRATE_LOCK_TIMEOUT_S = 600.0  # a migration on a large database plus its backup
+_MIGRATE_LOCK_POLL_S = 0.1
 
 
 class SchemaError(RuntimeError):
@@ -68,6 +83,65 @@ class MigrationFailed(SchemaError):
     """A pre-migrate backup or a migration failed; nothing after it was applied."""
 
 
+class MigrationLockTimeout(SchemaError):
+    """Another process held the migration lock for longer than this one would wait."""
+
+    def __init__(self, lock: Path, waited_s: float) -> None:
+        self.lock = lock
+        self.waited_s = waited_s
+        super().__init__(
+            f"another jobhunter process has been migrating this database for over "
+            f"{waited_s:.0f}s (lock {lock}); nothing was migrated here. Wait for it to finish "
+            "and retry; if no jobhunter process is running, check for a hung one"
+        )
+
+
+def migrate_lock_path(db_path: Path | str) -> Path:
+    """``<resolved db path>.migrate.lock``: resolved so a symlinked path and its target (e.g.
+    ``/home`` versus ``/var/home``) contend for the same lock."""
+    return Path(f"{Path(db_path).resolve()}{MIGRATE_LOCK_SUFFIX}")
+
+
+@contextmanager
+def migrate_lock(
+    db_path: Path | str,
+    *,
+    timeout: float = MIGRATE_LOCK_TIMEOUT_S,
+    on_wait: Callable[[Path], object] | None = None,
+) -> Iterator[Path]:
+    """Hold an exclusive ``flock`` on :func:`migrate_lock_path` for the block.
+
+    Polls non-blocking so the wait is bounded (:class:`MigrationLockTimeout`); ``on_wait`` is
+    called once, with the lock path, when the lock is found held. The kernel drops the lock
+    when the holder dies, however it dies, so a crashed migration never wedges later ones.
+    """
+    path = migrate_lock_path(db_path)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        start = time.monotonic()
+        waited = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if not waited:
+                    waited = True
+                    if on_wait is not None:
+                        on_wait(path)
+                elapsed = time.monotonic() - start
+                if elapsed >= timeout:
+                    raise MigrationLockTimeout(path, elapsed) from None
+                time.sleep(min(_MIGRATE_LOCK_POLL_S, max(timeout - elapsed, 0.0)))
+        try:
+            yield path
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def owning_data_dir(db_path: Path, data_dir: Path) -> Path:
     """Where ``db_path``'s marker and ``backups/auto`` live: ``data_dir`` when the database is
     inside it (the default layout, and ``/data`` in a container), else the database's own
@@ -98,9 +172,13 @@ def connect(path: Path | str, *, check_schema: bool = True) -> sqlite3.Connectio
     # single request or CLI process and never used concurrently.
     conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
+    try:
+        _enable_wal(conn)
+    except BaseException:
+        conn.close()
+        raise
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
     if check_schema:
         try:
@@ -109,6 +187,26 @@ def connect(path: Path | str, *, check_schema: bool = True) -> sqlite3.Connectio
             conn.close()
             raise
     return conn
+
+
+def _enable_wal(conn: sqlite3.Connection, timeout_s: float = 5.0) -> None:
+    """``PRAGMA journal_mode=WAL``, retried while another connection holds a lock.
+
+    Why: switching a new database to WAL needs an exclusive lock, and SQLite can return
+    SQLITE_BUSY for it without calling the busy handler (lock-upgrade deadlock avoidance).
+    Two processes opening the same fresh database at once (dd65f64) then fail in ``connect``.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) and "busy" not in str(exc):
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 @contextmanager
@@ -249,6 +347,8 @@ def migrate(
     explicit: bool = False,
     now: datetime | None = None,
     on_backup: Callable[[Path], object] | None = None,
+    on_wait: Callable[[Path], object] | None = None,
+    lock_timeout: float = MIGRATE_LOCK_TIMEOUT_S,
 ) -> list[int]:
     """Apply pending migrations in order, each in its own transaction. Returns versions applied.
 
@@ -261,17 +361,28 @@ def migrate(
     - a file database that already has a schema is backed up through the online backup API
       to ``backups/auto/pre-migrate-<from>-<to>-<UTC>Z.db`` (newest 3 kept). A new database
       (version 0) or an in-memory one is not backed up.
+
+    A file database is migrated under :func:`migrate_lock` (``on_wait`` is told when another
+    process holds it; :class:`MigrationLockTimeout` after ``lock_timeout`` seconds). Pending
+    migrations are checked again once the lock is held, so a process that waited for another
+    one's migration returns ``[]`` without a backup.
     """
     check_not_newer(conn)
     pending = pending_versions(conn)
     if not pending:
         return []
     path = database_file(conn)
-    if path is not None:  # an in-memory database has nothing to protect
-        data_dir = path.parent if data_dir is None else data_dir
+    if path is None:  # in-memory or temporary: private to this connection, nothing to lock
+        return _apply_pending(conn)
+    data_dir = path.parent if data_dir is None else data_dir
+    if not explicit and (marker := deployment_marker(data_dir)):
+        raise MigrationsPending(current_version(conn), pending, marker)
+    with migrate_lock(path, timeout=lock_timeout, on_wait=on_wait):
+        # Another process may have migrated while we waited (even past this code: re-guard).
+        check_not_newer(conn)
+        if not pending_versions(conn):
+            return []
         from_version = current_version(conn)
-        if not explicit and (marker := deployment_marker(data_dir)):
-            raise MigrationsPending(from_version, pending, marker)
         if from_version > 0:
             from jobhunter.core import backup
 
@@ -283,6 +394,11 @@ def migrate(
                 ) from exc
             if on_backup is not None:
                 on_backup(saved)
+        return _apply_pending(conn)
+
+
+def _apply_pending(conn: sqlite3.Connection) -> list[int]:
+    """Apply every unrecorded migration, each in its own transaction (the caller guards)."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_version ("
         "version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)"
