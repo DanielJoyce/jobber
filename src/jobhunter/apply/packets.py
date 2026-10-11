@@ -225,30 +225,99 @@ def attach_sent_packet(
     for kind, doc in docs.items():
         if doc is None or not doc["rendered_path"]:
             continue  # not exported yet (phase 1c renders the files)
-        stored = Path(doc["rendered_path"])
-        if not stored.is_absolute():
-            if data_dir is None:
-                logger.warning("packet %s: %s not attached: no data dir given", pk["id"], kind)
-                continue
-            stored = Path(data_dir).expanduser() / stored
-        try:
-            path = str(validate_attachment_path(str(stored)))
-        except TrackingError as exc:
-            logger.warning("packet %s: %s not attached: %s", pk["id"], kind, exc)
-            continue
-        dup = conn.execute(
-            "SELECT 1 FROM attachment WHERE application_id = ? AND path = ?", (app_id, path)
-        ).fetchone()
-        if dup is None:
-            conn.execute(
-                "INSERT INTO attachment (application_id, kind, path, added_at) VALUES (?, ?, ?, ?)",
-                (app_id, kind, path, at),
-            )
-        if kind == "cover_letter" and not (app["cover_letter_path"] or "").strip():
-            conn.execute(
-                "UPDATE application SET cover_letter_path = ? WHERE id = ?", (path, app_id)
-            )
+        _attach_file(conn, app_id, pk["id"], kind, doc["rendered_path"], data_dir, at)
     return True
+
+
+def _attach_file(
+    conn: sqlite3.Connection,
+    app_id: int,
+    packet_id: int,
+    kind: str,
+    rendered_path: str,
+    data_dir: Path | str | None,
+    at: str,
+) -> bool:
+    """One ``attachment`` row for a rendered packet file (and ``cover_letter_path`` when
+    empty). False when it is skipped (no data dir, or the path fails validation)."""
+    stored = Path(rendered_path)
+    if not stored.is_absolute():
+        if data_dir is None:
+            logger.warning("packet %s: %s not attached: no data dir given", packet_id, kind)
+            return False
+        stored = Path(data_dir).expanduser() / stored
+    try:
+        path = str(validate_attachment_path(str(stored)))
+    except TrackingError as exc:
+        logger.warning("packet %s: %s not attached: %s", packet_id, kind, exc)
+        return False
+    dup = conn.execute(
+        "SELECT 1 FROM attachment WHERE application_id = ? AND path = ?", (app_id, path)
+    ).fetchone()
+    if dup is None:
+        conn.execute(
+            "INSERT INTO attachment (application_id, kind, path, added_at) VALUES (?, ?, ?, ?)",
+            (app_id, kind, path, at),
+        )
+    if kind == "cover_letter":
+        conn.execute(
+            "UPDATE application SET cover_letter_path = ? WHERE id = ? "
+            "AND trim(coalesce(cover_letter_path, '')) = ''",
+            (path, app_id),
+        )
+    return True
+
+
+def attach_late_export(conn: sqlite3.Connection, packet_id: int, data_dir: Path | str) -> int:
+    """Attach files exported **after** the application was marked applied with this packet
+    (950d5eb (6)): ``attach_sent_packet`` ran then, and found nothing rendered.
+
+    Only what was sent: the resume version the application's ``packet:`` ref names, and the
+    current letter while the packet is still ``ready`` with that same resume (a new version
+    puts the packet back to draft). Returns the number of files attached. Commits nothing.
+    """
+    pk = conn.execute(
+        "SELECT p.id, p.status, p.application_id, p.resume_doc_id, p.cover_doc_id, "
+        "a.resume_version FROM application_packet p JOIN application a "
+        "ON a.id = p.application_id WHERE p.id = ?",
+        (packet_id,),
+    ).fetchone()
+    if pk is None:
+        return 0
+    ref = pk["resume_version"] or ""
+    prefix = f"{PACKET_REF_PREFIX}{packet_id}/resume/v"
+    if not ref.startswith(prefix) or not ref[len(prefix) :].isdigit():
+        return 0
+    sent = int(ref[len(prefix) :])
+    at = _iso(datetime.now(UTC))
+    n = 0
+    resume = conn.execute(
+        "SELECT rendered_path FROM packet_document WHERE packet_id = ? AND kind = 'resume' "
+        "AND version = ?",
+        (packet_id, sent),
+    ).fetchone()
+    if resume is not None and resume["rendered_path"]:
+        n += _attach_file(
+            conn, pk["application_id"], packet_id, "resume", resume["rendered_path"], data_dir, at
+        )
+    current = conn.execute(
+        "SELECT version FROM packet_document WHERE id = ?", (pk["resume_doc_id"],)
+    ).fetchone()
+    if pk["status"] == "ready" and current is not None and current["version"] == sent:
+        letter = conn.execute(
+            "SELECT rendered_path FROM packet_document WHERE id = ?", (pk["cover_doc_id"],)
+        ).fetchone()
+        if letter is not None and letter["rendered_path"]:
+            n += _attach_file(
+                conn,
+                pk["application_id"],
+                packet_id,
+                "cover_letter",
+                letter["rendered_path"],
+                data_dir,
+                at,
+            )
+    return n
 
 
 @dataclass(frozen=True)

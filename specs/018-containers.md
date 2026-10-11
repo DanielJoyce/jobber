@@ -23,7 +23,7 @@ this spec wins; 017 references C1 for the all-routes `Host` check.
 | Thing | Today | Where |
 |---|---|---|
 | Runtime | Python 3.13 via `uv`, `uv.lock` committed, hatchling build with `readme = "README.md"` | `pyproject.toml` |
-| Console | FastAPI via uvicorn, `127.0.0.1:8808`; a non-loopback bind needs `--allow-remote`; every request, any method, must carry a loopback `Host` (403 otherwise, unless `--allow-remote`; merged with spec 017 phase 1d, `cross_site_reason`), and a browser POST also a same-origin `Origin`; `GET /healthz` already exists | `cli.py console`, `console/app.py` |
+| Console | FastAPI via uvicorn, `127.0.0.1:8808`; a non-loopback bind needs `--allow-remote`; every request, any method, must carry a loopback `Host` (403 otherwise, unless `--allow-remote`; merged with spec 017 phase 1d, `cross_site_reason`), and a browser POST also a same-origin `Origin`; loopback means `localhost` or a loopback IP literal, so `foo.localhost`, `0.0.0.0` or an `/etc/hosts` alias get 403 too; `GET /healthz` already exists | `cli.py console`, `console/app.py` |
 | Paths | XDG: config `~/.config/jobhunter`, data `~/.local/share/jobhunter`, cache `~/.cache/jobhunter`; overrides `JOBHUNTER_DATA_DIR`, `_CACHE_DIR`, `_DB_PATH`, `_PROFILE_DIR`, `_RESUME_PATH`, `JOBHUNTER_CONFIG` | `xdg.py`, `config.py` |
 | Absolute paths in the DB | `attachment.path` (stored `.resolve()`d, so `/home/<you>` becomes `/var/home/<you>` on Fedora atomic), `application.cover_letter_path`, 017's `packet_document.rendered_path` | `console/tracking.py`, `core/migrations`, specs/017 |
 | Migrations | `db.migrate()` applies any missing migration on every command and at console start; no backup first; no check for a database newer than the code | `core/db.py` |

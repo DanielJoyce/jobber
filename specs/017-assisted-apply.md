@@ -1589,6 +1589,13 @@ set.
 A packet `ready` for 7 days whose application has **no `applied` event** shows on `/followups`
 as "ready, not applied?".
 
+Review follow-ups (950d5eb): files exported **after** the application was marked applied are
+attached on that export (`packets.attach_late_export`): the resume version the `packet:` ref
+names, and the letter while the packet is still `ready` with that resume (a version made later is
+never attached; which letter version went out is not recorded otherwise). "Did you apply?" is not
+asked again for an application already at `applied` or later, and a *Yes* from a stale banner
+leaves such an application's status, applied date and events alone.
+
 ## Security and privacy
 
 - **Console.** Still loopback. New packet `POST` routes inherit `same_origin_writes`, and phase

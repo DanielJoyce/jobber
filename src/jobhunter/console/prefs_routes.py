@@ -304,8 +304,9 @@ def register(
             )
         answer_writes: dict[str, Any] = {}
         if af.answers is not None:
-            old_answers = ans.load_answers(profile_dir(request)).answers
-            answer_writes = ans.answer_writes(af.answers, old_answers)
+            loaded = ans.load_answers(profile_dir(request))
+            # Entries the lenient load ignored stay in the file (950d5eb (5)).
+            answer_writes = ans.answer_writes(af.answers, loaded.answers, loaded.ignored_custom)
         if not changes and not answer_writes:
             return RedirectResponse("/prefs?saved=0", status_code=303)
         rerender = {"view": view, "mtime_ns": expected, "answers_form": af}

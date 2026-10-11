@@ -355,7 +355,30 @@ def _clean(value: Any) -> Any:
     return value
 
 
-_TOP_KEY = re.compile(r"^([A-Za-z_][\w-]*)\s*:")
+# A top-level key, plain or quoted, at the start of the file possibly after a BOM.
+_TOP_KEY = re.compile(r"^\ufeff?([\"']?)([A-Za-z_][\w-]*)\1\s*:")
+_DOC_MARKER = re.compile(r"^(?:---|\.\.\.)(?:\s|$)")
+
+
+def split_separate_blocks(text: str) -> list[tuple[str | None, str]]:
+    """``text`` as runs of lines: ``(key, block)`` for a top-level ``SEPARATE_KEYS`` block,
+    ``(None, text)`` for everything else. Joining the second items gives ``text`` back."""
+    runs: list[tuple[str | None, list[str]]] = []
+    current: str | None = None
+    for line in text.splitlines(keepends=True):
+        top = _TOP_KEY.match(line)
+        if top:
+            current = top.group(2) if top.group(2) in SEPARATE_KEYS else None
+            if current is not None:
+                runs.append((current, []))  # a block of its own, even right after another
+        elif current and _DOC_MARKER.match(line):
+            current = None
+        # Any other line at column 0 inside the block (the continuation of a multi-line quoted
+        # answer) stays in it: cut out, it would break the profile's parse (950d5eb (2)).
+        if not runs or runs[-1][0] != current:
+            runs.append((current, []))
+        runs[-1][1].append(line)
+    return [(key, "".join(lines)) for key, lines in runs if lines]
 
 
 def without_separate_blocks(text: str) -> str:
@@ -363,17 +386,35 @@ def without_separate_blocks(text: str) -> str:
     line, before the profile parses it. Anything inside them, even YAML the parser rejects
     (a duplicate key from a hand-added answer, a tab), can then never stop the profile load,
     scoring or the nightly run; apply/answers.py reads that block on its own."""
+    return "".join(run for key, run in split_separate_blocks(text) if key is None)
+
+
+_KEEP_BLOCK = "__jobhunter_kept_block_{n}__"
+
+
+def _hold_separate_blocks(text: str) -> tuple[str, dict[str, str]]:
+    """Each ``SEPARATE_KEYS`` block replaced by a one-line placeholder, and the blocks by
+    placeholder line. A save that does not change ``answers`` puts them back verbatim, so a
+    hand edit there the parser rejects (a duplicate key) never blocks other /prefs saves."""
     out: list[str] = []
-    skipping = False
-    for line in text.splitlines(keepends=True):
-        top = _TOP_KEY.match(line)
-        if top:
-            skipping = top.group(1) in SEPARATE_KEYS
-        elif skipping and line.strip() and not line[0].isspace() and line[0] not in "#-":
-            skipping = False  # a top-level line that is not a key (a document marker, say)
-        if not skipping:
-            out.append(line)
-    return "".join(out)
+    held: dict[str, str] = {}
+    for key, run in split_separate_blocks(text):
+        if key is None:
+            out.append(run)
+            continue
+        line = f"{key}: {_KEEP_BLOCK.format(n=len(held))}"
+        held[line] = run if run.endswith("\n") else run + "\n"
+        out.append(line + "\n")
+    return "".join(out), held
+
+
+def _restore_separate_blocks(text: str, held: Mapping[str, str]) -> str:
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        block = held.get(line.rstrip("\n"))
+        if block is not None:
+            lines[i] = block
+    return "".join(lines)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -657,24 +698,124 @@ def _to_yaml(value: Any, old: Any = None) -> Any:
 
 
 def _update_seq_of_maps(old: CommentedSeq, value: list[Any]) -> None:
-    """Rewrite a block list of mappings in place, so comments between items survive (ruamel
-    keeps them on the items; a new list would drop them)."""
-    for i, item in enumerate(value):
-        if i >= len(old):
-            old.append(_to_yaml(item))
+    """Rewrite a block list in place, so comments between items survive (ruamel keeps them
+    on the items; a new list would drop them).
+
+    ruamel stores the comment lines *before* item k after the last value of item k-1, and the
+    lines after the list (the next section's heading) after the last value of the last item.
+    So items are matched by identity (``_same_item``: the same ``question``, else equal), each
+    keeps its inline comment and the comment lines that preceded it, a removed item takes its
+    own with it, and the lines after the list stay after the list (950d5eb (1)). Lines before
+    the first item stay before whichever item is first.
+    """
+    inlines: list[CommentToken | None] = []
+    leads: list[str | None] = [None]  # leads[i]: the comment lines before old item i
+    for i in range(len(old)):
+        inline, rest = _take_trailing(old, i)
+        inlines.append(inline)
+        leads.append(rest)
+    tail = leads.pop()  # after the last item: belongs after the list, whatever comes last
+    used: set[int] = set()
+    plan: list[tuple[Any, CommentToken | None, str | None]] = []  # item, inline, lines before
+    for new_item in value:
+        match = next(
+            (i for i, cur in enumerate(old) if i not in used and _same_item(cur, new_item)),
+            None,
+        )
+        if match is None:
+            plan.append((_to_yaml(new_item), None, None))
             continue
-        cur = old[i]
-        if not isinstance(cur, CommentedMap) or not isinstance(item, Mapping):
-            if cur != item:
-                old[i] = _to_yaml(item, cur)
-            continue
-        for key in [k for k in cur if item.get(k) is None]:
-            del cur[key]
-        for key, val in item.items():
-            if val is not None and cur.get(key) != val:
-                cur[key] = _to_yaml(val, cur.get(key))
-    while len(old) > len(value):
+        used.add(match)
+        cur = old[match]
+        if isinstance(cur, CommentedMap) and isinstance(new_item, Mapping):
+            for key in [k for k in cur if new_item.get(k) is None]:
+                del cur[key]
+            for key, val in new_item.items():
+                if val is not None and cur.get(key) != val:
+                    cur[key] = _to_yaml(val, cur.get(key))
+        elif cur != new_item:
+            cur = _to_yaml(new_item, cur)
+        plan.append((cur, inlines[match], leads[match]))
+    while len(old):
         del old[len(old) - 1]  # del old[-1] shifts ruamel item comments
+    for item, _inline, _lead in plan:
+        old.append(item)
+    for j, (_item, inline, _lead) in enumerate(plan):
+        lines = (plan[j + 1][2] if j + 1 < len(plan) else tail) or ""
+        if inline or lines:
+            _add_trailing(old, j, inline, lines)
+
+
+def _same_item(cur: Any, new: Any) -> bool:
+    if isinstance(cur, Mapping) and isinstance(new, Mapping):
+        q = new.get("question")
+        if q is not None:
+            return cur.get("question") == q
+    return _plain(cur) == new if isinstance(cur, CommentedMap | CommentedSeq) else cur == new
+
+
+def _trailing_holder(seq: CommentedSeq, index: int) -> tuple[Any, Any, bool]:
+    """Where the comment after item ``index`` lives: (container, key, inside_item). A block
+    mapping or list item keeps it on its own last value; a scalar item on the list itself."""
+    item = seq[index]
+    if isinstance(item, CommentedMap | CommentedSeq) and not item.fa.flow_style():
+        holder = _last_holder(item)
+        if holder is not None:
+            return holder[0], holder[1], True
+    return seq, index, False
+
+
+def _take_trailing(seq: CommentedSeq, index: int) -> tuple[CommentToken | None, str | None]:
+    """Detach the comment after item ``index``: (its inline comment on the value's own line,
+    as its own token so its column is kept; the full comment lines below it). An inline
+    comment inside a mapping item stays put and is returned as None: it moves with the item."""
+    node, key, inside = _trailing_holder(seq, index)
+    slot = _TAIL_SLOT[type(node)]
+    entry = node.ca.items.get(key)
+    token = entry[slot] if entry and len(entry) > slot else None
+    if token is None:
+        return None, None
+    text = token.value
+    if text.startswith("\n"):
+        inline, rest = None, text[1:]
+    else:
+        first, _, after = text.partition("\n")
+        try:
+            pos = node.lc.key(key) if isinstance(node, CommentedMap) else node.lc.item(key)
+            value_line = pos[0]
+        except (AttributeError, KeyError, IndexError, TypeError):
+            value_line = None
+        if value_line is not None and token.start_mark.line == value_line:
+            inline, rest = first + "\n", after
+        else:
+            inline, rest = None, text  # a full line after a block scalar
+    if inline is not None:
+        token.value = inline
+        if inside:
+            return None, (rest or None)
+        entry[slot] = None
+        return token, (rest or None)
+    entry[slot] = None
+    return None, (rest or None)
+
+
+def _add_trailing(seq: CommentedSeq, index: int, inline: CommentToken | None, lines: str) -> None:
+    """Put back item ``index``'s ``inline`` comment and the comment ``lines`` after it."""
+    node, key, _inside = _trailing_holder(seq, index)
+    slot = _TAIL_SLOT[type(node)]
+    entry = node.ca.items.setdefault(key, [None, None, None, None])
+    while len(entry) <= slot:
+        entry.append(None)
+    token = entry[slot]
+    if token is None and inline is not None:
+        inline.value = inline.value.rstrip("\n") + "\n" + lines
+        entry[slot] = inline
+    elif token is not None:
+        token.value = token.value.rstrip("\n") + "\n" + lines
+    elif lines:
+        value = node[key]
+        block = isinstance(value, str) and value.endswith("\n")  # a literal block ends its line
+        entry[slot] = CommentToken(lines if block else "\n" + lines, CommentMark(0), None)
 
 
 # Where ruamel keeps the comment that follows a node: index 2 of a mapping key's entry,
@@ -796,6 +937,9 @@ def save_profile_changes(
 
     text = prefs_file.read_text(encoding="utf-8")
     yaml = _yaml_writer(text)
+    held: dict[str, str] = {}
+    if not any(path.split(".", 1)[0] in SEPARATE_KEYS for path in changes):
+        text, held = _hold_separate_blocks(text)
     try:
         doc = yaml.load(text)
     except YAMLError as exc:
@@ -812,12 +956,13 @@ def save_profile_changes(
         _put_tail(doc, tail)
     buf = io.StringIO()
     yaml.dump(doc, buf)
+    new_text = _restore_separate_blocks(buf.getvalue(), held) if held else buf.getvalue()
 
     fd, tmp_name = tempfile.mkstemp(dir=profile_dir, prefix=".preferences.", suffix=".tmp")
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(buf.getvalue())
+            fh.write(new_text)
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, stat.st_mode & 0o7777)
