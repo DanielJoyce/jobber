@@ -58,6 +58,10 @@ timers use the same config, database and cache as `jobhunter paths` shows even w
 user manager does not see `XDG_*` from a login shell. Reinstall after changing them.
 `JOBHUNTER_*` path variables are not copied; set those in `config.toml` or `.env`.
 
+Under rootless podman (opt-in) the console and each job run as containers, started by Quadlet
+units and systemd timers, with different default paths and secrets; see
+[018](018-containers.md) and the how-to in [docs/containers.md](../docs/containers.md).
+
 ## The pipeline is stages over a database, not a dataflow graph
 
 Every stage reads rows in one state and writes rows in the next. Each is **idempotent** and
@@ -143,6 +147,10 @@ jobhunter/
 Your files are **not** in the checkout. Defaults follow the XDG base directory spec
 (`src/jobhunter/xdg.py`); `jobhunter paths` prints the resolved value, its source and whether
 it exists.
+
+In container mode (opt-in) the same files are bind-mounted at `/data`, `/cache` and
+`/config/config.toml`, with secrets as podman secrets: see [018](018-containers.md) and the
+how-to in [docs/containers.md](../docs/containers.md).
 
 ```
 $XDG_CONFIG_HOME/jobhunter/        (~/.config/jobhunter)
