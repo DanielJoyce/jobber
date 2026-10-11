@@ -76,20 +76,29 @@ def effective_events(evs: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]
     """The events that decide status, newest first (``evs`` is newest first: at, id DESC).
 
     Every reader of status (``rebuild_status``, ``status_since``, the dashboard) uses this, so
-    the cached status and the derived one never differ. Automatic early events (``AUTO_NOTES``)
-    are dropped when the application has gone past 'preparing' and the user has not moved it
-    back since: a later manual early event after the newest past-preparing one is a deliberate
-    move back, and then the log is read as it is (latest event wins).
+    the cached status and the derived one never differ. Each row needs ``id``, ``status``,
+    ``note`` and ``at``.
+
+    Once the application has gone past 'preparing', early events (interested, preparing) are
+    dropped unless the user deliberately moved it back. A move back is decided by insertion
+    order, not by date: a manual early event entered after the most recently entered
+    past-preparing event. Then the log is read as it is (latest event wins). Otherwise automatic
+    early events (``AUTO_NOTES``) are dropped everywhere, and so is any early event dated after
+    the newest past-preparing one: it was entered before that event (a board drag, then a
+    backdated 'applied' accepted from a confirmation email), so it does not outrank it.
     """
-    newest_past = next((i for i, e in enumerate(evs) if e["status"] not in EARLY_STATUSES), None)
-    if newest_past is None:
+    past = [e for e in evs if e["status"] not in EARLY_STATUSES]
+    if not past:
         return list(evs)
+    last_entered = max(e["id"] for e in past)
     moved_back = any(
-        e["note"] not in AUTO_NOTES and e["status"] in EARLY_STATUSES for e in evs[:newest_past]
+        e["note"] not in AUTO_NOTES and e["status"] in EARLY_STATUSES and e["id"] > last_entered
+        for e in evs
     )
     if moved_back:
         return list(evs)
-    return [e for e in evs if e["note"] not in AUTO_NOTES]
+    newest_past = next(i for i, e in enumerate(evs) if e["status"] not in EARLY_STATUSES)
+    return [e for e in evs[newest_past:] if e["note"] not in AUTO_NOTES]
 
 
 def rebuild_status(conn: sqlite3.Connection, application_id: int) -> str:
@@ -98,7 +107,7 @@ def rebuild_status(conn: sqlite3.Connection, application_id: int) -> str:
     The latest of ``effective_events`` wins.
     """
     evs = conn.execute(
-        "SELECT status, note, at FROM application_event WHERE application_id = ? "
+        "SELECT id, status, note, at FROM application_event WHERE application_id = ? "
         "ORDER BY at DESC, id DESC",
         (application_id,),
     ).fetchall()

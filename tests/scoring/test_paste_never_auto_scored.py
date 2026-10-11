@@ -314,3 +314,29 @@ def test_a_killed_run_says_when_to_retry_and_expires(tmp_path, profile):  # noqa
     later = NOW + group_score.CLAIM_TTL + timedelta(minutes=1)
     assert group_score.estimate(c, profile, scoring, gid, later).refusal is None
     c.close()
+
+
+def test_score_group_claim_starts_after_the_confirm_prompt(env, monkeypatch):
+    """30610d5 (3): the claim is stamped when the user confirms, not when the estimate was
+    shown, so a long wait at the prompt does not shorten the claim window."""
+    import jobhunter.cli as cli_mod
+
+    c, scorer, gid, _ = env
+    clock = [NOW]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    def confirm(*a, **k):
+        clock[0] = NOW.replace(hour=13)  # an hour at the prompt
+        return True
+
+    monkeypatch.setattr(cli_mod, "datetime", Clock)
+    monkeypatch.setattr(cli_mod.typer, "confirm", confirm)
+    out = cli.invoke(app, ["score", "--group", str(gid)])
+    assert out.exit_code == 0, out.output
+    assert scorer.calls == 1
+    claimed = c.execute("SELECT evaluated_at FROM prefilter_result").fetchone()[0]
+    assert datetime.fromisoformat(claimed) == NOW.replace(hour=13)

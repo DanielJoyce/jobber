@@ -105,6 +105,20 @@ def test_status_follows_latest_event_by_time_and_rebuilds(conn):
     assert status_of(conn, a) == "applied"
 
 
+def test_backdated_applied_entered_after_a_drag_is_not_a_move_back(conn):
+    """30610d5 (1): a board drag to preparing today, then a backdated 'applied' accepted later
+    (a confirmation email): the drag was entered first, so the card goes to applied."""
+    a = make_app(conn, 1)
+    t.add_event(conn, a, "preparing", "dragged on board", ago(1))
+    t.add_event(conn, a, "applied", "from email", ago(5))
+    assert status_of(conn, a) == "applied"
+    assert t.rebuild_status(conn, a) == "applied"
+    assert t.status_since(conn, a) == ago(5)
+    # A drag back entered after the applied event is a deliberate move back, whatever its date.
+    t.add_event(conn, a, "preparing", "not yet", ago(3))
+    assert status_of(conn, a) == "preparing"
+
+
 def test_past_events_never_mutated(conn):
     a = make_app(conn, 1)
     t.add_event(conn, a, "applied", "first", ago(10))

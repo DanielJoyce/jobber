@@ -394,8 +394,10 @@ def _score_group(settings, profile, group_id: int, yes: bool) -> None:
             typer.echo("not run")
             raise typer.Exit(1)
         try:
+            # The claim's clock starts now, not when the estimate was shown: a long wait at the
+            # prompt must not shorten the claim window (or score against a stale day's cap).
             out = group_score.score_now(
-                conn, profile, settings.scoring, group_id, token=est.token, now=now
+                conn, profile, settings.scoring, group_id, token=est.token, now=datetime.now(UTC)
             )
         except group_score.ScoreRefused as exc:
             typer.echo(f"not scored: {exc}", err=True)

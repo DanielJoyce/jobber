@@ -283,7 +283,8 @@ class AppFact:
 def application_facts(conn: sqlite3.Connection) -> list[AppFact]:
     newest_first: dict[int, list[sqlite3.Row]] = defaultdict(list)
     for e in conn.execute(
-        "SELECT application_id, at, status, note FROM application_event ORDER BY at DESC, id DESC"
+        "SELECT id, application_id, at, status, note FROM application_event "
+        "ORDER BY at DESC, id DESC"
     ):
         newest_first[e["application_id"]].append(e)
     out: list[AppFact] = []
