@@ -238,10 +238,11 @@ def _spawn(argv: Sequence[str], **kwargs: Any) -> subprocess.Popen[bytes]:
 
 
 # Children of calls still running in this process. Each runs in its own session (so a
-# terminal's Ctrl-C does not reach it), which also means it would outlive the console: a child
-# left running after the console stops can finish a request whose usage is never logged.
-# ``kill_all`` runs on the console's shutdown and at interpreter exit (a7a1b40 (4)). A hard
-# kill of the console (SIGKILL, the OOM killer) still cannot run it.
+# terminal's Ctrl-C does not reach it). A normal console stop does not orphan one: uvicorn
+# waits for running requests, so the run finishes and logs its usage first. ``kill_all`` runs
+# on the console's lifespan shutdown and at interpreter exit as a backstop for a child whose
+# run is gone (a7a1b40 (4)); a hard kill of the console (SIGKILL, the OOM killer) cannot run
+# it, and a request that child finishes is not logged.
 _LIVE: set[subprocess.Popen[bytes]] = set()
 _LIVE_LOCK = threading.Lock()
 

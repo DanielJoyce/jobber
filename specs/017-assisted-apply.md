@@ -237,7 +237,7 @@ claude -p --output-format stream-json --verbose
 | Output | `stream-json` lines, read as they arrive. The `system`/`init` line carries `apiKeySource`, `model`, `tools` and `mcp_servers`. `rate_limit_event` lines carry `rate_limit_info`. The final `result` line carries `is_error`, `structured_output` (the object `--json-schema` validated), `usage` (input, output and cache tokens), `modelUsage` and `total_cost_usd`. jobhunter validates `structured_output` with the same pydantic model as the API path |
 | Checks on `init`, before the model is called | `apiKeySource` must be `none`, `tools` must be exactly `["StructuredOutput"]` (Claude Code adds that tool for `--json-schema` after `--tools ''` filtering; any other tool fails), and `mcp_servers` must be `[]`. On a mismatch jobhunter **kills the child at once**, before the request reaches the model, so nothing is billed; the CLI runner is turned off and the page says why |
 | Paid usage | If a `rate_limit_event` reports `isUsingOverage` or `overageInUse` (your subscription's extra usage, which is paid), the call is treated as paid: its `total_cost_usd` is logged under tier `packet` against `[apply] daily_cap_usd`, and further CLI calls wait for your click with "subscription is on paid extra usage". If the cap is already reached when overage shows, the child is killed. While no hold is set, CLI calls not confirmed as paid run **one at a time** (a `flock` across the console and the CLI command, waiting up to 240 s), and each re-reads the hold when its turn comes: two documents drafted side by side would otherwise both be charged before either reported paid usage. A call that finds the hold set while it waited runs nothing and asks for the paid click |
-| Stopping | Each child runs in its own session (a terminal's Ctrl-C does not reach it), so the console kills every child still running, with its process group, when it shuts down and at interpreter exit; the run then logs what the stream had reported. A hard kill of the console (SIGKILL, the OOM killer) cannot do this, and a request that child finishes is not logged |
+| Stopping | Each child runs in its own session (a terminal's Ctrl-C does not reach it). Stopping the console (one Ctrl-C, SIGTERM) does not cut a draft short: uvicorn waits for running requests, so the run finishes (at most the 180 s timeout) and logs its usage before the process exits. `cli_runner.kill_all` (lifespan shutdown and interpreter exit) is only a backstop for a child whose run is gone; in practice it finds none. A hard kill of the console (SIGKILL, the OOM killer, a podman stop timeout) leaves the child running, and a request it finishes is not logged |
 | Result | Fails unless `is_error` is false and `structured_output` validates. Otherwise `total_cost_usd` (an API-equivalent figure) is shown on `/costs` for information only |
 | Runner off | "CLI runner off" is stored in `<data dir>/apply-runner.json` (reason and time; there is no general key-value table in the database), shown on the packet page and `/costs` with **Turn back on**. It survives restarts until you clear it |
 | Same request | `--system-prompt` replaces Claude Code's default agentic prompt, so both runners send jobhunter's system prompt, the same user message and the same schema. `--effort medium` matches the API path for Opus calls; the Haiku entailment call sets no effort on either runner (Haiku rejects it). The CLI may add a small context block of its own; the live smoke test records what reaches the model |
@@ -354,7 +354,7 @@ Files go to `<data dir>/packets/<packet_id>/`, named for employers as
 code resolves it through settings, never a repo-relative path.
 
 Review follow-ups (019561b): a versioned file (`resume-v3.md`) is trusted as v3's export only
-when its Markdown and HTML match the current v3 (after a database restore a new v3 can reuse an
+when its Markdown matches the current v3 (the HTML and PDF also depend on the template, so a restyle does not untrust them) (after a database restore a new v3 can reuse an
 old v3's number); otherwise nothing is offered or attached until you press Export again. A
 question draft's **Copy** is gated like Export: hidden while a sentence is unsupported. A packet
 a merge abandons (nightly dedupe, cross-state, **Link them**) loses its employer-named copies
@@ -1591,8 +1591,9 @@ as "ready, not applied?".
 
 Review follow-ups (950d5eb): files exported **after** the application was marked applied are
 attached on that export (`packets.attach_late_export`): the resume version the `packet:` ref
-names, and the letter while the packet is still `ready` with that resume (a version made later is
-never attached; which letter version went out is not recorded otherwise). "Did you apply?" is not
+names, and the letter while the packet is still `ready` with that resume and the letter version
+was written no later than the application's applied date (a letter written after applying is
+never attached, even if the packet is marked ready again). "Did you apply?" is not
 asked again for an application already at `applied` or later, and a *Yes* from a stale banner
 leaves such an application's status, applied date and events alone.
 

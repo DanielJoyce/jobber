@@ -285,15 +285,15 @@ def exported(data_dir: Path, packet_id: int, exp: Export) -> bool:
     Their names (``resume-v3.md``) are trusted only when their content matches: after the
     database is restored from a backup, a new v3 can reuse the number of an old v3 whose
     files are still on disk, and those must never be attached or downloaded as the new one.
-    The Markdown and the HTML page are compared (the text and the PDF are made from them).
+    Only the Markdown, the version's content, is compared: the HTML and PDF also depend on
+    the template and its libraries, and an upgrade that restyles them must not untrust (and
+    so hide, and make you re-export over) every export already made.
     """
     try:
-        return all(
-            versioned_path(data_dir, packet_id, exp, fmt).read_bytes() == body.encode("utf-8")
-            for fmt, body in (("md", exp.md), ("html", exp.html))
-        )
+        md = versioned_path(data_dir, packet_id, exp, "md").read_bytes()
     except FileNotFoundError:
         return False
+    return md == exp.md.encode("utf-8")
 
 
 def packet_refusal(status: str) -> str | None:

@@ -188,6 +188,38 @@ def test_files_exported_after_applied_are_attached_then(client, conn, tmp_path):
     assert len(attachments(conn, app["id"])) == 2
 
 
+def test_a_letter_written_after_applying_is_not_attached(client, conn, tmp_path):  # noqa: F811
+    """Review of 950d5eb (6): letter v3 written after Yes, the packet marked ready again with
+    the same resume, then exported: v3 was never sent, so it is not attached."""
+    from jobhunter.apply import export
+
+    pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    make_ready(conn, pid, None)
+    client.post(f"/job/{packet_group(conn, pid)}/applied?choice=yes")
+    app = app_of(conn, pid)
+    later = (NOW + timedelta(days=1)).isoformat()
+    cur = conn.execute(
+        "INSERT INTO packet_document (packet_id, kind, version, origin, doc_json, body_md, "
+        "check_report, created_at) VALUES (?, 'cover_letter', 3, 'edited', ?, 'z', ?, ?)",
+        (
+            pid,
+            json.dumps({"cover_letter": {"paragraphs": []}}),
+            json.dumps({"ok": True, "items": []}),
+            later,
+        ),
+    )
+    conn.execute(
+        "UPDATE application_packet SET cover_doc_id = ?, status = 'ready' WHERE id = ?",
+        (cur.lastrowid, pid),
+    )
+    data = tmp_path / "data"
+    for kind in ("resume", "cover_letter"):
+        export.write_export(conn, data, pid, export.current_export(conn, pid, kind), FakeRenderer())
+    d = data / "packets" / str(pid)
+    assert attachments(conn, app["id"]) == [("resume", str(d / "resume-v2.pdf"))]
+    assert not app_of(conn, pid)["cover_letter_path"]
+
+
 def test_attach_is_once_and_keeps_your_own_resume_version(client, conn, rendered):  # noqa: F811
     pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
     make_ready(conn, pid, rendered)

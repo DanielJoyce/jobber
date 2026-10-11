@@ -673,6 +673,18 @@ def test_an_old_versions_files_are_not_reused_after_a_database_restore(env, rend
     assert env.client.get(f"/packet/{env.pid}/export/resume/md").status_code == 200
 
 
+def test_a_restyled_template_does_not_untrust_an_export(env, renderer, monkeypatch):
+    """Review of 019561b (1): only the Markdown decides; an upgrade that changes the HTML
+    template keeps the exported files offered and attached."""
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    original = export.to_html
+    monkeypatch.setattr(export, "to_html", lambda *a, **k: "<!-- v2 -->" + original(*a, **k))
+    env.client.get(f"/packet/{env.pid}")
+    assert len(named(env)) == 4
+    assert env.client.get(f"/packet/{env.pid}/export/resume/pdf").status_code == 200
+
+
 def test_the_nightly_dedupe_stage_removes_named_copies_of_a_packet_a_merge_abandoned(env, renderer):
     """019561b (3): a merge abandons a packet without its page being opened; the dedupe stage
     removes its employer-named copies at once. A live packet's copies are left alone."""

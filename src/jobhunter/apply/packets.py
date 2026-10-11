@@ -268,17 +268,34 @@ def _attach_file(
     return True
 
 
+def _written_by(created_at: str | None, applied_at: str | None) -> bool:
+    """A document version created at or before the application's applied date."""
+    if not created_at or not applied_at:
+        return False
+    try:
+        return _parse(created_at) <= _parse(applied_at)
+    except ValueError:
+        return False
+
+
+def _parse(value: str) -> datetime:
+    dt = datetime.fromisoformat(value)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
 def attach_late_export(conn: sqlite3.Connection, packet_id: int, data_dir: Path | str) -> int:
     """Attach files exported **after** the application was marked applied with this packet
     (950d5eb (6)): ``attach_sent_packet`` ran then, and found nothing rendered.
 
     Only what was sent: the resume version the application's ``packet:`` ref names, and the
-    current letter while the packet is still ``ready`` with that same resume (a new version
-    puts the packet back to draft). Returns the number of files attached. Commits nothing.
+    current letter while the packet is still ``ready`` with that same resume **and** the letter
+    version was written no later than the application's applied date (a letter written after
+    applying, then marked ready again, was not sent). Returns the number of files attached.
+    Commits nothing.
     """
     pk = conn.execute(
         "SELECT p.id, p.status, p.application_id, p.resume_doc_id, p.cover_doc_id, "
-        "a.resume_version FROM application_packet p JOIN application a "
+        "a.resume_version, a.applied_at FROM application_packet p JOIN application a "
         "ON a.id = p.application_id WHERE p.id = ?",
         (packet_id,),
     ).fetchone()
@@ -305,9 +322,14 @@ def attach_late_export(conn: sqlite3.Connection, packet_id: int, data_dir: Path 
     ).fetchone()
     if pk["status"] == "ready" and current is not None and current["version"] == sent:
         letter = conn.execute(
-            "SELECT rendered_path FROM packet_document WHERE id = ?", (pk["cover_doc_id"],)
+            "SELECT rendered_path, created_at FROM packet_document WHERE id = ?",
+            (pk["cover_doc_id"],),
         ).fetchone()
-        if letter is not None and letter["rendered_path"]:
+        if (
+            letter is not None
+            and letter["rendered_path"]
+            and _written_by(letter["created_at"], pk["applied_at"])
+        ):
             n += _attach_file(
                 conn,
                 pk["application_id"],

@@ -209,9 +209,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
-        # A drafting run's claude child lives in its own session; stop it with the console so
-        # it cannot finish a request whose usage is never logged (a7a1b40 (4)). The run sees
-        # its child die and logs what the stream had reported.
+        # Backstop only: uvicorn runs this after every request has finished, so a drafting
+        # run has already logged its usage; any claude child still tracked here has lost its
+        # run and is killed with its process group (a7a1b40 (4)).
         cli_runner.kill_all()
 
     app = FastAPI(
