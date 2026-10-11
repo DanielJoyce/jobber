@@ -80,6 +80,10 @@ secrets_app = typer.Typer(help="API keys and other secrets (never prints values)
 app.add_typer(secrets_app, name="secrets")
 db_app = typer.Typer(help="Database schema and backups.", no_args_is_help=True)
 app.add_typer(db_app, name="db")
+container_app = typer.Typer(
+    help="Container deployment on the host (specs/018): preflight.", no_args_is_help=True
+)
+app.add_typer(container_app, name="container")
 
 NOT_IMPLEMENTED = "not implemented yet"
 
@@ -2330,3 +2334,128 @@ def secrets_status() -> None:
         typer.echo(f"{state.name:<{width}}  {state.describe()}")
     for note in secrets.env_file_warnings(report.env_files):
         typer.echo(note)
+
+
+def _absolute_path_count(db_path: Path, data_dir: Path) -> int | None:
+    """Stored paths that are absolute or escape the data dir (C14), read-only; None when
+    there is no database yet."""
+    import sqlite3
+
+    from jobhunter.core import dbpaths
+
+    if not db_path.is_file():
+        return None
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        return dbpaths.count_absolute_paths(conn, data_dir)
+    finally:
+        conn.close()
+
+
+@container_app.command("preflight")
+def container_preflight_cmd(
+    unit_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--unit-dir",
+            help="Quadlet unit directory (default ~/.config/containers/systemd). Drop-ins go "
+            "in <unit>.container.d/ below it.",
+        ),
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Write the deployment marker without asking (switches off automatic migration).",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Check and list changes; write nothing.")
+    ] = False,
+    leave: Annotated[
+        bool,
+        typer.Option(
+            "--leave",
+            help="Go back to the host install: remove the drop-ins preflight wrote and the "
+            "deployment marker (the container units must be stopped).",
+        ),
+    ] = False,
+) -> None:
+    """Check the host for the container deployment and write per-secret Quadlet drop-ins.
+
+    Checks podman, the bind-mount sources (creating missing ones 0700), ownership, SELinux
+    labels, host timers, absolute paths in the database, host versus image schema, .env
+    modes and a leftover Gmail token file. Then writes one drop-in per existing podman secret
+    per unit (least privilege, specs/018 matrix), removes the ones it wrote for secrets that
+    are gone, and, after asking (or with --yes), writes <data dir>/deployment.toml. Reads
+    secret names only, never values. Rerun after any podman secret change. Host only.
+    """
+    from jobhunter.config import config_file
+    from jobhunter.ops import preflight
+    from jobhunter.ops import version as ver
+    from jobhunter.xdg import config_home
+
+    _host_only("container preflight")
+    settings = load_settings()
+    paths = settings.paths
+    data_dir = resolve_path(paths.data_dir)
+    units = (unit_dir.expanduser() if unit_dir else preflight.default_unit_dir()).absolute()
+
+    if leave:
+        active = preflight.active_units()
+        if active:
+            typer.echo(
+                f"error: stop the container units first: systemctl --user stop {' '.join(active)}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        if active is None and not yes:
+            typer.echo(
+                "error: systemctl cannot tell whether the container units are stopped. Stop "
+                "them (systemctl --user stop jobhunter-console 'jobhunter-ctr-*'), then rerun "
+                "with --yes.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        for line in preflight.leave(units, data_dir, dry_run=dry_run):
+            typer.echo(line)
+        typer.echo("next: systemctl --user daemon-reload && jobhunter schedule install")
+        return
+
+    db_path = resolve_path(paths.db_path)
+    report = _SECRETS_REPORT
+    ctx = preflight.Context(
+        home=Path.home(),
+        unit_dir=units,
+        settings=settings,
+        data_dir=data_dir,
+        cache_dir=resolve_path(paths.cache_dir),
+        db_path=db_path,
+        profile_dir=resolve_path(paths.profile_dir),
+        resume_path=resolve_path(paths.resume_path),
+        config_file=config_file(None),
+        gmail_token_file=config_home() / "gmail_token.json",
+        env_files=list(report.env_files) if report else [],
+        host_version=ver.collect(db_path, db.owning_data_dir(db_path, data_dir)),
+        absolute_paths=_absolute_path_count(db_path, data_dir),
+    )
+
+    def confirm(marker: Path) -> bool:
+        if yes:
+            return True
+        if not sys.stdin.isatty():
+            return False
+        return typer.confirm(
+            f"Write {marker}? From then on no jobhunter command (host or container) migrates "
+            "the database on its own; `jobhunter upgrade` does",
+            default=False,
+        )
+
+    result = preflight.run(ctx, dry_run=dry_run, confirm_marker=confirm)
+    for line in result.lines:
+        typer.echo(line.render())
+    for line in preflight.next_steps(result):
+        typer.echo(line)
+    if result.failed:
+        raise typer.Exit(1)
