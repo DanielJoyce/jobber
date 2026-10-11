@@ -129,9 +129,11 @@ def report(*, skills: int = 90, domain: int = 80, quote: str = GOOD, gap_quote: 
     )
 
 
-def final(text: str, *, stop_reason: str = "end_turn") -> SimpleNamespace:
+def final(
+    text: str, *, stop_reason: str = "end_turn", model: str = "claude-opus-5-5"
+) -> SimpleNamespace:
     return SimpleNamespace(
-        model="claude-opus-5",
+        model=model,
         stop_reason=stop_reason,
         content=[
             SimpleNamespace(type="thinking", thinking="hmm"),
@@ -177,7 +179,7 @@ def test_request_shape(conn, profile):
     res = deep.deep_score(conn, client, profile, gid, now=NOW)
     assert res.status == "scored"
     (p,) = client.calls
-    assert p["model"] == "claude-opus-5"
+    assert p["model"] == "claude-opus-5-5"
     assert p["thinking"] == {"type": "adaptive"}
     assert p["output_config"]["effort"] == "high"
     assert p["output_config"]["format"]["type"] == "json_schema"
@@ -198,7 +200,7 @@ def test_scored_row_readable_by_buckets_and_cost(conn, profile):
     gid = add_group(conn, 1)
     res = deep.deep_score(conn, FakeClient(final(report())), profile, gid, now=NOW)
     row = res.row
-    assert row["tier"] == "deep" and row["model"] == "anthropic:claude-opus-5"
+    assert row["tier"] == "deep" and row["model"] == "anthropic:claude-opus-5-5"
     assert row["evidence_unverified"] == 0
     job = conn.execute("SELECT * FROM job").fetchone()
     fit = compute_row(row, job, load_locations(conn, job["id"]), profile)
@@ -208,10 +210,22 @@ def test_scored_row_readable_by_buckets_and_cost(conn, profile):
     assert stored["requirement_gaps"][0]["verified"] is True
     assert stored["screen_disagreement"]["screen_bucket"] is None
     spend = conn.execute("SELECT * FROM llm_spend").fetchone()
-    # 5000 in at $5 + 3000 cache read at $0.50 + 1500 out at $25, per MTok
+    # Opus 5.5: 5000 in at $4 + 3000 cache read at $0.20 (0.05x) + 1500 out at $20, per MTok
     assert spend["tier"] == "deep" and spend["calls"] == 1
-    assert spend["cost_usd"] == pytest.approx(0.064)
-    assert row["cost_usd"] == pytest.approx(0.064)
+    assert spend["cost_usd"] == pytest.approx(0.0506)
+    assert row["cost_usd"] == pytest.approx(0.0506)
+
+
+def test_a_fallback_answer_is_priced_at_the_model_that_answered(conn, profile):
+    """A server-side fallback from Opus 5.5 to Opus 5 bills at Opus 5's rates (kept in the
+    price table for exactly this and for stored history)."""
+    gid = add_group(conn, 1)
+    msg = final(report(), model="claude-opus-5")
+    res = deep.deep_score(conn, FakeClient(msg), profile, gid, now=NOW)
+    # 5000 in at $5 + 3000 cache read at $0.50 + 1500 out at $25, per MTok
+    assert res.row["cost_usd"] == pytest.approx(0.064)
+    assert res.row["model"] == "anthropic:claude-opus-5-5"
+    assert res.row["served_model"] == "claude-opus-5"
 
 
 def test_rerun_returns_stored_row_without_calling(conn, profile):
@@ -300,3 +314,20 @@ def test_shortlist_orders_by_screen_overall_and_skips_deep(conn, profile):
     assert deep.shortlist(conn, profile, 10) == [g2, g3, g1]
     deep.deep_score(conn, FakeClient(final(report())), profile, g2, now=NOW)
     assert deep.shortlist(conn, profile, 10) == [g3, g1]
+
+
+def test_shortlist_skips_groups_deep_scored_by_an_older_model(conn, profile):
+    """Moving deep_scorer (or its default) from Opus 5 to Opus 5.5 must not make
+    ``score --deep N`` pay again for the groups Opus 5 already deep-scored (bug 15f7012)."""
+    g1, g2, g3 = (add_group(conn, n) for n in (1, 2, 3))
+    add_screen(conn, g1, profile, skills=60, domain=60)
+    add_screen(conn, g2, profile, skills=95, domain=90)
+    add_screen(conn, g3, profile, skills=80, domain=80)
+    old = FakeClient(final(report(), model="claude-opus-5"))
+    deep.deep_score(conn, old, profile, g2, now=NOW, scorer="anthropic:claude-opus-5")
+    assert deep.DEFAULT_SCORER == "anthropic:claude-opus-5-5"
+    assert deep.shortlist(conn, profile, 2) == [g3, g1]
+    # Asked for by name, one group can still be re-run on the new model.
+    new = FakeClient(final(report()))
+    assert deep.deep_score(conn, new, profile, g2, now=NOW).status == "scored"
+    assert len(new.calls) == 1

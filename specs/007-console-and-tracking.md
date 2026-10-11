@@ -74,7 +74,7 @@ Deliberate choices in that layout:
 | `1`–`7` | jump to bucket A–G |
 | `f` | toggle bucket F (stale matches) visibility |
 | `x` | dismiss → `label: not_interesting` |
-| `d` | request Stage 3 deep pass now (Opus 5, ~5s, shown inline) |
+| `d` | request Stage 3 deep pass now (Opus 5.5, ~5s, shown inline) |
 | `o` | open the original posting in a browser |
 | `a` | mark applied (opens the application form) |
 | `A` | open the resolved application link ([015](015-apply-links.md)) |

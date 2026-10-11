@@ -1,4 +1,4 @@
-"""Stage 2 screen: Haiku 4.5 over the Batch API (specs/006 "Stage 2 — the screen").
+"""Stage 2 screen: Haiku 5.5 over the Batch API (specs/006 "Stage 2 — the screen").
 
 One request per ``job_group`` (its canonical job), never per job or location. The request is
 ``system = [rubric, profile scoring inputs + cache_control]`` and a user message holding only
@@ -53,9 +53,11 @@ from jobhunter.scoring.scorers import (  # noqa: F401  (pricing/cost helpers re-
 logger = logging.getLogger(__name__)
 
 TIER = "screen"
-DEFAULT_SCORER = "anthropic:claude-haiku-4-5"
+DEFAULT_SCORER = "anthropic:claude-haiku-5-5"
 MAX_TOKENS = 2048
-# Planning estimate per request for spend caps (specs/006 "Cost": about $0.002 batched).
+# Planning estimate per request for spend caps. Set for Haiku 4.5 batched (about $0.002); Haiku
+# 5.5 costs roughly a tenth of that (specs/006 "Cost"). Kept high on purpose so a cap check is
+# never passed on an estimate that is too low.
 ESTIMATED_COST_PER_REQUEST_USD = 0.002
 _CUSTOM_ID = re.compile(r"^g(\d+)$")
 

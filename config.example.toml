@@ -36,8 +36,8 @@
 #   openai-compat:<model>   any OpenAI-compatible endpoint; [scoring.openai_compat]
 # screen_scorer = "jev:typesafe/jev-1.13"
 # screen_scorer = "openrouter:openai/gpt-oss-120b"
-# screen_scorer = "anthropic:claude-haiku-4-5"
-# deep_scorer = "anthropic:claude-opus-5"
+# screen_scorer = "anthropic:claude-haiku-5-5"
+# deep_scorer = "anthropic:claude-opus-5-5"
 # daily_cap_usd = 2.0
 # weekly_cap_usd = 10.0
 # deep_shortlist = 40
@@ -98,7 +98,7 @@
 [apply]
 # runner = "cli"
 # cli_model = "opus"                 # CLI alias
-# api_model = "claude-opus-5"        # API model id for the fallback
+# api_model = "claude-opus-5-5"      # API model id for the fallback
 # effort = "medium"
 # daily_cap_usd = 1.00               # packet API spend only; separate from [scoring] caps
 # entailment_check = true            # advisory Haiku pass: do the cited lines support each line?

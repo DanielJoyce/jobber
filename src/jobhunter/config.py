@@ -230,8 +230,8 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
 class Scoring(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    screen_scorer: str = "anthropic:claude-haiku-4-5"
-    deep_scorer: str = "anthropic:claude-opus-5"
+    screen_scorer: str = "anthropic:claude-haiku-5-5"
+    deep_scorer: str = "anthropic:claude-opus-5-5"
     daily_cap_usd: float = 2.0
     weekly_cap_usd: float = 10.0
     deep_shortlist: int = 40
@@ -306,14 +306,15 @@ class Apply(BaseModel):
 
     runner: Literal["cli", "api"] = "cli"
     cli_model: str = "opus"
-    api_model: str = "claude-opus-5"
+    api_model: str = "claude-opus-5-5"
     effort: Literal["low", "medium", "high"] = "medium"
     daily_cap_usd: float = Field(default=1.00, ge=0)
     # Advisory Haiku pass: do the cited lines support each generated line? (never clears a
-    # badge). Haiku gets no effort setting on either runner: it rejects one.
+    # badge). Haiku gets no effort setting on either runner (Haiku 4.5 rejects one); on the API
+    # the check runs with thinking off (scorers.thinking_off).
     entailment_check: bool = True
     cli_entailment_model: str = "haiku"
-    api_entailment_model: str = "claude-haiku-4-5"
+    api_entailment_model: str = "claude-haiku-5-5"
 
 
 class Settings(BaseModel):

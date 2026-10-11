@@ -1,4 +1,4 @@
-"""Stage 3 deep pass: Opus 5 on one job group (specs/006 "Stage 3 — deep pass").
+"""Stage 3 deep pass: Opus 5.5 on one job group (specs/006 "Stage 3 — deep pass").
 
 Not batched. One streamed request per group, with the same cached system prefix as Stage 2
 (rubric + profile scoring inputs) followed by a deep-pass instruction block. The result is
@@ -33,11 +33,12 @@ from jobhunter.scoring.rubric import DIMENSIONS, PROMPT_VERSION, RUBRIC_TEXT
 logger = logging.getLogger(__name__)
 
 TIER = "deep"
-DEFAULT_SCORER = "anthropic:claude-opus-5"
+DEFAULT_SCORER = "anthropic:claude-opus-5-5"
 MAX_TOKENS = 16000
 EFFORT = "high"
 BETAS = ["server-side-fallback-2026-07-01"]
-# specs/006 "Cost": about $0.064 per deep job; padded for the spend-cap check.
+# specs/006 "Cost": about $0.051 per deep job on Opus 5.5 ($0.064 on Opus 5); padded for the
+# spend-cap check.
 ESTIMATED_COST_PER_REQUEST_USD = 0.08
 DEEP_PROMPT_VERSION = f"{PROMPT_VERSION}+deep1"
 DISAGREEMENT_LEVELS = 1  # flagged when buckets differ by MORE than this many levels
@@ -141,8 +142,9 @@ def build_request(
 ) -> dict[str, Any]:
     """Params for ``client.beta.messages.stream``.
 
-    Adaptive thinking and ``effort`` are the Opus 5 controls; ``budget_tokens`` and
-    ``temperature`` are rejected by the model and never sent. The cache breakpoint sits on the
+    Adaptive thinking and ``effort`` are the Opus 5.5 controls (its thinking cannot be turned
+    off, and its default effort is ``medium``, so ``high`` is sent explicitly); ``budget_tokens``
+    and ``temperature`` are rejected by the model and never sent. The cache breakpoint sits on the
     profile block, so the rubric + profile prefix is identical to Stage 2's; the deep-pass
     instructions follow it.
     """
@@ -211,16 +213,23 @@ def _stored(conn: sqlite3.Connection, group_id: int, scorer: str, profile: Profi
 def shortlist(
     conn: sqlite3.Connection, profile: Profile, n: int, *, scorer: str = DEFAULT_SCORER
 ) -> list[int]:
-    """Top ``n`` group ids by computed screen overall that have no deep score for this key."""
+    """Top ``n`` group ids by computed screen overall that have no deep score yet.
+
+    "Yet" is per prompt and ``scoring_version`` but under **any** model: changing
+    ``scoring.deep_scorer`` (or its default, as when it moved from Opus 5 to Opus 5.5) must
+    not make ``score --deep N`` pay again for groups already deep-scored by the previous model;
+    it moves on to the next unscored ones. Re-running one group on the new model stays
+    possible on request (``score --deep-group``). ``scorer`` is kept for callers.
+    """
+    del scorer
     rows = conn.execute(
         "SELECT g.id AS gid, f.* FROM job_group g JOIN fit_score f ON f.job_group_id = g.id "
         "WHERE f.tier = 'screen' AND f.id = ("
         "  SELECT s.id FROM fit_score s WHERE s.job_group_id = g.id AND s.tier = 'screen' "
         "  ORDER BY (s.scoring_version = ?) DESC, s.id DESC LIMIT 1) "
         "AND NOT EXISTS (SELECT 1 FROM fit_score d WHERE d.job_group_id = g.id "
-        "  AND d.tier = 'deep' AND d.model = ? AND d.prompt_version = ? "
-        "  AND d.scoring_version = ?)",
-        (profile.scoring_version, scorer, DEEP_PROMPT_VERSION, profile.scoring_version),
+        "  AND d.tier = 'deep' AND d.prompt_version = ? AND d.scoring_version = ?)",
+        (profile.scoring_version, DEEP_PROMPT_VERSION, profile.scoring_version),
     ).fetchall()
     scored: list[tuple[int, int]] = []
     rejected = rejections.rejected_group_ids(conn)

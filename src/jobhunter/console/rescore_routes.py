@@ -38,7 +38,7 @@ SCOPE_LABELS = {
     "recent": f"Recent: open A\N{EN DASH}E jobs from the last {rs.RECENT_DAYS} days",
     "all": "All: every job waiting to be scored",
 }
-ANTHROPIC_HAIKU = "anthropic:claude-haiku-4-5"
+ANTHROPIC_HAIKU = "anthropic:claude-haiku-5-5"
 LIVE = ("pending", "running")
 
 

@@ -32,13 +32,27 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_TOKENS = 2048
 # USD per million tokens, standard (non-batch) rates: (input, output).
+# Source: https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-10-11),
+# "Model pricing" and "Batch processing" tables. Older models stay listed so stored spend rows,
+# uncollected batches and confirmed re-score plans made under them still price correctly.
 PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (1.00, 5.00),
     "claude-opus-5": (5.00, 25.00),
+    "claude-haiku-5-5": (0.10, 0.50),  # prompts up to 100,000 tokens; see LONG_PROMPT_PRICING
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-5-5": (4.00, 20.00),
 }
-BATCH_DISCOUNT = 0.5
+# Haiku 5.5 is priced by prompt length: a request whose prompt (input + cache writes + cache
+# reads) is over the threshold pays these (input, output) rates instead, cache multipliers
+# applied to the higher input rate (same pricing page, "Long context pricing").
+LONG_PROMPT_PRICING: dict[str, tuple[int, tuple[float, float]]] = {
+    "claude-haiku-5-5": (100_000, (0.50, 2.50)),
+}
+BATCH_DISCOUNT = 0.5  # every model above: "50% discount on both input and output tokens"
 CACHE_READ_MULTIPLIER = 0.1
-CACHE_WRITE_MULTIPLIER = 1.25  # 5-minute ephemeral cache writes
+# Cache hits on Opus 5.5 and Sonnet 5.5 are 0.05x base input (pricing page, footnote 2).
+CACHE_READ_MULTIPLIERS: dict[str, float] = {"claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.05}
+CACHE_WRITE_MULTIPLIER = 1.25  # 5-minute ephemeral cache writes (1.25x on every model above)
 
 
 class ScorerError(Exception):
@@ -59,7 +73,7 @@ def split_scorer(spec: str) -> tuple[str, str]:
 
 
 def model_id(scorer: str) -> str:
-    """``"anthropic:claude-haiku-4-5"`` -> ``"claude-haiku-4-5"``. Other providers raise."""
+    """``"anthropic:claude-haiku-5-5"`` -> ``"claude-haiku-5-5"``. Other providers raise."""
     provider, name = split_scorer(scorer)
     if provider != "anthropic":
         raise ValueError(f"scorer {scorer!r} is not an Anthropic model")
@@ -72,18 +86,45 @@ def _usage_int(usage: Any, name: str) -> int:
 
 def compute_cost(usage: Any, model: str, *, batch: bool) -> float:
     """USD for one Anthropic response's ``usage``: input, cache writes, cache reads, output."""
+    name = model_id(model)
     try:
-        in_rate, out_rate = PRICING_PER_MTOK[model_id(model)]
+        in_rate, out_rate = PRICING_PER_MTOK[name]
     except KeyError as exc:
         raise ValueError(f"no pricing for model {model!r}") from exc
+    fresh = _usage_int(usage, "input_tokens")
+    writes = _usage_int(usage, "cache_creation_input_tokens")
+    reads = _usage_int(usage, "cache_read_input_tokens")
+    if name in LONG_PROMPT_PRICING:
+        threshold, long_rates = LONG_PROMPT_PRICING[name]
+        if fresh + writes + reads > threshold:
+            in_rate, out_rate = long_rates
     factor = BATCH_DISCOUNT if batch else 1.0
     cost = (
-        _usage_int(usage, "input_tokens") * in_rate
-        + _usage_int(usage, "cache_creation_input_tokens") * in_rate * CACHE_WRITE_MULTIPLIER
-        + _usage_int(usage, "cache_read_input_tokens") * in_rate * CACHE_READ_MULTIPLIER
+        fresh * in_rate
+        + writes * in_rate * CACHE_WRITE_MULTIPLIER
+        + reads * in_rate * CACHE_READ_MULTIPLIERS.get(name, CACHE_READ_MULTIPLIER)
         + _usage_int(usage, "output_tokens") * out_rate
     )
     return cost * factor / 1_000_000
+
+
+# Bounded calls (the screen, the entailment check) run with thinking off, as they did on Haiku
+# 4.5, so output stays inside ``max_tokens`` and priced like a classification. Models whose
+# thinking is on by default need it switched off explicitly, each in the form it accepts
+# (platform.claude.com/docs/en/build-with-claude/thinking#turning-thinking-off): Haiku 5.5
+# takes ``disabled`` at its default effort; Sonnet 5.5 rejects ``disabled`` and takes
+# ``between_tools``; Opus 5.5 cannot turn thinking off at all and gets nothing here.
+THINKING_OFF: dict[str, dict[str, str]] = {
+    "claude-haiku-5-5": {"type": "disabled"},
+    "claude-sonnet-5-5": {"type": "between_tools"},
+}
+
+
+def thinking_off(model: str) -> dict[str, Any]:
+    """Extra params that keep a bounded call thinking-off on ``model`` (an API model id)."""
+    if model in THINKING_OFF:
+        return {"thinking": dict(THINKING_OFF[model])}
+    return {}
 
 
 # ─── Provider-neutral request and result ────────────────────────────────────
@@ -153,9 +194,10 @@ class FitScorer(Protocol):
 
 
 def anthropic_params(request: ScoreRequest, model: str) -> dict[str, Any]:
-    """Messages API params for one request. No ``thinking`` and no ``output_config.effort``.
+    """Messages API params for one request. No ``output_config.effort``; thinking off.
 
-    Haiku 4.5 rejects ``effort``, and a bounded classification runs with thinking off.
+    Haiku 4.5 rejects ``effort``, and a bounded classification runs with thinking off
+    (``thinking_off``: explicit on models whose thinking is on by default).
     """
     return {
         "model": model,
@@ -166,6 +208,7 @@ def anthropic_params(request: ScoreRequest, model: str) -> dict[str, Any]:
         ],
         "messages": [{"role": "user", "content": request.posting}],
         "output_config": {"format": {"type": "json_schema", "schema": request.schema}},
+        **thinking_off(model),
     }
 
 
@@ -189,7 +232,7 @@ class AnthropicScorer:
 
     supports_batching = True
 
-    def __init__(self, client: Any, spec: str = "anthropic:claude-haiku-4-5") -> None:
+    def __init__(self, client: Any, spec: str = "anthropic:claude-haiku-5-5") -> None:
         self.client = client
         self.name = spec
         self.model = model_id(spec)
@@ -654,7 +697,7 @@ def scorer_from_string(
     http_client: httpx.Client | None = None,
     anthropic_factory: Callable[[], Any] | None = None,
 ) -> FitScorer:
-    """``"anthropic:claude-haiku-4-5"`` or ``"openai-compat:llama-3.1-70b"`` -> a scorer."""
+    """``"anthropic:claude-haiku-5-5"`` or ``"openai-compat:llama-3.1-70b"`` -> a scorer."""
     try:
         check_scorer_spec(spec)  # same check as config load, so --scorer overrides get it too
     except ValueError as exc:
