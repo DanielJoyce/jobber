@@ -156,17 +156,18 @@ of it made a network call.
 
 ### Achievements
 
-See [021](021-achievements.md). An `/achievements` board, a notice in the activity band and a
-one-line strip on Today, computed on read from tables jobhunter already keeps, plus a
-`followup_log` so follow-ups leave a record. A1 (migration and write points), then A2 (rules
-and `evaluate`), then the page (A3), the notice (A4) and the strip (A5) together; A6 after 019
-S1. About 5.6 h of continuous run (the A1, A2, A3 chain binds; 6 tickets by the calibrated
-rule in 019), about 5.5M subagent tokens.
+See [021](021-achievements.md). An `/achievements` board in the nav, a notice in the activity
+band and a one-line strip on Today, computed on read from tables jobhunter already keeps, plus
+a `followup_log` so follow-ups leave a record. A1 (migration and write points), then A2 (rules,
+`evaluate`, the route and nav entry), then the page (A3), the notice (A4) and the strip (A5)
+together; A6 after 019 S1. About 6.3 h of continuous run (the A1, A2, A4 chain binds; 6
+tickets by the calibrated rule in 019), about 5.5M subagent tokens.
 
-**Done when** a copy of your database shows the 9 history unlocks on `/achievements` without a
-notice, marking a follow-up done shows "Achievement: Follow-through" in the activity band at
-once, turning achievements off removes the strip and the notices, and no test or page load
-constructs a model client.
+**Done when** a copy of your database shows the 7 history unlocks on `/achievements` without a
+notice, marking a dated follow-up done shows "Achievement: Follow-through" in the activity band
+at once, a pipeline run holding the write lock leaves `/` and `/achievements` at 200, turning
+achievements off removes the nav entry, strip and notices, and no test or page load constructs
+a model client.
 
 ## Dependency order
 

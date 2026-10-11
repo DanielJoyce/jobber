@@ -1,34 +1,47 @@
 # 021 — Achievements
 
-Status: **draft for review, revision 1** (bug `4f6bedb`). Written 2026-10-11.
+Status: **draft for review, revision 2** (bug `4f6bedb`). Written 2026-10-11; revised the same
+day after an adversarial review and your answers ([History](#history)).
 
 You asked for "a spec for an achievements board and achievements". A job hunt is long, most of
 it gets no reply, and the useful work (a tailored packet, a follow-up, a contact logged) leaves
 no visible trace. This spec adds:
 
-- **An achievement catalog** of 31 achievements (53 unlocks counting tiers) in six categories. Each has an exact rule over
-  tables jobhunter already keeps, so your existing history counts from day one.
-- **`/achievements`**, a board: what you have earned, progress toward the next tier, locked ones
-  with a hint, and a few hidden ones.
+- **An achievement catalog** of 32 achievements (54 unlocks counting tiers) in six
+  categories. Each has an exact rule over tables jobhunter already keeps, so your existing
+  history counts from day one.
+- **`/achievements`**, a board in the top nav: what you have earned, progress toward the next
+  tier, locked ones with a hint, and a few hidden ones.
 - **A small notice** in the existing activity band (PR 113) when one unlocks, and a one-line
   strip on Today.
 - **Settings** on the board: turn the whole thing off, turn notices off, hide categories.
 
 It rewards habits that make a search work. It does not reward volume for its own sake, and
-nothing in it spends scorer or API credits.
+nothing in it reads or rewards scoring or anything else that spends credits.
+
+## Decisions
+
+### Your answers (2026-10-11)
+
+| Question | Answer |
+|---|---|
+| Nav link? | **Yes**: "Achievements" in the top nav (hidden while achievements are off) |
+| Daily cap on application counts | **3 per local day** ("feast or famine"), on every family that counts applications you sent |
+| Rejection-related achievements | **Keep them, with a positive spin**: resilience, closing the loop, learning. Names and copy never lead with "rejected" |
 
 ## Goals and guardrails
 
 | # | Rule | How the design keeps it |
 |---|---|---|
-| G1 | **Reward effective habits**: targeted applications, tailored packets, follow-ups, contacts, deciding on jobs, a steady weekly routine, rest | Most of the catalog is in Search, Apply (targeted), Follow-up and Rhythm. Volume has one family, capped |
-| G2 | **Never reward spray-and-pray** | The only count-of-applications family (`apply.momentum`) counts at most **5 applications per day** and stops at 50. "Targeted" and "tailored" families need evidence of preparation. `apply.quality_week` rewards a week of 2 to 5 applications that were all targeted. No achievement for applications per day or per hour |
-| G3 | **Never reward anything that spends credits** | No rule reads `llm_spend`, `rescore_request`, `rescore_run`, packet generation counts or "Score it" outcomes. Packets count only once **sent** (review done, application made), never per generated version. Hints never say "score" or "generate". A test enforces both ([Testing](#testing)) |
-| G4 | **No punishment** | Unlocks are permanent (one narrow exception: [Revocation](#idempotence-and-revocation)). There are **no daily streaks**. The weekly rhythm has freezes and a "Welcome back" achievement for returning after a gap. Copy never says "lost" or "broken" |
-| G5 | **Can be turned off**, wholly or by category | [Settings](#settings) |
-| G6 | **Nothing leaves the machine** | Pure SQL and Python over the local database. No network, no model call, no share or export button, no telemetry |
-| G7 | **No comparison to others** | No percentiles, "rarest", leaderboards or averages. Only your own history |
-| G8 | **Outcomes are milestones, not goals** | Interviews and offers depend on employers. They get one-off milestones with no tier ladder, and you can hide the category |
+| G1 | **Reward effective habits**: targeted applications, tailored packets, follow-ups, contacts, deciding on jobs, a steady weekly routine, rest | Most of the catalog is in Search, Apply (targeted), Follow-up and Rhythm |
+| G2 | **Never reward spray-and-pray** | Every family that counts your applications (Momentum, Aimed, Tailor-made, Shortlist) counts **at most 3 per local day** and has a low top tier. Triage counts are capped per day too, so one bulk click is not a volume trophy. "Targeted" needs a deliberate act on an **earlier day** than the send. Weekly achievements are judged only on **finished** weeks |
+| G3 | **Never reward anything that spends credits** | No rule reads `fit_score`, `llm_spend`, `rescore_request`, `rescore_run`, cost columns, packet generation counts or "Score it" outcomes. A packet counts once it is **sent**, never per generated version. Hints and card copy never mention scoring or generating. Tests enforce all of it ([Testing](#testing)) |
+| G4 | **No punishment** | Unlocks are permanent (one narrow exception: [Revocation](#revocation)). **No daily streaks.** The weekly rhythm has freezes and a "Welcome back" achievement. Copy never says "lost" or "broken" |
+| G5 | **Credit only for what you did** | Automated writes never earn anything by themselves: nightly merge events, the mail classifier's rejection rows, bulk triage batches, the migration's own backfill rows ([Definitions](#definitions-used-by-the-rules)) |
+| G6 | **Can be turned off**, wholly or by category | [Settings](#settings) |
+| G7 | **Nothing leaves the machine** | Pure SQL and Python over the local database. No network, no model call, no share or export button, no telemetry |
+| G8 | **No comparison to others** | No percentiles, "rarest", leaderboards or averages. Only your own history |
+| G9 | **Outcomes are milestones, not goals** | Interviews and offers depend on employers: one-off milestones, no tier ladder, hideable |
 
 ## What exists today (checked in code, 2026-10-11)
 
@@ -37,285 +50,291 @@ The rules read these. Paths are under `src/jobhunter/`.
 | Fact | Where |
 |---|---|
 | `application` (one per job group; `status`, `applied_at`, `resume_version`, `cover_letter_path`, `next_action`, `next_action_at`) | `core/migrations/0001_initial.sql:223` |
-| `application_event` (append-only log; `at`, `status`, `note`, `source` manual/email/import) | `0001_initial.sql:240` |
-| `contact` (per application; **no timestamp column**) | `0001_initial.sql:252` |
-| `label` (one row per group; `interesting` / `not_interesting` / `applied`, `labeled_at` overwritten on relabel) | `0001_initial.sql:205`, written by `console/inbox.py:315` |
-| `profile_change` (every prefs save; `source` ui/file/revert) | `0001_initial.sql:271` |
-| `fit_score.verdict` (`strong`/`possible`/`weak`/`mismatch`) | `0001_initial.sql:180` |
-| `mail_message` (alert emails processed) | `0009_mail_alerts.sql:12` |
-| `alert_signup.subscribed_at` | `0021_alert_signup.sql` |
-| `rejection` (employer rejections; `state` pending/confirmed) | `0023_rejection.sql`, `0028_rejection_state.sql` |
-| `application_packet` (`status` draft/ready/abandoned, `ready_at`), `packet_document.origin` (generated/edited/base) | `0029_application_packet.sql` |
+| `application_event` (append-only; `at`, `status`, `note`, `source` manual/email/import); **no insertion time**, and pipeline events accept a user-supplied `at` | `0001_initial.sql:240`, `console/tracking_routes.py:190` |
+| Sent statuses: `applied`, `acknowledged`, `screening`, `interview`, `offer`. An acknowledgement email or a drag can move an application past `applied` with no `applied` event | `apply/packets.py:39`, `mail/match.py:42-48`, `console/tracking.py:328-330` |
+| Automatic early-event notes: `shortlisted from inbox`, `opened apply link`, `packet started`; "Did you apply?" *Not yet* writes `not applied yet` | `console/tracking.py:71-74`, `console/detail.py:588` |
+| Bulk triage: up to 500 groups in one transaction with one `labeled_at` and one shortlist event time | `console/inbox.py:310`, `:406-411`, `:315-337` |
+| A dedupe merge writes an event with the winner's status, `source = 'manual'`, `at = now`, note `Merged duplicate application (...)`, and deletes the losing application; the group merge re-keys or deletes `label` rows (keyed by `job_group_id`) | `pipeline/dedupe_url.py:232-255`, `:293-307` |
+| `contact` (per application; **no timestamp**) | `0001_initial.sql:252` |
+| `label` (one row per group, `labeled_at` overwritten on relabel) | `0001_initial.sql:205` |
+| `profile_change` (`source` ui/file/revert) | `0001_initial.sql:271` |
+| `rejection`: `mail match` writes rows itself, `confirmed` whenever the phrase is specific; confirming a pending row is an `UPDATE` with **no time stored**; a manual row takes a user-entered `received_at` | `0023_rejection.sql`, `0028_rejection_state.sql`, `mail/match.py:776-795`, `core/rejections.py:148-150`, `console/rejections_routes.py:89-101` |
+| `application_packet`, `packet_document.origin` (`generated`/`edited`/`base`); "Use base resume" makes an untailored `base` version that can be marked ready | `0029_application_packet.sql`, `apply/generator.py:1153-1170` |
+| A sent packet sets `resume_version = 'packet:<id>/resume/v<n>'` **unless you typed one** (then only the `attachment` rows, `packets/<id>/resume-v<n>.pdf`, record it); `resume_version` is free text in the drawer | `apply/packets.py:186`, `:221-225`, `console/tracking.py:400-414` |
 | `capture_log` (extension captures; `outcome`) | `0033_capture_log.sql` |
-| A sent packet sets `application.resume_version = 'packet:<id>/resume/v<n>'` on the `applied` event, on every path | `apply/packets.py:186` (`attach_sent_packet`) |
-| Regenerating a packet clears `ready_at` | `apply/generator.py:837` |
-| Automatic early events carry fixed notes: `shortlisted from inbox`, `opened apply link`, `packet started` | `console/tracking.py:71-74` |
-| A dedupe merge writes an event with the winner's status and note `Merged duplicate application (...)` | `pipeline/dedupe_url.py:301-305` |
-| "Response" means `screening`, `interview`, `offer` or `rejected` (acknowledged is an automated receipt) | `console/dashboard.py:49` |
-| Follow-up **Done** clears `next_action` and keeps **no record** that a follow-up happened | `console/tracking.py:388`, route `console/tracking_routes.py:281` |
-| Setting a next action overwrites it; no history | `console/tracking.py:368` |
-| The activity band: `GET /activity` on every page, polls every 3 s while work runs and 60 s idle, `role="status"` | `console/activity_routes.py:28-29`, `templates/_activity.html`, `templates/base.html:29` |
-| Nav entries: `PAGES` (a `None` label keeps a page out of the nav) | `console/app.py:74-87` |
-| The dashboard counts days in UTC | `console/dashboard.py:122` |
+| `alert_signup.subscribed_at`; `mail_message` | `0021_alert_signup.sql`, `0009_mail_alerts.sql:12` |
+| Follow-up **Done** clears `next_action`, keeping **no record**; the drawer re-posts the prefilled date on every save; Done and No-response posts carry no item kind; `fu_no_response` commits twice | `console/tracking.py:368-397`, `templates/_drawer.html:16`, `tracking_routes.py:203-211`, `:281-298` |
+| `tracking.parse_ts` reads a bare date as UTC midnight (the previous evening in the Americas) | `console/tracking.py:54-57` |
+| Shortlist undo deletes an application unless it has contacts, attachments, proposals or packets | `console/inbox.py:351-389` |
+| The activity band: `GET /activity`, `outerHTML` swap every 3 s while work runs and 60 s idle, `role="status"`; `app.js` handles any `.activity-dismiss` click by writing `sessionStorage` and emptying the band; `inbox.js` ignores only requests whose path is `/activity` | `console/activity_routes.py`, `templates/_activity.html:2`, `static/app.js:63-75`, `static/inbox.js:155-175` |
+| Connections wait up to 5 s for a lock | `core/db.py:185` |
+| Nav entries: `PAGES` | `console/app.py:74-87` |
+| Theme tokens: `--series-1` and `--text-secondary` exist in all three theme blocks; `--text-muted` only in light; no `color-scheme` | `static/app.css:1-140` |
 | The container runs with `Timezone=local` | `specs/018-containers.md:286` |
-| `/setup` readiness checks (`readiness.py`, `essentials_ok`) are **specified, not built** | [019](019-setup-and-readiness.md) S1 |
+| `readiness.essentials_ok` is specified, not built | [019](019-setup-and-readiness.md) S1 |
+| Migrations end at `0034_score_failure.sql` | `core/migrations/` |
 
-Your history on a copy of the database (counts only, 2026-10-11): 20 applications, 18 with an
-`applied` event (all from accepted Gmail confirmations), on 10 different days across 4 weeks, at
-most 6 on one day; 6 confirmed employer rejections; 3 triage labels; 14 prefs saves; 3
-extension captures; 0 contacts, 0 packets, 0 next actions set. The backfill section says what
-that unlocks.
-
-Two gaps must be closed for the follow-up and networking achievements to mean anything: a
-follow-up leaves no trace today, and a contact has no date. [Data](#data) adds both.
+Your history on a copy of the database (counts only, 2026-10-11): 18 sent applications on 10
+local days (one day had 6, one had 3), 6 rejection rows all written by `mail match`, 3 triage
+labels, 14 prefs saves, 1 job added from the extension; no contacts, packets or next actions.
+[Backfill](#backfill) says what that unlocks.
 
 ## Definitions used by the rules
 
-- **Local day / week.** Days are calendar days in the console process's local time zone
-  (`datetime.astimezone()`), weeks are Monday to Sunday. Deliberately not the dashboard's UTC
-  day: at UTC an application sent at 6 pm Pacific lands on tomorrow, which would make a rhythm
-  feel wrong. The container already runs with the host's zone.
-- **Applied date** of an application: the earliest `application_event.at` with
-  `status = 'applied'`, ignoring events whose note starts with `Merged duplicate application`.
-  An application counts once, however many `applied` events it has.
-- **Sent application**: one with an applied date.
-- **Targeted** application: a sent application with at least one of
-  1. a sent packet: `resume_version LIKE 'packet:%'`;
-  2. an `interested` or `preparing` event dated before its applied date (it was on your
-     shortlist or in preparation first; the automatic notes count here, they record a real
-     shortlist press or packet start);
-  3. an existing `fit_score` row for its group with `verdict IN ('strong', 'possible')` and
-     `created_at` before its applied date. **Read only**: nothing is ever scored for this.
-- **Tailored** application: a sent application with `resume_version LIKE 'packet:%'`.
-- **Response**: an `application_event` with status `screening`, `interview` or `offer`
-  (rejections are counted separately, never as a "response" achievement).
-- **Active day**: a local day with at least one of these deliberate actions:
-  an application's applied date; a `label.labeled_at`; a `followup_log` row (new);
-  a `contact.created_at` (new); a packet `ready_at`; a `rejection` with `source = 'manual'`;
-  a status event `screening`/`interview`/`offer`/`withdrawn`/`no_response` with
-  `source = 'manual'`; `alert_signup.subscribed_at`; a `capture_log` row with outcome
-  `added`, `linked`, `description_added` or `linked_groups`; a `profile_change` with
-  `source = 'ui'`. Not counted: `opened apply link` events, `packet started` events, merge
-  events, anything from the scorer or the nightly run.
-- **Active week**: a week with **2 or more** active days. One active day a week is still a
-  search, but the rhythm is about a habit, and two touches is the lightest habit worth naming.
-- **Rest day**: a day in a week that has no active action.
+- **Local day / week.** Calendar days in the console process's local zone
+  (`datetime.astimezone()`), weeks Monday to Sunday. Not the dashboard's UTC day: an
+  application sent at 6 pm Pacific would land on tomorrow. A date-only value (a
+  `next_action_at` of `2026-10-14`) **is** a local calendar date and is compared as one, never
+  through `parse_ts`.
+- **User events.** Every event rule reads one shared query: `application_event` minus rows
+  whose note starts with `Merged duplicate application`. Merge events never count, for any
+  status.
+- **Sent date** of an application: the earliest user event with a status in `SENT_STATUSES`
+  (`applied`, `acknowledged`, `screening`, `interview`, `offer`). An application counts once.
+- **Daily cap.** A family that counts your applications counts at most **3 per local day**
+  of the date that family uses (sent date, or shortlist date for Shortlist). The fourth and
+  later that day still exist; they just do not move that family.
+- **Deliberate early event**: an `interested` or `preparing` user event that is either
+  `shortlisted from inbox` from a **single** press (fewer than 3 shortlist events share its
+  exact `at`; a bulk batch shares one), `packet started`, or a manual move (`source = 'manual'`,
+  note not in the automatic notes and not `not applied yet`).
+- **Sent packet** of an application: a packet of **that application** whose sent resume
+  version has `origin IN ('generated', 'edited')`. The version is found from `resume_version`
+  when it parses as `packet:<id>/resume/v<n>` with `<id>` belonging to the application, else
+  from an `attachment` row of kind `resume` at `packets/<id>/resume-v<n>.pdf` for such a
+  packet. A typed `packet:` string that resolves to no such packet counts for nothing; a
+  `base` version (your resume unchanged) is not tailoring.
+- **Targeted** application: a sent application with a sent packet, or with a deliberate early
+  event on a local day **before** its sent date.
+- **Tailored** application: a sent application with a sent packet.
+- **Response**: a user event with status `screening`, `interview` or `offer`.
+- **Recorded time** of a manual event: the new `application_event.recorded_at` (when the row
+  was written) if set, else `at`. Rhythm uses it, so backdating an event does not fill a past
+  week; momentum and the other send-date rules keep the real `at` (the day you applied).
+- **Active day**: a local day with at least one deliberate action:
+  a sent date of an email-sourced send (its `at` is the confirmation's time, which is when you
+  applied); the recorded time of a manual user event in a sent status or `withdrawn` or
+  `no_response`; a `label.labeled_at` (a bulk batch is one action); a `followup_log` row that is
+  not a migration backfill; a `contact.created_at`; a packet `ready_at`; a manual `rejection`'s
+  `created_at` or any `rejection.confirmed_at`; `alert_signup.subscribed_at`; a `capture_log`
+  row with outcome `added`, `linked`, `description_added` or `linked_groups`; a
+  `profile_change` with `source = 'ui'`. Never: `opened apply link`, `packet started`, merge
+  events, anything written by the scorer, the nightly run or `mail match` alone.
+- **Active week**: a **finished** week with **2 or more** active days. **Missed week**: any
+  finished week that is not active (a 1-day week is missed). The current week is "in progress"
+  and never counts either way until Monday 00:00 local.
+- **Rest day**: a day of a finished active week with no active action.
 
 ## The catalog
 
-31 achievements, 53 unlocks. A **family** has tiers (each tier is its own unlock, shown as one card with
-pips); the others are single. **Hidden** ones show as "Hidden achievement" with their category
-until earned. **Lost?** says whether the unlock can go away; the answer is no everywhere except
-the 24-hour undo ([Revocation](#idempotence-and-revocation)). **Backfill** is what your current
-history unlocks on the first evaluation, silently.
+32 achievements, 54 unlocks. A **family** has tiers (each tier is its own unlock, shown as one
+card with pips); the others are single. **Hidden** ones show as "Hidden achievement" with their
+category until earned. **Lost?** No, everywhere, except the 24-hour [revocation](#revocation).
+**Backfill** is what your current history unlocks on the first evaluation, silently.
 
 ### Setup (4)
 
-| ID | Name | Rule (exact) | Backfill (your data) |
+| ID | Name | Rule (exact) | Backfill |
 |---|---|---|---|
-| `setup.prefs` | Tuned in | First `profile_change` with `source = 'ui'` (saved from `/prefs`). Saving is free; a re-score is a separate, explicit action and is not rewarded | Yes |
-| `setup.alerts` | Net cast, tiers **1 / 5** | Count of `alert_signup` rows with `subscribed_at IS NOT NULL` | No (0) |
-| `setup.mail` | Inbox sorted | First `mail_message` row (`processed_at`): alert emails are reaching jobhunter | No (0 alert emails processed) |
-| `setup.ready` | All set | 019's `essentials_ok` is true. **Added by ticket A6 once 019 S1 lands**; absent from the catalog until then | n/a |
+| `setup.prefs` | Tuned in | First `profile_change` with `source = 'ui'` (a save from `/prefs`; saving is free, a re-score is a separate action and not rewarded) | Yes |
+| `setup.alerts` | Net cast, tiers **1 / 5** | `alert_signup` rows with `subscribed_at IS NOT NULL` | No |
+| `setup.mail` | Inbox sorted | Any `mail_message` row exists (alert emails reach jobhunter) | No |
+| `setup.ready` | All set | 019's `essentials_ok`. **Added by A6 once 019 S1 lands** | n/a |
 
 ### Search (4)
 
 | ID | Name | Rule (exact) | Backfill |
 |---|---|---|---|
-| `search.decide` | Decisive, tiers **10 / 50 / 150 / 300** | Count of `label` rows (any label: saying no is a decision too). The date of a tier is the `labeled_at` of the row that crossed it, ordered by `labeled_at` | No (3) |
-| `search.no` | Clear no | 10 `label` rows with `label = 'not_interesting'`. Knowing what you do not want is a skill | No (1) |
-| `search.shortlist` | Shortlist | 5 applications with an `interested` event | No (2) |
-| `search.found` | Found it yourself | First `capture_log` row with outcome `added`, `linked` or `description_added` (a job you found and sent from the extension). The capture's optional "Score it" is not part of the rule | Yes |
+| `search.decide` | Decisive, tiers **10 / 50 / 150 / 300** | `label` rows, counting at most **20 per local day** of `labeled_at`. Saying no is a decision too | No |
+| `search.no` | Clear no | 10 `not_interesting` labels, at most **5 per local day** | No |
+| `search.shortlist` | Shortlist | 5 applications with a deliberate early event, at most 3 per local day | No |
+| `search.found` | Found it yourself | First `capture_log` row with outcome `added`, `linked` or `description_added` | Yes |
 
 ### Apply (7)
 
 | ID | Name | Rule (exact) | Backfill |
 |---|---|---|---|
 | `apply.first` | First one out | First sent application | Yes |
-| `apply.momentum` | Momentum, tiers **5 / 10 / 25 / 50** | Sent applications, counting **at most 5 per local day** (by applied date). Stops at 50 | 5 and 10 (17 counted of 18: one day had 6) |
-| `apply.targeted` | Aimed, not sprayed, tiers **1 / 5 / 15** | Targeted applications | No (the 2 scored groups are your 2 `interested` ones, not yet sent) |
-| `apply.tailored` | Tailor-made, tiers **1 / 5 / 10** | Tailored applications | No (0) |
-| `apply.own_words` | In your own words | A tailored application whose sent resume version (the `v<n>` in `resume_version`) is a `packet_document` with `origin = 'edited'` | No |
-| `apply.cover` | Dear hiring manager | A tailored application with `cover_letter_path` set and its packet's `cover_doc_id` not null | No |
-| `apply.quality_week` | Quality week | A local week with **2 to 5** sent applications, **all** targeted | No |
+| `apply.momentum` | Momentum, tiers **5 / 10 / 25 / 50** | Sent applications, capped 3 per local day of sent date | **5 and 10** (15 counted of 18) |
+| `apply.targeted` | Aimed, not sprayed, tiers **1 / 5 / 15** | Targeted applications, capped 3 per day | No |
+| `apply.tailored` | Tailor-made, tiers **1 / 5 / 10** | Tailored applications, capped 3 per day | No |
+| `apply.own_words` | In your own words | A tailored application whose sent resume version has `origin = 'edited'` | No |
+| `apply.cover` | Dear hiring manager | A tailored application whose packet's `cover_doc_id` is set and whose `cover_letter_path` or a `cover_letter` attachment records it | No |
+| `apply.quality_week` | Quality week | A **finished** week with **2 to 5** sent applications, **all** targeted | No |
 
-### Follow-up (6)
+### Follow-up (7)
 
 | ID | Name | Rule (exact) | Backfill |
 |---|---|---|---|
-| `follow.plan` | Next step set, tiers **1 / 5 / 15** | Count of `followup_log` rows with `kind = 'planned'` (setting a next-action date). Backfill: each application whose `next_action_at` is set at migration time gets one row dated at migration | No (0 set) |
-| `follow.done` | Follow-through, tiers **1 / 5 / 15 / 30** | `followup_log` rows with `kind IN ('done', 'no_response')` | No: no history exists before this spec |
-| `follow.on_time` | On time | 5 `followup_log` rows of `kind = 'done'` with `at` on or before the local day of `due_at` | No |
-| `follow.tidy` | Loose ends | 5 applications with a `no_response` event (closing stale applications keeps the pipeline honest) | No |
-| `follow.contact` | Networker, tiers **1 / 5 / 15** | `contact` rows. Existing rows (no date) count as of migration time | No (0) |
-| `follow.outcome_logged` | Noted, moving on | First `rejection` with `state = 'confirmed'`. Recording outcomes keeps your data honest; the copy says so and nothing more | Yes |
+| `follow.plan` | Next step set, tiers **1 / 5 / 15** | Distinct `(application_id, due_at)` pairs among `followup_log` `planned` rows | No |
+| `follow.done` | Follow-through, tiers **1 / 5 / 15 / 30** | Distinct `(application_id, due_at)` pairs among `done` rows, plus `no_response` rows | No |
+| `follow.on_time` | On time | 5 `done` rows each with an earlier `planned` row for the same pair and a local day on or before `due_at` (as a local date) | No |
+| `follow.tidy` | Tidy pipeline | 5 applications with a manual `no_response` user event (closing stale ones keeps the pipeline honest) | No |
+| `follow.contact` | Networker, tiers **1 / 5 / 15** | `contact` rows (rows from before the migration count, dated at migration, but are not active days) | No |
+| `follow.loop` | Closing the loop | The first time **you** record an employer's answer: a manual `rejection` (by `created_at`), a confirmed `rejection.confirmed_at` (you pressed confirm), or a user event `rejected` with `source = 'manual'` or from an accepted proposal. Copy: "You recorded how an application ended. Knowing where you stand frees you to move on." | No (all 6 rows came from the classifier) |
+| `follow.lessons` | Lessons kept | 3 applications with a manual user event in `rejected`, `no_response` or `withdrawn` that carries a note you wrote (not an automatic or route-generated note). Copy: "Three times you wrote down what you learned from an ending." | No |
 
 ### Outcomes (7, hideable)
 
+Employer-driven, so no daily cap: you cannot spray responses.
+
 | ID | Name | Rule (exact) | Backfill |
 |---|---|---|---|
-| `out.heard_back` | Heard back | First response event | Depends on your events (none today) |
-| `out.conversations` | Conversations, tiers **3 / 10** | Applications with any response event | No |
-| `out.interview` | First interview | First `interview` event | No |
-| `out.interviews` | Interview circuit | 3 different applications with an `interview` event | No |
-| `out.offer` | Offer | First `offer` event | No |
-| `out.long_game` | The long game (**hidden**) | A response event 30 or more days after that application's applied date | No |
-| `out.second_wind` | Second wind (**hidden**) | An application sent within 14 days after a confirmed `rejection.received_at` | **Yes**: 5 of your 6 rejections were followed by an application within 14 days |
+| `out.heard_back` | Heard back | First response | No |
+| `out.conversations` | Conversations, tiers **3 / 10** | Applications with a response | No |
+| `out.interview` | First interview | First `interview` user event | No |
+| `out.interviews` | Interview circuit | 3 applications with an `interview` user event | No |
+| `out.offer` | Offer | First `offer` user event | No |
+| `out.long_game` | The long game (**hidden**) | A response 30 or more days after that application's sent date | No |
+| `out.bounce_back` | Bounce back (**hidden**) | You sent an application within 14 days after an employer said no (a `rejection` in `confirmed` state, by `received_at`, or a `rejected` user event). Copy: "A no, and you kept going within two weeks. That is what resilience looks like." | **Yes** (5 of 6) |
 
 ### Rhythm (3)
 
 | ID | Name | Rule (exact) | Backfill |
 |---|---|---|---|
-| `rhythm.weeks` | Steady rhythm, tiers **2 / 4 / 8 / 12** | Longest run of consecutive active weeks, freezes applied (below) | Tier 1 (2 weeks): the last 3 weeks each had 2 to 4 active days |
-| `rhythm.rest` | Rest is part of it | 3 active weeks that each also had **2 or more** rest days | Yes |
-| `rhythm.comeback` | Welcome back | An active week that follows **2 or more** weeks with no active day | No |
+| `rhythm.weeks` | Steady rhythm, tiers **2 / 4 / 8 / 12** | Longest run of consecutive active weeks, freezes applied | **Tier 1** (weeks of Sep 21 and Sep 28) |
+| `rhythm.rest` | Rest is part of it | 3 active weeks that each had **2 or more** rest days | Not yet; **yes on Monday** when this week ends |
+| `rhythm.comeback` | Welcome back | An active week after **2 or more** missed weeks, **and** after an earlier active week (a first-ever week is a start, not a comeback) | No |
 
-Count: 4 + 4 + 7 + 6 + 7 + 3 = **31 cards, 53 unlocks** (each tier is an unlock).
-`setup.ready` arrives with A6, so 30 cards and 52 unlocks ship first.
+**Freezes.** You hold up to **2**; you earn one for every 4 consecutive active weeks in a run.
+A missed week, when you hold a freeze, uses one and the run continues (it does not add to the
+length). Freezes are recomputed from history each time, so they need no storage, and a
+confirmation accepted late can repair a past week. When a run ends the board says "Rhythm:
+paused. Your best run is 6 weeks." Earned tiers stay.
 
-**What your history unlocks on day one** (silently, from the copy): Tuned in, Found it
-yourself, First one out, Momentum 5 and 10, Noted moving on, Second wind, Steady rhythm (2
-weeks) and Rest is part of it: **9 unlocks**. The strongest next steps the board will show are
-Aimed, not sprayed (shortlist or prepare before sending), Next step set and Networker, which
-your history has none of yet.
-
-**Freezes.** Rhythm is a weekly count, so one missed week would end it. You hold up to **2
-freezes**; you earn one for every 4 consecutive active weeks (counted inside the run). A week
-with no active day, when you hold a freeze, uses one automatically and the run continues
-(the frozen week does not add to the length). The current week never counts as missed until it
-ends. Everything is recomputed from history on each evaluation, so freezes need no storage and
-an email confirmation accepted late can repair an earlier week. When the run does end, the
-board shows "Rhythm: paused. Your best run is 6 weeks." The earned tiers stay.
-
-**What is deliberately absent:** applications per day, a daily streak, "apply to N jobs this
-week", jobs scored, re-scores run, packets generated, time spent, logins, or anything about
-other people.
+**Deliberately absent:** applications per day, a daily streak, "apply to N this week", jobs
+scored, re-scores, packets generated, time spent, logins, anything about other people.
 
 ## Data
 
-New migration (the next free number at implementation time; `0034` today). All additive.
+New migration **`0035_achievements.sql`** (the next free number at implementation time).
+All additive.
 
 ```sql
--- One row per unlocked achievement tier. Never updated except seen_at.
 CREATE TABLE achievement_unlock (
   id              INTEGER PRIMARY KEY,
-  achievement_id  TEXT NOT NULL,             -- 'apply.momentum'
-  tier            INTEGER NOT NULL DEFAULT 1, -- 1-based index into the family's thresholds
-  unlocked_at     TEXT NOT NULL,             -- when it was earned: the crossing row's date
-  detected_at     TEXT NOT NULL,             -- when evaluate() wrote it
-  evidence        TEXT NOT NULL,             -- JSON {"application": [12, 15], "label": [...]}
+  achievement_id  TEXT NOT NULL,              -- 'apply.momentum'
+  tier            INTEGER NOT NULL DEFAULT 1,  -- 1-based into the family's thresholds
+  unlocked_at     TEXT NOT NULL,              -- the crossing date (display)
+  detected_at     TEXT NOT NULL,              -- when evaluate() wrote it (revocation clock)
+  evidence        TEXT NOT NULL,              -- JSON {"application": [12, 15]}: display only
   catalog_version INTEGER NOT NULL,
-  seen_at         TEXT,                      -- NULL: notice not yet shown or dismissed
+  seen_at         TEXT,                       -- NULL: notice not yet shown or dismissed
   UNIQUE (achievement_id, tier)
 );
 CREATE INDEX achievement_unlock_unseen ON achievement_unlock(seen_at) WHERE seen_at IS NULL;
 
--- Follow-ups had no history (tracking.done clears the field).
 CREATE TABLE followup_log (
   id             INTEGER PRIMARY KEY,
-  application_id INTEGER REFERENCES application(id),  -- NULLed on application delete
+  application_id INTEGER NOT NULL REFERENCES application(id),
   at             TEXT NOT NULL,
   kind           TEXT NOT NULL CHECK (kind IN ('planned', 'done', 'no_response')),
-  item_kind      TEXT CHECK (item_kind IN ('action', 'nudge', 'packet')),
-  due_at         TEXT                         -- the next_action_at that was due, when known
+  due_at         TEXT,                         -- the next_action_at in force (date or time)
+  backfill       INTEGER NOT NULL DEFAULT 0 CHECK (backfill IN (0, 1))
 );
-CREATE INDEX followup_log_at ON followup_log(at);
+CREATE INDEX followup_log_app ON followup_log(application_id);
 
--- Settings: enabled, notify, hidden_categories (JSON list), backfilled_at, fingerprint.
-CREATE TABLE achievement_setting (
+CREATE TABLE achievement_setting (            -- enabled, notify, hidden_categories, backfilled_at
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
-ALTER TABLE contact ADD COLUMN created_at TEXT;  -- NULL for rows that predate this
+ALTER TABLE contact ADD COLUMN created_at TEXT;            -- NULL: predates this migration
+ALTER TABLE application_event ADD COLUMN recorded_at TEXT; -- NULL: predates this migration
+ALTER TABLE rejection ADD COLUMN confirmed_at TEXT;        -- set when you confirm a pending row
 
--- Backfill: current next actions count as planned once.
-INSERT INTO followup_log (application_id, at, kind, item_kind, due_at)
-  SELECT id, strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), 'planned', 'action', next_action_at
+INSERT INTO followup_log (application_id, at, kind, due_at, backfill)
+  SELECT id, strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), 'planned', next_action_at, 1
   FROM application WHERE next_action_at IS NOT NULL AND next_action_at != '';
 ```
 
-**Write points** (each in the same transaction as the change it records):
+**Write points** (each inside the transaction of the change it records):
 
 | Action | Writes | Code |
 |---|---|---|
-| Set or change a next-action date (`set_next_action` with a date) | `followup_log` `planned`, `due_at` = the date. Snooze calls the same function: snooze writes **nothing** (it passes a flag) | `console/tracking.py:368`, `:392` |
-| Follow-up **Done** | `done`, with the item's kind and `due_at` | `tracking_routes.py:281` |
-| **No response** from follow-ups | `no_response` | `tracking_routes.py:293` |
+| Any event insert | `recorded_at = now` (`tracking.add_event`, `detail.answer_prompt`, the inbox shortlist, the merge) | `console/tracking.py:131`, `console/detail.py:537`, `console/inbox.py:334`, `pipeline/dedupe_url.py:301` |
+| Next action: `next_action_at` **changes to a new non-empty value** | `planned`, `due_at` = the new value. Re-saving the same date, editing only the text, or a snooze (which moves a date you did not choose) writes nothing; snooze passes a flag | `console/tracking.py:368`, `:392` |
+| Follow-up **Done**, when a next action with a date existed | `done`, `due_at` = that date. Done on a nudge with no next action writes nothing | `tracking_routes.py:281` |
+| **No response** from follow-ups | `no_response`, in **one** transaction with the event (fixes today's double commit) | `tracking_routes.py:293-298` |
 | Add a contact | `contact.created_at = now` | `console/tracking.py:432` |
-| Merge of applications | `followup_log.application_id` re-pointed like the other child tables | `pipeline/dedupe_url.py:293` (the child-table loop) |
-| Shortlist undo deleting an application | `followup_log.application_id` set NULL first | `console/inbox.py:387` |
+| Confirm a pending rejection | `confirmed_at = now` | `core/rejections.py:148` |
+| Application merge | `followup_log` added to the child-table loop | `pipeline/dedupe_url.py:293` |
+| Shortlist undo | `followup_log` added to the `others` check, so an application you planned a follow-up on is kept, like one with a contact | `console/inbox.py:370-381` |
 
-The two dedupe and undo lines matter: both delete `application` rows, and a new child table
-with a foreign key would otherwise block them.
-
-`achievement_unlock.evidence` holds table names and row ids only, no text. If a row is later
-deleted, the board says "(record since removed)" for it.
+`evidence` holds table names and row ids only, for the "why" list. Ids that no longer exist
+show as "(record since merged or removed)". Evidence is never used to decide anything.
 
 ### How unlocks are computed
 
-**On read, with a change check.** Not a nightly job (an unlock a day late is no reward) and not
-hooks in every write path (a dozen paths, including the CLI's `mail match`, would each need one,
-and a missed one silently loses an unlock). One function does it all:
+**On read, gated by a change check.** Not nightly (a day late is no reward) and not hooks in
+every write path (the CLI's `mail match` alone would be missed). One function:
 
 ```
-achievements.evaluate(conn, now, tz) -> list[Unlock]   # the newly written ones
+achievements.evaluate(conn, now, tz) -> list[Unlock]     # the newly written ones
 ```
 
-1. If `enabled` is off, return `[]` and write nothing.
-2. Compute every rule from scratch: each rule is a Python function over a few SQL queries
-   returning, per tier, the crossing date and the evidence ids.
-3. `INSERT ... ON CONFLICT (achievement_id, tier) DO NOTHING` for each crossed tier, in one
-   `BEGIN IMMEDIATE` transaction. Evaluate twice and the table is unchanged.
-4. Apply the revocation rule (below).
+1. If `enabled` is off, return `[]`. No write.
+2. **Read phase**, no transaction: compute every rule from scratch (each rule is a Python
+   function over a few SQL queries returning, per tier, the crossing date and evidence ids) and
+   diff against the stored rows: tiers to insert, tiers to revoke, evidence to refresh.
+3. **Nothing to change: return without writing.** This is the common case and takes no lock.
+4. **Write phase**: set `PRAGMA busy_timeout = 250` for this statement sequence, `BEGIN
+   IMMEDIATE`, then **inside the transaction** re-read `backfilled_at` and the stored rows and
+   recompute (cheap, and closes the race with another tab or an undo committed in between).
+   Insert with `ON CONFLICT (achievement_id, tier) DO NOTHING RETURNING id`, revoke, refresh
+   evidence, and, if `backfilled_at` was empty, write every row with `seen_at = detected_at` and
+   set `backfilled_at`. Commit, restore the connection's timeout.
+5. A `sqlite3.Error` anywhere (a pipeline run holding the write lock, a busy database) is
+   caught by the **caller**, which renders from the stored unlocks. The next call retries.
+   Every caller (`/`, `/achievements`, `/activity`) does this; none returns 500 for it.
 
 **When it runs:**
 
-- `GET /achievements` and the Today strip: always.
-- `GET /activity` (every page): only when the **fingerprint** changed. The fingerprint is one
-  `SELECT` of `MAX(id)` and `COUNT(*)` over each evidence table (`application_event`, `label`
-  by `MAX(labeled_at)`, `contact`, `followup_log`, `rejection`, `application_packet` by
-  `MAX(updated_at)`, `alert_signup` by `MAX(updated_at)`, `capture_log`, `profile_change`,
-  `mail_message` count) plus the local date (a week rollover can change rhythm). Stored in
-  `achievement_setting`. Rowid maxima are index lookups; the counts are over small tables.
-  `mail_message` is the largest and still a count over a primary key.
-- Writes made by the CLI (`jobhunter mail match`, a proposal accepted from the terminal) are
-  picked up by the next poll through the fingerprint. No CLI change is needed.
+- `/activity`, the Today strip and `GET /achievements` call it only when the **fingerprint**
+  changed. `/achievements` also calls it on a full page load regardless, since it is rare.
+- The fingerprint is one `SELECT` kept **in process** (`app.state`, never written to the
+  database): `MAX(id)` and `COUNT(*)` of `application_event`, `contact`, `followup_log`,
+  `attachment`, `capture_log`, `profile_change`; `COUNT(*)` and `MAX(labeled_at)` of `label`;
+  `MAX(id)`, `COUNT(*)`, confirmed count and `MAX(confirmed_at)` of `rejection`;
+  `MAX(updated_at)` of `application_packet` and `alert_signup`; `EXISTS` on `mail_message`
+  (only "any row" matters, so the mail phase of a run does not churn it); plus the local date
+  and the start of the current week. After a restart the first call evaluates.
+- CLI writes (`mail match`, a proposal accepted in the terminal) show up through the
+  fingerprint on the next poll.
 
-`/activity` is documented as read-only except for the stale re-score heartbeat
-(`activity_routes.py:1-8`). It now also writes unlocks; its docstring says so. A
-`sqlite3.Error` (busy database) is swallowed exactly like the existing queries there, so a
-locked database never breaks a page; the next poll retries.
+`/activity`'s docstring (`activity_routes.py:1-8`) is updated to say it may write unlocks.
 
-**Performance budget:** `evaluate` under 50 ms and the fingerprint under 2 ms on a copy of your
-database, and `evaluate` under 250 ms on a synthetic database 10 times larger (200
-applications, 3,000 labels, 2,000 events). The rules touch no `job` or `job_fts` rows; the only
-large-table read is `fit_score` by `job_group_id` for sent applications, which uses the existing
-unique index.
+**Performance budget:** read phase under 50 ms and the fingerprint under 2 ms on a copy of your
+database; read phase under 250 ms on a synthetic database 10 times larger (200 applications,
+3,000 labels, 2,000 events). No rule reads `job`, `job_fts` or `fit_score`.
 
 ### Backfill
 
-The first evaluation after the migration (or after turning achievements back on) is a
-**backfill pass**: it writes every unlock the history supports with `unlocked_at` set to the
-real crossing date where one exists (contacts and pre-existing next actions use the migration
-time) and `seen_at = detected_at`, so nothing pops up. `achievement_setting.backfilled_at`
-records it, and the board shows once: "9 achievements from your history so far" (the real count).
+The first write phase after the migration, or after turning achievements back on, writes every
+unlock your history supports with `unlocked_at` at the real crossing date (contacts from before
+the migration use the migration time) and `seen_at = detected_at`, so nothing pops up. Because
+`backfilled_at` is read inside the write transaction, a second tab racing it inserts nothing new.
+The board shows once: "7 achievements from your history so far" (the real count).
 
-Later unlocks always notify, even when the crossing date is old (an email confirmation accepted
-today for an application sent last week is still news to you today).
+On your copy that is **7**: Tuned in, Found it yourself, First one out, Momentum 5 and 10,
+Bounce back, and Steady rhythm tier 1 (the weeks of Sep 21 and Sep 28 each had 2 or more active
+days; the week of Sep 14 had one). This week (Oct 5 to 11) has 4 active days and ends tonight:
+on Monday the run becomes 3 weeks and Rest is part of it unlocks, with a notice. The next steps
+the board points at are Aimed, not sprayed, Next step set, Networker and Closing the loop.
 
-### Idempotence and revocation
+Later unlocks always notify, even when the crossing date is old (a confirmation accepted today
+for an application sent last week is still news to you today).
 
-`UNIQUE (achievement_id, tier)` makes every write idempotent; concurrent evaluations (two tabs,
-a poll during a page load) race safely.
+### Revocation
 
-Unlocks are permanent, with **one** exception: an unlock less than **24 hours** old whose
-evidence rows no longer exist (a shortlist undone, a contact deleted, a rejection dismissed, a
-mistaken label removed) is deleted on the next evaluation. After 24 hours it is kept even if
-the evidence goes. Status moves are not evidence deletion (events are append-only), so moving a
-card back never revokes anything. A rule that merely stops being true (a rhythm run ending) never
-revokes.
+Unlocks are permanent, with **one** exception: within **24 hours of `detected_at`**, a tier
+(and every tier above it) is revoked only when the **fresh computation no longer reaches it**:
+you undid the shortlist, deleted the contact, or removed the label that crossed it. If the tier
+still holds (one of six shortlisted undone, a nightly merge that deleted an evidence row), the
+row stays, its `evidence` is refreshed in place and `seen_at` is untouched, so no second notice.
+Whether evidence rows exist is never checked. After 24 hours nothing is revoked. A rule that
+merely stops being current (a rhythm run ending) never revokes.
 
 `catalog_version` is stored on each unlock. A later catalog change that tightens a rule keeps
 existing unlocks; one that renames an id ships a migration that renames rows.
@@ -324,147 +343,159 @@ existing unlocks; one that renames an id ships a migration that renames rows.
 
 ### `/achievements`
 
-Reached from the Today strip and from a notice. Not in the top nav by default
-([Open questions](#open-questions)): the nav already has nine entries and wraps at 375 px.
-`PAGES` gets `("/achievements", None, "Achievements")`.
+In the top nav: `PAGES` gets `("/achievements", "Achievements", "Achievements")`, and
+`base.html` skips that entry while achievements are off (a Jinja global reading a setting cached
+in `app.state`, refreshed by the settings route).
 
 ```
 Achievements                                         Settings ▸
-14 earned · Rhythm 3 weeks (best 5) · 1 freeze held
+14 earned · Rhythm 3 weeks (best 5) · 1 freeze held · this week: in progress
 
 Apply ─────────────────────────────────────────────────────────
 [badge] Aimed, not sprayed          ●●○   Tier 2 of 3
-        Applications you shortlisted, prepared or saw scored strong before sending.
+        Applications you shortlisted or prepared a packet for on an earlier day.
         ███████░░░  9 of 15                      earned Oct 3 · why ▸
 [badge] Tailor-made                 ○○○   locked
-        Hint: prepare a packet, mark it ready, then apply with it.
+        Hint: prepare a packet, review it, mark it ready, then apply with it.
         ░░░░░░░░░░  0 of 1
 ...
 Outcomes ──────────────────────────────────────────────────────
 [?]     Hidden achievement          keep going
 ```
 
-- Sections in category order: Setup, Search, Apply, Follow-up, Outcomes, Rhythm. Within a
-  section: earned (newest first), then in progress, then locked.
-- Each card: badge, name, one-line plain-words rule, tier pips with a text equivalent
-  ("Tier 2 of 3"), a `<progress>` element with a visible "9 of 15", the earned date in local
-  time, and **why ▸** (a `<details>`) listing the evidence as links to `/pipeline/{id}` or
-  `/job/{group_id}`. Locked cards show a hint that names a healthy next action; hints never
-  mention scoring, generating, or sending more applications.
+- Sections in category order: Setup, Search, Apply, Follow-up, Outcomes, Rhythm. Within one:
+  earned (newest first), then in progress, then locked.
+- Each card: badge, name, one-line plain-words rule, tier pips with "Tier n of m" text, a
+  `<progress>` with a visible "9 of 15", the earned date in local time, and **why ▸**
+  (`<details>`) linking the evidence to `/pipeline/{id}` or `/job/{group_id}`. Locked cards show a
+  hint naming a healthy next action. Hints and descriptions never mention scoring, generating
+  or sending more applications.
+- Weekly cards say "judged when the week ends" while the current week is in progress.
 - Hidden achievements show "Hidden achievement" with no hint until earned.
-- The rhythm line at the top says "Rhythm: 3 weeks", "Rhythm: paused. Your best run is 5
-  weeks", or nothing before the first active week. Never "lost" or "broken".
-- Visiting the page marks every unlock seen (`seen_at`).
-- `Cache-Control: no-store` like every page; behind the existing loopback and same-origin
-  middleware.
+- The rhythm line reads "Rhythm: 3 weeks", "Rhythm: paused. Your best run is 5 weeks", or
+  nothing before the first active week.
+- Visiting the page marks every unlock it rendered as seen.
+- `Cache-Control: no-store`; behind the existing loopback and same-origin middleware.
 
-**Badge art: inline SVG, not emoji.** One `<symbol>` per category (six) in a sprite partial,
-`fill="currentColor"`, so badges follow the `app.css` light and dark tokens. Earned badges use
-the accent token; locked ones the muted token with a dashed outline. Tier is shown by ring count
-**and** the "Tier n of m" text, never by colour alone. Emoji were rejected: they render
-differently per platform and font, cannot follow the theme, and screen readers read their
-Unicode names. Each badge is `aria-hidden`; the card's heading carries the name.
+**Badge art: inline SVG, not emoji.** One `<symbol>` per category in a sprite partial,
+`fill="currentColor"`. Earned badges use `--series-1`; locked ones `--text-secondary` with a
+dashed outline (`--text-muted` is not defined in the dark blocks). Tier shows as ring count
+**and** text, never colour alone. Emoji were rejected: they render differently per platform,
+cannot follow the theme, and screen readers read their Unicode names. Badges are `aria-hidden`.
 
-**Layout:** CSS grid `repeat(auto-fill, minmax(16rem, 1fr))`, one column at 375 px with no
-horizontal scroll. Light and dark through the existing tokens (`app.css:66`, `:123`).
+**Progress bars** are styled, not native: `appearance: none`, track `--grid`, fill `--series-1`
+through `::-webkit-progress-bar`, `::-webkit-progress-value` and `::-moz-progress-bar`, so they
+follow light and dark. Grid `repeat(auto-fill, minmax(16rem, 1fr))`: one column at 375 px, no
+horizontal scroll.
 
 ### Settings
 
-A `<details>` "Settings" panel on the board, one form, `POST /achievements/settings`:
+A `<details>` "Settings" panel on the board, `POST /achievements/settings`:
 
 | Setting | Default | Effect |
 |---|---|---|
-| Achievements on | **on** | Off: `evaluate` writes nothing, no notices, no Today strip; `/achievements` shows "Achievements are off" and a turn-on button. Existing unlocks are kept. Turning on again runs a silent backfill |
+| Achievements on | **on** | Off: `evaluate` writes nothing; no nav entry, notice or Today strip; `/achievements` shows "Achievements are off" and a turn-on button. Unlocks are kept. Turning on runs a silent backfill |
 | Show unlock notices | on | Off: unlocks are written with `seen_at = detected_at` |
-| Hide categories | none hidden | Checkboxes per category. Hidden categories are still computed (so un-hiding shows the true history) but get `seen_at` at once, and are left off the board, the strip and the count |
+| Hide categories | none | Hidden categories are still computed (un-hiding shows the true history) but get `seen_at` at once and are left off the board, the strip and the count |
 
-Stored in `achievement_setting`. Not `config.toml` (read-only in the container, 018 D3, and a
-restart to toggle is too much) and not `preferences.yaml` (it feeds `filter_version`, and a
-setting there would look like a scoring input). The CSRF and origin rules are the existing
-middleware's.
+Stored in `achievement_setting`: not `config.toml` (read-only in the container, 018 D3) and not
+`preferences.yaml` (it feeds `filter_version`).
 
 ### Unlock notice (the activity band)
 
-Reuse `#activity` rather than a new poller. `_activity.html` gets one more item, after the
-existing ones:
+`_activity.html` gets one more item after the existing ones:
 
 ```
 ★ Achievement: Follow-through (tier 2)  View · ×        (and "+2 more" when several)
 ```
 
-- Shown when an unseen unlock exists in a visible category and notices are on. One line, the
-  newest; "+N more" links to the board.
-- **×** posts `POST /achievements/seen` (marks all unseen as seen) and is server-side, unlike
-  the re-score line's `sessionStorage` dismissal, so it does not reappear in another tab.
-- The band is already `role="status" aria-live="polite"`, so screen readers announce it once.
-- **Prompt feedback:** the console write routes that can unlock something (pipeline event and
-  move, "Did you apply?", follow-up done and no-response, next action, contact add, label,
-  packet mark ready, rejection add and confirm, alert subscribe) add the response header
-  `HX-Trigger: jh-activity`, and `_activity.html`'s `hx-trigger` gains `jh-activity from:body`.
-  An htmx action then refreshes the band at once instead of within 60 s. Non-htmx posts
-  redirect, and the next page load fetches `/activity` anyway.
-- **Motion:** a 150 ms opacity fade only under `prefers-reduced-motion: no-preference`; none
-  otherwise (same pattern as `app.css:237`). No confetti, no sound, no badge animation.
+- Shown when an unseen unlock exists in a visible category and notices are on. The newest one,
+  with `data-unlock="<id>"`; "+N more" and View link to `/achievements`.
+- **×** uses its own class `ach-dismiss` (not `.activity-dismiss`, whose `app.js` handler would
+  overwrite the re-score dismissal and empty the band). It is `hx-post="/achievements/seen"`
+  with the **ids it shows** (`hx-vals`), `hx-swap="none"`; the response carries
+  `HX-Trigger: jh-activity`, so the band refreshes through `/activity`, which `inbox.js`
+  already ignores. Unlocks that arrived after the band rendered stay unseen. Seen is
+  server-side, so it does not reappear in another tab.
+- **Announcement once:** the notice span has `aria-live="off"`, so the band's own live region
+  does not re-read it on every 3 s or 60 s swap. `app.js` copies its text into a persistent,
+  visually hidden `#ach-announce` (`role="status"`, in `base.html`, outside `#activity`) only
+  when `data-unlock` differs from the last id it announced (kept in `sessionStorage`).
+- **No animation.** A fade would replay on every `outerHTML` swap. No confetti, no sound.
+- **Prompt feedback:** console write routes that can unlock something (pipeline event and move,
+  "Did you apply?", follow-up done and no-response, next action, contact add, label, packet
+  mark ready, rejection add and confirm, alert subscribe) add `HX-Trigger: jh-activity`, and
+  the band's `hx-trigger` gains `jh-activity from:body`. The fingerprint changes with each of
+  these writes (rejection confirm through the confirmed count), so the refresh evaluates.
 
 ### Today strip
 
-One line under the KPI row in `dashboard.html`, outside the range-driven htmx refresh:
+One line under the KPI row in `dashboard.html`, outside the range-driven refresh, gated by the
+fingerprint like the band:
 
 ```
 Achievements 14 · Next: Follow-through 3 of 5 · Rhythm 3 weeks          View all ▸
 ```
 
-"Next" is the in-progress, visible achievement closest to its next tier, preferring Follow-up
-and Apply-targeted over Momentum when tied. Hidden when achievements are off. Wraps to two
-lines at 375 px.
+"Next" is the visible in-progress achievement closest to its next tier, preferring Follow-up
+and Aimed over Momentum on a tie. Hidden when off. Wraps at 375 px.
 
 ## Privacy and money
 
-- `jobhunter/achievements.py` (or `console/achievements.py`) imports nothing from `scoring`,
-  `apply.generator`, `apply.score`, `anthropic`, `httpx` or `core.fetch`. A test asserts it.
-- No rule reads `llm_spend`, `rescore_request` or `rescore_run`, and no rule reads cost columns
-  (`fit_score.cost_usd`, `packet_document.cost_usd`). A test greps the rule SQL.
-- Evidence stores ids only. The board shows employer and title by joining at render time, as
-  `/pipeline` does; nothing new is stored about you.
+- The `achievements` module imports nothing from `scoring`, `apply.generator`, `apply.score`,
+  `anthropic`, `httpx` or `core.fetch`. A test asserts it.
+- Rule SQL never names `fit_score`, `llm_spend`, `rescore_request`, `rescore_run` or a cost
+  column (`cost_usd`, `api_equiv_usd`). A test greps the rule SQL for each.
+- Evidence stores ids only; employer and title are joined at render time, as `/pipeline` does.
 
 ## Testing
 
-All under the conftest network guard; no model client is constructed (a fixture makes
-`anthropic.Anthropic` raise if instantiated).
+All under the conftest network guard, with a fixture that makes `anthropic.Anthropic` raise
+if constructed.
 
-- **Per rule, table-driven**: build the minimal rows in a temp database, run `evaluate`, assert
-  the tiers and `unlocked_at` and evidence. Include real shapes: email-sourced `applied`
-  events, a merge event with status `applied` (not double-counted, not an applied date), an
-  application with only automatic early events, a regenerated packet (`ready_at` NULL) that was
-  already sent, an application with a typed `resume_version` (not tailored), 6 applications in
-  one local day (Momentum counts 5).
-- **Time zone**: an application at 01:30 UTC counts on the previous local day with
-  `TZ=America/Los_Angeles`; weeks split Monday 00:00 local.
-- **Rhythm**: table of week patterns: gap with and without freezes, freeze earned at 4, cap of
-  2, current week not counted missed, comeback after 2 empty weeks, a late-accepted
-  confirmation repairing a past week.
-- **Idempotence**: evaluate twice, same rows; two connections evaluating at once, no error, no
-  duplicate.
-- **Backfill**: first evaluation writes with `seen_at` set and `/activity` shows nothing; a
-  later unlock shows the notice; × hides it in a second client too.
-- **Revocation**: shortlist then undo within 24 h removes `search.shortlist`'s evidence-backed
-  unlock; the same after 25 h keeps it; moving a card back never revokes.
-- **Off**: `enabled=0` writes nothing on any route; strip and notice absent; turning on again
-  backfills silently.
-- **Hidden category**: absent from board, strip, notice and count; un-hiding shows earned
-  unlocks without a notice.
-- **Guardrails**: the import and SQL checks above; every hint string is checked against a
-  deny list (`score`, `generate`, `more applications`).
-- **Write points**: follow-up done, no-response and next-action routes write `followup_log`;
-  snooze does not; contact add sets `created_at`; a dedupe merge and a shortlist undo still
-  succeed with `followup_log` rows present.
-- **Migration** on a copy-shaped database: contacts without dates, existing next actions get
-  one `planned` row, nothing else changes; `upgrade` applies it like the others.
-- **Links**: request every internal href `/achievements`, the strip and the notice render and
-  expect 200 (the lesson from the Sankey link that pointed nowhere).
-- **Performance**: the budget above, on a synthetic 10x database, as a non-flaky upper bound.
-- **Browser check before merge**, on a copy of your database: light, dark, 375 px,
-  reduced motion.
+- **Per rule, table-driven**, on real shapes: email-sourced sends; an application that went
+  straight to `acknowledged` (sent, counts); a merge event at `applied` and at `interview` 40
+  days after sending (counts for nothing, no long game); only automatic early events; *Not yet*
+  then *Yes* (not targeted); a shortlist and a send on the same day (not targeted); a bulk
+  shortlist of 20 then 20 sends over a week (targeted at most 3 a day); 6 sends in one day
+  (Momentum counts 3); a typed `packet:9/resume/v1` with no such packet (not tailored); a typed
+  resume version with the packet attachment present (tailored); a `base` version sent (not
+  tailored); a `fit_score` strong row alone (not targeted).
+- **Follow-up:** set a date, save the text only, save the same date (one `planned`); set,
+  Done, set the same date again, Done (one pair); Done on the due day with
+  `TZ=America/Los_Angeles` and a date-only due (on time); snooze writes nothing; No-response is
+  one transaction.
+- **Classifier and bulk:** classifier-confirmed rejections alone unlock no Closing the loop;
+  confirming a pending one does, and the next `/activity` shows the notice; a 300-row bulk
+  dismiss moves Decisive by 20.
+- **Time zone:** an application at 01:30 UTC counts on the previous local day; weeks split at
+  Monday 00:00 local.
+- **Weeks:** a week good on Tuesday that ends with 6 untargeted sends gives no Quality week; a
+  current week with 2 active days gives no Rest and no rhythm credit until it ends; a 1-day
+  week is missed; freezes earned at 4, capped at 2; comeback needs an earlier active week; a
+  backdated manual event does not fill a past week; migration-backfill `planned` rows make no
+  active day.
+- **Evaluate:** a no-change call performs no write (assert with a read-only connection); a
+  second connection holding `BEGIN IMMEDIATE` makes `GET /`, `/achievements` and `/activity`
+  return 200 from stored rows within about 300 ms; two first-time evaluations racing give 7
+  silent rows and no notice; twice in a row, same rows.
+- **Revocation:** undo 1 of 6 shortlisted within 24 h (no revoke, no second notice); undo the
+  only one (revoked); a nightly merge deleting an evidenced application under 24 h (no revoke);
+  after 25 h nothing revokes.
+- **Notice:** × marks only the shown ids; a later unlock still shows; × does not touch the
+  re-score line's `sessionStorage`; `/inbox`'s pending selection survives a × on the inbox
+  page; announcement happens once across several polls.
+- **Off and hidden:** off writes nothing anywhere and drops the nav entry, strip and notice; on
+  again backfills silently; a hidden category is absent from board, strip, notice and count.
+- **Guardrails:** the import and SQL greps; every hint **and description** string checked
+  against a deny list (`score`, `generate`, `more applications`).
+- **Write points and migration:** each table row above; a dedupe merge and a shortlist undo
+  succeed with `followup_log` rows; the migration on a copy-shaped database (contacts without
+  dates, existing next actions get one backfill row); `upgrade` applies it.
+- **Links:** every internal href the board, strip and notice render returns 200.
+- **Performance:** the budget above on the synthetic 10x database.
+- **Browser check before merge**, on a copy of your database: light, dark (progress bars
+  included), 375 px, reduced motion, a screen reader pass over the notice.
 
 ## Proposed tickets
 
@@ -473,43 +504,64 @@ per the CLAUDE.md table (the reviewer is always stronger).
 
 | # | Ticket | Difficulty | Worker / reviewer | Depends on |
 |---|---|---|---|---|
-| A1 | Migration: `achievement_unlock`, `achievement_setting`, `followup_log`, `contact.created_at`, the next-action backfill; write points (next action without snooze, done, no-response, contact add); `followup_log` handled in the dedupe merge table loop and the shortlist undo; tests for each, migration on a copy-shaped DB | hard (migration, touches merge and undo) | opus / opus at higher effort | |
-| A2 | `achievements` module: definitions, rule functions for the catalog (minus `setup.ready`), local-tz day and week helpers, rhythm with freezes, Momentum day cap, `evaluate` with backfill, revocation, fingerprint; guardrail tests (imports, SQL, hint deny list), the performance test | hard (exact rules on real data shapes) | opus / opus at higher effort | A1 |
-| A3 | `/achievements` page: cards, pips, `<progress>`, evidence `<details>`, hidden cards, rhythm line, settings form and route, SVG sprite, CSS (grid, dark, 375 px), marks seen; `PAGES` entry; link test | normal | sonnet / opus | A2 |
-| A4 | Notice in `/activity` (fingerprint-gated `evaluate`, one line, "+N more", `POST /achievements/seen`), `HX-Trigger: jh-activity` on the listed write routes, `jh-activity from:body` in the trigger, reduced-motion fade; tests incl. the second-client dismissal | normal | sonnet / opus | A2 |
-| A5 | Today strip in `dashboard.html` from A2's summary function; hidden when off; 375 px wrap | mechanical | haiku / sonnet | A2 |
+| A1 | Migration `0035`: the three tables, three columns, follow-up backfill; every write point in the table (including the no-response single transaction, the merge loop and the undo check); tests for each; migration on a copy-shaped DB | hard (migration; touches merge and undo) | opus / opus at higher effort | |
+| A2 | `achievements` module: definitions, catalog rules (minus `setup.ready`), local-tz helpers, daily caps, rhythm with freezes, `evaluate` (read phase, no-change fast path, guarded write phase, silent backfill, revocation), in-process fingerprint, settings read; **plus** the `PAGES` entry with the nav filter, a stub `GET /achievements`, `POST /achievements/seen` and `POST /achievements/settings`, so A3 to A5 can run in parallel and their links resolve; guardrail and performance tests | hard (exact rules on real data, write-lock handling) | opus / opus at higher effort | A1 |
+| A3 | Board page: cards, pips, styled progress, evidence, hidden cards, weekly "in progress", rhythm line, settings panel, SVG sprite, CSS (dark, 375 px); link test | normal | sonnet / opus | A2 |
+| A4 | Notice: `/activity` item with fingerprint-gated `evaluate` and error fallback, `ach-dismiss` with shown ids, `#ach-announce` and its `app.js`, `HX-Trigger: jh-activity` on the listed routes and in the band trigger; tests including the PR 113 interplay | hard (a polled GET that writes, lock contention, a dozen routes) | opus / opus at higher effort | A2 |
+| A5 | Today strip, fingerprint-gated, error fallback | mechanical | haiku / sonnet | A2 |
 | A6 | `setup.ready` from 019's `essentials_ok` | mechanical | haiku / sonnet | A2, 019 S1 |
 
-Order: A1, then A2, then A3, A4 and A5 together; A6 whenever 019 S1 has landed.
+Order: A1, then A2, then A3, A4 and A5 together; A6 once 019 S1 has landed.
 
 **Estimate**, by the calibrated rule (ticket wall-clock: mechanical 0.75 h, normal 1.4 h, hard
 2.1 h; schedule = sum / 3, plus 30%, range 0.7x to 1.6x; floor = the longest dependency chain):
 
-- Sum: 2 hard (4.2 h) + 2 normal (2.8 h) + 2 mechanical (1.5 h) = 8.5 h.
-- Schedule: 8.5 / 3 = 2.83 h, plus 30% = 3.7 h, range 2.6 to 5.9 h.
-- Floor: A1 then A2 then A3 is 5.6 h, above the estimate, so **it binds: about 5.6 h** of
-  continuous run (up to about 9 h at the 1.6x end of the chain).
+- Sum: 3 hard (6.3 h) + 1 normal (1.4 h) + 2 mechanical (1.5 h) = 9.2 h.
+- Schedule: 9.2 / 3 = 3.07 h, plus 30% = 4.0 h, range 2.8 to 6.4 h.
+- Floor: A1, A2, A4 is 6.3 h, above the estimate, so **it binds: about 6.3 h** of continuous
+  run, up to about 10 h at 1.6x.
 - About 5.5M subagent tokens (019's rate of about 0.9M per ticket).
 
-**Later, not proposed now:** a "start fresh" button that clears unlocks; contacts not tied to
-an application (informational interviews), which needs a UI that does not exist yet; a weekly
-summary line on Today ("this week: 2 targeted applications, 3 follow-ups").
+**Later, not proposed now:** a "start fresh" button; contacts not tied to an application
+(informational interviews), which needs a UI that does not exist yet; a weekly summary line on
+Today.
 
 ## Open questions
 
-1. **Nav link or not?** Recommended default: **no nav entry**; reach the board from the Today
-   strip and the notices. Say if you want it in the top nav.
-2. **Momentum's cap of 5 applications per local day.** It is the anti-spray guard; your busiest
-   day so far had 6, so one application of history does not count toward Momentum (it still
-   counts everywhere else). Recommended default: **keep 5**.
-3. **Rejection-related achievements** ("Noted, moving on" for logging a confirmed rejection,
-   and the hidden "Second wind" for applying again within 14 days). Some people find any
-   badge near a rejection grating. Recommended default: **keep both**, worded as record-keeping
-   and resilience; hiding Outcomes removes Second wind, and Follow-up's "Noted" can be cut if you
-   would rather not see it.
+None. The nav link, the daily cap and the rejection-related achievements were answered on
+2026-10-11.
 
 ## History
 
+### Revision 2: adversarial review and your answers
+
+23 verified findings, 6 blocking, all addressed:
+
+- **Blocking.** Targeted no longer reads `fit_score` (a paid "Score it" or a nightly score could
+  stand in for preparation), and the SQL grep forbids it. Weekly achievements are judged only
+  on finished weeks. The sent date covers applications that skip the `applied` event. Tailored
+  needs a real packet of that application with a generated or edited resume, found through the
+  ref or the attachment, never a typed string or a `base` version. `evaluate` writes only when
+  something changed, recomputes inside its write transaction, waits at most 250 ms, keeps the
+  fingerprint in process, and every caller falls back to stored rows. The page, nav and `seen`
+  route moved into A2, A4 is rated hard, and the floor is 6.3 h.
+- **Automated actions earn nothing:** merge events are excluded from every rule; classifier
+  rejections no longer unlock anything by themselves (`confirmed_at` added); bulk triage is
+  capped per day and a bulk shortlist is not deliberate; migration backfill rows and backdated
+  events make no active day (`recorded_at` added).
+- **Caps:** every family counting your applications is capped at 3 per local day (your
+  answer); triage counts are capped too.
+- **Follow-ups:** `planned` only on a new date, `done` only when a dated action existed,
+  counted as distinct pairs; date-only due dates compared as local dates; `item_kind` dropped;
+  no-response in one transaction; undo keeps an application with follow-up history.
+- **Revocation** decides by recomputation within 24 h of `detected_at`, never by evidence
+  existence, so merges and partial undos cause no churn or repeat notices.
+- **Band:** its own dismiss class, posts the shown ids, refreshes through `/activity`, announces
+  once through a separate live region, no fade.
+- **Theme:** real tokens (`--series-1`, `--text-secondary`), styled progress bars.
+- **Your answers:** a nav link; a cap of 3 per day; rejection-related achievements kept and
+  renamed: Closing the loop, Lessons kept (new) and Bounce back.
+
 ### Revision 1 (2026-10-11)
 
-First draft from your request. Decisions recorded on `4f6bedb`.
+First draft from your request.
