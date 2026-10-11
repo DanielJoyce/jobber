@@ -218,6 +218,7 @@ def create_app(
             if boot_file is None
             else db.owning_data_dir(boot_file, resolve_path(settings.paths.data_dir)),
             on_backup=lambda p: logger.warning("console: backed up %s before migrating", p),
+            on_wait=lambda p: logger.warning("console: waiting for another migration (%s)", p),
         )
     except BaseException:
         if console_lock is not None:

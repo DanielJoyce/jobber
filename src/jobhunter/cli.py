@@ -117,6 +117,9 @@ MIGRATION_EXEMPT_COMMANDS = frozenset(
 )
 
 
+RESTORE_MIGRATE_WAIT_S = 120.0
+
+
 def _migrate(conn) -> list[int]:
     """Bring the schema up to date the automatic way (specs/018 Version skew).
 
@@ -134,7 +137,7 @@ def _migrate(conn) -> list[int]:
     data_dir = None
     if path is not None:
         data_dir = db.owning_data_dir(path, resolve_path(load_settings().paths.data_dir))
-    return db.migrate(conn, data_dir=data_dir, on_backup=_say_backed_up)
+    return db.migrate(conn, data_dir=data_dir, on_backup=_say_backed_up, on_wait=_say_waiting)
 
 
 def _invoked_command() -> str | None:
@@ -144,6 +147,10 @@ def _invoked_command() -> str | None:
 
 def _say_backed_up(path: Path) -> None:
     typer.echo(f"pre-migrate backup: {path}", err=True)
+
+
+def _say_waiting(lock: Path) -> None:
+    typer.echo(f"waiting for another jobhunter process to finish migrating ({lock})", err=True)
 
 
 @app.callback()
@@ -1911,7 +1918,13 @@ def db_migrate_cmd() -> None:
     conn = db.connect(db_path)
     try:
         before = db.current_version(conn)
-        applied = db.migrate(conn, data_dir=data_dir, explicit=True, on_backup=_say_backed_up)
+        applied = db.migrate(
+            conn,
+            data_dir=data_dir,
+            explicit=True,
+            on_backup=_say_backed_up,
+            on_wait=_say_waiting,
+        )
         after = db.current_version(conn)
     finally:
         conn.close()
@@ -2261,7 +2274,14 @@ def db_restore_cmd(
             typer.echo(f"saved the current database to {p}")
 
         try:
-            result = rst.restore(path, db_path, data_dir, on_safety=said_safety)
+            # Innermost lock (order: run, console, migrate; dd65f64): never write the live
+            # database under another process's migration. Its holder waits on no lock, so this
+            # bounded wait cannot deadlock.
+            with db.migrate_lock(db_path, timeout=RESTORE_MIGRATE_WAIT_S, on_wait=_say_waiting):
+                result = rst.restore(path, db_path, data_dir, on_safety=said_safety)
+        except db.MigrationLockTimeout as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
         except rst.RestoreError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
