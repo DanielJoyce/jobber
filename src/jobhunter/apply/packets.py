@@ -27,7 +27,7 @@ from jobhunter.console.tracking import (
     rebuild_status,
     validate_attachment_path,
 )
-from jobhunter.core import db
+from jobhunter.core import db, dbpaths
 from jobhunter.pipeline.dedupe import normalize_employer
 from jobhunter.pipeline.dedupe_xstate import normalize_title
 
@@ -239,16 +239,15 @@ def _attach_file(
     at: str,
 ) -> bool:
     """One ``attachment`` row for a rendered packet file (and ``cover_letter_path`` when
-    empty). False when it is skipped (no data dir, or the path fails validation)."""
-    stored = Path(rendered_path)
-    if not stored.is_absolute():
-        if data_dir is None:
-            logger.warning("packet %s: %s not attached: no data dir given", packet_id, kind)
-            return False
-        stored = Path(data_dir).expanduser() / stored
+    empty), stored relative to the data dir (specs/018 D18); a file outside it is copied into
+    ``attachments/``. False when it is skipped (no data dir, or the path fails validation)."""
+    if data_dir is None:
+        logger.warning("packet %s: %s not attached: no data dir given", packet_id, kind)
+        return False
     try:
-        path = str(validate_attachment_path(str(stored)))
-    except TrackingError as exc:
+        resolved = validate_attachment_path(str(dbpaths.resolve(rendered_path, data_dir)))
+        path = dbpaths.store(resolved, data_dir)
+    except (TrackingError, dbpaths.CopyError) as exc:
         logger.warning("packet %s: %s not attached: %s", packet_id, kind, exc)
         return False
     dup = conn.execute(

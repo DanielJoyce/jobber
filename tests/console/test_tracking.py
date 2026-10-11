@@ -275,35 +275,73 @@ def test_contacts_crud(conn):
 # --- attachments ---------------------------------------------------------------------------
 
 
-def test_attachment_stores_path_only(conn, tmp_path):
+def test_attachment_outside_the_data_dir_is_copied_in(conn, tmp_path):
     a = make_app(conn, 1)
-    f = tmp_path / "resume.pdf"
+    data = tmp_path / "data"
+    f = tmp_path / "docs" / "resume.pdf"
+    f.parent.mkdir()
     f.write_bytes(b"%PDF fake")
-    aid = t.add_attachment(conn, a, "resume", str(f), NOW)
-    row = t.attachments(conn, a)[0]
-    assert (row["id"], row["kind"], row["path"]) == (aid, "resume", str(f.resolve()))
-    assert [p.name for p in tmp_path.glob("*.pdf")] == ["resume.pdf"]  # nothing copied
+    aid = t.add_attachment(conn, a, "resume", str(f), NOW, data_dir=data)
+    row = t.attachments(conn, a, data)[0]
+    assert (row["id"], row["kind"], row["path"]) == (aid, "resume", "attachments/resume.pdf")
+    copy = data / "attachments" / "resume.pdf"
+    assert row["file"] == str(copy)
+    assert copy.read_bytes() == b"%PDF fake" and copy.stat().st_mode & 0o777 == 0o600
+    assert f.read_bytes() == b"%PDF fake"  # the original is left where it is
     t.delete_attachment(conn, aid)
-    assert t.attachments(conn, a) == [] and f.exists()
+    assert t.attachments(conn, a) == [] and f.exists() and copy.exists()
+
+
+def test_attachment_inside_the_data_dir_is_stored_relative_not_copied(conn, tmp_path):
+    a = make_app(conn, 1)
+    data = tmp_path / "data"
+    f = data / "packets" / "7" / "letter.pdf"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"%PDF letter")
+    t.add_attachment(conn, a, "cover_letter", str(f), NOW, data_dir=data)
+    assert t.attachments(conn, a)[0]["path"] == "packets/7/letter.pdf"
+    assert not (data / "attachments").exists()
+    # read back against another mount point of the same tree (a container's /data)
+    moved = tmp_path / "elsewhere"
+    data.rename(moved)
+    assert t.attachments(conn, a, moved)[0]["file"] == str(moved / "packets/7/letter.pdf")
+
+
+def test_attachment_name_clash_keeps_both_files_and_reuses_identical(conn, tmp_path):
+    a = make_app(conn, 1)
+    data = tmp_path / "data"
+    one, two = tmp_path / "a" / "cv.pdf", tmp_path / "b" / "cv.pdf"
+    for p, body in ((one, b"first"), (two, b"second")):
+        p.parent.mkdir()
+        p.write_bytes(body)
+    t.add_attachment(conn, a, "resume", str(one), NOW, data_dir=data)
+    t.add_attachment(conn, a, "resume", str(two), NOW, data_dir=data)
+    t.add_attachment(conn, a, "other", str(one), NOW, data_dir=data)  # same bytes: reused
+    paths = [r["path"] for r in t.attachments(conn, a)]
+    assert paths[0] == paths[2] == "attachments/cv.pdf"
+    assert re.fullmatch(r"attachments/cv-[0-9a-f]{12}\.pdf", paths[1])
+    assert (data / paths[0]).read_bytes() == b"first"
+    assert (data / paths[1]).read_bytes() == b"second"
+    assert len(list((data / "attachments").iterdir())) == 2
 
 
 def test_attachment_nonexistent_rejected(conn, tmp_path):
     a = make_app(conn, 1)
     with pytest.raises(t.TrackingError, match="no such file"):
-        t.add_attachment(conn, a, "other", str(tmp_path / "missing.pdf"))
+        t.add_attachment(conn, a, "other", str(tmp_path / "missing.pdf"), data_dir=tmp_path)
     with pytest.raises(t.TrackingError):
-        t.add_attachment(conn, a, "other", str(tmp_path))  # directory
+        t.add_attachment(conn, a, "other", str(tmp_path), data_dir=tmp_path)  # directory
     with pytest.raises(t.TrackingError):
-        t.add_attachment(conn, a, "bogus-kind", str(tmp_path))
+        t.add_attachment(conn, a, "bogus-kind", str(tmp_path), data_dir=tmp_path)
 
 
-def test_attachment_repo_tracked_path_rejected(conn):
+def test_attachment_repo_tracked_path_rejected(conn, tmp_path):
     a = make_app(conn, 1)
     tracked = t.REPO_ROOT / "pyproject.toml"
     assert tracked.is_file()
     with pytest.raises(t.TrackingError, match="tracked tree"):
-        t.add_attachment(conn, a, "other", str(tracked))
-    assert t.attachments(conn, a) == []
+        t.add_attachment(conn, a, "other", str(tracked), data_dir=tmp_path / "data")
+    assert t.attachments(conn, a) == [] and not (tmp_path / "data").exists()
 
 
 def test_attachment_untracked_file_inside_repo_allowed(conn, tmp_path):
@@ -313,13 +351,24 @@ def test_attachment_untracked_file_inside_repo_allowed(conn, tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path / "repo")], check=True)
     (tmp_path / "repo" / "ignored.txt").write_text("x")
     # untracked inside a repo is fine; a tracked one is not
+    data = tmp_path / "data"
     t.add_attachment(
-        conn, a, "other", str(tmp_path / "repo" / "ignored.txt"), repo_root=tmp_path / "repo"
+        conn,
+        a,
+        "other",
+        str(tmp_path / "repo" / "ignored.txt"),
+        repo_root=tmp_path / "repo",
+        data_dir=data,
     )
     subprocess.run(["git", "-C", str(tmp_path / "repo"), "add", "ignored.txt"], check=True)
     with pytest.raises(t.TrackingError):
         t.add_attachment(
-            conn, a, "other", str(tmp_path / "repo" / "ignored.txt"), repo_root=tmp_path / "repo"
+            conn,
+            a,
+            "other",
+            str(tmp_path / "repo" / "ignored.txt"),
+            repo_root=tmp_path / "repo",
+            data_dir=data,
         )
 
 
@@ -411,8 +460,11 @@ def test_drawer_and_edits(client, conn, tmp_path):
 
     f = tmp_path / "cl.txt"
     f.write_text("hi")
-    post("attachments", f"kind=cover_letter&path={f}")
+    r = post("attachments", f"kind=cover_letter&path={f}")
     assert len(t.attachments(conn, a)) == 1
+    assert t.attachments(conn, a)[0]["path"] == "attachments/cl.txt"
+    copy = Settings().paths.data_dir / "attachments" / "cl.txt"
+    assert copy.read_text() == "hi" and f"<code>{copy}</code>" in r.text
     r = post("attachments", f"kind=other&path={tmp_path / 'nope'}")
     assert "no such file" in r.text and len(t.attachments(conn, a)) == 1
     post(f"attachments/{t.attachments(conn, a)[0]['id']}/delete", "")

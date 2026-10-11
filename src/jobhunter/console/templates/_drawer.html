@@ -70,10 +70,10 @@
 
   <section>
     <h3>Attachments</h3>
-    <p class="muted">Local paths only; nothing is uploaded or copied.</p>
+    <p class="muted">Local files only; nothing is uploaded. A file outside the data directory is copied into its <code>attachments/</code> folder.</p>
     <ul>
       {% for f in attachments %}
-      <li>{{ f['kind'] }}: <code>{{ f['path'] }}</code>
+      <li>{{ f['kind'] }}: <code>{{ f['file'] or f['path'] }}</code>
         <form method="post" action="/pipeline/{{ c.app_id }}/attachments/{{ f['id'] }}/delete" hx-post="/pipeline/{{ c.app_id }}/attachments/{{ f['id'] }}/delete" hx-target="#drawer" hx-swap="innerHTML" class="inline-form"><button class="act" type="submit">remove</button></form></li>
       {% endfor %}
     </ul>

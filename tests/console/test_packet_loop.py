@@ -28,12 +28,14 @@ from test_packet_pages import (  # noqa: F401
 
 from jobhunter.apply import packets
 from jobhunter.console import tracking
+from jobhunter.xdg import data_home
 
 
 @pytest.fixture
-def rendered(tmp_path):
-    """Rendered packet files under a data dir outside the repository (phase 1c writes them)."""
-    d = tmp_path / "data" / "packets"
+def rendered():
+    """Rendered packet files in the console's data dir (the default, below the test's HOME),
+    stored as absolute paths the way rows written before C14 hold them."""
+    d = data_home() / "packets"
     d.mkdir(parents=True)
     resume, letter = d / "Synthetic-Person-Resume.pdf", d / "Synthetic-Person-Cover-Letter.pdf"
     resume.write_bytes(b"%PDF-synthetic")
@@ -86,12 +88,13 @@ def attachments(conn, app_id):  # noqa: F811
 
 
 def assert_attached(conn, pid, rendered):  # noqa: F811
+    """Attached, and stored relative to the data dir (specs/018 D18), whatever the row held."""
     app = app_of(conn, pid)
     assert app["status"] == "applied"
     assert app["resume_version"] == f"packet:{pid}/resume/v2"
-    assert app["cover_letter_path"] == str(rendered[1])
+    assert app["cover_letter_path"] == f"packets/{rendered[1].name}"
     assert attachments(conn, app["id"]) == sorted(
-        [("resume", str(rendered[0])), ("cover_letter", str(rendered[1]))]
+        [("resume", f"packets/{rendered[0].name}"), ("cover_letter", f"packets/{rendered[1].name}")]
     )
 
 
@@ -136,6 +139,26 @@ def test_pipeline_move_to_applied_attaches_it_too(client, conn, rendered):  # no
     assert_attached(conn, pid, rendered)
 
 
+def test_a_rendered_file_outside_the_data_dir_is_copied_in(client, conn, tmp_path):  # noqa: F811
+    """An old row pointing outside the data dir: the file is copied into attachments/ and the
+    copy is what gets attached (the container never sees the original)."""
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    resume, letter = outside / "R.pdf", outside / "L.pdf"
+    resume.write_bytes(b"%PDF-resume")
+    letter.write_bytes(b"%PDF-letter")
+    pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    make_ready(conn, pid, (resume, letter))
+    client.post(f"/job/{packet_group(conn, pid)}/applied?choice=yes")
+    app = app_of(conn, pid)
+    assert attachments(conn, app["id"]) == [
+        ("cover_letter", "attachments/L.pdf"),
+        ("resume", "attachments/R.pdf"),
+    ]
+    assert app["cover_letter_path"] == "attachments/L.pdf"
+    assert (data_home() / "attachments" / "R.pdf").read_bytes() == b"%PDF-resume"
+
+
 def test_a_draft_packet_attaches_nothing(client, conn, rendered):  # noqa: F811
     pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
     gid = packet_group(conn, pid)
@@ -169,11 +192,11 @@ def test_files_exported_after_applied_are_attached_then(client, conn, tmp_path):
     for kind in ("resume", "cover_letter"):
         exp = export.current_export(conn, pid, kind)
         export.write_export(conn, data, pid, exp, FakeRenderer())
-    d = data / "packets" / str(pid)
+    d = f"packets/{pid}"
     assert attachments(conn, app["id"]) == sorted(
-        [("resume", str(d / "resume-v2.pdf")), ("cover_letter", str(d / "cover-letter-v2.pdf"))]
+        [("resume", f"{d}/resume-v2.pdf"), ("cover_letter", f"{d}/cover-letter-v2.pdf")]
     )
-    assert app_of(conn, pid)["cover_letter_path"] == str(d / "cover-letter-v2.pdf")
+    assert app_of(conn, pid)["cover_letter_path"] == f"{d}/cover-letter-v2.pdf"
     # A v3 made after applying (the packet goes back to draft) is never attached.
     cur = conn.execute(
         "INSERT INTO packet_document (packet_id, kind, version, origin, doc_json, body_md, "
@@ -215,8 +238,7 @@ def test_a_letter_written_after_applying_is_not_attached(client, conn, tmp_path)
     data = tmp_path / "data"
     for kind in ("resume", "cover_letter"):
         export.write_export(conn, data, pid, export.current_export(conn, pid, kind), FakeRenderer())
-    d = data / "packets" / str(pid)
-    assert attachments(conn, app["id"]) == [("resume", str(d / "resume-v2.pdf"))]
+    assert attachments(conn, app["id"]) == [("resume", f"packets/{pid}/resume-v2.pdf")]
     assert not app_of(conn, pid)["cover_letter_path"]
 
 
@@ -337,6 +359,6 @@ def test_did_you_apply_attaches_1c_export_resolved_against_the_data_dir(
         (env.pid,),
     ).fetchone()
     assert c.post(f"/job/{gid}/applied?choice=yes").status_code == 200
-    want = str((env.settings.paths.data_dir / stored).resolve())
-    assert attachments(env.conn, app_id) == [("resume", want)]
+    assert attachments(env.conn, app_id) == [("resume", stored)]  # relative, as 1c wrote it
+    assert (env.settings.paths.data_dir / stored).is_file()
     assert app_of(env.conn, env.pid)["resume_version"] == f"packet:{env.pid}/resume/v1"
