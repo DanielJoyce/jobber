@@ -161,7 +161,7 @@ band and a one-line strip on Today, computed on read from tables jobhunter alrea
 a `followup_log` so follow-ups leave a record. A1 (migration and write points), then A2 (rules,
 `evaluate`, the route and nav entry), then the page (A3), the notice (A4) and the strip (A5)
 together; A6 after 019 S1. About 6.3 h of continuous run (the A1, A2, A4 chain binds; 6
-tickets by the calibrated rule in 019), about 5.5M subagent tokens.
+tickets by the calibrated rule in 019), about 7.7M subagent tokens.
 
 **Done when** a copy of your database shows the 7 history unlocks on `/achievements` without a
 notice, marking a dated follow-up done shows "Achievement: Follow-through" in the activity band

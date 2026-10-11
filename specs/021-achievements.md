@@ -1,6 +1,6 @@
 # 021 — Achievements
 
-Status: **draft for review, revision 2** (bug `4f6bedb`). Written 2026-10-11; revised the same
+Status: **draft for review, revision 2a** (bug `4f6bedb`). Written 2026-10-11; revised the same
 day after an adversarial review and your answers ([History](#history)).
 
 You asked for "a spec for an achievements board and achievements". A job hunt is long, most of
@@ -138,7 +138,7 @@ category until earned. **Lost?** No, everywhere, except the 24-hour [revocation]
 |---|---|---|---|
 | `setup.prefs` | Tuned in | First `profile_change` with `source = 'ui'` (a save from `/prefs`; saving is free, a re-score is a separate action and not rewarded) | Yes |
 | `setup.alerts` | Net cast, tiers **1 / 5** | `alert_signup` rows with `subscribed_at IS NOT NULL` | No |
-| `setup.mail` | Inbox sorted | Any `mail_message` row exists (alert emails reach jobhunter) | No |
+| `setup.mail` | Inbox sorted | You ran `jobhunter mail setup` successfully (not `--dry-run`): it records `mail_setup_at` in `achievement_setting` (A1). The automated fetch of alert emails does not count | No (no record before A1) |
 | `setup.ready` | All set | 019's `essentials_ok`. **Added by A6 once 019 S1 lands** | n/a |
 
 ### Search (4)
@@ -166,9 +166,9 @@ category until earned. **Lost?** No, everywhere, except the 24-hour [revocation]
 
 | ID | Name | Rule (exact) | Backfill |
 |---|---|---|---|
-| `follow.plan` | Next step set, tiers **1 / 5 / 15** | Distinct `(application_id, due_at)` pairs among `followup_log` `planned` rows | No |
-| `follow.done` | Follow-through, tiers **1 / 5 / 15 / 30** | Distinct `(application_id, due_at)` pairs among `done` rows, plus `no_response` rows | No |
-| `follow.on_time` | On time | 5 `done` rows each with an earlier `planned` row for the same pair and a local day on or before `due_at` (as a local date) | No |
+| `follow.plan` | Next step set, tiers **1 / 5 / 15** | Distinct `(application_id, due_at)` pairs among `followup_log` `planned` rows, capped at **3 per local day** of `at` and **1 per application per local day** (re-dating the same application over and over is not planning) | No |
+| `follow.done` | Follow-through, tiers **1 / 5 / 15 / 30** | Distinct `(application_id, due_at)` pairs among `done` rows, plus `no_response` rows, with the same caps (3 per local day, 1 per application per day) | No |
+| `follow.on_time` | On time | 5 `done` rows (after the same caps) each with an earlier `planned` row for the same pair and a local day on or before `due_at` (as a local date) | No |
 | `follow.tidy` | Tidy pipeline | 5 applications with a manual `no_response` user event (closing stale ones keeps the pipeline honest) | No |
 | `follow.contact` | Networker, tiers **1 / 5 / 15** | `contact` rows (rows from before the migration count, dated at migration, but are not active days) | No |
 | `follow.loop` | Closing the loop | The first time **you** record an employer's answer: a manual `rejection` (by `created_at`), a confirmed `rejection.confirmed_at` (you pressed confirm), or a user event `rejected` with `source = 'manual'` or from an accepted proposal. Copy: "You recorded how an application ended. Knowing where you stand frees you to move on." | No (all 6 rows came from the classifier) |
@@ -253,12 +253,13 @@ INSERT INTO followup_log (application_id, at, kind, due_at, backfill)
 
 | Action | Writes | Code |
 |---|---|---|
-| Any event insert | `recorded_at = now` (`tracking.add_event`, `detail.answer_prompt`, the inbox shortlist, the merge) | `console/tracking.py:131`, `console/detail.py:537`, `console/inbox.py:334`, `pipeline/dedupe_url.py:301` |
+| Any event insert | `recorded_at = now` at every insert site: `tracking.add_event`, `detail.answer_prompt`, the apply-click event, the packet-start event, the inbox shortlist, the merge. A1 greps for `INSERT INTO application_event` and a test fails on any site that omits it | `console/tracking.py:131`, `console/detail.py:537`, `console/detail.py:480`, `apply/packets.py:90`, `console/inbox.py:334`, `pipeline/dedupe_url.py:301` |
 | Next action: `next_action_at` **changes to a new non-empty value** | `planned`, `due_at` = the new value. Re-saving the same date, editing only the text, or a snooze (which moves a date you did not choose) writes nothing; snooze passes a flag | `console/tracking.py:368`, `:392` |
 | Follow-up **Done**, when a next action with a date existed | `done`, `due_at` = that date. Done on a nudge with no next action writes nothing | `tracking_routes.py:281` |
 | **No response** from follow-ups | `no_response`, in **one** transaction with the event (fixes today's double commit) | `tracking_routes.py:293-298` |
 | Add a contact | `contact.created_at = now` | `console/tracking.py:432` |
-| Confirm a pending rejection | `confirmed_at = now` | `core/rejections.py:148` |
+| Confirm a rejection | `confirmed_at = now`, both when you press confirm on `/rejections` and when you accept a rejection proposal (which confirms the row too) | `core/rejections.py:148`, `console/proposals.py:153` |
+| `jobhunter mail setup` succeeds (not `--dry-run`) | `achievement_setting` `mail_setup_at = now` | `mail/setup.py:79` via the CLI command |
 | Application merge | `followup_log` added to the child-table loop | `pipeline/dedupe_url.py:293` |
 | Shortlist undo | `followup_log` added to the `others` check, so an application you planned a follow-up on is kept, like one with a contact | `console/inbox.py:370-381` |
 
@@ -374,7 +375,7 @@ Outcomes ───────────────────────�
 - Hidden achievements show "Hidden achievement" with no hint until earned.
 - The rhythm line reads "Rhythm: 3 weeks", "Rhythm: paused. Your best run is 5 weeks", or
   nothing before the first active week.
-- Visiting the page marks every unlock it rendered as seen.
+- Visiting the page marks the unlocks it rendered as seen, and only when one of them is unseen (so an ordinary visit writes nothing). That write uses the same 250 ms busy timeout and the same fallback: on a busy database the page still renders and the notice stays until the next visit.
 - `Cache-Control: no-store`; behind the existing loopback and same-origin middleware.
 
 **Badge art: inline SVG, not emoji.** One `<symbol>` per category in a sprite partial,
@@ -457,7 +458,7 @@ if constructed.
   straight to `acknowledged` (sent, counts); a merge event at `applied` and at `interview` 40
   days after sending (counts for nothing, no long game); only automatic early events; *Not yet*
   then *Yes* (not targeted); a shortlist and a send on the same day (not targeted); a bulk
-  shortlist of 20 then 20 sends over a week (targeted at most 3 a day); 6 sends in one day
+  shortlist of 20 then 20 sends over a week (**0** targeted: a bulk batch is not deliberate); 6 sends in one day
   (Momentum counts 3); a typed `packet:9/resume/v1` with no such packet (not tailored); a typed
   resume version with the packet attachment present (tailored); a `base` version sent (not
   tailored); a `fit_score` strong row alone (not targeted).
@@ -504,11 +505,11 @@ per the CLAUDE.md table (the reviewer is always stronger).
 
 | # | Ticket | Difficulty | Worker / reviewer | Depends on |
 |---|---|---|---|---|
-| A1 | Migration `0035`: the three tables, three columns, follow-up backfill; every write point in the table (including the no-response single transaction, the merge loop and the undo check); tests for each; migration on a copy-shaped DB | hard (migration; touches merge and undo) | opus / opus at higher effort | |
+| A1 | Migration `0035`: the three tables, three columns, follow-up backfill; every write point in the table (including every `application_event` insert site, `confirmed_at` on `/rejections` confirm and on accepting a rejection proposal, `mail_setup_at` from `mail setup`, the no-response single transaction, the merge loop and the undo check); tests for each; migration on a copy-shaped DB | hard (migration; touches merge and undo) | opus / opus at higher effort | |
 | A2 | `achievements` module: definitions, catalog rules (minus `setup.ready`), local-tz helpers, daily caps, rhythm with freezes, `evaluate` (read phase, no-change fast path, guarded write phase, silent backfill, revocation), in-process fingerprint, settings read; **plus** the `PAGES` entry with the nav filter, a stub `GET /achievements`, `POST /achievements/seen` and `POST /achievements/settings`, so A3 to A5 can run in parallel and their links resolve; guardrail and performance tests | hard (exact rules on real data, write-lock handling) | opus / opus at higher effort | A1 |
 | A3 | Board page: cards, pips, styled progress, evidence, hidden cards, weekly "in progress", rhythm line, settings panel, SVG sprite, CSS (dark, 375 px); link test | normal | sonnet / opus | A2 |
 | A4 | Notice: `/activity` item with fingerprint-gated `evaluate` and error fallback, `ach-dismiss` with shown ids, `#ach-announce` and its `app.js`, `HX-Trigger: jh-activity` on the listed routes and in the band trigger; tests including the PR 113 interplay | hard (a polled GET that writes, lock contention, a dozen routes) | opus / opus at higher effort | A2 |
-| A5 | Today strip, fingerprint-gated, error fallback | mechanical | haiku / sonnet | A2 |
+| A5 | Today strip, fingerprint-gated, error fallback, "Next" selection | normal (a query, a gated evaluate and a fallback path, not a template tweak) | sonnet / opus | A2 |
 | A6 | `setup.ready` from 019's `essentials_ok` | mechanical | haiku / sonnet | A2, 019 S1 |
 
 Order: A1, then A2, then A3, A4 and A5 together; A6 once 019 S1 has landed.
@@ -516,11 +517,11 @@ Order: A1, then A2, then A3, A4 and A5 together; A6 once 019 S1 has landed.
 **Estimate**, by the calibrated rule (ticket wall-clock: mechanical 0.75 h, normal 1.4 h, hard
 2.1 h; schedule = sum / 3, plus 30%, range 0.7x to 1.6x; floor = the longest dependency chain):
 
-- Sum: 3 hard (6.3 h) + 1 normal (1.4 h) + 2 mechanical (1.5 h) = 9.2 h.
-- Schedule: 9.2 / 3 = 3.07 h, plus 30% = 4.0 h, range 2.8 to 6.4 h.
+- Sum: 3 hard (6.3 h) + 2 normal (2.8 h) + 1 mechanical (0.75 h) = 9.85 h.
+- Schedule: 9.85 / 3 = 3.28 h, plus 30% = 4.3 h, range 3.0 to 6.8 h.
 - Floor: A1, A2, A4 is 6.3 h, above the estimate, so **it binds: about 6.3 h** of continuous
   run, up to about 10 h at 1.6x.
-- About 5.5M subagent tokens (019's rate of about 0.9M per ticket).
+- Tokens by the calibrated per-difficulty rule (hard 2.0M, normal 0.6M, mechanical 0.5M): 6.0M + 1.2M + 0.5M = **about 7.7M** subagent tokens.
 
 **Later, not proposed now:** a "start fresh" button; contacts not tied to an application
 (informational interviews), which needs a UI that does not exist yet; a weekly summary line on
@@ -532,6 +533,15 @@ None. The nav link, the daily cap and the rejection-related achievements were an
 2026-10-11.
 
 ## History
+
+### Revision 2a: final check
+
+One blocker: the token estimate used a flat 0.9M per ticket; it now uses the per-difficulty rule
+(7.7M). Also: every `application_event` insert site sets `recorded_at` (apply click and packet
+start added); accepting a rejection proposal sets `confirmed_at`; `/achievements` writes seen
+only when something is unseen, with the busy fallback; the bulk-shortlist test expects 0
+targeted; A5 is normal; Inbox sorted needs your `mail setup`, not the automated fetch; the
+follow-up families are capped per day and per application.
 
 ### Revision 2: adversarial review and your answers
 
