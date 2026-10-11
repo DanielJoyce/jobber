@@ -624,6 +624,11 @@ def dedupe(
                 ("dry-run: would merge " if dry_run else "merged ") + f"{xres.would_merge} groups"
             )
             typer.echo(", ".join(f"{k}={v}" for k, v in vars(xres).items()))
+        if not dry_run:
+            # A merge can abandon a packet: its employer-named copies go now (019561b (3)).
+            from jobhunter.apply.export import sync_abandoned
+
+            sync_abandoned(conn, resolve_path(settings.paths.data_dir))
     finally:
         conn.close()
 

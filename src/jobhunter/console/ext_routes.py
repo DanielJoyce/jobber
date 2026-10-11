@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from jobhunter.apply import capture, ext_pairing, packets, paste
+from jobhunter.apply import capture, export, ext_pairing, packets, paste
 from jobhunter.apply import score as group_score
 from jobhunter.apply.capture_models import (
     API_VERSION,
@@ -373,11 +373,12 @@ def register(
                     if gid is not None:
                         gone(conn, gid, None)
                 try:
-                    return ok(
-                        capture_errors(
-                            lambda: capture.link(conn, req, now=now(), ext_version=version)
-                        )
+                    answer = capture_errors(
+                        lambda: capture.link(conn, req, now=now(), ext_version=version)
                     )
+                    # A link can abandon a packet: its named copies go now (019561b (3)).
+                    export.sync_abandoned(conn, settings().paths.data_dir)
+                    return ok(answer)
                 except KeyError as exc:
                     gid = int(exc.args[0]) if exc.args else req.a
                     raise _Error(

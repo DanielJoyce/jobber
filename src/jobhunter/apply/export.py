@@ -279,6 +279,23 @@ def versioned_path(data_dir: Path, packet_id: int, exp: Export, fmt: str) -> Pat
     return packet_dir(data_dir, packet_id) / f"{VERSIONED[exp.kind]}-v{exp.version.version}.{fmt}"
 
 
+def exported(data_dir: Path, packet_id: int, exp: Export) -> bool:
+    """The versioned files on disk are this version's export.
+
+    Their names (``resume-v3.md``) are trusted only when their content matches: after the
+    database is restored from a backup, a new v3 can reuse the number of an old v3 whose
+    files are still on disk, and those must never be attached or downloaded as the new one.
+    The Markdown and the HTML page are compared (the text and the PDF are made from them).
+    """
+    try:
+        return all(
+            versioned_path(data_dir, packet_id, exp, fmt).read_bytes() == body.encode("utf-8")
+            for fmt, body in (("md", exp.md), ("html", exp.html))
+        )
+    except FileNotFoundError:
+        return False
+
+
 def packet_refusal(status: str) -> str | None:
     return (
         "This packet was abandoned; nothing is exported for it." if status == "abandoned" else None
@@ -348,7 +365,7 @@ def sync_named(conn: sqlite3.Connection, data_dir: Path, packet_id: int) -> None
     keep: dict[str, Path] = {}
     for kind in KINDS:
         exp = current_export(conn, packet_id, kind) if live else None
-        if exp is not None and refusal(exp) is None:
+        if exp is not None and refusal(exp) is None and exported(data_dir, packet_id, exp):
             for fmt in FORMATS:
                 src = versioned_path(data_dir, packet_id, exp, fmt)
                 if src.is_file():
@@ -386,6 +403,32 @@ def safe_sync(conn: sqlite3.Connection, data_dir: Path, packet_id: int) -> str |
         log.warning("could not refresh the exported files of packet %s: %s", packet_id, exc)
         return f"Could not refresh the exported files in the data folder ({exc.strerror or exc})."
     return None
+
+
+def sync_abandoned(conn: sqlite3.Connection, data_dir: Path) -> int:
+    """``safe_sync`` every packet that still has employer-named copies but is abandoned.
+
+    A merge (the nightly ``dedupe_url`` pass, a cross-state merge, **Link them**) can abandon
+    a packet without its page being opened; its named copies, the files you attach, must go
+    then and not wait for that page. Run after those. Returns how many packets were synced.
+    """
+    root = Path(data_dir) / "packets"
+    try:
+        dirs = [d for d in root.iterdir() if d.is_dir() and d.name.isdigit()]
+    except FileNotFoundError:
+        return 0
+    n = 0
+    for d in sorted(dirs):
+        if not _owned(d):
+            continue
+        row = conn.execute(
+            "SELECT status FROM application_packet WHERE id = ?", (int(d.name),)
+        ).fetchone()
+        if row is not None and packet_refusal(row["status"]) is None:
+            continue
+        safe_sync(conn, data_dir, int(d.name))
+        n += 1
+    return n
 
 
 def named_version(data_dir: Path, packet_id: int, exp: Export) -> int | None:
@@ -457,5 +500,7 @@ def write_export(
 
 
 def available(data_dir: Path, packet_id: int, exp: Export) -> dict[str, bool]:
-    """Which formats of the current version are on disk."""
-    return {f: versioned_path(data_dir, packet_id, exp, f).is_file() for f in FORMATS}
+    """Which formats of the current version are on disk (none when they are another
+    version's files under the same name, ``exported``)."""
+    ok = exported(data_dir, packet_id, exp)
+    return {f: ok and versioned_path(data_dir, packet_id, exp, f).is_file() for f in FORMATS}

@@ -297,7 +297,12 @@
     <div class="draft" id="draft-{{ v.id }}">
       <h4>{{ view.question }}</h4>
       <div class="doc-head">{{ provenance(v) }}</div>
+      {% if v.ok %}
       <p class="draft-text"><button type="button" class="act copy-btn" data-copy="{{ v.body_md }}">Copy</button> {{ v.body_md }}</p>
+      {% else %}
+      <p class="draft-text">{{ v.body_md }}</p>
+      <p class="muted copy-gate" id="copy-gate-{{ v.id }}">{% if v.unsupported %}{{ v.unsupported }} unsupported sentence{{ "" if v.unsupported == 1 else "s" }}: fix or confirm each before you copy this draft.{% else %}Nothing is checked yet: copy is available once it is.{% endif %}</p>
+      {% endif %}
       {{ side_forms(v.id) }}
       <form method="post" action="/packet/{{ p.id }}/doc/{{ v.id }}/save" class="editor">
       <button type="submit" class="sr default-save" tabindex="-1" aria-hidden="true">Save</button>
