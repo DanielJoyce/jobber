@@ -227,9 +227,14 @@ def _rescore_fakes(monkeypatch, env, tokens):
 
     plans = iter(tokens)
     states = []
+    built = []
 
     def make_plan(*a, **k):
+        built.append(1)
+        # Only the first plan finds jobs to re-prefilter; the rebuilt one finds none left.
+        evaluated = 5 if len(built) == 1 else 0
         return SimpleNamespace(
+            prefilter={"evaluated": evaluated, "passed": evaluated},
             token=next(plans),
             refusal=None,
             total=2,
@@ -239,7 +244,6 @@ def _rescore_fakes(monkeypatch, env, tokens):
             cost_per_job=0.01,
             cost_source="default",
             remaining_usd=5.0,
-            prefilter=None,
         )
 
     def confirm(*a, **k):
@@ -252,11 +256,12 @@ def _rescore_fakes(monkeypatch, env, tokens):
 
     monkeypatch.setattr(rs, "make_plan", make_plan)
     monkeypatch.setattr(rs, "create_request", create_request)
-    monkeypatch.setattr(
-        rs,
-        "run_request",
-        lambda *a, **k: SimpleNamespace(scored=2, total=2, errored=0, cost_usd=0.0, note=""),
-    )
+
+    def run_request(*a, **k):
+        states.append(("prefiltered", k["prefiltered"]["evaluated"]))
+        return SimpleNamespace(scored=2, total=2, errored=0, cost_usd=0.0, note="")
+
+    monkeypatch.setattr(rs, "run_request", run_request)
     monkeypatch.setattr(rs, "get_request", lambda *a, **k: {"status": "done", "error": None})
     monkeypatch.setattr(scorers, "privacy_notice", lambda *a, **k: None)
     monkeypatch.setattr("typer.confirm", confirm)
@@ -267,7 +272,8 @@ def test_rescore_prompt_does_not_hold_the_lock(env, monkeypatch):
     states = _rescore_fakes(monkeypatch, env, ["a", "a"])
     result = cli.invoke(app, ["score", "--rescore", "all"])
     assert result.exit_code == 0, result.output
-    assert states == [("prompt", True), ("spend", False)]
+    # The first plan's prefilter counts are reported (rescore.run_request), not the rebuilt one's.
+    assert states == [("prompt", True), ("spend", False), ("prefiltered", 5)]
 
 
 def test_rescore_plan_changed_while_deciding_spends_nothing(env, monkeypatch):

@@ -740,7 +740,7 @@ def _score_rescore(
                     settings.scoring,
                     scorer=spec,
                     now=clock,
-                    prefiltered=fresh.prefilter,
+                    prefiltered=plan.prefilter,  # the first plan ran the prefilter (rescore.py)
                 )
             except rs.RescoreError as exc:
                 rs.cancel_request(conn, rid, clock())
