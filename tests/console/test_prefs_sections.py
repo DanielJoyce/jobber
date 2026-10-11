@@ -183,7 +183,7 @@ def test_paid_section_shows_the_cost_choice_before_writing(client, pdir, conn):
     form = form_for(pdir, narrative__avoid="On-call rotations.")
     r = client.post("/prefs/section/narrative", data=form)
     assert r.status_code == 200
-    assert "section_rescore" in r.text and "This section is paid" in r.text
+    assert 'name="rescore_narrative"' in r.text and "This section is paid" in r.text
     assert text(pdir) == before and not history(conn)
     r = client.post("/prefs/section/narrative", data={**form, "confirm": "1"})
     assert "Saved 1 change" in r.text
@@ -192,14 +192,14 @@ def test_paid_section_shows_the_cost_choice_before_writing(client, pdir, conn):
 
 
 def test_paid_section_queues_the_chosen_rescore(client, pdir, conn):
-    form = form_for(pdir, current_focus__doing="Synthetic work", section_rescore="all")
+    form = form_for(pdir, current_focus__doing="Synthetic work", rescore_recency="all")
     r = client.post("/prefs/section/recency", data={**form, "confirm": "1"})
     assert "Re-score (all) queued" in r.text
     assert conn.execute("SELECT scope FROM rescore_request").fetchone()["scope"] == "all"
 
 
 def test_free_section_never_queues_a_rescore(client, pdir, conn):
-    form = form_for(pdir, hard__salary_floor__amount="150000", section_rescore="all")
+    form = form_for(pdir, hard__salary_floor__amount="150000", rescore_pay="all")
     client.post("/prefs/section/pay", data={**form, "confirm": "1"})
     assert conn.execute("SELECT count(*) FROM rescore_request").fetchone()[0] == 0
 
@@ -316,3 +316,67 @@ def test_sections_together_reproduce_the_full_form(pdir):
     for section in pf.SECTION_PATHS:
         data, _ = pf.section_to_data(section, form, base)
         assert {pf.section_of_path(p) for p in pf.diff(base, data)} <= {section}
+
+
+def test_one_paid_sections_choice_is_not_used_by_the_other(client, pdir, conn):
+    # Both confirm boxes post their radios; each save reads only its own group.
+    form = form_for(
+        pdir,
+        narrative__avoid="On-call rotations.",
+        current_focus__doing="x",
+        rescore_recency="all",
+        rescore_narrative="none",
+    )
+    client.post("/prefs/section/narrative", data={**form, "confirm": "1"})
+    assert conn.execute("SELECT count(*) FROM rescore_request").fetchone()[0] == 0
+    changed = form_for(pdir, current_focus__doing="y", narrative__avoid="z")
+    recency = client.post("/prefs/section/recency", data=changed).text
+    narrative = client.post("/prefs/section/narrative", data=changed).text
+    assert 'name="rescore_recency"' in recency and 'name="rescore_narrative"' not in recency
+    assert 'name="rescore_narrative"' in narrative and 'name="rescore_recency"' not in narrative
+
+
+def test_concurrent_section_saves_never_lose_an_update(client, pdir):
+    import threading
+
+    base = form_for(pdir)
+    pay = {**base, "hard.salary_floor.amount": ["150000"]}
+    where = {**base, "soft.remote_bonus": ["12"]}
+    results = {}
+
+    def go(name, data):
+        results[name] = client.post(f"/prefs/section/{name}", data=data).status_code
+
+    threads = [
+        threading.Thread(target=go, args=("pay", pay)),
+        threading.Thread(target=go, args=("where", where)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    after = load_profile(pdir)
+    landed = {
+        "pay": after.hard.salary_floor is not None and after.hard.salary_floor.amount == 150000,
+        "where": after.soft.remote_bonus == 12,
+    }
+    # Same mtime posted twice: the loser is told (409), never "Saved" for a lost change.
+    for name in ("pay", "where"):
+        assert (results[name] == 200) == landed[name], (results, landed)
+    assert 200 in results.values()
+
+
+def test_crlf_and_list_order_do_not_mark_sections_unsaved(client, pdir):
+    form = form_for(pdir, hard__salary_floor__amount="lots")
+    form["narrative.want"] = ["Synthetic systems work.\r\n"]
+    form["target_titles"] = ["Systems Engineer\r\n"]
+    r = client.post("/prefs/save", data=form)
+    assert r.status_code == 422
+    marked = HTMLParser(r.text).css_first("#prefs-form").attributes["data-unsaved"].split()
+    assert marked == ["pay"]
+    assert pf._norm(["b", "a"]) == pf._norm(["a", "b"])
+
+
+def test_nochange_settles_the_section(client, pdir):
+    r = client.post("/prefs/section/where", data=form_for(pdir))
+    assert "prefs-saved" in r.headers["HX-Trigger-After-Swap"]

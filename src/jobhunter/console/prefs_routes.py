@@ -3,6 +3,7 @@
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
 import json
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +46,11 @@ SECTIONS = [
     ("resume", "Resume"),
     ("answers", "Application answers"),
 ]
+
+
+# One writer at a time: the read, merge, validate and write of a save (and its mtime check)
+# run under this lock, so two saves in flight cannot both pass the check and lose an update.
+_WRITE_LOCK = threading.Lock()
 
 
 def _json(value: Any) -> str:
@@ -244,6 +250,10 @@ def register(
             ctx["rescore"] = choice if choice in pf.RESCORE_SCOPES else "none"
         return templates.TemplateResponse(request, "_prefs_preview.html", ctx)
 
+    def locked(work: Callable[..., Response], *args: Any) -> Response:
+        with _WRITE_LOCK:
+            return work(*args)
+
     def save_whole_file(
         request: Request, conn: sqlite3.Connection, st: gr.PrefsState, form: pf.Form
     ) -> Response:
@@ -297,7 +307,7 @@ def register(
     @app.post("/prefs/save", response_class=HTMLResponse)
     async def save(request: Request, conn: Conn) -> Response:
         form = pf.parse_form(await request.body())
-        return await run_in_threadpool(save_work, request, conn, form)
+        return await run_in_threadpool(locked, save_work, request, conn, form)
 
     def save_work(request: Request, conn: sqlite3.Connection, form: pf.Form) -> Response:
         st = state_of(request)
@@ -384,7 +394,7 @@ def register(
         if section not in pf.SAVEABLE_SECTIONS:
             raise HTTPException(404, "no such section")
         form = pf.parse_form(await request.body())
-        return await run_in_threadpool(save_section_work, request, conn, section, form)
+        return await run_in_threadpool(locked, save_section_work, request, conn, section, form)
 
     def section_response(
         request: Request,
@@ -396,6 +406,7 @@ def register(
         af: pa.AnswersForm | None = None,
         mtime_ns: int | None = None,
         saved_now: bool = False,
+        settled: bool = False,
     ) -> Response:
         """The status block for ``section`` (swapped in place); on a save, also the new
         mtime, the re-score panel and the events that re-baseline the page."""
@@ -428,6 +439,11 @@ def register(
             response.headers["HX-Reswap"] = "outerHTML"
         else:
             response = HTMLResponse(main + oob, status_code=status)
+        if settled:
+            # Nothing to write: the file already holds what the section shows.
+            response.headers["HX-Trigger-After-Swap"] = json.dumps(
+                {"prefs-saved": {"section": section}}
+            )
         if saved_now:
             response.headers["HX-Trigger-After-Swap"] = json.dumps(
                 {"prefs-changed": "", "prefs-saved": {"section": section}}
@@ -501,7 +517,13 @@ def register(
             )
         if not changes and not answer_writes:
             return section_response(
-                request, conn, section, {"kind": "nochange", **fail}, af=af, mtime_ns=expected
+                request,
+                conn,
+                section,
+                {"kind": "nochange", **fail},
+                af=af,
+                mtime_ns=expected,
+                settled=True,
             )
         paid = any(pf.is_paid(p) for p in changes)
         if paid and pf.form_value(form, "confirm") != "1":
@@ -556,7 +578,7 @@ def register(
                 af=af,
                 mtime_ns=expected,
             )
-        scope = pf.form_value(form, "section_rescore", "none")
+        scope = pf.form_value(form, f"rescore_{section}", "none")
         queued = paid and pf.record_rescore(conn, scope, new, now())
         return section_response(
             request,

@@ -409,7 +409,7 @@ SECTION_PATHS: dict[str, tuple[str, ...]] = {
 }
 SAVEABLE_SECTIONS = (*SECTION_FIELDS, ANSWERS_SECTION)
 # Form controls that belong to no section (page plumbing).
-PLUMBING_FIELDS = frozenset({"mtime_ns", "rescore", "section_rescore", "confirm", "ans.present"})
+PLUMBING_FIELDS = frozenset({"mtime_ns", "rescore", "confirm", "ans.present"})
 ERROR_SECTION = {"weights": "weights"}
 
 
@@ -453,6 +453,17 @@ def section_to_data(
     return data, errors
 
 
+def _norm(value: Any) -> Any:
+    """A form value as the save would read it: browsers post textareas with CRLF, and the save
+    trims lines; checkbox lists have no order. Both sides go through this before comparing."""
+    if isinstance(value, str):
+        lines = [line.strip() for line in value.replace("\r\n", "\n").split("\n")]
+        return "\n".join(lines).strip("\n")
+    if isinstance(value, list):
+        return sorted(value)
+    return value
+
+
 def dirty_sections(
     view: Mapping[str, Any], fallback: Mapping[str, Any], ans_dirty: bool
 ) -> list[str]:
@@ -462,7 +473,7 @@ def dirty_sections(
     out = {
         s
         for key in fallback
-        if view[key] != fallback[key] and (s := section_of_field(key)) is not None
+        if _norm(view[key]) != _norm(fallback[key]) and (s := section_of_field(key)) is not None
     }
     if ans_dirty:
         out.add(ANSWERS_SECTION)

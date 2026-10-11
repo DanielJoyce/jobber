@@ -130,6 +130,18 @@ def test_clean_page_leaves_without_a_warning(browser, server):
     assert "beforeunload" not in dialogs
 
 
+def test_two_section_saves_clicked_back_to_back_both_land(page, server):
+    page.goto(f"{server.url}/prefs")
+    page.fill(FLOOR, "151000")
+    page.fill(BONUS, "17")
+    save_btn(page, "pay").click()
+    save_btn(page, "where").click()
+    expect(page.locator("#status-where")).to_contain_text("Saved")
+    expect(page.locator("#status-pay")).to_contain_text("Saved")
+    saved = load_profile(server.app.state.settings.paths.profile_dir)
+    assert saved.hard.salary_floor.amount == 151000 and saved.soft.remote_bonus == 17
+
+
 def test_save_all_is_the_normal_save(page, server):
     page.goto(f"{server.url}/prefs")
     page.fill(FLOOR, "151000")

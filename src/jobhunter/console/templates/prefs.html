@@ -67,6 +67,7 @@
     <div id="rescore-panel">{% with rs = rescore_panel %}{% include "_rescore_panel.html" %}{% endwith %}</div>
   </section>
 
+  <span id="section-sync" hidden></span>
   <div class="prefs-layout">
     <form id="prefs-form" class="prefs-form" method="post" action="/prefs/save" autocomplete="off"
           data-unsaved="{{ unsaved_sections | join(' ') }}" data-whole-file="{{ 'true' if st.writes_whole_file else 'false' }}"
