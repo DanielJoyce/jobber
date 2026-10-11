@@ -171,7 +171,7 @@ def test_scorer_list_names_keyed_scorers_without_revealing_keys(pdir, db_path, m
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     text = make_client(pdir, db_path).get("/prefs").text
     assert "jev:typesafe/jev-1.13" in text and "sk-or-secret-value" not in text
-    assert "anthropic:claude-haiku-4-5" not in text  # no ANTHROPIC_API_KEY
+    assert "anthropic:claude-haiku-5-5" not in text  # no ANTHROPIC_API_KEY
 
 
 def test_panel_fragment_follows_scope_and_scorer(client):

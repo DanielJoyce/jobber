@@ -242,7 +242,7 @@ def test_cli_failure_offers_the_api_and_does_not_call_it(env, fake_claude, monke
     r = generate(env, runner="api")
     assert r.status_code == 303
     assert [d["runner"] for d in docs(env)] == ["api"]
-    assert client.params[0]["model"] == "claude-opus-5"
+    assert client.params[0]["model"] == "claude-opus-5-5"
 
 
 class FakeClient:

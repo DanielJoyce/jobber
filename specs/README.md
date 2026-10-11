@@ -38,7 +38,7 @@ Status: **design, awaiting your approval.** No implementation code written yet.
 | Storage | **SQLite** (WAL, FTS5) | Single user, zero ops, full-text search built in |
 | Console | **FastAPI + Jinja2 + HTMX** | Server-rendered, keyboard-driven, no build step |
 | Ingestion | **Query-driven, not full-crawl** | 15x cheaper, more polite, more relevant — *confirmed with you* |
-| Screening model | **Haiku 4.5 via Batch API**, Opus 5 on the shortlist | ~$2 per 1,000 jobs; scorer is **pluggable** |
+| Screening model | **Haiku 5.5 via Batch API**, Opus 5.5 on the shortlist | ~$0.26 per 1,000 jobs; scorer is **pluggable** |
 | Output shape | **Compatibility buckets A–G**, computed in Python | A single score is not actionable |
 | Browser automation | **Yes — Playwright, minority of sources** | [See below](#do-we-need-browser-controls) |
 | Raw-response cache | Content-addressed, gzipped, permanent | Re-parse without re-fetching. The most important decision here |
@@ -87,7 +87,7 @@ model judges, you decide:
 
 1. **Stage 0** — board-side keyword/occupation search. A deliberately *broad* net, not a filter.
 2. **Stage 1** — deterministic prefilter on hard facts only. Never rejects for missing data.
-3. **Stage 2** — Haiku 4.5 reads the full description against your resume, your `current_focus`,
+3. **Stage 2** — Haiku 5.5 reads the full description against your resume, your `current_focus`,
    and free-prose `want` / `avoid` / `done_with` blocks. It scores skills **twice**:
    `raw_skills` (what a keyword index sees) and `recency_weighted_skills` (last 3 years at full
    weight, 3–7 at half, beyond 7 at a quarter).

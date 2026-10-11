@@ -6,8 +6,8 @@ funnel. **Keyword search runs first and only at the source; the model does the r
 ```
   Stage 0  source-side keyword/occupation search   ~500,000 →  ~6,000 / week   free
   Stage 1  deterministic prefilter (hard facts)      ~6,000 →  ~2,000 / week   free
-  Stage 2  Haiku 4.5 screen, batched                 ~2,000 →    ~120 / week   ~$4/wk
-  Stage 3  Opus 5 deep pass on the shortlist           ~120 →     ~40 / week   ~$3/wk
+  Stage 2  Haiku 5.5 screen, batched                 ~2,000 →    ~120 / week   ~$0.55/wk
+  Stage 3  Opus 5.5 deep pass on the shortlist         ~120 →     ~40 / week   ~$2/wk
   Stage 4  you, in the console, by bucket               ~40 →  applications
 ```
 
@@ -111,9 +111,9 @@ Every rejection writes its rule keys to `prefilter_result.reasons`, and the cons
 **Rejected** view filterable by rule. A prefilter you cannot audit silently hides good jobs;
 this one is inspectable, and reviewing it occasionally is a real maintenance task, not a nicety.
 
-## Stage 2 — the screen (Haiku 4.5, batched)
+## Stage 2 — the screen (Haiku 5.5, batched)
 
-Model `claude-haiku-4-5`, through the **Batch API** for the 50% discount. Latency is irrelevant
+Model `claude-haiku-5-5`, through the **Batch API** for the 50% discount. Latency is irrelevant
 for a nightly run; results are durable for 29 days.
 
 One call per **`job_group`**, never per job and never per location
@@ -183,14 +183,19 @@ Two verification steps, because a cache that is not working costs 10x and says n
 
 - Assert `usage.cache_read_input_tokens > 0` on the second and later requests of a run. If it
   is zero, something is invalidating the prefix and that is a bug, not a mystery.
-- Haiku's **minimum cacheable prefix is larger than Opus's**. If the rubric + profile come in
-  under it, caching silently does not happen. Pad the rubric with genuinely useful scoring
+- Each model has a **minimum cacheable prefix** (512 tokens on Haiku 5.5; larger on Haiku
+  4.5). If the rubric + profile come in under it, caching silently does not happen. Pad the rubric with genuinely useful scoring
   anchors rather than filler, and confirm with the assertion above.
 
-Note two Haiku 4.5 specifics: `output_config.effort` is **not** supported and errors, and
-thinking on Haiku 4.5 uses `thinking: {type: "enabled", budget_tokens: N}` rather than adaptive.
 For a bounded classification task, run it with thinking off — the structured schema plus
 required evidence quotes does the work that thinking would, at a fraction of the output cost.
+Model specifics: Haiku 4.5 thinks only when asked and rejects `output_config.effort`. Haiku 5.5
+runs adaptive thinking **by default** (default effort `medium`), and thinking counts toward
+`max_tokens`, so the screen sends `thinking: {type: "disabled"}` explicitly (accepted at effort
+`high` or below; no effort is sent). Sonnet 5.5 rejects `disabled` and takes
+`{type: "between_tools"}` instead. Haiku 5.5 also rejects `temperature`/`top_p`/`top_k` and
+assistant prefill; the screen sends none of them. Its tokenizer counts the same text as about
+30% more tokens than Haiku 4.5.
 
 ### Scoring anchors
 
@@ -330,11 +335,20 @@ the paid re-score, and a new rejection must not re-send every job. Skipping is f
 free; the context sentence reaches jobs scored after the rejection arrives, and older scores
 stand.
 
-## Stage 3 — deep pass (Opus 5)
+## Stage 3 — deep pass (Opus 5.5)
 
 Top N by screen score (default 40/week, configurable), plus anything you manually promote.
-Model `claude-opus-5` with `thinking: {type: "adaptive"}` and `output_config: {effort: "high"}`
-— this is the stage where correctness is worth paying for. Not batched; it runs on demand when
+Model `claude-opus-5-5` with `thinking: {type: "adaptive"}` and `output_config: {effort: "high"}`
+— this is the stage where correctness is worth paying for. (Opus 5.5's thinking cannot be
+turned off and its default effort is `medium`, so `high` is sent explicitly. `max_tokens` is
+32,000: it caps thinking and the report together, and Opus 5.5 thinks more per turn than Opus 5.)
+
+A paid attempt that writes no score (a refusal, a report cut off at `max_tokens`, malformed
+output; for the screen, a Haiku 5.5 refusal) is noted in `score_failure`, keyed like
+`fit_score` with the description revision. The daily screen run and the `--deep N` shortlist
+skip such a group so it is not paid for again every run; a new description revision, a
+confirmed re-score, `--deep-group` or Score it still run it. With server-side fallback, cost
+is the sum over `usage.iterations`, each attempt at its own model's rates. Not batched; it runs on demand when
 you open a job, so you get it interactively.
 
 Produces a fuller report: a reasoned recommendation, requirement-by-requirement gap analysis
@@ -358,8 +372,8 @@ class FitScorer(Protocol):
 
 ```toml
 [scoring]
-screen_scorer = "anthropic:claude-haiku-4-5"    # default
-deep_scorer   = "anthropic:claude-opus-5"
+screen_scorer = "anthropic:claude-haiku-5-5"    # default
+deep_scorer   = "anthropic:claude-opus-5-5"
 ```
 
 Implementations ship for Anthropic (batched) and a generic OpenAI-compatible HTTP endpoint,
@@ -371,14 +385,14 @@ The reason this matters is not portability — it is that **`eval` can compare s
 labeled jobs**:
 
 ```bash
-jobhunter eval --compare anthropic:claude-haiku-4-5 anthropic:claude-opus-5 openai-compat:local
+jobhunter eval --compare anthropic:claude-haiku-5-5 anthropic:claude-opus-5-5 openai-compat:local
 ```
 
 Recall, precision, bucket agreement, hallucinated-quote rate, and cost per 1,000 jobs, side by
 side on your labels. That turns "which model should I use" from a guess into a measurement — and
 it is worth re-running occasionally, since a cheaper model that holds recall is pure savings.
 
-Default recommendation: **Haiku 4.5 for Stage 2, Opus 5 for Stage 3.** Haiku is fast and cheap
+Default recommendation: **Haiku 5.5 for Stage 2, Opus 5.5 for Stage 3.** Haiku is fast and cheap
 enough to screen everything, and the structured schema plus verified evidence quotes does most
 of the work that a bigger model would. Measure before paying more.
 
@@ -415,31 +429,38 @@ regression, and `eval` says so rather than leaving it to judgment.
 
 ## Cost
 
-Prices: Haiku 4.5 $1.00/$5.00 per MTok, halved by the Batch API to **$0.50/$2.50**; cache reads
-at 0.1x, so **$0.05/MTok** batched. Opus 5 $5.00/$25.00 per MTok.
+Prices ([pricing page](https://platform.claude.com/docs/en/about-claude/pricing), checked
+2026-10-11): Haiku 5.5 $0.10/$0.50 per MTok for prompts up to 100,000 tokens ($0.50/$2.50 over
+that), halved by the Batch API to **$0.05/$0.25**; cache reads at 0.1x, so **$0.005/MTok**
+batched. Opus 5.5 $4.00/$20.00 per MTok, cache reads at 0.05x ($0.20/MTok). The older models
+stay in the price table so stored spend still prices: Haiku 4.5 $1.00/$5.00, Opus 5
+$5.00/$25.00.
 
-**Stage 2, per job group:**
+**Stage 2, per job group** (token counts are Haiku 4.5's plus about 30% for Haiku 5.5's
+tokenizer):
 
 | | Tokens | Rate | Cost |
 |---|---|---|---|
-| Posting + metadata (uncached) | 2,000 | $0.50/MTok | $0.00100 |
-| Rubric + profile (cache read) | 3,000 | $0.05/MTok | $0.00015 |
-| Output | 350 | $2.50/MTok | $0.00088 |
-| | | | **≈ $0.0020** |
+| Posting + metadata (uncached) | 2,600 | $0.05/MTok | $0.00013 |
+| Rubric + profile (cache read) | 3,900 | $0.005/MTok | $0.00002 |
+| Output | 455 | $0.25/MTok | $0.00011 |
+| | | | **≈ $0.00026** |
 
-**≈ $2.00 per 1,000 jobs screened.** At 2,000/week → **$4.00/week**.
+**≈ $0.26 per 1,000 jobs screened.** At 2,000/week → **$0.53/week**. The spend-cap planning
+estimate stays at $0.002 per job (`screen.ESTIMATED_COST_PER_REQUEST_USD`): deliberately high,
+so a cap is never overrun on an estimate.
 
-**Stage 3, per job:** 5,000 in + 3,000 cached + 1,500 out ≈ **$0.064**. At 40/week → **$2.56/week**.
+**Stage 3, per job:** 5,000 in + 3,000 cached + 1,500 out ≈ **$0.051**. At 40/week → **$2.02/week**.
 
-**Total ≈ $6.50/week, ≈ $28/month**, and that is the number the console's cost page tracks
+**Total ≈ $2.55/week, ≈ $11/month**, and that is the number the console's cost page tracks
 against a configured cap.
 
 For contrast, this is what the Stage 0 decision bought: exhaustively crawling 54 labor-exchange
 boards would put on the order of 50,000 jobs/week into Stage 2 even after prefiltering —
-**~$100/week, ~$430/month**, for a pile of postings that are mostly not in your field. Roughly
-15x the cost for worse results.
+**~$13/week, ~$56/month**, for a pile of postings that are mostly not in your field. Roughly
+5x the cost for worse results.
 
-A one-time backfill is affordable: 50,000 historical jobs ≈ $100, run once.
+A one-time backfill is affordable: 50,000 historical jobs ≈ $13, run once.
 
 ## Failure modes this design defends against
 

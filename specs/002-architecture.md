@@ -132,8 +132,8 @@ jobhunter/
 │   │   ├── profile.py            load/validate profile, version hash
 │   │   ├── prefilter.py          deterministic hard constraints
 │   │   ├── rubric.py             versioned prompt + output schema
-│   │   ├── screen.py             Haiku 4.5 via Batch API
-│   │   ├── deep.py               Opus 5 shortlist pass
+│   │   ├── screen.py             Haiku 5.5 via Batch API
+│   │   ├── deep.py               Opus 5.5 shortlist pass
 │   │   └── calibration.py        eval against hand labels
 │   └── console/
 │       ├── app.py

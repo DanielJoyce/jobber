@@ -175,14 +175,14 @@ def test_anthropic_scorer_records_served_model(conn, profile):  # noqa: F811
     msg = SimpleNamespace(
         content=[SimpleNamespace(type="text", text=screen_json([GOOD_QUOTE]))],
         usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-5-5",
         stop_reason="end_turn",
     )
     client = SimpleNamespace(messages=SimpleNamespace(parse=lambda **kw: msg))
     screen.score_with(conn, AnthropicScorer(client), profile, gid, now=NOW)
     row = conn.execute("SELECT model, served_model FROM fit_score").fetchone()
-    assert row["model"] == "anthropic:claude-haiku-4-5"
-    assert row["served_model"] == "claude-haiku-4-5-20251001"
+    assert row["model"] == "anthropic:claude-haiku-5-5"
+    assert row["served_model"] == "claude-haiku-5-5"
 
 
 # ─── Cost ───────────────────────────────────────────────────────────────────

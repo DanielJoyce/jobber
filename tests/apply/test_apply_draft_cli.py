@@ -140,7 +140,7 @@ def test_api_run_on_yes(env, monkeypatch):
     monkeypatch.setattr(generator, "_default_client", Client)
     out = cli.invoke(app, ["apply", "draft", str(env.pid), "--runner", "api"], input="y\n")
     assert out.exit_code == 0, out.output
-    assert calls == ["claude-opus-5", "claude-haiku-4-5"]
+    assert calls == ["claude-opus-5-5", "claude-haiku-5-5"]
     assert [tuple(r) for r in docs(env)] == [("resume", 1, "api")]
 
 

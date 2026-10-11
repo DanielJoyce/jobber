@@ -30,8 +30,10 @@ def test_defaults_when_no_file(tmp_path):
     assert s.fetch.global_concurrency == 8
     assert s.fetch.timeout_s == 20.0
     assert s.fetch.max_retries == 5
-    assert s.scoring.screen_scorer == "anthropic:claude-haiku-4-5"
-    assert s.scoring.deep_scorer == "anthropic:claude-opus-5"
+    assert s.scoring.screen_scorer == "anthropic:claude-haiku-5-5"
+    assert s.scoring.deep_scorer == "anthropic:claude-opus-5-5"
+    assert s.apply.api_model == "claude-opus-5-5"
+    assert s.apply.api_entailment_model == "claude-haiku-5-5"
     assert s.scoring.daily_cap_usd == 2.0
     assert s.scoring.weekly_cap_usd == 10.0
     assert s.scoring.deep_shortlist == 40

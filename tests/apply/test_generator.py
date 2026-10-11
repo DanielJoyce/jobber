@@ -342,7 +342,7 @@ def test_api_run_on_click_streams_opus_with_effort_and_caches_the_resume(env, mo
     client = FakeClient([RESUME_OUT, ENTAIL_OUT])
     out = gen(env, runner="api", client_factory=lambda: client)
     p, e = client.params
-    assert p["model"] == "claude-opus-5"
+    assert p["model"] == "claude-opus-5-5"
     assert p["thinking"] == {"type": "adaptive"}
     assert p["output_config"]["effort"] == "medium"
     assert p["output_config"]["format"]["type"] == "json_schema"
@@ -350,14 +350,15 @@ def test_api_run_on_click_streams_opus_with_effort_and_caches_the_resume(env, mo
     assert "L1: Synthetic Person" in p["system"][1]["text"]
     assert QUOTE in p["messages"][0]["content"]
     assert "SECRET-SAVED-ANSWER" not in json.dumps(p) and "SECRET-PREFS-LINK" not in json.dumps(p)
-    # Haiku entailment: no thinking, no effort.
-    assert e["model"] == "claude-haiku-4-5"
-    assert "thinking" not in e and "effort" not in e["output_config"]
-    opus = (8000 * 5 + 3000 * 25) / 1e6
+    # Haiku 5.5 entailment: thinking switched off explicitly (on by default there), no effort.
+    assert e["model"] == "claude-haiku-5-5"
+    assert e["thinking"] == {"type": "disabled"} and "effort" not in e["output_config"]
+    opus = (8000 * 4 + 3000 * 20) / 1e6  # Opus 5.5: $4 / $20 per MTok
     assert out.cost_usd == pytest.approx(opus)
     rows = spend(env)
-    assert rows[("packet", "claude-opus-5")] == (1, pytest.approx(opus))
-    assert rows[("packet", "claude-haiku-4-5")][0] == 1
+    assert rows[("packet", "claude-opus-5-5")] == (1, pytest.approx(opus))
+    haiku = (8000 * 0.10 + 3000 * 0.50) / 1e6  # Haiku 5.5: $0.10 / $0.50 per MTok
+    assert rows[("packet", "claude-haiku-5-5")] == (1, pytest.approx(haiku))
     v = review.get_version(env.conn, out.doc_id)
     assert (v.runner, v.cost_usd) == ("api", pytest.approx(opus))
 
@@ -388,7 +389,7 @@ def test_api_without_a_key_is_refused(env, monkeypatch):
 def test_estimate_uses_the_median_api_cost_once_there_is_history(env, monkeypatch):
     first = generator.estimate(env.conn, env.settings, "resume", 32000)
     assert first.source == "token estimate"
-    assert first.usd == pytest.approx((8000 * 5 + 4500 * 25) / 1e6 + 0.003)
+    assert first.usd == pytest.approx((8000 * 4 + 4500 * 20) / 1e6 + 0.003)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
     for usage in ((8000, 3000), (8000, 5000), (8000, 4000)):
         gen(
@@ -398,7 +399,7 @@ def test_estimate_uses_the_median_api_cost_once_there_is_history(env, monkeypatc
         )
     est = generator.estimate(env.conn, env.settings, "resume", 1)
     assert est.source == "median of 3"
-    assert est.usd == pytest.approx((8000 * 5 + 4000 * 25) / 1e6 + 0.003)
+    assert est.usd == pytest.approx((8000 * 4 + 4000 * 20) / 1e6 + 0.003)
 
 
 # ─── letter and drafts ──────────────────────────────────────────────────────
@@ -625,8 +626,9 @@ def test_two_api_runs_at_once_cannot_both_pass_the_cap(env, monkeypatch):
     import time
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
+    # $0.15 left: room for one Opus 5.5 run (about $0.09 plus the check), not two.
     env.conn.execute(
-        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 1, 0, 0, 0.80)"
+        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 1, 0, 0, 0.85)"
     )
     pid2 = _second_packet(env)
 

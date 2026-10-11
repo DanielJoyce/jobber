@@ -211,7 +211,7 @@ ingested group; unscored pasted groups appear only in the pipeline.
 
 | | |
 |---|---|
-| Model | `[apply] cli_model = "opus"` (the CLI alias, whichever Opus your subscription serves) and `[apply] api_model = "claude-opus-5"` for the fallback: two keys, because one value cannot be both. A handful per week; wording quality is the point |
+| Model | `[apply] cli_model = "opus"` (the CLI alias, whichever Opus your subscription serves) and `[apply] api_model = "claude-opus-5-5"` for the fallback: two keys, because one value cannot be both. A handful per week; wording quality is the point |
 | Runner (your decision, 2026-10-10) | **The Claude Code CLI on your subscription first**, the official `anthropic` SDK with `ANTHROPIC_API_KEY` second ([CLI runner](#cli-runner)). `[apply] runner = "cli"` (default, your decision) or `"api"`. With `cli`, when the CLI is missing or fails, **the page offers the API run with its estimate and waits for your click**; it never switches silently |
 | API fallback | `messages.stream`, structured output via `output_config`, adaptive thinking, **effort `medium`** (`[apply] effort`) |
 | Caching | API fallback only: system prompt + numbered resume as the cached prefix. The 5-minute TTL usually expires while you review, so regenerate is costed uncached |
@@ -299,7 +299,7 @@ item is passing or confirmed. Editing a line never clears its badge; the checker
 edited text.
 
 **Advisory entailment pass** (`[apply] entailment_check`, **default on**, your decision): Haiku
-(`--model haiku` on the CLI runner, `claude-haiku-4-5` on the fallback) says per line whether the
+(`--model haiku` on the CLI runner, `claude-haiku-5-5` on the fallback) says per line whether the
 cited lines support it (`yes` / `partly` / `no`). Advisory only: it never clears an
 **unsupported** badge. Free on the subscription; about $0.003 per packet on the API.
 
@@ -375,19 +375,23 @@ each, and a per-board checklist in resume-first order:
 ### Cost
 
 On the CLI runner a packet costs no API credit; it uses your subscription's allowance. The
-figures below apply to the API fallback: Opus 5 at $5 / $25 per million input / output tokens
+figures below apply to the API fallback: Opus 5.5 at $4 / $20 per million input / output tokens
 (`scoring/scorers.py`); thinking tokens bill as output.
 
 | Item | Input | Output (incl. thinking, effort medium) | Cost |
 |---|---:|---:|---:|
-| Resume variant | ~8,000 | ~3,000-5,000 | **≈ $0.12-0.17** |
-| Regenerate (cache usually expired) | ~8,000 | ~3,000-5,000 | ≈ $0.12-0.17 |
-| Cover letter, on request | ~9,000 | ~1,200-2,000 | ≈ $0.08-0.10 |
-| One question draft | ~5,000 | ~600-1,000 | ≈ $0.04-0.05 |
-| Entailment pass (Haiku) | | | ≈ $0.003 |
-| **Typical packet** (generate, regenerate, two drafts, no letter) | | | **≈ $0.35-0.45** |
+| Resume variant | ~8,000 | ~3,000-5,000 | **≈ $0.09-0.13** |
+| Regenerate (cache usually expired) | ~8,000 | ~3,000-5,000 | ≈ $0.09-0.13 |
+| Cover letter, on request | ~9,000 | ~1,200-2,000 | ≈ $0.06-0.08 |
+| One question draft | ~5,000 | ~600-1,000 | ≈ $0.03-0.04 |
+| Entailment pass (Haiku 5.5, thinking off) | | | under $0.003 (the planning estimate) |
+| **Typical packet** (generate, regenerate, two drafts, no letter) | | | **≈ $0.25-0.35** |
 
-On the fallback, five packets a week is about **$2-3/week**, under the `[apply] daily_cap_usd` of
+The code's fallback estimates before there is history (`FALLBACK_ESTIMATE_USD`,
+`ENTAILMENT_ESTIMATE_USD` in `apply/generator.py`) were set for Opus 5 and Haiku 4.5 and are
+kept as they are: high, so a cap check never passes on an estimate that is too low.
+
+On the fallback, five packets a week is about **$1.25-1.75/week**, under the `[apply] daily_cap_usd` of
 $1.00. These are estimates: phase 1b replaces them with `count_tokens` on your real resume and a
 real posting, and once there is history the estimate uses the median `packet_document.cost_usd`
 for the same `kind` on the API runner (not `llm_spend`, whose daily rows mix kinds). The button

@@ -22,7 +22,7 @@ Nothing here adds a new input. It reports on the ones that exist and points at t
 
 Missing inputs fail in three different ways today, and two of them are hard to notice:
 
-- **Silent.** `scoring.screen_scorer` defaults to `anthropic:claude-haiku-4-5`. With no
+- **Silent.** `scoring.screen_scorer` defaults to `anthropic:claude-haiku-5-5`. With no
   Anthropic credential, the SDK client is still constructed and the error surfaces at the batch
   submit: the score stage catches it, adds `score: submit failed (Could not resolve
   authentication method ...)` to the run summary, logs a warning, and does not change the exit
@@ -86,7 +86,7 @@ under "More"), **info** (shown, never a fault).
 | 14 | Gmail label and filter | `mail setup` | R | Alerts stay in your inbox; the label is empty | Only `mail status` (a Gmail API call) can tell. Local proxy: alerts arriving under the label (`mail_message`) |
 | 15 | Alert subscriptions on blocked boards | `/alerts` (`alert_signup`, `mail_message`) | R | Coverage of the roughly 40 banks that block crawlers ([008](008-compliance.md)) | The checklist exists; nothing points you to it |
 | 16 | Alert parsers | `mail/parsers`: `vos`, `joblink`, `neogov`, `nlx`, `generic` | info | LinkedIn alerts (bug `430a0e7`) and Craigslist saved searches (bug `b0ac328`) have no parser yet | **Silent**: their messages are labelled but yield no jobs |
-| 17 | Deep pass: `scoring.deep_scorer` (`anthropic:claude-opus-5`) | `score --deep`, `score --collect-pending` | R with an Anthropic screen scorer, else O | Stage 3 shortlist | `score --deep` errors when run |
+| 17 | Deep pass: `scoring.deep_scorer` (`anthropic:claude-opus-5-5`) | `score --deep`, `score --collect-pending` | R with an Anthropic screen scorer, else O | Stage 3 shortlist | `score --deep` errors when run |
 | 18 | Drafting runner ([017](017-assisted-apply.md)) | `apply.runner`: `cli` needs `claude` on `PATH` and a claude.ai login; `api` needs an Anthropic credential. Runner-off state in `<data dir>/apply-runner.json` | R | Generate on a packet, the entailment check | Generate shows the error and offers the other runner; never switches by itself. Containers: drafting runs on the host (`apply draft`, C9) |
 | 19 | `apply.daily_cap_usd` | `apply/generator.py` | info | Paid packet drafting | 0 refuses paid runs, by design |
 | 20 | Extension pairing | `<data dir>/extension.json` (`ext_pairing.status`) | O | Send to jobhunter from Chrome | The extension gets 401 |
@@ -257,7 +257,7 @@ the checks and by the run's score stage (S7), so the two cannot disagree. Its an
 | `local:` | always `present` for the key (optional); the server is a live check | `unknown` until checked live |
 
 S7 skips the score stage only on `missing`, with `score: skipped: no Anthropic credential for
-anthropic:claude-haiku-4-5 (see jobhunter doctor)`; `present` and `unknown` try as today.
+anthropic:claude-haiku-5-5 (see jobhunter doctor)`; `present` and `unknown` try as today.
 
 ### Gmail token
 
@@ -378,7 +378,7 @@ are all ok collapses to its header. "Show everything" expands all.
 Scoring
   ✕ missing   Screen scorer                       Fit scores and buckets for new jobs
               screen_scorer is not set in config.toml, so the default
-              anthropic:claude-haiku-4-5 is used, and no Anthropic credential is set.
+              anthropic:claude-haiku-5-5 is used, and no Anthropic credential is set.
               New jobs are not being scored (last run 02:00: skipped, no credential).
               Fix, either:
                 · add ANTHROPIC_API_KEY to ~/.env, then restart the console

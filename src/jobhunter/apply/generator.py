@@ -50,7 +50,7 @@ from jobhunter.core import db
 from jobhunter.core.spend import PACKET_CLI_TIER, PACKET_TIER
 from jobhunter.scoring import screen as stage2
 from jobhunter.scoring.profile import Profile
-from jobhunter.scoring.scorers import PRICING_PER_MTOK, Usage, compute_cost
+from jobhunter.scoring.scorers import PRICING_PER_MTOK, Usage, compute_cost, thinking_off
 
 logger = logging.getLogger(__name__)
 
@@ -377,8 +377,9 @@ def build_request(
 
 
 def api_params(req: Request, model: str, *, effort: str | None, max_tokens: int) -> dict[str, Any]:
-    """Messages API params. Opus: adaptive thinking and effort. Haiku: neither (it rejects
-    effort, and a bounded check runs without thinking)."""
+    """Messages API params. Opus: adaptive thinking and effort. Haiku: no effort and thinking
+    off (Haiku 4.5 rejects effort; a bounded check runs without thinking, switched off
+    explicitly on models whose thinking is on by default, see ``scorers.thinking_off``)."""
     params: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
@@ -392,6 +393,8 @@ def api_params(req: Request, model: str, *, effort: str | None, max_tokens: int)
     if effort is not None:
         params["thinking"] = {"type": "adaptive"}
         params["output_config"]["effort"] = effort
+    else:
+        params.update(thinking_off(model))
     return params
 
 

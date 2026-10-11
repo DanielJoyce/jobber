@@ -34,8 +34,10 @@ All three must pass before you commit.
 - **No personal data in the repo.** `resume/`, `profile/`, `data/`, `config.toml` are gitignored.
   Never commit an email address, phone number, or salary figure. Use placeholders like
   `<you>@example.com` in examples.
-- **Anthropic API:** official `anthropic` SDK only. Model IDs: `claude-haiku-4-5` (screen),
-  `claude-opus-5` (deep pass). Structured output via `output_config`; batch via
+- **Anthropic API:** official `anthropic` SDK only. Model IDs (Claude 5.5 series):
+  `claude-haiku-5-5` (screen, entailment check), `claude-sonnet-5-5` (mid tier, when chosen),
+  `claude-opus-5-5` (deep pass, drafting fallback). Older ids stay in the price table for stored
+  spend only. Structured output via `output_config`; batch via
   `client.messages.batches`. Tests mock the client; never call the API in tests.
 - Keep changes scoped to your bug. Don't reformat or refactor unrelated files.
 

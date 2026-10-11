@@ -21,7 +21,8 @@ and no batch discount**. Anthropic direct with Batch API + caching is shown for 
 
 | Option | ~$/1,000 jobs | Notes |
 |---|---:|---|
-| Claude Haiku 4.5, direct API, batch + cache | **≈ 2.00** | Current default ([006](006-fit-scoring.md#cost)) |
+| Claude Haiku 5.5, direct API, batch + cache | **≈ 0.26** | Current default ([006](006-fit-scoring.md#cost)) |
+| Claude Haiku 4.5, direct API, batch + cache | ≈ 2.00 | Previous default |
 | Claude Haiku 4.5 via OpenRouter | 7.00 | No batch discount, so direct is cheaper |
 | `openai/gpt-oss-120b` (batch) | 0.20 | Open-weight 120B MoE |
 | `openai/gpt-oss-20b` | 0.13 | Open-weight 21B MoE, 3.6B active. **Also runnable locally** |
