@@ -674,7 +674,7 @@ def _update_seq_of_maps(old: CommentedSeq, value: list[Any]) -> None:
             if val is not None and cur.get(key) != val:
                 cur[key] = _to_yaml(val, cur.get(key))
     while len(old) > len(value):
-        del old[-1]
+        del old[len(old) - 1]  # del old[-1] shifts ruamel item comments
 
 
 # Where ruamel keeps the comment that follows a node: index 2 of a mapping key's entry,

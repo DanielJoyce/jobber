@@ -317,6 +317,31 @@ answers:
 """
 
 
+def test_removing_the_last_item_of_a_commented_block_list_keeps_comments_in_place(tmp_path):
+    from jobhunter.scoring.profile import save_profile_changes
+
+    d = tmp_path / "p"
+    d.mkdir()
+    (d / "preferences.yaml").write_text(
+        "target_titles:\n"
+        "  - Systems Engineer  # current\n"
+        "  - Staff Engineer  # stretch\n"
+        "  - Principal Engineer  # dream\n"
+        "narrative:\n  want: Synthetic.\n",
+        encoding="utf-8",
+    )
+    save_profile_changes(
+        d,
+        {"target_titles": ["Systems Engineer", "Staff Engineer"]},
+        expected_mtime_ns=preferences_mtime_ns(d),
+        require_resume=False,
+    )
+    text = (d / "preferences.yaml").read_text(encoding="utf-8")
+    assert "  - Systems Engineer  # current\n" in text
+    assert "  - Staff Engineer  # stretch\n" in text
+    assert "Principal" not in text
+
+
 def test_editing_a_custom_answer_keeps_every_comment(client, pdir):
     (pdir / "preferences.yaml").write_text(BASE + COMMENTED, encoding="utf-8")
     form = page_form(

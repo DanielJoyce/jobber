@@ -923,6 +923,76 @@
     "Decline to answer"
    ],
    "expected": "eeo"
+  },
+  {
+   "label": "How much do you expect to earn?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Earnings expectations",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Expected annual earnings",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Minimum pay you would accept",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Hourly expectation",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Annual package",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "What pay are you looking for?",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Have you ever been charged with a crime?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Have you pleaded guilty to an offense?",
+   "options": [],
+   "expected": "criminal"
+  },
+  {
+   "label": "Name of reference 1",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Reference 2 email",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Bank details",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "How do you forecast quarterly earnings for a client?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How did you earn the trust of a new team?",
+   "options": [],
+   "expected": null
   }
  ]
 }

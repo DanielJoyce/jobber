@@ -66,6 +66,16 @@ NEVER_STORE: dict[str, tuple[str, ...]] = {
         "expected package",
         "desired package",
         "notice pay",
+        "expect to earn",
+        "expected earnings",
+        "earnings expectation",
+        "earnings expectations",
+        "annual earnings",
+        "minimum pay",
+        "hourly expectation",
+        "hourly expectations",
+        "annual package",
+        "what pay",
     ),
     "eeo": (
         "gender",
@@ -172,6 +182,10 @@ NEVER_STORE: dict[str, tuple[str, ...]] = {
         "criminal",
         "pending charges",
         "arrested",
+        "charged with",
+        "pleaded guilty",
+        "pled guilty",
+        "plead guilty",
     ),
     "references": (
         "references",
@@ -181,6 +195,12 @@ NEVER_STORE: dict[str, tuple[str, ...]] = {
         "reference contact",
         "referee",
         "referees",
+        "name of reference",
+        "reference 1",
+        "reference 2",
+        "reference 3",
+        "reference 4",
+        "reference 5",
     ),
     "credentials": (
         "password",
@@ -200,6 +220,7 @@ NEVER_STORE: dict[str, tuple[str, ...]] = {
         "sort code",
         "cvv",
         "payment details",
+        "bank details",
     ),
 }
 
