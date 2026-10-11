@@ -326,6 +326,9 @@ class LoadedAnswers:
     # ``answers.custom`` entries as written that did not validate (not never-store ones): the
     # form never shows them, so a form save keeps them in the file rather than deleting them.
     ignored_custom: list[Any] = field(default_factory=list)
+    # ``answers.custom`` is there but not a list (say a hand-written mapping): a form save must
+    # not replace it with the form's list, which would delete those answers.
+    custom_unmanaged: bool = False
 
 
 def _warn(out: LoadedAnswers, message: str, *, never_store: bool = False) -> None:
@@ -393,7 +396,12 @@ def _lenient_links(value: Any, out: LoadedAnswers) -> dict[str, Any]:
 
 def _lenient_custom(value: Any, out: LoadedAnswers) -> list[SavedAnswer]:
     if not isinstance(value, list):
-        _warn(out, "answers.custom is not a list of answers, so it was ignored.")
+        _warn(
+            out,
+            "answers.custom is not a list of answers, so it was ignored; custom answers cannot "
+            "be saved from this page until it is fixed in the raw editor.",
+        )
+        out.custom_unmanaged = True
         return []
     items: list[SavedAnswer] = []
     for i, item in enumerate(value, start=1):
@@ -455,9 +463,9 @@ def answers_from_text(text: str) -> LoadedAnswers:
         # Names the line, never the values (logs and warnings carry no answer values).
         _warn(
             out,
-            f"preferences.yaml repeats a key inside answers: ({where}); only the first value is "
-            "used, and saving answers on this page is refused until you fix it in the raw "
-            "editor (other preferences still save).",
+            f"preferences.yaml repeats a key inside answers:, or has a second answers: "
+            f"section ({where}); only the first value is used, and saving answers on this page "
+            "is refused until you fix it in the raw editor (other preferences still save).",
         )
     return out
 

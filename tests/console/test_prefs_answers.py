@@ -490,6 +490,128 @@ def test_removing_the_last_answer_keeps_the_next_sections_heading(client, pdir):
     assert "# ---- scoring notes ----\nscoring_notes: synthetic" in text
 
 
+LISTS = """\
+resume_path: resume.md
+target_titles:
+  # titles heading
+  - Systems Engineer  # first
+  # stretch target, keep this note
+  - Staff Engineer  # stretch
+  # dream, keep too
+  - Principal Engineer  # dream
+queries:
+  # infra net
+  - keywords: [terraform, kubernetes]  # infra
+  # data net
+  - keywords: [airflow, dbt]
+hard:
+  title_exclusions:
+  - intern
+  # B heading
+  - clerk  # no front desk
+answers:
+  custom:
+  - question: A?
+    answer: a
+  # B answer heading
+  - question: B?
+    answer: b
+narrative:
+  want: Synthetic.
+"""
+
+
+def _save_lists(tmp_path, changes):
+    from jobhunter.scoring.profile import save_profile_changes
+
+    d = tmp_path / "lists"
+    d.mkdir(exist_ok=True)
+    (d / "resume.md").write_text("Synthetic Person\n", encoding="utf-8")
+    (d / "preferences.yaml").write_text(LISTS, encoding="utf-8")
+    save_profile_changes(
+        d, changes, expected_mtime_ns=preferences_mtime_ns(d), require_resume=False
+    )
+    return (d / "preferences.yaml").read_text(encoding="utf-8")
+
+
+def _query(keywords):
+    return {"keywords": keywords, "title": None, "onet_soc": None, "remote": None}
+
+
+@pytest.mark.parametrize(
+    ("changes", "kept", "gone"),
+    [
+        # Remove the first title: the comment above the kept second one stays.
+        (
+            {"target_titles": ["Staff Engineer", "Principal Engineer"]},
+            ["# stretch target, keep this note", "# stretch", "# dream, keep too", "# dream"],
+            ["# first"],
+        ),
+        # Rename the middle title: its comment lines and inline comment stay.
+        (
+            {"target_titles": ["Systems Engineer", "Staff Engineer II", "Principal Engineer"]},
+            ["# first", "# stretch target, keep this note", "# stretch", "# dream"],
+            [],
+        ),
+        # Add a query (the form posts unset keys as None): every comment stays.
+        (
+            {
+                "queries": [
+                    _query(["terraform", "kubernetes"]),
+                    _query(["airflow", "dbt"]),
+                    _query(["rust", "wasm"]),
+                ]
+            },
+            ["# infra net", "# infra", "# data net"],
+            [],
+        ),
+        # Remove the first exclusion: the comment above the kept one stays.
+        ({"hard.title_exclusions": ["clerk"]}, ["# B heading", "# no front desk"], []),
+        # Remove the first custom answer (dash at the key's indent): same.
+        ({"answers.custom": [{"question": "B?", "answer": "b"}]}, ["# B answer heading"], []),
+    ],
+)
+def test_list_edits_keep_the_comments_of_kept_items(tmp_path, changes, kept, gone):
+    """Review of 950d5eb (1): kept or edited items keep their comments in every list."""
+    text = _save_lists(tmp_path, changes)
+    for comment in kept:
+        assert comment in text, (comment, text)
+    for comment in gone:
+        assert comment not in text, (comment, text)
+    assert "# titles heading" in text
+
+
+def test_a_custom_mapping_is_never_replaced_by_a_form_save(client, pdir):
+    """Review of 950d5eb (5): answers.custom written as a mapping is not a list the form can
+    show; adding a custom answer is refused rather than deleting the hand-written ones."""
+    block = "answers:\n  custom:\n    Why us?: Calm teams.\n    Why now?: Good timing.\n"
+    (pdir / "preferences.yaml").write_text(BASE + block, encoding="utf-8")
+    form = page_form(pdir, custom=[("Why here?", "Synthetic widgets.")])
+    r = post(client, "/prefs/save", form)
+    assert r.status_code == 422 and "is not a list" in r.text
+    assert text_of(pdir) == BASE + block
+
+
+def test_a_second_answers_section_does_not_block_other_saves(tmp_path):
+    """Review of 950d5eb (3): two top-level answers: sections used to block every save."""
+    from jobhunter.scoring.profile import save_profile_changes
+
+    d = tmp_path / "two"
+    d.mkdir()
+    (d / "resume.md").write_text("Synthetic Person\n", encoding="utf-8")
+    two = "answers:\n  notice_period: one week\nanswers:\n  relocation: no\n"
+    (d / "preferences.yaml").write_text(BASE + two, encoding="utf-8")
+    assert any("second answers:" in w for w in answers.load_answers(d).warnings)
+    save_profile_changes(
+        d,
+        {"target_titles": ["Systems Engineer", "Staff Engineer"]},
+        expected_mtime_ns=preferences_mtime_ns(d),
+        require_resume=False,
+    )
+    text = (d / "preferences.yaml").read_text(encoding="utf-8")
+    assert two in text and "Staff Engineer" in text
+
+
 DUP_BLOCK = (
     "answers:\n  notice_period: one week\n  notice_period: two weeks\n"
     "  # keep this comment\n"

@@ -402,7 +402,7 @@ def _hold_separate_blocks(text: str) -> tuple[str, dict[str, str]]:
         if key is None:
             out.append(run)
             continue
-        line = f"{key}: {_KEEP_BLOCK.format(n=len(held))}"
+        line = f"{_KEEP_BLOCK.format(n=len(held))}: {key}"  # unique even for two blocks
         held[line] = run if run.endswith("\n") else run + "\n"
         out.append(line + "\n")
     return "".join(out), held
@@ -703,10 +703,12 @@ def _update_seq_of_maps(old: CommentedSeq, value: list[Any]) -> None:
 
     ruamel stores the comment lines *before* item k after the last value of item k-1, and the
     lines after the list (the next section's heading) after the last value of the last item.
-    So items are matched by identity (``_same_item``: the same ``question``, else equal), each
-    keeps its inline comment and the comment lines that preceded it, a removed item takes its
-    own with it, and the lines after the list stay after the list (950d5eb (1)). Lines before
-    the first item stay before whichever item is first.
+    So each new item is matched to an old one: first by identity (``_same_item``: the same
+    ``question``, else equal ignoring unset keys), then the rest in order with the old items
+    left over (an edit, such as a renamed title). A matched item keeps its inline comment and
+    the comment lines that preceded it, wherever it ends up (before the first item included),
+    a removed item takes its own with it, and the lines after the list stay after the list
+    (950d5eb (1)).
     """
     inlines: list[CommentToken | None] = []
     leads: list[str | None] = [None]  # leads[i]: the comment lines before old item i
@@ -716,16 +718,22 @@ def _update_seq_of_maps(old: CommentedSeq, value: list[Any]) -> None:
         leads.append(rest)
     tail = leads.pop()  # after the last item: belongs after the list, whatever comes last
     used: set[int] = set()
-    plan: list[tuple[Any, CommentToken | None, str | None]] = []  # item, inline, lines before
+    assign: list[int | None] = []
     for new_item in value:
         match = next(
             (i for i, cur in enumerate(old) if i not in used and _same_item(cur, new_item)),
             None,
         )
+        if match is not None:
+            used.add(match)
+        assign.append(match)
+    leftover = iter([i for i in range(len(old)) if i not in used])
+    assign = [m if m is not None else next(leftover, None) for m in assign]
+    plan: list[tuple[Any, CommentToken | None, str | None]] = []  # item, inline, lines before
+    for new_item, match in zip(value, assign, strict=True):
         if match is None:
             plan.append((_to_yaml(new_item), None, None))
             continue
-        used.add(match)
         cur = old[match]
         if isinstance(cur, CommentedMap) and isinstance(new_item, Mapping):
             for key in [k for k in cur if new_item.get(k) is None]:
@@ -735,11 +743,14 @@ def _update_seq_of_maps(old: CommentedSeq, value: list[Any]) -> None:
                     cur[key] = _to_yaml(val, cur.get(key))
         elif cur != new_item:
             cur = _to_yaml(new_item, cur)
-        plan.append((cur, inlines[match], leads[match]))
+        # Lines before old item 0 live before the list (on its key) and stay there.
+        plan.append((cur, inlines[match], leads[match] if match else None))
     while len(old):
         del old[len(old) - 1]  # del old[-1] shifts ruamel item comments
     for item, _inline, _lead in plan:
         old.append(item)
+    if plan and plan[0][2]:
+        _add_leading(old, plan[0][2])
     for j, (_item, inline, _lead) in enumerate(plan):
         lines = (plan[j + 1][2] if j + 1 < len(plan) else tail) or ""
         if inline or lines:
@@ -751,7 +762,24 @@ def _same_item(cur: Any, new: Any) -> bool:
         q = new.get("question")
         if q is not None:
             return cur.get("question") == q
+        new = {k: v for k, v in new.items() if v is not None}
     return _plain(cur) == new if isinstance(cur, CommentedMap | CommentedSeq) else cur == new
+
+
+def _add_leading(seq: CommentedSeq, lines: str) -> None:
+    """Comment ``lines`` before the list's first item, after any already there."""
+    tokens = []
+    for line in lines.splitlines(keepends=True):
+        body = line.lstrip(" ")
+        col = len(line) - len(body)
+        tokens.append(CommentToken(body if body.strip() else "\n", CommentMark(col), None))
+    if seq.ca.comment is None:
+        seq.ca.comment = [None, []]
+    while len(seq.ca.comment) < 2:
+        seq.ca.comment.append([])
+    if seq.ca.comment[1] is None:
+        seq.ca.comment[1] = []
+    seq.ca.comment[1].extend(tokens)
 
 
 def _trailing_holder(seq: CommentedSeq, index: int) -> tuple[Any, Any, bool]:
