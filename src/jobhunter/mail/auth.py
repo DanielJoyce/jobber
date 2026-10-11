@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import webbrowser
@@ -358,6 +359,127 @@ def authenticate(
     else:
         token = run_oauth_flow(settings, port=port or 0, open_browser=open_browser)
     return store_token(token)
+
+
+# --- podman secret (host only, specs/018 C7) ------------------------------------------------
+
+SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+PODMAN_PROBE_TIMEOUT_SECONDS = 20
+PODMAN_WRITE_TIMEOUT_SECONDS = 30
+# Tried in order; the first whose `podman secret ls` succeeds wins. The last three are the
+# host-escape chain for toolbox and distrobox (flatpak-spawn, host-spawn, distrobox-host-exec).
+PODMAN_CHAINS: tuple[tuple[str, ...], ...] = (
+    ("podman",),
+    ("flatpak-spawn", "--host", "podman"),
+    ("host-spawn", "podman"),
+    ("distrobox-host-exec", "podman"),
+)
+
+
+def _secret_names(prefix: list[str]) -> list[str] | None:
+    """Names from `podman secret ls`, or None when that command does not work."""
+    try:
+        done = subprocess.run(
+            [*prefix, "secret", "ls", "--format", "{{.Name}}"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=PODMAN_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def find_podman() -> tuple[list[str], list[str]]:
+    """The working podman command prefix and the existing secret names; raise if none works.
+
+    Run before the consent flow so a host without podman is refused up front.
+    """
+    for chain in PODMAN_CHAINS:
+        if shutil.which(chain[0]) is None:
+            continue
+        names = _secret_names(list(chain))
+        if names is not None:
+            return list(chain), names
+    raise MailAuthError(
+        "podman is not reachable (tried podman, flatpak-spawn --host podman, host-spawn "
+        "podman, distrobox-host-exec podman), so no consent flow was started. Install podman "
+        "on the host or run this from a shell that can reach it."
+    )
+
+
+def check_secret_name(name: str) -> None:
+    if not SECRET_NAME_RE.fullmatch(name):
+        raise MailAuthError(
+            f"invalid podman secret name {name!r}: use letters, digits, '_', '.', '-' "
+            "and start with a letter or digit."
+        )
+
+
+def write_podman_secret(prefix: list[str], name: str, token: str) -> None:
+    """`podman secret create --replace NAME -` with the token on stdin only.
+
+    The token is never in argv or the child's added environment, and nothing is written to disk.
+    """
+    try:
+        done = subprocess.run(
+            [*prefix, "secret", "create", "--replace", name, "-"],
+            input=token,
+            capture_output=True,
+            text=True,
+            timeout=PODMAN_WRITE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MailAuthError(f"podman secret create failed ({type(exc).__name__})") from exc
+    if done.returncode != 0:
+        detail = (done.stderr or "").replace(token, "[redacted]").strip().splitlines()
+        tail = f": {detail[-1][:200]}" if detail else ""
+        raise MailAuthError(f"podman secret create exited {done.returncode}{tail}")
+
+
+def authenticate_to_podman_secret(
+    settings: Settings,
+    name: str,
+    *,
+    manual: bool = False,
+    port: int | None = None,
+    open_browser: bool = True,
+    keep_local: bool = False,
+    echo: Callable[[str], None] = print,
+) -> str:
+    """Host only: run the OAuth flow, then store the refresh token as a podman secret.
+
+    podman is checked before consent. If the write fails afterwards the token is stored
+    locally (keyring or 0600 file) so the consent is not lost. Returns "new", "replaced"
+    or "local" (write failed, kept locally).
+    """
+    if container.is_container():
+        raise MailAuthError(container.refusal("mail auth"))
+    check_secret_name(name)
+    require_client_secrets(settings)
+    prefix, existing = find_podman()
+    if manual:
+        token = run_manual_flow(settings, port=port or DEFAULT_PORT)
+    else:
+        token = run_oauth_flow(settings, port=port or 0, open_browser=open_browser)
+    try:
+        write_podman_secret(prefix, name, token)
+    except MailAuthError as exc:
+        where = store_token(token, echo)
+        echo(
+            f"warning: could not write podman secret {name} ({exc}). The token was kept in the "
+            f"{where} so the consent is not lost. Fix podman, then run: "
+            f"jobhunter mail auth --podman-secret {name}"
+        )
+        return "local"
+    if keep_local:
+        store_token(token, echo)
+    return "replaced" if name in existing else "new"
 
 
 def build_service(settings: Settings):
