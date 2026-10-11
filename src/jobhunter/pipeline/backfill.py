@@ -39,12 +39,15 @@ DEFAULT_POLL_SECONDS = 60.0
 DEFAULT_MAX_WAIT_SECONDS = 4 * 3600
 # Used only when a scorer has no price of its own (no measured history, no price table).
 FALLBACK_COST_PER_JOB_USD = screen.ESTIMATED_COST_PER_REQUEST_USD  # Haiku, batched
-# A typical screen call (specs/006 "Cost"): 2,000 uncached input, 3,000 cached, 350 output.
+# A typical screen call (specs/006 "Cost"), in the newer tokenizer's counts (Haiku 5.5 and
+# Opus 4.7 onward count the same text as about 30% more tokens): 2,600 uncached input, 3,900
+# cached, 455 output. For an older-tokenizer model this overestimates by about 30%, the safe
+# direction for a budget that bypasses the daily cap.
 TYPICAL_USAGE = SimpleNamespace(
-    input_tokens=2000,
+    input_tokens=2600,
     cache_creation_input_tokens=0,
-    cache_read_input_tokens=3000,
-    output_tokens=350,
+    cache_read_input_tokens=3900,
+    output_tokens=455,
 )
 
 # Same conditions as screen._ELIGIBLE, counted rather than loaded.

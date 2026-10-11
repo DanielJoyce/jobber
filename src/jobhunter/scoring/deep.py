@@ -29,12 +29,16 @@ from jobhunter.scoring import screen as stage2
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile, scoring_inputs
 from jobhunter.scoring.rubric import DIMENSIONS, PROMPT_VERSION, RUBRIC_TEXT
+from jobhunter.scoring.scorers import compute_message_cost
 
 logger = logging.getLogger(__name__)
 
 TIER = "deep"
 DEFAULT_SCORER = "anthropic:claude-opus-5-5"
-MAX_TOKENS = 16000
+# Room for thinking plus the report. Opus 5.5 thinks more per turn than Opus 5 at the same
+# effort, and max_tokens caps thinking and text together; a cut-off report is paid for and
+# writes nothing. The call streams, so a high cap costs nothing unless it is used.
+MAX_TOKENS = 32000
 EFFORT = "high"
 BETAS = ["server-side-fallback-2026-07-01"]
 # specs/006 "Cost": about $0.051 per deep job on Opus 5.5 ($0.064 on Opus 5); padded for the
@@ -219,17 +223,28 @@ def shortlist(
     ``scoring.deep_scorer`` (or its default, as when it moved from Opus 5 to Opus 5.5) must
     not make ``score --deep N`` pay again for groups already deep-scored by the previous model;
     it moves on to the next unscored ones. Re-running one group on the new model stays
-    possible on request (``score --deep-group``). ``scorer`` is kept for callers.
+    possible on request (``score --deep-group``). A group whose last paid attempt with this
+    scorer wrote nothing (refused, cut off, malformed; ``score_failure``) for its current
+    description revision is skipped too, so it is not paid for again on every run.
     """
-    del scorer
     rows = conn.execute(
         "SELECT g.id AS gid, f.* FROM job_group g JOIN fit_score f ON f.job_group_id = g.id "
         "WHERE f.tier = 'screen' AND f.id = ("
         "  SELECT s.id FROM fit_score s WHERE s.job_group_id = g.id AND s.tier = 'screen' "
         "  ORDER BY (s.scoring_version = ?) DESC, s.id DESC LIMIT 1) "
         "AND NOT EXISTS (SELECT 1 FROM fit_score d WHERE d.job_group_id = g.id "
-        "  AND d.tier = 'deep' AND d.prompt_version = ? AND d.scoring_version = ?)",
-        (profile.scoring_version, DEEP_PROMPT_VERSION, profile.scoring_version),
+        "  AND d.tier = 'deep' AND d.prompt_version = ? AND d.scoring_version = ?) "
+        "AND NOT EXISTS (SELECT 1 FROM score_failure x WHERE x.job_group_id = g.id "
+        "  AND x.tier = 'deep' AND x.model = ? AND x.prompt_version = ? "
+        "  AND x.scoring_version = ? AND x.input_rev = g.description_rev)",
+        (
+            profile.scoring_version,
+            DEEP_PROMPT_VERSION,
+            profile.scoring_version,
+            scorer,
+            DEEP_PROMPT_VERSION,
+            profile.scoring_version,
+        ),
     ).fetchall()
     scored: list[tuple[int, int]] = []
     rejected = rejections.rejected_group_ids(conn)
@@ -270,8 +285,9 @@ def deep_score(
     """Run the deep pass for one group and store it as ``fit_score`` tier 'deep'.
 
     Re-running returns the stored row without calling the API. A refusal, truncated or
-    malformed output, or an exhausted daily cap writes no row, so the group stays eligible.
-    A refusal still records its spend (the tokens were billed).
+    malformed output, or an exhausted daily cap writes no row. A refusal still records its
+    spend (the tokens were billed). A paid attempt that wrote nothing is also noted in
+    ``score_failure`` so ``shortlist`` skips the group; asking for it by id still runs it.
     """
     existing = _stored(conn, group_id, scorer, profile)
     if existing is not None:
@@ -291,7 +307,8 @@ def deep_score(
     params = build_request(job_d, stage2._summary_for(conn, job), profile, scorer=scorer)
     message = _stream_message(client, params)
     usage = message.usage
-    cost = stage2.compute_cost(usage, _cost_model(message, scorer), batch=False)
+    # Every attempt a server-side fallback made, each at its own model's rates.
+    cost = compute_message_cost(usage, _cost_model(message, scorer), batch=False)
 
     def spend() -> None:
         stage2._record_spend(
@@ -308,10 +325,23 @@ def deep_score(
     try:
         report = parse_message(message)
     except DeepError as exc:
-        status = "refused" if getattr(message, "stop_reason", None) == "refusal" else "invalid"
+        stop = getattr(message, "stop_reason", None)
+        status = "refused" if stop == "refusal" else "invalid"
         logger.warning("deep pass group %d %s: %s", group_id, status, exc)
+        rev = conn.execute(
+            "SELECT description_rev FROM job_group WHERE id = ?", (group_id,)
+        ).fetchone()
         with _txn(conn):
             spend()
+            stage2.record_failure(
+                conn,
+                group_id,
+                TIER,
+                stage2._Key(scorer, DEEP_PROMPT_VERSION, profile.scoring_version),
+                rev[0] if rev else 0,
+                stop if stop in ("refusal", "max_tokens") else "invalid",
+                now,
+            )
         return DeepResult(status, cost_usd=cost, detail=str(exc))
 
     with _txn(conn):

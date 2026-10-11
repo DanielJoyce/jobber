@@ -340,7 +340,15 @@ stand.
 Top N by screen score (default 40/week, configurable), plus anything you manually promote.
 Model `claude-opus-5-5` with `thinking: {type: "adaptive"}` and `output_config: {effort: "high"}`
 — this is the stage where correctness is worth paying for. (Opus 5.5's thinking cannot be
-turned off and its default effort is `medium`, so `high` is sent explicitly.) Not batched; it runs on demand when
+turned off and its default effort is `medium`, so `high` is sent explicitly. `max_tokens` is
+32,000: it caps thinking and the report together, and Opus 5.5 thinks more per turn than Opus 5.)
+
+A paid attempt that writes no score (a refusal, a report cut off at `max_tokens`, malformed
+output; for the screen, a Haiku 5.5 refusal) is noted in `score_failure`, keyed like
+`fit_score` with the description revision. The daily screen run and the `--deep N` shortlist
+skip such a group so it is not paid for again every run; a new description revision, a
+confirmed re-score, `--deep-group` or Score it still run it. With server-side fallback, cost
+is the sum over `usage.iterations`, each attempt at its own model's rates. Not batched; it runs on demand when
 you open a job, so you get it interactively.
 
 Produces a fuller report: a reasoned recommendation, requirement-by-requirement gap analysis

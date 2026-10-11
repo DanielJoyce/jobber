@@ -108,6 +108,62 @@ def test_an_explicit_screen_scorer_is_untouched_and_not_rescored(conn, profile, 
     assert models(conn) == before
 
 
+# ─── Haiku 5.5 refusals (bug 15f7012 review) ───────────────────────────────
+
+
+def refused_batch(conn, profile, gid, spec=NEW_SCREEN):
+    """A collected batch in which Haiku 5.5 refused group ``gid`` (billed, no score)."""
+    entry = scorers.ScoreResult(
+        f"g{gid}",
+        usage=SimpleNamespace(input_tokens=6000, output_tokens=0),
+        model="claude-haiku-5-5",
+        stop_reason="refusal",
+    )
+
+    class Refusing:
+        def __init__(self, client, model):
+            self.name = model
+
+        def ready(self, handle):
+            return True
+
+        def collect(self, handle):
+            return [entry]
+
+        def cost(self, usage, *, batch=False):
+            return compute_cost(usage, self.name, batch=batch)
+
+    conn.execute(
+        "INSERT INTO score_batch (id, tier, model, prompt_version, scoring_version, "
+        "request_count, submitted_at) VALUES ('b1', 'screen', ?, ?, ?, 1, 'x')",
+        (spec, screen.PROMPT_VERSION, profile.scoring_version),
+    )
+    conn.execute(
+        "INSERT INTO score_batch_item (batch_id, custom_id, job_group_id, input_rev) "
+        "VALUES ('b1', ?, ?, 0)",
+        (f"g{gid}", gid),
+    )
+    return Refusing
+
+
+def test_a_refused_screen_is_not_resubmitted_by_the_daily_run(conn, profile, monkeypatch):
+    gid = add_group(conn, 1, profile)
+    monkeypatch.setattr(screen, "AnthropicScorer", refused_batch(conn, profile, gid))
+    out = screen.collect_batch(conn, None, "b1", profile, now=NOW)
+    assert out.invalid == 1 and out.cost_usd > 0  # the refusal was billed and recorded
+    item = conn.execute("SELECT result FROM score_batch_item").fetchone()
+    assert item["result"] == "refused"
+    assert screen.eligible_groups(conn, profile, scorer=NEW_SCREEN, limit=5, new_only=True) == []
+    sent = batch_route(monkeypatch)
+    runner._score_stage(conn, Settings(), profile, NOW, runner.RunReport())
+    assert sent == []
+    # A confirmed re-score (not new_only) may still choose it; a new revision is new again.
+    assert len(screen.eligible_groups(conn, profile, scorer=NEW_SCREEN, limit=5)) == 1
+    conn.execute("UPDATE job_group SET description_rev = description_rev + 1 WHERE id = ?", (gid,))
+    got = screen.eligible_groups(conn, profile, scorer=NEW_SCREEN, limit=5, new_only=True)
+    assert [r["group_id"] for r in got] == [gid]
+
+
 # ─── Prices (platform.claude.com/docs/en/about-claude/pricing, 2026-10-11) ──
 
 
@@ -126,6 +182,9 @@ def usage(i=0, o=0, w=0, r=0):
         # Kept so stored spend, open batches and confirmed plans still price.
         ("anthropic:claude-haiku-4-5", (1.00, 5.00)),
         ("claude-opus-5", (5.00, 25.00)),
+        # Fallback targets a refused Opus 5.5 / Sonnet 5.5 request may be answered by.
+        ("claude-opus-4-8", (5.00, 25.00)),
+        ("claude-sonnet-5", (2.00, 10.00)),
     ],
 )
 def test_standard_and_batch_rates(model, rates):

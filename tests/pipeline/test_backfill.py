@@ -20,7 +20,7 @@ from jobhunter.scoring.scorers import ScoreResult
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
 SCORER = "anthropic:claude-haiku-4-5"
-HAIKU_BATCH_PER_JOB = 0.002025  # compute_cost of TYPICAL_USAGE, batched Haiku
+HAIKU_BATCH_PER_JOB = 0.0026325  # compute_cost of TYPICAL_USAGE, batched Haiku 4.5
 PROFILE = Profile.model_validate({"hard": {"states_allowed": ["CO"]}})
 ADAPTERS = {"fake": lambda: FakeAdapter()}
 
@@ -421,6 +421,16 @@ def test_per_job_cost_uses_scorer_price_then_measured_history(conn):
     scorer.per_job = 0.05  # history wins over the price table once spend is measured
     per = bf.per_job_cost(conn, scorer)
     assert per.usd == pytest.approx(0.01) and "measured" in per.source
+
+
+def test_haiku_5_5_with_no_history_is_priced_at_spec_006_tokens(conn):
+    """2,600 in at $0.05 + 3,900 cache read at $0.005 + 455 out at $0.25 per MTok, batched:
+    about $0.00026 a job (specs/006 "Cost"), not the 30% lower figure Haiku 4.5's counts give."""
+    from jobhunter.scoring.scorers import AnthropicScorer
+
+    per = bf.per_job_cost(conn, AnthropicScorer(FakeClient(), "anthropic:claude-haiku-5-5"))
+    assert per.usd == pytest.approx(0.00026325)
+    assert "scorer price" in per.source
 
 
 def test_unpriced_scorer_falls_back_to_default(conn):

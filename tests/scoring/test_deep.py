@@ -184,7 +184,7 @@ def test_request_shape(conn, profile):
     assert p["output_config"]["effort"] == "high"
     assert p["output_config"]["format"]["type"] == "json_schema"
     assert "temperature" not in p and "budget_tokens" not in json.dumps(p)
-    assert p["max_tokens"] == 16000
+    assert p["max_tokens"] == 32000  # room for Opus 5.5's thinking plus the report
     assert p["betas"] == ["server-side-fallback-2026-07-01"]
     assert p["fallbacks"] == "default"
     assert [m["role"] for m in p["messages"]] == ["user"]
@@ -228,6 +228,61 @@ def test_a_fallback_answer_is_priced_at_the_model_that_answered(conn, profile):
     assert res.row["served_model"] == "claude-opus-5"
 
 
+def test_a_fallback_to_opus_4_8_is_priced_at_opus_4_8_rates(conn, profile):
+    gid = add_group(conn, 1)
+    msg = final(report(), model="claude-opus-4-8")
+    res = deep.deep_score(conn, FakeClient(msg), profile, gid, now=NOW)
+    # $5 / $0.50 cache read / $25 per MTok, not Opus 5.5's $4 / $0.20 / $20 ($0.0506)
+    assert res.row["cost_usd"] == pytest.approx(0.064)
+
+
+def test_every_fallback_attempt_in_usage_iterations_is_recorded(conn, profile):
+    """The declined Opus 5.5 attempt is billed too; usage.iterations is the per-attempt
+    record and top-level usage covers only the answering model."""
+    gid = add_group(conn, 1)
+    msg = final(report(), model="claude-opus-4-8")
+    msg.usage.iterations = [
+        SimpleNamespace(
+            type="message",
+            model="claude-opus-5-5",
+            input_tokens=5000,
+            output_tokens=800,
+            cache_read_input_tokens=3000,
+            cache_creation_input_tokens=0,
+        ),
+        SimpleNamespace(
+            type="fallback_message",
+            model="claude-opus-4-8",
+            input_tokens=5000,
+            output_tokens=1500,
+            cache_read_input_tokens=3000,
+            cache_creation_input_tokens=0,
+        ),
+    ]
+    res = deep.deep_score(conn, FakeClient(msg), profile, gid, now=NOW)
+    declined = (5000 * 4 + 3000 * 0.20 + 800 * 20) / 1e6
+    answered = (5000 * 5 + 3000 * 0.50 + 1500 * 25) / 1e6
+    assert res.row["cost_usd"] == pytest.approx(declined + answered)
+    spent = conn.execute("SELECT sum(cost_usd) FROM llm_spend").fetchone()[0]
+    assert spent == pytest.approx(declined + answered)
+
+
+@pytest.mark.parametrize("stop", ["max_tokens", "refusal"])
+def test_a_paid_attempt_that_wrote_nothing_is_not_shortlisted_again(conn, profile, stop):
+    g1, g2 = (add_group(conn, n) for n in (1, 2))
+    add_screen(conn, g1, profile, skills=95, domain=90)
+    add_screen(conn, g2, profile, skills=60, domain=60)
+    cut = FakeClient(final('{"verdict": "str', stop_reason=stop))
+    res = deep.deep_score(conn, cut, profile, g1, now=NOW)
+    assert res.status in ("invalid", "refused") and res.cost_usd > 0
+    assert deep.shortlist(conn, profile, 2) == [g2]  # not paid for again by --deep N
+    # A new description revision tries again; so does asking for the group by id.
+    conn.execute("UPDATE job_group SET description_rev = description_rev + 1 WHERE id = ?", (g1,))
+    assert deep.shortlist(conn, profile, 2) == [g1, g2]
+    again = FakeClient(final(report()))
+    assert deep.deep_score(conn, again, profile, g1, now=NOW).status == "scored"
+
+
 def test_rerun_returns_stored_row_without_calling(conn, profile):
     gid = add_group(conn, 1)
     client = FakeClient(final(report()))
@@ -238,7 +293,7 @@ def test_rerun_returns_stored_row_without_calling(conn, profile):
     assert conn.execute("SELECT count(*) FROM fit_score WHERE tier='deep'").fetchone()[0] == 1
 
 
-def test_refusal_leaves_group_eligible(conn, profile):
+def test_refusal_is_not_reshortlisted_but_can_be_run_by_id(conn, profile):
     gid = add_group(conn, 1)
     add_screen(conn, gid, profile)
     client = FakeClient(final("", stop_reason="refusal"), final(report()))
@@ -246,7 +301,9 @@ def test_refusal_leaves_group_eligible(conn, profile):
     assert res.status == "refused" and res.row is None
     assert conn.execute("SELECT count(*) FROM fit_score WHERE tier='deep'").fetchone()[0] == 0
     assert conn.execute("SELECT calls FROM llm_spend").fetchone()[0] == 1
-    assert deep.shortlist(conn, profile, 5) == [gid]
+    # A refusal is billed; --deep N does not pay for it again on every run (score_failure),
+    # while --deep-group still runs it on request.
+    assert deep.shortlist(conn, profile, 5) == []
     assert deep.deep_score(conn, client, profile, gid, now=NOW).status == "scored"
 
 

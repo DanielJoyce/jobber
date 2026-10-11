@@ -41,6 +41,10 @@ PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-5-5": (0.10, 0.50),  # prompts up to 100,000 tokens; see LONG_PROMPT_PRICING
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5-5": (4.00, 20.00),
+    # Likely server-side fallback targets (a refused Opus 5.5 or Sonnet 5.5 request can be
+    # answered by these), so a fallback answer is priced at the rates it is billed at.
+    "claude-opus-4-8": (5.00, 25.00),
+    "claude-sonnet-5": (2.00, 10.00),
 }
 # Haiku 5.5 is priced by prompt length: a request whose prompt (input + cache writes + cache
 # reads) is over the threshold pays these (input, output) rates instead, cache multipliers
@@ -106,6 +110,28 @@ def compute_cost(usage: Any, model: str, *, batch: bool) -> float:
         + _usage_int(usage, "output_tokens") * out_rate
     )
     return cost * factor / 1_000_000
+
+
+def compute_message_cost(usage: Any, model: str, *, batch: bool) -> float:
+    """USD for one response, counting every attempt a server-side fallback made.
+
+    With fallbacks, ``usage.iterations`` is the per-attempt billing record and the top-level
+    counts cover only the attempt that answered
+    (platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#billing-and-rate-limits).
+    Each attempt is priced at its own model's rates; one whose model is not in the table is
+    priced as ``model``. An attempt declined before any output is billed only in some refusal
+    categories, which the entry does not carry, so it is counted anyway: an over-count by
+    design, so spend and caps never under-count. Without iterations this is ``compute_cost``.
+    """
+    iterations = getattr(usage, "iterations", None) or []
+    if not iterations:
+        return compute_cost(usage, model, batch=batch)
+    total = 0.0
+    for entry in iterations:
+        served = getattr(entry, "model", None)
+        priced = served if isinstance(served, str) and served in PRICING_PER_MTOK else model
+        total += compute_cost(entry, priced, batch=batch)
+    return total
 
 
 # Bounded calls (the screen, the entailment check) run with thinking off, as they did on Haiku

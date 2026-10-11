@@ -372,7 +372,12 @@ WHERE NOT EXISTS (
       WHERE i.job_group_id = g.id AND b.collected_at IS NULL AND b.tier = :tier)
     AND g.id NOT IN (
       SELECT c.value FROM rescore_request r, json_each(r.group_ids) c
-      WHERE r.status IN ('pending', 'running') AND r.group_ids IS NOT NULL)))
+      WHERE r.status IN ('pending', 'running') AND r.group_ids IS NOT NULL)
+    AND NOT EXISTS (
+      SELECT 1 FROM score_failure x
+      WHERE x.job_group_id = g.id AND x.tier = :tier AND x.model = :model
+        AND x.prompt_version = :prompt_version AND x.scoring_version = :scoring_version
+        AND x.input_rev = g.description_rev)))
 ORDER BY j.posted_at IS NULL, j.posted_at DESC, g.id
 LIMIT :limit
 """
@@ -665,6 +670,12 @@ def collect_batch(
                 logger.warning("batch %s %s: %s", batch_id, custom_id, exc)
                 out.invalid += 1
                 outcomes[custom_id] = "invalid"
+                if entry.stop_reason == "refusal":
+                    # Billed in some categories; the daily run must not re-submit it forever.
+                    outcomes[custom_id] = "refused"
+                    record_failure(
+                        conn, group_id, TIER, key, revs.get(custom_id, 0), "refusal", now
+                    )
                 continue
             if job is None:
                 out.invalid += 1
@@ -704,6 +715,36 @@ def collect_batch(
     if out.unknown_ids:
         logger.warning("batch %s returned unknown custom_ids: %s", batch_id, out.unknown_ids)
     return out
+
+
+def record_failure(
+    conn: sqlite3.Connection,
+    group_id: int,
+    tier: str,
+    key: _Key,
+    input_rev: int,
+    reason: str,
+    now: datetime,
+) -> None:
+    """Note a paid attempt that wrote no score, so automatic runs do not pay for it again.
+
+    The daily run (``new_only``) and the deep shortlist skip a group with a failure under the
+    same model, prompt, ``scoring_version`` and description revision. Explicit requests still
+    run it (bug 15f7012 review)."""
+    conn.execute(
+        "INSERT INTO score_failure (job_group_id, tier, model, prompt_version, scoring_version, "
+        "input_rev, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            group_id,
+            tier,
+            key.model,
+            key.prompt_version,
+            key.scoring_version,
+            input_rev,
+            reason,
+            to_iso(now),
+        ),
+    )
 
 
 def pending_batch_ids(conn: sqlite3.Connection) -> list[str]:
