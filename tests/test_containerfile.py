@@ -46,6 +46,7 @@ def test_every_from_is_pinned_by_digest() -> None:
     for args in froms:
         image = args.split()[0]
         assert re.search(r"@sha256:[0-9a-f]{64}$", image), f"unpinned FROM: {image}"
+        assert not re.search(r"@sha256:0{64}$", image), f"placeholder digest: {image}"
 
 
 def test_final_user_is_non_root() -> None:
