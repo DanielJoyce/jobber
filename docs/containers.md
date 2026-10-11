@@ -15,8 +15,8 @@ with `jobhunter` means `uv run jobhunter` from the checkout (or the installed sc
 ## First run checklist
 
 Run these once, in order. Stop at the first line that does not print what is shown and look in
-[Troubleshooting](#troubleshooting). Skip the secrets and Gmail lines you do not use. Keys are
-read from a file or stdin, never from the command line.
+[Troubleshooting](#troubleshooting). Lines marked optional are for features you may not use; skip those. Keys
+are typed at a hidden prompt and piped on stdin: never on the command line, never in a file.
 
 ```
 podman --version                                        # podman version 5.x (5.0 or newer)
@@ -28,9 +28,12 @@ jobhunter db relativize-paths --apply                   # backs up first, then r
 jobhunter schedule uninstall                            # host timers removed
 podman build --build-arg BUILD_COMMIT=$(git rev-parse HEAD) -t localhost/jobhunter:$(git rev-parse --short HEAD) .
 podman tag localhost/jobhunter:$(git rev-parse --short HEAD) localhost/jobhunter:current
-podman secret create jobhunter_openrouter ./key.txt && shred -u ./key.txt   # prints a secret id
-podman secret create jobhunter_google_client ~/.config/jobhunter/google_client_secret.json
-jobhunter mail auth --podman-secret jobhunter_gmail_token   # browser consent, then the secret is stored
+read -rs KEY && printf '%s' "$KEY" | podman secret create jobhunter_anthropic - && unset KEY   # optional: paste key, Enter; prints a secret id
+read -rs KEY && printf '%s' "$KEY" | podman secret create jobhunter_openrouter - && unset KEY   # optional (OpenRouter scorer)
+read -rs KEY && printf '%s' "$KEY" | podman secret create jobhunter_usajobs_key - && unset KEY  # optional (USAJOBS source)
+read -rs KEY && printf '%s' "$KEY" | podman secret create jobhunter_usajobs_email - && unset KEY  # optional (USAJOBS source)
+podman secret create jobhunter_google_client ~/.config/jobhunter/google_client_secret.json   # optional (Gmail)
+jobhunter mail auth --podman-secret jobhunter_gmail_token   # optional (Gmail): browser consent, then the secret is stored
 mkdir -p ~/.config/containers/systemd ~/.config/systemd/user ~/.local/bin
 cp deploy/quadlet/*.container ~/.config/containers/systemd/
 cp deploy/systemd/* ~/.config/systemd/user/
@@ -97,7 +100,10 @@ podman run --rm --entrypoint id localhost/jobhunter:current -u
 ## Secrets
 
 podman secrets keep keys out of unit files, `podman inspect`, logs and image layers. Create one
-per key you use, from a file or stdin. Never put a key on the command line (shell history, `ps`).
+per key you use, on stdin. Never put a key on the command line (shell history, `ps`) and
+never write it to a file (least of all in the checkout; `shred` does nothing useful on btrfs).
+`read -rs` takes the key at a hidden prompt, so it stays out of shell history too. The Google
+client JSON is already a file, so `podman secret create` reads it from where it is.
 
 | podman secret | Holds | Used by |
 |---|---|---|
@@ -113,8 +119,8 @@ Each container gets only the secrets in its row: preflight writes one Quadlet dr
 that exists.
 
 ```
-podman secret create jobhunter_openrouter ./key.txt && shred -u ./key.txt
-printf '%s' "$KEY_FROM_YOUR_PASSWORD_MANAGER" | podman secret create jobhunter_openrouter -
+read -rs KEY && printf '%s' "$KEY" | podman secret create jobhunter_openrouter - && unset KEY
+<password-manager-command> | podman secret create jobhunter_openrouter -
 ```
 
 A trailing newline in a file is harmless: jobhunter strips leading and trailing whitespace. A
@@ -212,8 +218,10 @@ preflight adds the drop-ins.
 
 The set: `jobhunter-console` (the web console, published on `127.0.0.1:8808` only) and the
 oneshots `jobhunter-ctr-backup`, `-run`, `-collect`, `-rescore`, `-verify`. Oneshots have no
-`[Install]` and are started only by their timers (02:00, 03:30, Sunday 04:00; a missed run
-catches up, `Persistent=true`). A `compose.yaml` exists as a convenience for `podman-compose`
+`[Install]`. Three timers start the jobs (run 02:00, collect 03:30, verify Sunday 04:00; a
+missed run catches up, `Persistent=true`). The run unit pulls in `jobhunter-ctr-backup` first
+(`Requires=`), and a successful collect starts `jobhunter-ctr-rescore` (`OnSuccess=`); backup and
+rescore have no timer of their own. A `compose.yaml` exists as a convenience for `podman-compose`
 (not `podman compose`, which delegates to docker-compose and refuses external secrets). It has
 no scheduler; use Quadlet for everyday running.
 
@@ -234,14 +242,18 @@ written and the exit status is 1. Typical success output:
 ok    podman reachable (podman)
 ok    data dir /var/home/<you>/.local/share/jobhunter exists
 ok    config file /var/home/<you>/.config/jobhunter/config.toml exists
-ok    SELinux: every file under /var/home/<you>/.local/share/jobhunter is container_file_t
+ok    SELinux: data dir not labelled container_file_t yet (podman labels it at the first start, :z)
 ok    no host timers from `jobhunter schedule install` are enabled
 ok    every path stored in the database is relative to the data dir
 ok    host code and image agree on schema 29
 ok    database at schema 29
 ok    base units found in /var/home/<you>/.config/containers/systemd
 ok    podman secrets found: jobhunter_openrouter
+ok    not created (their drop-ins are skipped): jobhunter_anthropic, jobhunter_llama, ...
+ok    quadlet -dryrun -user generates every jobhunter unit with these drop-ins
 ok    wrote /var/home/<you>/.config/containers/systemd/jobhunter-console.container.d/50-jobhunter_openrouter.conf
+ok    wrote /var/home/<you>/.config/containers/systemd/jobhunter-ctr-run.container.d/50-jobhunter_openrouter.conf
+ok    wrote /var/home/<you>/.config/containers/systemd/jobhunter-ctr-rescore.container.d/50-jobhunter_openrouter.conf
 ok    wrote deployment marker /var/home/<you>/.local/share/jobhunter/deployment.toml: no command migrates on its own now
 next:
   systemctl --user daemon-reload
@@ -294,14 +306,17 @@ jobhunter-ctr sources list
 jobhunter-ctr secrets status
 ```
 
-Drafting stays on the host. The container has no `claude` CLI and no paid fallback:
+Drafting stays on the host. The container has no `claude` CLI and no SDK drafting. The packet
+page in the console shows the host command to copy; save your notes in the console first, then
+run it in a host terminal:
 
 ```
 jobhunter apply draft 42
 ```
 
-(`42` stands for a packet id.) `mail auth`, `schedule`, `upgrade`, `db restore` and
-`container preflight` are host-only too.
+(`42` stands for a packet id.) The host-only commands (they refuse inside a container): `mail auth`, `schedule install|status|uninstall`,
+`migrate-paths`, `apply draft`, `upgrade`, `ctr-script`, `db relativize-paths`, `db restore` and
+`container preflight`.
 
 ## Start it and verify
 
@@ -437,16 +452,19 @@ code, migration and database versions without writing anything.
 systemctl --user disable --now jobhunter-ctr-run.timer jobhunter-ctr-collect.timer jobhunter-ctr-verify.timer
 systemctl --user stop jobhunter-console
 jobhunter container preflight --leave
-jobhunter schedule install
+rm ~/.config/containers/systemd/jobhunter-*.container
+rm ~/.config/systemd/user/jobhunter-ctr-*
+systemctl --user daemon-reload
+jobhunter schedule install --enable
 ```
 
-`--leave` refuses while any container unit is active or any container timer is enabled. It
-removes the drop-ins preflight wrote and `deployment.toml`, so host commands migrate on their
-own again, and prints what is left to do: `rm ~/.config/containers/systemd/jobhunter-*.container`
-(otherwise the console unit starts at login) and `systemctl --user daemon-reload`, then
-`jobhunter schedule install`. It does not remove `~/.local/bin/jobhunter-ctr`, the timer files in
-`~/.config/systemd/user/` or the podman secrets; delete those yourself (`podman secret rm
-NAME`) if you want them gone.
+Order matters. Disable the timers and stop the console first: `--leave` refuses while any
+container unit is active or any container timer is enabled. It then removes the drop-ins
+preflight wrote and `deployment.toml`, so host commands migrate on their own again. Removing the
+`.container` files stops the console unit from starting at login, and removing the `-ctr-` timer
+files keeps them from coming back; after `daemon-reload`, `jobhunter schedule install --enable`
+writes the host timers and enables them. It does not remove `~/.local/bin/jobhunter-ctr` or the
+podman secrets; delete those yourself (`podman secret rm NAME`) if you want them gone.
 
 ## SELinux
 
@@ -464,7 +482,7 @@ next container start relabels, and a running console gets EACCES until restarted
 label permanent for tools that call `restorecon`:
 
 ```
-semanage fcontext -a -t container_file_t '/var/home/<you>/.local/share/jobhunter(/.*)?'
+sudo semanage fcontext -a -t container_file_t '/var/home/<you>/.local/share/jobhunter(/.*)?'
 restorecon -R ~/.local/share/jobhunter
 ```
 
@@ -501,7 +519,8 @@ interactive ones exit 0 having spent nothing. A holder older than 6 hours makes 
 exit with status 75 so a hung job is reported.
 
 **`error: jobhunter X does not run in container mode`.** `mail auth`, `schedule`,
-`container preflight`, `upgrade`, `db restore`, `apply draft` and `migrate-paths` are host-only.
+`migrate-paths`, `apply draft`, `upgrade`, `ctr-script`, `db relativize-paths`, `db restore` and
+`container preflight` are host-only.
 Run them on the host, not through `jobhunter-ctr`.
 
 **The console ignores an edited `config.toml`.** The units bind-mount that single file; an

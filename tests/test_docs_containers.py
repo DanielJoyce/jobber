@@ -86,3 +86,18 @@ def test_local_links_resolve():
 def test_no_personal_data():
     text = DOC.read_text(encoding="utf-8")
     assert not re.search(r"[\w.+-]+@(?!example\.com)[\w-]+\.[a-z]{2,}", text)
+
+
+def test_deploy_files_and_units_named_in_doc_exist():
+    text = DOC.read_text(encoding="utf-8")
+    assert "deploy/quadlet/*.container" in text and "deploy/systemd/*" in text
+    assert list((ROOT / "deploy" / "quadlet").glob("*.container"))
+    assert list((ROOT / "deploy" / "systemd").iterdir())
+    quadlet = {p.stem for p in (ROOT / "deploy" / "quadlet").glob("*.container")}
+    timers = {p.stem for p in (ROOT / "deploy" / "systemd").glob("*.timer")}
+    for name in set(re.findall(r"\b(jobhunter-(?:ctr-)?[a-z]+)(?=[\s.,)`'])", text)):
+        if name in {"jobhunter-ctr"}:
+            continue
+        assert name in quadlet, f"unit {name} named in the doc has no deploy/quadlet file"
+    for name in set(re.findall(r"\b(jobhunter-ctr-[a-z]+)\.timer", text)):
+        assert name in timers, f"timer {name} has no deploy/systemd file"
