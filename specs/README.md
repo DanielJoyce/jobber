@@ -28,7 +28,7 @@ Status: **design, awaiting your approval.** No implementation code written yet.
 | [016](016-alternative-scorers.md) | Alternative scorers | OpenRouter, Jev Router, local models on this hardware, rollout by measurement |
 | [017](017-assisted-apply.md) | **Assisted apply** | Targeted resume, cover letter and checked custom-question drafts from your own facts for any posting; a **Send to jobhunter** button in jobhunter's own Chrome extension that adds the job you are viewing and scores it on your confirm; later, resume-first form help from the same extension that stops before Submit |
 | [018](018-containers.md) | Containers | Rootless podman: image, Quadlet (compose optional), container paths, podman secrets with `*_FILE`, SQLite on a bind mount. How-to: [docs/containers.md](../docs/containers.md) |
-| [019](019-setup-and-readiness.md) | **Setup and readiness** | `/setup` lists every input with ok / missing / broken / optional, what it unlocks and how to fix it; a banner until the essentials are there; `jobhunter doctor` runs the same local, free checks and exits non-zero when an essential is missing |
+| [019](019-setup-and-readiness.md) | **Setup and readiness** | `/setup` lists every input with ok / missing / broken / optional, what it unlocks and how to fix it; a banner until the essentials are there; `jobhunter doctor` runs the same local, free checks and exits non-zero when an essential is missing; in-app help by topic at `/help`; the console offers Apply or Restart when `config.toml` changes |
 
 ## Headline decisions
 
