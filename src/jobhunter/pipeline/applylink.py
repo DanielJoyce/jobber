@@ -44,6 +44,7 @@ from jobhunter.pipeline.ats_rules import (
     match_ats,
     unwrap,
 )
+from jobhunter.pipeline.board_ids import is_board_host
 from jobhunter.pipeline.dedupe import group_members
 from jobhunter.pipeline.listing import _txn, from_iso, to_iso
 
@@ -54,6 +55,9 @@ MAX_HOPS = 8
 MAX_META_DELAY_S = 10
 # Candidate start URLs tried per group before giving up (each one costs requests).
 MAX_CANDIDATES = 3
+# LinkedIn and Indeed (specs/017 phase 1e): never requested by any path, robots.txt included.
+# A link that starts there stays 'unresolved' until a capture supplies the destination.
+NO_FETCH_ERROR = "board host: jobhunter never requests LinkedIn or Indeed pages"
 
 CtxFactory = Callable[[str], FetchContext]
 HopMethod = Literal["unwrap", "3xx", "meta", "js", "browser"]
@@ -234,6 +238,9 @@ def resolve_url(
         if rule is not None and not rule.fetch:
             res.status, res.final_url, res.ats = ApplyStatus.live, rule.canonical(url), rule.name
             return res
+        if is_board_host(host_of(url)):
+            res.error, res.final_url = NO_FETCH_ERROR, url
+            return res
 
         previous = res.chain[-2].url if len(res.chain) >= 2 else start_url
         try:
@@ -378,11 +385,15 @@ def resolve_group(
         raise ValueError(f"job_group {group_id} has no member with a usable URL")
     best: Resolution | None = None
     for start in starts:
-        ctx = ctx_factory(start)
-        try:
-            res = resolve_url(start, ctx, browser_fallback=browser_fallback)
-        finally:
-            ctx.close()
+        if is_board_host(host_of(start)) and unwrap(start) is None:
+            # No context at all: not even a robots.txt request goes to a board host.
+            res = Resolution(start, ApplyStatus.unresolved, start, error=NO_FETCH_ERROR)
+        else:
+            ctx = ctx_factory(start)
+            try:
+                res = resolve_url(start, ctx, browser_fallback=browser_fallback)
+            finally:
+                ctx.close()
         if best is None or _RANK[res.status] < _RANK[best.status]:
             best = res
         if res.status == ApplyStatus.live:
@@ -476,6 +487,8 @@ def reverify(
     rule = match_ats(link.final_url)
     if rule is not None and not rule.fetch:
         return link
+    if is_board_host(host_of(link.final_url)):
+        return link  # never fetched (specs/017 phase 1e)
     checked = link.verified_at or link.resolved_at
     if now - checked < timedelta(hours=max_age_hours):
         return link
@@ -491,6 +504,11 @@ def reverify(
                 _save(conn, link)
                 return link
             left_posting = _left_posting(rule, url, resp.location)
+            if not left_posting and is_board_host(host_of(resp.location)):
+                # A redirect into LinkedIn or Indeed is never followed (specs/017 1e).
+                link.error = NO_FETCH_ERROR
+                _save(conn, link)
+                return link
             if not left_posting:
                 url = resp.location
                 resp = ctx.get(_fetchable(url), follow_redirects=False)

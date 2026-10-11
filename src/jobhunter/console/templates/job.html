@@ -56,6 +56,21 @@
     {% endif %}
   </div>
 
+  {% if same_job %}
+  <section class="card" id="same-job">
+    <h2>Same posting elsewhere in jobhunter</h2>
+    <p class="muted">These share this posting's LinkedIn or Indeed job id, or its URL. Link them to keep one job; nothing is re-scored.</p>
+    <ul>
+      {% for c in same_job %}
+      <li><a href="/job/{{ c.group_id }}">{{ c.title }}</a> &middot; {{ c.employer }} <span class="muted">({{ c.why }})</span>
+        <form method="post" action="/job/{{ d.group_id }}/link" class="inline-form"><input type="hidden" name="other" value="{{ c.group_id }}"><button type="submit" class="act" id="link-{{ c.group_id }}">Link them</button></form></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if group_score %}{% with d = group_score.d, est = group_score.est, notice = group_score.notice, profile_error = group_score.profile_error, score_message = group_score.score_message, score_ok = group_score.score_ok %}{% include "_group_score.html" %}{% endwith %}{% endif %}
+
   {% if d.scored %}
   <section class="card">
     <h2>Score breakdown</h2>
@@ -91,7 +106,7 @@
     <h2>Description</h2>
     {% if d.pasted_posting and not d.text.paragraphs %}
     <div class="banner partial-banner" role="note" id="pasted-no-text">
-      <p><strong>No posting text yet.</strong> This posting was added on New packet with only its URL.{% if d.packet_id %} Paste its text on <a href="/packet/{{ d.packet_id }}">its packet</a>; a pasted posting is scored only when you ask there.{% endif %}</p>
+      <p><strong>No posting text yet.</strong> This posting was added with only its URL.{% if d.packet_id %} Paste its text on <a href="/packet/{{ d.packet_id }}">its packet</a>; a posting you added is scored only when you ask.{% endif %}</p>
     </div>
     {% elif d.partial %}
     <div class="banner partial-banner" role="note">

@@ -77,6 +77,7 @@
 [console]
 # host = "127.0.0.1"
 # port = 8808
+# public_port = 8808     # the port the browser extension connects to, if it differs
 
 # Assisted apply drafting (specs/017): targeted resume, cover letter, question drafts.
 # runner = "cli" runs `claude -p` on your Claude subscription (no API credit) in a scrubbed
@@ -89,3 +90,7 @@
 # effort = "medium"
 # daily_cap_usd = 1.00               # packet API spend only; separate from [scoring] caps
 # entailment_check = true            # advisory Haiku pass: do the cited lines support each line?
+
+[capture]
+# Hosts where the browser extension never reads a page (suffix match).
+# disabled_hosts = []    # e.g. ["linkedin.com", "indeed.com"]

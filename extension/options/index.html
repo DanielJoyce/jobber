@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jobhunter extension options</title>
+  <link rel="stylesheet" href="../popup/popup.css">
+  <style>
+    body { width: auto; max-width: 560px; margin: 0 auto; padding: 16px; }
+  </style>
+</head>
+<body>
+  <h1>jobhunter</h1>
+  <p class="muted">Pair this extension with your local jobhunter console once. On the console, open
+    <strong>Preferences → Browser extension → Pair browser extension</strong>, or run
+    <code>jobhunter ext pair</code>, and type the code here. The code works once, for 10 minutes.</p>
+  <p id="pair-status" role="status" aria-live="polite" class="muted">Checking…</p>
+  <form id="pair-form" class="card">
+    <label>Console port <input id="port" type="number" min="1" max="65535" value="8808" required></label>
+    <label>Pairing code <input id="code" autocomplete="off" spellcheck="false" placeholder="ABCDE-FGHIJ" required></label>
+    <p><button type="submit" class="primary" id="pair">Pair</button>
+      <button type="button" id="unpair">Unpair</button></p>
+  </form>
+  <p class="muted">The extension reads a page only when you click its icon, press Alt+Shift+J or use
+    the right-click <strong>Send to jobhunter</strong>, and sends it only to your console on
+    127.0.0.1. Nothing is scored until you confirm.</p>
+  <script src="options.js" type="module"></script>
+</body>
+</html>

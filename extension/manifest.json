@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "jobhunter",
+  "description": "Send the job posting you are viewing to your local jobhunter console. Reads a page only when you click.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvQ4i2bbsqH0tkYdKDeoGdzMlVdeZP3Ch2Dx6l4wTx4Fvt4dYhS2UngJph4+oX1ge/b2joicNDJWd3T2oERParBLwxKoxPYYaBuZlQYwtDEf6FJiy6rnDdZa0yrINID7aCj1lgS1ED3U9o5jWtP0gFl6a6ycwHmAEU5XfxppWgHYYgmheLbmGtEJct1rH5rCAxjMlXq2xnqXT8ikVwX6N4rlME3gQebhVg0yH6YvfTBCnCA5+a9uF75KxaSf9vrLJlCdFSY3dPZdzCma7YIm7TkhusiN6eKS5ht/YAcHNvHRQFaHxtfXhZCturTEYiFMf6bPz9BE/Vjs/K4nJJdmC2QIDAQAB",
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_title": "Send to jobhunter", "default_popup": "popup/index.html"},
+  "options_ui": {"page": "options/index.html", "open_in_tab": true},
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {"default": "Alt+Shift+J"},
+      "description": "Send this job page to jobhunter"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1d1d1f;
+  --muted: #5f6368;
+  --line: #d9dce1;
+  --accent: #1a5fb4;
+  --ok: #2e7d32;
+  --warn: #8a5300;
+  --err: #b3261e;
+  --card: #f6f7f9;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1f22;
+    --fg: #e8eaed;
+    --muted: #a5abb3;
+    --line: #3c4043;
+    --accent: #8ab4f8;
+    --ok: #81c995;
+    --warn: #fdd663;
+    --err: #f28b82;
+    --card: #2a2b2f;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  width: 380px;
+  max-width: 100vw;
+  font: 13px/1.4 system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+header, footer { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px; }
+header { border-bottom: 1px solid var(--line); }
+footer { border-top: 1px solid var(--line); justify-content: space-between; }
+main { padding: 10px 12px; display: grid; gap: 8px; }
+.muted { color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.card h2 { font-size: 14px; margin: 0 0 2px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge { border: 1px solid var(--line); border-radius: 10px; padding: 0 6px; font-size: 12px; }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.err { color: var(--err); }
+.lines { white-space: pre-wrap; max-height: 6.5em; overflow: hidden; color: var(--muted); }
+button {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+button.link { border: none; background: none; color: var(--accent); padding: 0; }
+button:disabled { opacity: 0.5; cursor: default; }
+label { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+input, textarea, select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 6px;
+  width: 100%;
+}
+textarea { min-height: 9em; resize: vertical; }
+ul { margin: 0; padding-left: 18px; }

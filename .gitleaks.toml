@@ -25,9 +25,19 @@ description = "USAJOBS API key assigned in code or config"
 regex = '''(?i)usajobs_api_key\s*[:=]\s*["']?[A-Za-z0-9+/=]{20,}'''
 keywords = ["usajobs_api_key"]
 
-[allowlist]
+[[allowlists]]
 description = "Vendored third-party assets and the robots survey contain no secrets"
 paths = [
   '''src/jobhunter/console/static/vendor/''',
   '''uv\.lock''',
 ]
+
+[[allowlists]]
+# The extension's PUBLIC key (specs/017 "Distribution and versions"): it only pins the
+# extension ID so pairing survives a move. The private half was never kept; nothing is packed
+# or signed. Exactly this file and this line: any other key-shaped string is still a finding.
+description = "Public key that pins the jobhunter extension ID (not a secret)"
+condition = "AND"
+paths = ['''^extension/manifest\.json$''']
+regexTarget = "line"
+regexes = ['''"key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvQ4i2bbsqH0tkYdKDeoGdzMlVdeZP3Ch2Dx6l4wTx4Fvt4dYhS2UngJph4\+oX1ge/b2joicNDJWd3T2oERParBLwxKoxPYYaBuZlQYwtDEf6FJiy6rnDdZa0yrINID7aCj1lgS1ED3U9o5jWtP0gFl6a6ycwHmAEU5XfxppWgHYYgmheLbmGtEJct1rH5rCAxjMlXq2xnqXT8ikVwX6N4rlME3gQebhVg0yH6YvfTBCnCA5\+a9uF75KxaSf9vrLJlCdFSY3dPZdzCma7YIm7TkhusiN6eKS5ht/YAcHNvHRQFaHxtfXhZCturTEYiFMf6bPz9BE/Vjs/K4nJJdmC2QIDAQAB",''']

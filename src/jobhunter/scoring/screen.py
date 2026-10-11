@@ -26,7 +26,6 @@ from pydantic import ValidationError
 
 from jobhunter.config import Scoring
 from jobhunter.core import rejections
-from jobhunter.core.manual_sources import MANUAL_SOURCES_SQL
 from jobhunter.core.models import LocationScope, Screen
 from jobhunter.core.spend import SCORING_ONLY
 from jobhunter.pipeline.listing import _txn, to_iso
@@ -340,11 +339,11 @@ def _all_input_tokens(usage: Any) -> int:
 
 # ─── Selection and spend ────────────────────────────────────────────────────
 
-# Groups the user made by hand (core/manual_sources) are eligible only when named in ``:only``:
-# a pasted posting is scored solely by Score this group now (specs/017), never by a daily run
-# or a re-score plan, which select without ``:only``.
-_ELIGIBLE = (
-    """
+# Groups scored only on request (``job_group.score_on_request``: pasted, captured and
+# email-manual groups) are eligible only when named in ``:only``: such a group is scored solely
+# by Score this group now / Score it (specs/017), never by a daily run, which selects without
+# ``:only``. Re-score plans also drop flagged groups from their own id lists (rescore.py).
+_ELIGIBLE = """
 SELECT g.id AS group_id, g.description_rev AS input_rev, j.*
 FROM job_group g
 JOIN job j ON j.id = g.canonical_job_id
@@ -361,9 +360,7 @@ WHERE NOT EXISTS (
       AND b.scoring_version = :scoring_version)
   AND g.id NOT IN (SELECT value FROM json_each(:rejected))
   AND (:only IS NULL OR g.id IN (SELECT value FROM json_each(:only)))
-  AND (:only IS NOT NULL OR j.source_key NOT IN ("""
-    + MANUAL_SOURCES_SQL
-    + """))
+  AND (:only IS NOT NULL OR g.score_on_request = 0)
   AND (NOT :new_only OR (
     NOT EXISTS (
       SELECT 1 FROM fit_score f
@@ -377,7 +374,6 @@ WHERE NOT EXISTS (
 ORDER BY j.posted_at IS NULL, j.posted_at DESC, g.id
 LIMIT :limit
 """
-)
 
 
 def eligible_groups(

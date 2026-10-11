@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 
 from jobhunter.console.tracking import PREPARE_NOTE, rebuild_status
 from jobhunter.core import db
-from jobhunter.core.manual_sources import PASTE_MANUAL
 
 # Application statuses Prepare moves to 'preparing'; later ones are left where they are.
 _BEFORE_PREPARING = ("interested",)
@@ -118,16 +117,18 @@ class Packet:
     url: str
     apply_url: str | None
     has_description: bool
+    score_on_request: bool = False
 
     @property
     def pasted(self) -> bool:
-        return self.source_key == PASTE_MANUAL
+        """Scored only on request (specs/017 "Scored on request: a group flag")."""
+        return self.score_on_request
 
 
 def get_packet(conn: sqlite3.Connection, packet_id: int) -> Packet | None:
     row = conn.execute(
         "SELECT p.*, a.status AS app_status, a.job_group_id AS group_id, j.title, j.employer, "
-        "j.agency_raw, j.source_key, j.url, j.apply_url, "
+        "j.agency_raw, j.source_key, j.url, j.apply_url, g.score_on_request, "
         "(coalesce(trim(j.description_text), '') != '') AS has_text "
         "FROM application_packet p JOIN application a ON a.id = p.application_id "
         "JOIN job_group g ON g.id = a.job_group_id JOIN job j ON j.id = g.canonical_job_id "
@@ -150,4 +151,5 @@ def get_packet(conn: sqlite3.Connection, packet_id: int) -> Packet | None:
         url=row["url"],
         apply_url=row["apply_url"],
         has_description=bool(row["has_text"]),
+        score_on_request=bool(row["score_on_request"]),
     )

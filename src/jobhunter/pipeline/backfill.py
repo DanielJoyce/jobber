@@ -63,6 +63,7 @@ WHERE NOT EXISTS (
       AND b.model = :model AND b.prompt_version = :prompt_version
       AND b.scoring_version = :scoring_version)
   AND g.id NOT IN (SELECT value FROM json_each(:rejected))
+  AND g.score_on_request = 0
 """
 
 _RESOLVE_BACKLOG = """

@@ -217,6 +217,20 @@ class Console(BaseModel):
 
     host: str = "127.0.0.1"
     port: int = 8808
+    # The port the browser connects to, when it differs from ``port`` (a container publishing
+    # 127.0.0.1:8808 to another inside port). The extension API accepts only a loopback Host on
+    # this port (specs/017 "Local API security"). None: ``port``.
+    public_port: int | None = Field(default=None, ge=1, le=65535)
+
+
+class Capture(BaseModel):
+    """The extension's Send to jobhunter (specs/017 phase 1e)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Hosts where the extension never reads a page (checked in the worker before injecting).
+    # A suffix match: "example.com" covers "jobs.example.com".
+    disabled_hosts: list[str] = Field(default_factory=list)
 
 
 class Apply(BaseModel):
@@ -252,6 +266,7 @@ class Settings(BaseModel):
     apply: Apply = Field(default_factory=Apply)
     mail: Mail = Field(default_factory=Mail)
     console: Console = Field(default_factory=Console)
+    capture: Capture = Field(default_factory=Capture)
 
     @model_validator(mode="after")
     def _derive_catalog_cache(self) -> Settings:

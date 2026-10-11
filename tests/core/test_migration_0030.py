@@ -45,7 +45,8 @@ def test_0030_keeps_rows_and_adds_runner_with_its_check(tmp_path, monkeypatch):
         "check_report, created_at) VALUES (1, 'resume', 1, 'base', '{}', '', '{}', ?)",
         (ISO,),
     )
-    monkeypatch.setattr(db, "_load_migrations", real)
+    # Only 0030: later migrations (0031-0033, phase 1e) are tested on their own.
+    monkeypatch.setattr(db, "_load_migrations", lambda: [m for m in real() if m[0] <= 30])
     assert db.migrate(c) == [30]
     row = c.execute("SELECT runner, api_equiv_usd, kind FROM packet_document").fetchone()
     assert tuple(row) == (None, None, "resume")

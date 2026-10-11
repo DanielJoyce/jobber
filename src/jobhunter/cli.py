@@ -30,6 +30,8 @@ app.add_typer(schedule_app, name="schedule")
 app.add_typer(llm_app, name="llm")
 apply_app = typer.Typer(help="Assisted apply: packet drafts (specs/017).", no_args_is_help=True)
 app.add_typer(apply_app, name="apply")
+ext_app = typer.Typer(help="The jobhunter browser extension: pairing.", no_args_is_help=True)
+app.add_typer(ext_app, name="ext")
 
 NOT_IMPLEMENTED = "not implemented yet"
 
@@ -792,7 +794,52 @@ def console(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
-    uvicorn.run(create_app(settings, allow_remote=allow_remote), host=bind_host, port=bind_port)
+    app_ = create_app(
+        settings,
+        allow_remote=allow_remote,
+        ext_port=settings.console.public_port or bind_port,
+    )
+    uvicorn.run(app_, host=bind_host, port=bind_port)
+
+
+@ext_app.command("pair")
+def ext_pair() -> None:
+    """Make a one-time pairing code for the extension's options page (valid 10 minutes)."""
+    from jobhunter.apply import ext_pairing
+
+    settings = load_settings()
+    code, expires = ext_pairing.new_code(
+        ext_pairing.state_path(settings.paths.data_dir), datetime.now(UTC)
+    )
+    typer.echo(f"Pairing code: {code}")
+    typer.echo(
+        f"Type it on the jobhunter extension's options page before "
+        f"{expires.astimezone():%H:%M}. It works once; pairing revokes any earlier pairing."
+    )
+
+
+@ext_app.command("unpair")
+def ext_unpair() -> None:
+    """Revoke the extension's token (and any pending code)."""
+    from jobhunter.apply import ext_pairing
+
+    settings = load_settings()
+    if ext_pairing.unpair(ext_pairing.state_path(settings.paths.data_dir)):
+        typer.echo("Unpaired: the extension's token no longer works.")
+    else:
+        typer.echo("Nothing was paired.")
+
+
+@ext_app.command("status")
+def ext_status() -> None:
+    """Whether an extension is paired (never prints the token)."""
+    from jobhunter.apply import ext_pairing
+
+    settings = load_settings()
+    st = ext_pairing.status(ext_pairing.state_path(settings.paths.data_dir), datetime.now(UTC))
+    typer.echo(f"paired: {'yes, since ' + st['paired_at'] if st['paired'] else 'no'}")
+    if st["code_expires_at"]:
+        typer.echo(f"a pairing code is waiting until {st['code_expires_at']}")
 
 
 @app.command(name="eval")

@@ -18,7 +18,7 @@ from jobhunter.apply.packets import live_packet_id
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
 from jobhunter.console.tracking import APPLY_CLICK_NOTE, rebuild_status
 from jobhunter.core import rejections
-from jobhunter.core.manual_sources import PASTE_MANUAL
+from jobhunter.core.manual_sources import EMAIL_MANUAL
 from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline.applylink import get_apply_link
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
@@ -280,9 +280,17 @@ class Detail:
     packet_id: int | None = None  # the live assisted-apply packet (specs/017)
 
     @property
+    def score_on_request(self) -> bool:
+        """The group is scored only when the user asks (specs/017 "Scored on request").
+
+        Set for pasted, captured and email-manual groups; whichever member is canonical.
+        """
+        return bool(self.job["score_on_request"])
+
+    @property
     def pasted_posting(self) -> bool:
-        """Pasted on New packet (specs/017): not from an email alert, scored only on request."""
-        return self.job["source_key"] == PASTE_MANUAL
+        """Pasted or captured by the user (specs/017): never queued for a nightly re-score."""
+        return self.score_on_request and self.job["source_key"] != EMAIL_MANUAL
 
     @property
     def posting_href(self) -> str | None:
@@ -293,7 +301,7 @@ class Detail:
 
 def group_job(conn: sqlite3.Connection, group_id: int) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT j.*, s.name AS source_name FROM job_group g "
+        "SELECT j.*, s.name AS source_name, g.score_on_request FROM job_group g "
         "JOIN job j ON j.id = g.canonical_job_id JOIN source s ON s.key = j.source_key "
         "WHERE g.id = ?",
         (group_id,),

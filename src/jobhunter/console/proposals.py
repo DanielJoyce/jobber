@@ -118,7 +118,9 @@ def _manual_group(
     )
     job_id = cur.lastrowid
     g = conn.execute(
-        "INSERT INTO job_group (canonical_job_id, method, created_at) VALUES (?, 'manual', ?)",
+        # Scored only on request (specs/017 "Scored on request: a group flag").
+        "INSERT INTO job_group (canonical_job_id, method, created_at, score_on_request) "
+        "VALUES (?, 'manual', ?, 1)",
         (job_id, at),
     )
     conn.execute("UPDATE job SET job_group_id = ? WHERE id = ?", (g.lastrowid, job_id))

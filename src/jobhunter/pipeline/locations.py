@@ -277,22 +277,34 @@ def apply_locations(
     jobs = conn.execute(sql, params).fetchall()
     with _txn(conn):
         for job in jobs:
-            stored = load_locations(conn, job["id"])
-            rows, scope, warnings = derive_locations(job, stored, job["source_state"])
-            conn.execute("DELETE FROM job_locations WHERE job_id = ?", (job["id"],))
-            conn.executemany(
-                "INSERT INTO job_locations (job_id, state, city, county, lat, lon, is_primary) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (job["id"], r.state, r.city, r.county, r.lat, r.lon, int(r.is_primary))
-                    for r in rows
-                ],
-            )
-            conn.execute(
-                "UPDATE job SET location_scope = ?, parse_warnings = ? WHERE id = ?",
-                (scope.value, _merge_warnings(job["parse_warnings"], warnings), job["id"]),
-            )
+            _apply_one(conn, job)
     return len(jobs)
+
+
+def _apply_one(conn: sqlite3.Connection, job: sqlite3.Row) -> None:
+    stored = load_locations(conn, job["id"])
+    rows, scope, warnings = derive_locations(job, stored, job["source_state"])
+    conn.execute("DELETE FROM job_locations WHERE job_id = ?", (job["id"],))
+    conn.executemany(
+        "INSERT INTO job_locations (job_id, state, city, county, lat, lon, is_primary) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(job["id"], r.state, r.city, r.county, r.lat, r.lon, int(r.is_primary)) for r in rows],
+    )
+    conn.execute(
+        "UPDATE job SET location_scope = ?, parse_warnings = ? WHERE id = ?",
+        (scope.value, _merge_warnings(job["parse_warnings"], warnings), job["id"]),
+    )
+
+
+def apply_job_locations(conn: sqlite3.Connection, job_id: int) -> None:
+    """``apply_locations`` for one job, inside the caller's transaction (a capture, 017 1e)."""
+    job = conn.execute(
+        "SELECT j.*, s.state AS source_state FROM job j "
+        "LEFT JOIN source s ON s.key = j.source_key WHERE j.id = ?",
+        (job_id,),
+    ).fetchone()
+    if job is not None:
+        _apply_one(conn, job)
 
 
 def jobs_in_state(
