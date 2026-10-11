@@ -1,0 +1,63 @@
+# Convenience option for ad-hoc and dev use (specs/018, C4). podman-compose only: run
+# `podman-compose up -d console`, not `podman compose` (which may hand off to docker-compose).
+# The Quadlet units in deploy/quadlet/ are the supported deployment; there is no scheduler here.
+#
+# Needs the image (localhost/jobhunter:current) and the host directories to exist:
+#   mkdir -p -m 0700 ~/.local/share/jobhunter ~/.cache/jobhunter
+# Secrets are external podman secrets; create them first, for example
+#   podman secret create jobhunter_anthropic -     (value on stdin, never argv)
+# Every secret listed below must exist. Add or drop the optional ones (see the comments) to
+# match what you have; the least-privilege matrix is in specs/018 "Which container gets which
+# secret". No secret value appears in this file.
+
+x-podman:
+  in_pod: false # podman refuses --userns together with --pod
+
+x-jobhunter: &jobhunter
+  image: localhost/jobhunter:current
+  userns_mode: "keep-id:uid=1000,gid=1000"
+  environment:
+    JOBHUNTER_DATA_DIR: /data
+    JOBHUNTER_DB_PATH: /data/jobhunter.db
+    JOBHUNTER_PROFILE_DIR: /data/profile
+    JOBHUNTER_RESUME_PATH: /data/resume
+    JOBHUNTER_CACHE_DIR: /cache
+    ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+  volumes:
+    - ${HOME}/.local/share/jobhunter:/data:z
+    - ${HOME}/.cache/jobhunter:/cache:z
+    - ${HOME}/.config/jobhunter/config.toml:/config/config.toml:ro,z
+
+services:
+  console:
+    <<: *jobhunter
+    container_name: jobhunter-compose-console
+    command: ["console"]
+    ports:
+      - "127.0.0.1:8808:8808"
+    restart: on-failure
+    secrets:
+      - source: jobhunter_anthropic
+        target: anthropic_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      # Optional, same shape: jobhunter_openrouter, jobhunter_openai_compat, jobhunter_llama.
+
+  run:
+    <<: *jobhunter
+    container_name: jobhunter-compose-run
+    command: ["run"]
+    profiles: ["manual"] # podman-compose --profile manual run --rm run
+    secrets:
+      - source: jobhunter_anthropic
+        target: anthropic_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      # Optional: jobhunter_usajobs_key, jobhunter_usajobs_email, jobhunter_google_client and
+      # jobhunter_gmail_token, each with its *_FILE variable in environment (see preflight).
+
+secrets:
+  jobhunter_anthropic:
+    external: true

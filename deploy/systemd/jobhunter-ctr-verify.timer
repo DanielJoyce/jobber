@@ -1,0 +1,12 @@
+# Same schedule as the host timers from `jobhunter schedule install` (tested to match).
+# Install to ~/.config/systemd/user/, then enable --now.
+[Unit]
+Description=Weekly jobhunter source verification, Sunday 04:00 (container)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+Unit=jobhunter-ctr-verify.service
+
+[Install]
+WantedBy=timers.target
