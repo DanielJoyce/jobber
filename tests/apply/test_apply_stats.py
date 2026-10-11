@@ -19,13 +19,6 @@ URLS = {
     "workable": "https://apply.workable.com/acme/j/1A2B3C4D5E/",
     "workday": "https://acme.wd5.myworkdayjobs.com/en-US/Acme/job/Denver-CO/Analyst_R-1",
 }
-# phase 1e's table as its spec gives it (0033_capture_log.sql on its branch)
-CAPTURE_LOG = """
-CREATE TABLE capture_log (
-  id INTEGER PRIMARY KEY, action_id TEXT NOT NULL UNIQUE, route TEXT NOT NULL,
-  job_group_id INTEGER, job_id INTEGER, captured_at TEXT NOT NULL, host TEXT NOT NULL,
-  method TEXT, outcome TEXT NOT NULL, response TEXT, ext_version TEXT)
-"""
 
 
 @pytest.fixture
@@ -66,7 +59,7 @@ def test_counts_ready_packets_by_ats_and_the_gate(conn):
     text = s.format()
     assert "Ready on the four public ATSs: 4 (phase 2 gate: 8)" in text
     assert "  workable: 1" in text
-    assert "Captures: no capture_log table yet" in text
+    assert "Captures: 0" in text  # phase 1e's table, empty
 
 
 def test_saved_answers_are_counted_never_shown(conn):
@@ -77,8 +70,7 @@ def test_saved_answers_are_counted_never_shown(conn):
     assert "SECRET-ANSWER-TEXT" not in s.format()
 
 
-def test_captures_are_counted_once_the_table_exists(conn):
-    conn.execute(CAPTURE_LOG)
+def test_captures_are_counted_from_capture_log(conn):
     rows = [
         ("a1", "capture", "jobs.example.com", "jsonld", "added"),
         ("a2", "capture", "jobs.example.com", "page", "previewed"),
@@ -135,3 +127,8 @@ def test_sent_with_a_packet_counts_rejected_ones_and_never_drafts_or_abandoned(c
         (f"packet:{pid}/resume/v1", pid),
     )  # recorded by attach_sent_packet when it was ready
     assert stats.compute(conn, NOW).sent_with_packet == 3
+
+
+def test_without_a_capture_log_table_stats_still_work(conn):
+    conn.execute("DROP TABLE capture_log")  # an older schema
+    assert "Captures: no capture_log table yet" in stats.compute(conn, NOW).format()
