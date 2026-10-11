@@ -414,3 +414,24 @@ def test_a_claim_on_any_member_refuses_a_second_score_now(conn, profile):  # noq
     assert g(conn, gid)["canonical_job_id"] == jid  # the claim is on the other member
     again = group_score.estimate(conn, profile, SCORING, gid, NOW)
     assert again.refusal and "has not finished" in again.refusal
+
+
+def test_a_finished_score_now_does_not_refuse_a_retry_after_a_re_paste(conn, profile):  # noqa: F811
+    """30610d5 (2), 56d7fcf (3): Score now succeeds, the description is re-pasted (new
+    description_rev) within CLAIM_TTL; the old claim was answered, so a new Score now is not
+    refused as 'has not finished'."""
+    gid = captured(conn, url="https://careers.example.org/jobs/9001")
+    est = group_score.estimate(conn, profile, SCORING, gid, NOW)
+    out = group_score.score_now(
+        conn, profile, SCORING, gid, token=est.token, now=NOW, scorer_factory=lambda s: FakeScorer()
+    )
+    assert out.status == "scored"
+    conn.execute("UPDATE job_group SET description_rev = description_rev + 1 WHERE id = ?", (gid,))
+    later = NOW + timedelta(minutes=5)
+    again = group_score.estimate(conn, profile, SCORING, gid, later)
+    assert again.refusal is None
+    scorer = FakeScorer()
+    group_score.score_now(
+        conn, profile, SCORING, gid, token=again.token, now=later, scorer_factory=lambda s: scorer
+    )
+    assert scorer.calls == 1
