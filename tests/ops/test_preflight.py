@@ -50,6 +50,47 @@ if argv[:1] == ["run"]:
 sys.exit(2)
 """
 
+QUADLET = pf.QUADLET
+
+
+def _quadlet_applies_dropins() -> tuple[bool, str]:
+    """Whether the installed generator applies <unit>.container.d/ drop-ins, by trying it."""
+    import tempfile
+
+    if not QUADLET.exists():
+        return False, "quadlet generator not installed"
+    version = pf.quadlet_version(QUADLET) or "unknown"
+    root = Path(tempfile.mkdtemp(prefix="jh-qprobe-", dir="/tmp"))
+    try:
+        (root / "u").mkdir()
+        (root / "u" / "probe.container").write_text("[Container]\nImage=localhost/x:1\n")
+        (root / "u" / "probe.container.d").mkdir()
+        (root / "u" / "probe.container.d" / "50-x.conf").write_text(
+            "[Container]\nEnvironment=JH_PROBE=1\n"
+        )
+        (root / "r").mkdir(mode=0o700)
+        done = subprocess.run(
+            [str(QUADLET), "-dryrun", "-user"],
+            env={
+                "QUADLET_UNIT_DIRS": str(root / "u"),
+                "HOME": str(root),
+                "XDG_RUNTIME_DIR": str(root / "r"),
+                "PATH": "/usr/bin:/bin",
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    if "JH_PROBE=1" not in done.stdout:
+        return False, f"quadlet {version} does not apply .container.d drop-ins (needs podman 5)"
+    return True, ""
+
+
+DROPINS_OK, DROPINS_WHY = _quadlet_applies_dropins()
+
 FAKE_SYSTEMCTL = """#!/bin/sh
 # is-active / is-enabled NAME...: one state per name, from $FAKE_ACTIVE / $FAKE_ENABLED
 verb=$2
@@ -80,6 +121,9 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_PODMAN_LOG", str(log))
     monkeypatch.setenv("FAKE_IMAGE_SCHEMA", str(db.code_version()))
     monkeypatch.setenv("FAKE_PODMAN_SECRETS", ",".join(ALL_SECRETS))
+    # The in-preflight generator dry run uses the real quadlet only where it applies drop-ins
+    # (podman 5); elsewhere (CI's 4.9) it is skipped, as on a host without the generator.
+    monkeypatch.setattr(pf, "QUADLET", pf.QUADLET if DROPINS_OK else tmp_path / "no-quadlet")
     data = home / ".local" / "share" / "jobhunter"
     conn = db.connect(data / "jobhunter.db")
     db.migrate(conn)
@@ -584,10 +628,7 @@ def test_wrapper_column_limited_to_existing():
     assert names == {"jobhunter_llama"}
 
 
-QUADLET = pf.QUADLET
-
-
-@pytest.mark.skipif(not QUADLET.exists(), reason="quadlet generator not installed")
+@pytest.mark.skipif(not DROPINS_OK, reason=DROPINS_WHY)
 def test_quadlet_check_catches_a_split_environment_line(host):
     spec = pf.SecretSpec(
         "jobhunter_openrouter", "/run/secrets/k", "FOO\n_FILE", frozenset({pf.CONSOLE})
@@ -600,7 +641,7 @@ def test_quadlet_check_catches_a_split_environment_line(host):
     assert pf.quadlet_check(QUADLET, host.units, pf.DropinPlan()) == (True, "")
 
 
-@pytest.mark.skipif(not QUADLET.exists(), reason="quadlet generator not installed")
+@pytest.mark.skipif(not DROPINS_OK, reason=DROPINS_WHY)
 def test_quadlet_dry_run_accepts_units_and_dropins(host, tmp_path):
     assert preflight("--yes").exit_code == 0
     runtime = Path("/tmp") / f"jh-q-{os.getpid()}"
@@ -631,3 +672,22 @@ def test_quadlet_dry_run_accepts_units_and_dropins(host, tmp_path):
     assert "OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_api_key" in console
     run_unit = out.split("---jobhunter-ctr-run.service---")[1]
     assert "jobhunter_gmail_token" in run_unit
+
+
+def test_generator_that_ignores_dropins_refuses(host, monkeypatch, tmp_path):
+    """An old quadlet generates the base units but drops the secrets: FAIL, nothing written."""
+    fake = tmp_path / "old-quadlet"
+    sections = "".join(
+        f"echo '---{u}.service---'; echo 'ExecStart=podman run x'; " for u in pf.UNITS
+    )
+    fake.write_text(
+        f'#!/bin/sh\nif [ "$1" = -version ]; then echo 4.9.3; exit 0; fi\n{sections}\nexit 0\n'
+    )
+    fake.chmod(0o755)
+    monkeypatch.setattr(pf, "QUADLET", fake)
+    r = preflight("--yes")
+    assert r.exit_code == 1
+    assert "quadlet 4.9.3 did not apply the drop-in" in r.output
+    assert "Needs podman 5.0 or newer" in r.output
+    assert list(host.units.rglob("*.conf")) == []
+    assert not (host.data / "deployment.toml").exists()

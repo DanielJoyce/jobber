@@ -40,6 +40,9 @@ IMAGE = "localhost/jobhunter:current"
 IMAGE_TIMEOUT_SECONDS = 120
 QUADLET = Path("/usr/libexec/podman/quadlet")
 QUADLET_TIMEOUT_SECONDS = 60
+# Seen on CI: quadlet 4.9 ignores <unit>.container.d/*.conf; 5.x applies them. Spec 018
+# targets Fedora atomic with podman 5.
+MIN_PODMAN_DROPINS = "5.0"
 SECRETS_DIR = "/run/secrets"
 CONTAINER_UID = 1000
 CONTAINER_FILE_T = "container_file_t"
@@ -687,6 +690,42 @@ def _matrix(ctx: Context, res: Result) -> list[SecretSpec]:
     return specs
 
 
+def quadlet_version(quadlet: Path) -> str | None:
+    """``quadlet -version`` (e.g. ``5.8.4``), or None."""
+    try:
+        done = subprocess.run(
+            [str(quadlet), "-version"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = done.stdout.strip().split()
+    return out[-1] if done.returncode == 0 and out else None
+
+
+def _final_dropins(unit_dir: Path, plan: DropinPlan) -> set[tuple[str, str]]:
+    """(unit, secret) for every preflight drop-in that exists once ``plan`` is applied."""
+    pairs: set[tuple[str, str]] = set()
+    for path in [*plan.keep, *plan.write]:
+        unit = path.parent.name.removesuffix(".container.d")
+        secret = path.name.removeprefix(DROPIN_PREFIX).removesuffix(DROPIN_SUFFIX)
+        pairs.add((unit, secret))
+    return pairs
+
+
+def _service_section(dryrun_out: str, unit: str) -> str:
+    """The text quadlet -dryrun printed for ``<unit>.service``."""
+    marker = f"---{unit}.service---"
+    if marker not in dryrun_out:
+        return ""
+    return dryrun_out.split(marker, 1)[1].split("\n---", 1)[0]
+
+
 def quadlet_check(quadlet: Path, unit_dir: Path, plan: DropinPlan) -> tuple[bool, str]:
     """Dry-run the Quadlet generator on a copy of the jobhunter units with ``plan`` applied.
     ``(True, "")`` when every unit generates a service."""
@@ -735,6 +774,18 @@ def quadlet_check(quadlet: Path, unit_dir: Path, plan: DropinPlan) -> tuple[bool
             errors = [ln for ln in done.stderr.splitlines() if "jobhunter" in ln][:3]
             detail = "; ".join(errors) or done.stderr.strip()[-300:]
             return False, f"units that fail to generate: {', '.join(missing) or '?'} ({detail})"
+        # The generator must also have applied the drop-ins: an older quadlet generates the
+        # base units and silently ignores <unit>.container.d/, so the units would run without
+        # their secrets.
+        for unit, secret in sorted(_final_dropins(unit_dir, plan)):
+            section = _service_section(done.stdout, unit)
+            if f"--secret {secret}," not in section:
+                version = quadlet_version(quadlet) or "unknown version"
+                return False, (
+                    f"quadlet {version} did not apply the drop-in for {secret} to {unit}: it "
+                    "ignores <unit>.container.d/ drop-ins, so the units would run without "
+                    f"their secrets. Needs podman {MIN_PODMAN_DROPINS} or newer"
+                )
         return True, ""
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
