@@ -124,3 +124,56 @@ def test_restore_refuses_while_a_console_elsewhere_holds_the_lock(env, shared_ho
     proc.stdin.close()
     proc.wait(10)
     assert runner.invoke(app, ["db", "restore", str(saved)]).exit_code == 0
+
+
+def test_a_symlinked_database_gives_one_console_lock_and_one_run_lock(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    linked_dir = tmp_path / "linked"
+    linked_dir.symlink_to(real_dir, target_is_directory=True)
+    settings = Settings(
+        paths=Paths(
+            data_dir=linked_dir, db_path=linked_dir / "jobhunter.db", profile_dir=tmp_path / "p"
+        )
+    )
+    console = create_app(settings)
+    file_link = tmp_path / "file-link.db"
+    file_link.symlink_to(real_dir / "jobhunter.db")
+    for spelling in (real_dir / "jobhunter.db", file_link):
+        assert not exclusive_free(spelling), spelling
+    console.state.console_lock.release()
+    assert exclusive_free(real_dir / "jobhunter.db")
+
+    with runlock.RunLock(file_link, "run"), pytest.raises(runlock.LockHeld):
+        runlock.RunLock(real_dir / "jobhunter.db", "collect").acquire(None)
+
+
+def open_fds() -> int:
+    import os
+
+    return len(os.listdir("/proc/self/fd"))
+
+
+def test_an_unusable_lock_file_lets_the_console_start_but_stops_a_restore(tmp_path, caplog):
+    db_path = tmp_path / "jobhunter.db"
+    runlock.console_lock_path(db_path).mkdir()  # cannot be opened as a file
+    before = open_fds()
+    shared = runlock.ConsoleLock(db_path)
+    with caplog.at_level("WARNING"):
+        shared.acquire()  # no exception: the console goes on
+    assert not shared.held
+    assert "running without it" in caplog.text
+    with pytest.raises(runlock.ConsoleBusy, match="cannot be ruled out"):
+        runlock.ConsoleLock(db_path, exclusive=True).acquire()
+    assert open_fds() == before  # nothing leaked
+
+
+def test_restore_refuses_when_it_cannot_take_the_console_lock(env):
+    conn = db.connect(env / "jobhunter.db")
+    db.migrate(conn)
+    saved = backup.online_backup(conn, env / "saved.db")
+    conn.close()
+    runlock.console_lock_path(env / "jobhunter.db").mkdir()
+    refused = runner.invoke(app, ["db", "restore", str(saved)])
+    assert refused.exit_code == 1 and "cannot be ruled out" in refused.output
+    assert runner.invoke(app, ["db", "restore", "--force", str(saved)]).exit_code == 0

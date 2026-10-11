@@ -156,6 +156,11 @@ def _stage(source: Path, workdir: Path) -> Path:
         if wal.is_file():
             shutil.copyfile(wal, Path(f"{copy}-wal"))
     except OSError as exc:
+        if exc.filename is not None and str(workdir) in str(exc.filename):
+            raise RestoreError(
+                f"cannot write the staging copy in {workdir.parent} ({exc}); is the disk full? "
+                "Nothing was changed."
+            ) from exc
         raise RestoreError(f"cannot read {source}: {exc}. Nothing was changed.") from exc
     try:
         src = sqlite3.connect(str(copy), isolation_level=None)
@@ -235,6 +240,17 @@ def restore(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _free_name(directory: Path, name: str) -> Path:
+    """``directory/name``, or ``...-2.db``, ``...-3.db`` if taken: an earlier safety copy (two
+    restores in one second) is never replaced."""
+    stem = name.removesuffix(".db")
+    candidate, n = directory / name, 1
+    while candidate.exists() or candidate.is_symlink():
+        n += 1
+        candidate = directory / f"{stem}-{n}.db"
+    return candidate
+
+
 def _check_page_size(staged: sqlite3.Connection, live: sqlite3.Connection, db_path: Path) -> None:
     """SQLite cannot back up into a WAL database with a different page size (it reports a
     misleading "readonly database"); say what is going on instead, before anything changes."""
@@ -277,7 +293,7 @@ def _write_live(
             _check_page_size(staged, live, db_path)
             with contextlib.suppress(sqlite3.DatabaseError):
                 before = backup.table_counts(live)
-            dest = backup.manual_dir(data_dir) / backup.manual_name(now, "restore")
+            dest = _free_name(backup.manual_dir(data_dir), backup.manual_name(now, "restore"))
             try:
                 safety = backup.online_backup(live, dest)
             except (backup.BackupError, sqlite3.DatabaseError) as exc:

@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import logging
 import os
 import re
 import socket
@@ -35,6 +36,8 @@ from pathlib import Path
 
 from jobhunter.xdg import mkdir_private
 
+logger = logging.getLogger(__name__)
+
 LOCK_SUFFIX = ".run.lock"
 STALE_AFTER = timedelta(hours=6)
 EXIT_STALE = 75  # EX_TEMPFAIL: a failure, so systemd's OnFailure= fires
@@ -45,8 +48,11 @@ _UNIT_S = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
 def lock_path(db_path: Path | str) -> Path:
-    """``<db_path>.run.lock``, beside the database (same mount, same SELinux label)."""
-    return Path(f"{db_path}{LOCK_SUFFIX}")
+    """``<db_path>.run.lock``, beside the database (same mount, same SELinux label).
+
+    The path is resolved first, as SQLite resolves symlinks: every spelling of one database
+    (a symlinked file or directory) must lock the same file."""
+    return Path(f"{Path(db_path).resolve()}{LOCK_SUFFIX}")
 
 
 def parse_duration(text: str) -> float:
@@ -280,8 +286,9 @@ CONSOLE_SUFFIX = ".console.lock"
 
 
 def console_lock_path(db_path: Path | str) -> Path:
-    """``<db_path>.console.lock``: every running console holds ``LOCK_SH`` on it."""
-    return Path(f"{db_path}{CONSOLE_SUFFIX}")
+    """``<db_path>.console.lock``: every running console holds ``LOCK_SH`` on it. Resolved
+    like :func:`lock_path`, so a symlinked database still gives one lock file."""
+    return Path(f"{Path(db_path).resolve()}{CONSOLE_SUFFIX}")
 
 
 class ConsoleBusy(RuntimeError):
@@ -309,22 +316,45 @@ class ConsoleLock:
         return self._fd is not None
 
     def acquire(self) -> None:
-        """Take it without waiting; raise :class:`ConsoleBusy` when held the other way."""
+        """Take it without waiting; raise :class:`ConsoleBusy` when held the other way.
+
+        If the lock cannot be taken at all (lock file unopenable, no flock support): shared
+        (the console) logs a warning and goes on without it, since refusing to start would be
+        worse; exclusive (a restore) raises :class:`ConsoleBusy`, because it cannot tell
+        whether a console is running.
+        """
         if self._fd is not None:
             return
-        mkdir_private(self.path.parent)
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        fd: int | None = None
         mode = fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
         try:
+            mkdir_private(self.path.parent)
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
             fcntl.flock(fd, mode | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            os.close(fd)
+            if fd is not None:
+                os.close(fd)
             if self.exclusive:
                 raise ConsoleBusy(f"a jobhunter console is running (it holds {self.path})") from exc
             raise ConsoleBusy(
                 f"a jobhunter db restore is in progress (it holds {self.path}); start the "
                 "console when it finishes"
             ) from exc
+        except OSError as exc:
+            if fd is not None:
+                os.close(fd)
+            if self.exclusive:
+                raise ConsoleBusy(
+                    f"cannot take the console lock {self.path} ({exc}), so a running console "
+                    "cannot be ruled out"
+                ) from exc
+            logger.warning(
+                "console: cannot take %s (%s); running without it, so `db restore` cannot "
+                "see this console",
+                self.path,
+                exc,
+            )
+            return
         self._fd = fd
 
     def release(self) -> None:

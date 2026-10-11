@@ -363,3 +363,14 @@ def test_safety_is_reported_before_the_live_database_is_touched(layout):
     assert seen == [(True, (35, "old,new"))]
     assert scratch(live) == (35, "old,new")
     assert [p.name for p in data.iterdir() if p.name.startswith(".restore-")] == []
+
+
+def test_an_existing_safety_copy_name_is_never_overwritten(layout):
+    data, live, saved, _keeper = layout
+    taken = data / "backups" / "jobhunter-20261010T120000Z-pre-restore.db"
+    taken.parent.mkdir()
+    taken.write_text("an earlier copy")
+    result = rst.restore(saved, live, data, now=NOW)
+    assert taken.read_text() == "an earlier copy"
+    assert result.safety_backup == data / "backups" / "jobhunter-20261010T120000Z-pre-restore-2.db"
+    assert scratch(result.safety_backup) == (35, "old,new")
