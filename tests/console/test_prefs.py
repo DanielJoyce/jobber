@@ -231,12 +231,12 @@ def test_preview_bucket_deltas_when_floor_drops(client, pdir, conn):
     assert "140000</span> → 100000" in r.text
     assert "2 scored jobs" in r.text
     lines = re.findall(
-        r'<li>[A-Za-z ]+ <span class="bucket-badge"[^>]*>([A-G])</span> (\d+) → (\d+) \(([^)]+)\)',
+        r"<li>([A-Za-z ]+?) (\d+) → (\d+) \(([^)]+)\)",
         r.text,
     )
     assert lines, r.text
     assert all(sign.startswith(("+", MINUS)) for *_, sign in lines)
-    assert any(b == "A" and sign.startswith("+") for b, _, _, sign in lines)
+    assert any(b == "Bullseye" and sign.startswith("+") for b, _, _, sign in lines)
     assert f"Filtered out by salary 1 → 0 ({MINUS}1)" in r.text
     assert 'href="/job/1"' in r.text
     assert "Save — free" in r.text
@@ -468,7 +468,7 @@ def test_bucket_names_replace_letters_and_thresholds_group_by_bucket(client):
     legends = re.findall(r"<legend>\s*([A-Za-z ]+?)\s*(?:<span|</legend>)", section)
     assert legends[:3] == ["Bullseye", "Strong", "Stretch Up"]
     assert "Stale Match" in legends and "Mismatch" in legends and "Bullseye (A)" not in section
-    assert re.search(r'<legend>Bullseye <span class="bucket-badge"[^>]*>A</span>', section)
+    assert "bucket-badge" not in section
     first_group = section[section.index("<legend>Bullseye") : section.index("<legend>Strong")]
     assert (
         'name="buckets.a_overall"' in first_group and 'name="buckets.b_overall"' not in first_group

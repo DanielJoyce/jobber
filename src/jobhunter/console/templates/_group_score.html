@@ -3,7 +3,7 @@
   {% if score_message %}<div class="banner banner-error" role="alert" id="score-message">{{ score_message }}</div>{% endif %}
   {% if score_ok %}<div class="banner banner-ok" role="status" id="score-ok">{{ score_ok }}</div>{% endif %}
   {% if d and d.scored %}
-  <p id="score-result"><span class="badge" title="Bucket {{ d.bucket }}">{{ bucket_name(d.bucket) }} <span class="bucket-badge">{{ d.bucket }}</span></span>
+  <p id="score-result"><span class="badge">{{ bucket_name(d.bucket) }}</span>
     <span class="badge">overall {{ d.overall }}</span> <a href="/job/{{ d.group_id }}">reload for the breakdown</a></p>
   {% elif profile_error %}
   <p class="muted">Fix the preferences file first; nothing can be scored without a valid profile. <a href="/prefs">Preferences</a></p>

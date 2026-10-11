@@ -286,15 +286,19 @@
       var ink = inkOn(fill);
       var cov = COVERAGE[row.coverage] || COVERAGE.none;
       var sink = statusInk(row.coverage, fill, ink);
+      // On the hatch the ink also crosses the grey lines, which it may not outcontrast, so
+      // no-data labels get a surface-colored halo that keeps them readable over the lines.
+      var lblCls = isNoData(row) ? "lbl halo" : "lbl";
+      var valCls = isNoData(row) ? "lbl-value halo" : "lbl-value";
       if (c.remote) {
-        text(gLabels, c.lx, c.ly - 6, "Remote (US)", "lbl", ink);
-        text(gLabels, c.lx, c.ly + 18, fmt(row.value, data.kind), "lbl-value", ink);
+        text(gLabels, c.lx, c.ly - 6, "Remote (US)", lblCls, ink, isNoData(row) ? fill : null);
+        text(gLabels, c.lx, c.ly + 18, fmt(row.value, data.kind), valCls, ink, isNoData(row) ? fill : null);
         text(gLabels, c.lx, c.ly + 40, cov[0], "status", sink, fill);
       } else if (c.callout) {
-        text(gLabels, c.lx, c.ly + 5, c.usps, "lbl", ink);
+        text(gLabels, c.lx, c.ly + 5, c.usps, lblCls, ink, isNoData(row) ? fill : null);
         text(gLabels, c.x + 58, c.ly + 5, cov[0], "status", sink, fill);
       } else {
-        text(gLabels, c.lx, c.ly, c.usps, "lbl", ink);
+        text(gLabels, c.lx, c.ly, c.usps, lblCls, ink, isNoData(row) ? fill : null);
         text(gLabels, c.lx, c.ly + 15, cov[0], "status", sink, fill);
       }
       if (showBadge && row.applications > 0) {

@@ -16,7 +16,7 @@
           <td>{{ it.employer }}</td>
           <td class="muted col-site">{{ it.host }}</td>
           <td class="nowrap col-added">{{ it.captured }}</td>
-          <td>{% if it.bucket %}<span class="badge" title="Bucket {{ it.bucket }}">{{ bucket_name(it.bucket) }} <span class="bucket-badge">{{ it.bucket }}</span></span>{% else %}<span class="muted">not scored</span>{% endif %}</td>
+          <td>{% if it.bucket %}<span class="badge">{{ bucket_name(it.bucket) }}</span>{% else %}<span class="muted">not scored</span>{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
