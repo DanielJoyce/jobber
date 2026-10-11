@@ -300,3 +300,51 @@ def test_overage_failure_reports_that_the_request_was_served(fake_claude, claude
     with pytest.raises(cli_runner.CliFailure) as exc:
         _run(fake_claude, tmp_path, on_overage=lambda: False)
     assert exc.value.overage and exc.value.started and exc.value.result is None
+
+
+def test_kill_all_stops_a_running_child_and_the_run_fails(fake_claude, claude_stream, tmp_path):
+    """a7a1b40 (4): the console's shutdown kills a child still running (it is in its own
+    session, so it would otherwise outlive the console and finish an unlogged request)."""
+    import threading
+
+    run = claude_stream(OUT)
+    run["steps"][1:1] = [{"sleep": 5}, {"touch": "went_on"}]
+    fake_claude.set([run])
+    box: dict[str, BaseException] = {}
+
+    def go():
+        try:
+            _run(fake_claude, tmp_path)
+        except BaseException as exc:  # handed back to the test
+            box["exc"] = exc
+
+    t = threading.Thread(target=go)
+    t.start()
+    deadline = time.monotonic() + 5
+    while not cli_runner._LIVE and time.monotonic() < deadline:
+        time.sleep(0.02)
+    time.sleep(0.3)  # past the init line
+    assert cli_runner.kill_all() == 1
+    t.join(5)
+    assert not t.is_alive()
+    assert isinstance(box.get("exc"), cli_runner.CliFailure)
+    assert box["exc"].started  # the init line passed: the caller logs what was reported
+    assert not cli_runner._LIVE
+    time.sleep(0.2)
+    assert not fake_claude.reached("went_on")
+
+
+def test_console_shutdown_runs_kill_all(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from jobhunter.config import Paths, Settings
+    from jobhunter.console.app import create_app
+    from jobhunter.core import db
+
+    calls: list[int] = []
+    monkeypatch.setattr(cli_runner, "kill_all", lambda: calls.append(1) or 0)
+    settings = Settings(paths=Paths(db_path=tmp_path / "c.db", data_dir=tmp_path / "data"))
+    app = create_app(settings, lambda: db.connect(tmp_path / "c.db"))
+    with TestClient(app):
+        assert calls == []
+    assert calls == [1]

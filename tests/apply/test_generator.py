@@ -658,3 +658,87 @@ def test_two_confirmed_paid_cli_runs_at_once_cannot_both_pass_the_cap(
     kinds = sorted(type(r).__name__ for r in res.values())
     assert kinds == ["ApplyRefused", "Outcome"], res
     assert len(fake_claude.calls()) == 2  # the refused run never reached the CLI
+
+
+# ─── a7a1b40: one unconfirmed CLI call at a time ───────────────────────────
+
+
+def _in_thread(fn):
+    import threading
+
+    box: dict[str, object] = {}
+
+    def run():
+        try:
+            box["out"] = fn()
+        except BaseException as exc:  # handed back to the test
+            box["exc"] = exc
+
+    t = threading.Thread(target=run)
+    t.start()
+    return t, box
+
+
+def test_an_unconfirmed_cli_run_waits_and_is_refused_if_the_one_before_set_the_hold(
+    env, fake_claude, claude_stream
+):
+    """a7a1b40 (5): while another unconfirmed CLI call is in flight (the probe lock is held),
+    a second one waits; when the first reports paid extra usage, the second is refused with
+    nothing run, instead of also being charged without a paid click."""
+    import time
+
+    from jobhunter.apply import inflight
+
+    data_dir = env.settings.paths.data_dir
+    fake_claude.set([claude_stream(RESUME_OUT), claude_stream(ENTAIL_OUT)])
+    with inflight.probe(data_dir):  # the first run, in flight
+        t, box = _in_thread(lambda: gen(env))
+        time.sleep(0.6)
+        assert t.is_alive() and fake_claude.calls() == []  # waiting, nothing launched
+        runner_state.set_overage(data_dir)  # the first run reports paid extra usage
+    t.join(10)
+    exc = box.get("exc")
+    assert isinstance(exc, generator.ApplyRefused) and exc.needs_paid_confirm
+    assert fake_claude.calls() == []
+    assert env.conn.execute("SELECT count(*) FROM packet_document").fetchone()[0] == 0
+
+
+def test_an_unconfirmed_cli_run_proceeds_after_the_one_before_finished_in_plan(
+    env, fake_claude, claude_stream
+):
+    import time
+
+    from jobhunter.apply import inflight
+
+    fake_claude.set([claude_stream(RESUME_OUT), claude_stream(ENTAIL_OUT)])
+    with inflight.probe(env.settings.paths.data_dir):
+        t, box = _in_thread(lambda: gen(env))
+        time.sleep(0.6)
+        assert fake_claude.calls() == []
+    t.join(20)
+    assert "exc" not in box, box.get("exc")
+    assert box["out"].version == 1 and len(fake_claude.calls()) == 2
+
+
+def test_an_unconfirmed_cli_run_gives_up_after_the_probe_wait(env, fake_claude, monkeypatch):
+    from jobhunter.apply import inflight
+
+    monkeypatch.setattr(inflight, "PROBE_WAIT_S", 0.3)
+    with (
+        inflight.probe(env.settings.paths.data_dir),
+        pytest.raises(generator.ApplyRefused, match="still running"),
+    ):
+        gen(env)
+    assert fake_claude.calls() == []
+
+
+def test_long_question_claims_differing_past_120_characters_do_not_collide(tmp_path):
+    """a7a1b40 (1): the lock file name keeps a hash of the whole key."""
+    from jobhunter.apply import inflight
+
+    stem = "7-question_draft-" + "describe a time you " * 10
+    with inflight.claim(tmp_path, stem + "led a migration"):
+        with inflight.claim(tmp_path, stem + "handled a conflict"):
+            pass
+        with pytest.raises(inflight.Busy), inflight.claim(tmp_path, stem + "led a migration"):
+            pass

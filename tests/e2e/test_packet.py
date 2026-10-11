@@ -235,6 +235,24 @@ def test_the_paid_button_sends_its_confirmation_and_a_second_click_runs_nothing(
     assert not page.errors
 
 
+def test_a_bfcache_restore_re_enables_the_run_buttons(page, server, fake_claude):
+    """a7a1b40 (3): back to a page restored from the bfcache must not leave the run buttons
+    disabled under a stale "Running" note. The submit itself is cancelled (no run, no fake)."""
+    _new_packet(page, server)
+    page.evaluate(
+        "window.addEventListener('submit', e => e.preventDefault())"
+    )  # bubbles after packet.js's handler: the busy state is set, nothing is sent
+    page.locator("#resume button[data-runner=cli]").click()
+    btn = page.locator("#resume button[data-runner=cli]")
+    expect(btn).to_be_disabled()
+    expect(page.locator("#resume .busy-note")).to_have_count(1)
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}))")
+    expect(btn).to_be_enabled()
+    expect(page.locator("#resume .busy-note")).to_have_count(0)
+    assert fake_claude.calls() == []
+    assert not page.errors
+
+
 # ─── phase 1c: export ───────────────────────────────────────────────────────
 
 
