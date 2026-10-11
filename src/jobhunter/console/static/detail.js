@@ -11,7 +11,7 @@
     },
     A: function () {
       var link = document.getElementById("apply-link");
-      if (link) window.location.href = link.getAttribute("href");
+      if (link) window.open(link.getAttribute("href"), "_blank", "noopener");
     },
     b: function () {
       window.location.href = "/inbox";

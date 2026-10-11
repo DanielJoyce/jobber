@@ -32,7 +32,7 @@
 
   <div class="packet-actions">
     {% if d and d.button %}
-    <a class="packet-btn" id="open-application" href="/apply/{{ p.group_id }}">Open application &#8599;</a>
+    <a class="packet-btn" id="open-application" href="/apply/{{ p.group_id }}" target="_blank" rel="noopener">Open application &#8599;</a>
     <span class="muted">opens the employer's page and logs the click, so "Did you apply?" asks when you are back</span>
     {% else %}
     <span class="muted" id="no-url">No posting URL was given, so there is no application link to open.</span>

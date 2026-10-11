@@ -5,7 +5,7 @@
     <button type="button" class="apply-btn" disabled>{{ b.label }}</button>
     <a class="muted" href="{{ b.open_anyway }}" target="_blank" rel="noopener noreferrer">open anyway</a>
     {% else %}
-    <a class="apply-btn {{ b.kind }}" id="apply-link" href="{{ b.href }}">{{ b.label }}</a>
+    <a class="apply-btn {{ b.kind }}" id="apply-link" href="{{ b.href }}" target="_blank" rel="noopener">{{ b.label }}</a>
     {% endif %}
     {% if b.host %}<span class="muted">{{ b.host }}</span>{% endif %}
     {% if b.verified %}<span class="muted">&middot; {{ b.verified }}</span>{% endif %}
