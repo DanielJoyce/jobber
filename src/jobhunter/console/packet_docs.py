@@ -239,7 +239,7 @@ def host_draft_command(packet_id: int, kind: str) -> str:
     if kind == "cover_letter":
         return base + " --letter"
     if kind == "question_draft":
-        return base + " --question '<paste the question>'"
+        return base + " --question -"
     return base
 
 

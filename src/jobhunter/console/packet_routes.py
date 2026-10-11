@@ -595,6 +595,25 @@ def register(
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
         return back(request, conn, packet_id, "letter")
 
+    @app.post("/packet/{packet_id}/story")
+    def packet_story(request: Request, conn: Conn, form: Form, packet_id: int) -> Response:
+        """Save a question's story facts (S1-S3) without drafting. Container mode: the host
+        ``apply draft`` reads them from the database."""
+        p = require_packet(conn, packet_id)
+        question = form.get("question", "")
+        try:
+            if labels.never_store(question) is not None:
+                raise generator.ApplyRefused(labels.YOURS)
+            lines = answers.clean_lines(form.get("facts", ""))
+            answers.save_packet_answer(
+                conn, p.id, answers.story_key(question), question, "\n".join(lines)
+            )
+        except generator.ApplyRefused as exc:
+            return render_packet(request, conn, p, status=409, doc_message=exc.message)
+        except (answers.NeverStore, ValueError) as exc:
+            return render_packet(request, conn, p, status=409, doc_message=str(exc))
+        return back(request, conn, packet_id, "drafts")
+
     @app.post("/packet/{packet_id}/answers")
     def packet_save_answer(request: Request, conn: Conn, form: Form, packet_id: int) -> Response:
         """Save as answer: a question draft's text (``doc_id``) or your own (``value``), kept on

@@ -160,3 +160,25 @@ def test_numeric_question_prints_evidence(env, fake_claude):
 def test_letter_and_question_together_is_a_usage_error(env):
     out = cli.invoke(app, ["apply", "draft", str(env.pid), "--letter", "--question", "Why us?"])
     assert out.exit_code == 2
+
+
+NASTY = "Years of Terraform? What's the company's ; $(id) > out"
+
+
+def test_question_from_stdin_needs_no_shell_quoting(env, fake_claude):
+    out = cli.invoke(app, ["apply", "draft", str(env.pid), "--question", "-"], input=NASTY + "\n")
+    assert out.exit_code == 0, out.output
+    assert "A years-of-experience question" in out.output
+
+
+def test_question_from_file(env, fake_claude, tmp_path):
+    f = tmp_path / "q.txt"
+    f.write_text(NASTY, encoding="utf-8")
+    out = cli.invoke(app, ["apply", "draft", str(env.pid), "--question-file", str(f)])
+    assert out.exit_code == 0, out.output
+    assert "A years-of-experience question" in out.output
+
+
+def test_empty_stdin_question_is_a_usage_error(env):
+    out = cli.invoke(app, ["apply", "draft", str(env.pid), "--question", "-"], input="\n")
+    assert out.exit_code == 2

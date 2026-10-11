@@ -60,6 +60,7 @@
   <span class="host-draft" data-host-draft="{{ kind }}">
     <code>{{ cmd }}</code>
     <button type="button" class="act copy-btn" data-copy="{{ cmd }}">Copy command</button>
+    {% if kind == "question_draft" %}<span class="muted">Run it, paste the question, then press Ctrl-D (no quoting needed). Saved story facts are used.</span>{% endif %}
     <span class="muted">Drafting runs on your host with your Claude subscription; the console picks up the result on reload.</span>
   </span>
   {% elif r.default == "cli" and r.cli_ok %}
@@ -172,7 +173,7 @@
     <div class="doc-actions">
       <form method="post" action="/packet/{{ p.id }}/generate" class="gen-form">
         <input type="hidden" name="kind" value="resume">
-        {% if slot.shown %}<label class="instr">Regenerate with an instruction (optional)
+        {% if slot.shown and not r.container %}<label class="instr">Regenerate with an instruction (optional)
           <input name="instruction" maxlength="300" placeholder="shorter; lead with the security work"></label>{% endif %}
         {{ run_buttons("resume", "Regenerate" if slot.shown else "Generate resume") }}
       </form>
@@ -263,9 +264,9 @@
     {% if not slot.shown %}<p class="muted">No cover letter: a packet has one only when you ask.{% if not resume.current_id %} Make the resume version first.{% endif %}</p>{% endif %}
     <form method="post" action="/packet/{{ p.id }}/generate" class="gen-form notes-form" id="letter-form">
       <input type="hidden" name="kind" value="cover_letter">
-      <label for="notes">Employer notes, one to three lines in your words (why this employer, any history). Blank is fine: the letter then says nothing about the employer beyond posting quotes. They are saved when you add the letter.</label>
+      <label for="notes">Employer notes, one to three lines in your words (why this employer, any history). Blank is fine: the letter then says nothing about the employer beyond posting quotes. {% if r.container %}Press Save notes: the host draft uses the saved notes.{% else %}They are saved when you add the letter.{% endif %}</label>
       <textarea id="notes" name="notes" rows="3">{{ notes | join("\n") }}</textarea>
-      {% if slot.shown %}<label class="instr">Instruction (optional) <input name="instruction" maxlength="300"></label>{% endif %}
+      {% if slot.shown and not r.container %}<label class="instr">Instruction (optional) <input name="instruction" maxlength="300"></label>{% endif %}
       <div class="inline">
         {% if resume.current_id %}{{ run_buttons("cover_letter", "Rewrite cover letter" if slot.shown else "Add cover letter") }}{% endif %}
         <button type="submit" class="act" formaction="/packet/{{ p.id }}/notes" id="save-notes">Save notes only</button>
@@ -302,6 +303,7 @@
       <label for="facts">Story facts for a "Describe a time..." question: one to three lines in your words (S1-S3). The draft only structures them.</label>
       <textarea id="facts" name="facts" rows="3">{{ gen.facts if gen and gen.kind == "question_draft" else "" }}</textarea>
       <p class="muted">Salary, EEO, self-ID, address, consent and signature questions are yours: no draft, nothing stored.</p>
+      {% if r.container %}<button type="submit" class="act" formaction="/packet/{{ p.id }}/story" id="save-story">Save story facts</button>{% endif %}
       {{ run_buttons("question_draft", "Draft an answer") }}
     </form>
     {% for v, view in drafts %}

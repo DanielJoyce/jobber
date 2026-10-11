@@ -7,6 +7,7 @@ the test when called, so "no SDK call without the click" is checked on every pat
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from datetime import UTC, datetime
@@ -674,12 +675,35 @@ def test_container_page_shows_host_commands_and_no_generate_buttons(ctr_env):
         {"kind": "question_draft", "runner": "api", "question": "Why us?"},
     ],
 )
-def test_container_generate_routes_refuse_and_call_nothing(ctr_env, data):
+def test_container_generate_routes_refuse_and_call_nothing(ctr_env, data, monkeypatch):
+    from jobhunter.apply import generator
+
+    # A resume version exists, so a missing guard would get as far as drafting.
+    assert ctr_env.client.post(f"/packet/{ctr_env.pid}/base").status_code == 303
+    before = (len(docs(ctr_env, "resume")), len(docs(ctr_env, "cover_letter")))
+    monkeypatch.setattr(generator, "generate", lambda *a, **k: pytest.fail("generate called"))
     ctr_env.app.state.packet_api_client_factory = lambda: pytest.fail("SDK factory called")
     r = ctr_env.client.post(f"/packet/{ctr_env.pid}/generate", data=data)
     assert r.status_code == 409
-    assert "runs on your host" in r.text
-    assert docs(ctr_env, "resume") == [] and docs(ctr_env, "cover_letter") == []
+    from jobhunter.console.packet_docs import CONTAINER_DRAFT_MESSAGE
+
+    assert html.unescape(r.text).count(CONTAINER_DRAFT_MESSAGE) >= 1
+    assert (len(docs(ctr_env, "resume")), len(docs(ctr_env, "cover_letter"))) == before
+
+
+def test_container_question_command_needs_no_quoting_and_story_facts_are_saved(ctr_env):
+    page = ctr_env.client.get(f"/packet/{ctr_env.pid}")
+    assert f"jobhunter apply draft {ctr_env.pid} --question -" in page.text
+    assert "paste the question" in page.text
+    assert 'name="instruction"' not in page.text
+    q = "Describe a time you failed? What's ; $(id) > x"
+    r = ctr_env.client.post(
+        f"/packet/{ctr_env.pid}/story", data={"question": q, "facts": "I broke prod\nI fixed it"}
+    )
+    assert r.status_code == 303
+    from jobhunter.apply import answers
+
+    assert answers.story_facts(ctr_env.conn, ctr_env.pid, q) == ["I broke prod", "I fixed it"]
 
 
 def test_host_mode_still_shows_the_generate_buttons(env, fake_claude):

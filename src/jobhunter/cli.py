@@ -1746,7 +1746,15 @@ def apply_draft(
     packet_id: Annotated[int, typer.Argument(help="The packet id (/packet/<id> in the console).")],
     letter: Annotated[bool, typer.Option("--letter", help="Draft the cover letter.")] = False,
     question: Annotated[
-        str | None, typer.Option("--question", help="Draft an answer to this custom question.")
+        str | None,
+        typer.Option(
+            "--question",
+            help="Draft an answer to this custom question; '-' reads it from stdin.",
+        ),
+    ] = None,
+    question_file: Annotated[
+        Path | None,
+        typer.Option("--question-file", help="Read the custom question from this file."),
     ] = None,
     story: Annotated[
         list[str] | None,
@@ -1773,6 +1781,22 @@ def apply_draft(
     from jobhunter.scoring.profile import ProfileError, load_profile_for
 
     _host_only("apply draft")
+    if question_file is not None:
+        if question is not None:
+            typer.echo("error: pick one of --question and --question-file", err=True)
+            raise typer.Exit(2)
+        try:
+            question = question_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            typer.echo(f"error: cannot read {question_file}: {exc}", err=True)
+            raise typer.Exit(2) from exc
+    elif question == "-":
+        question = sys.stdin.read()
+    if question is not None:
+        question = question.strip()
+        if not question:
+            typer.echo("error: the question is empty", err=True)
+            raise typer.Exit(2)
     if letter and question:
         typer.echo("error: pick one of --letter and --question", err=True)
         raise typer.Exit(2)
