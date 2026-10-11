@@ -55,10 +55,12 @@ class Layout:
     image: str = IMAGE
 
     def volumes(self) -> list[str]:
+        # Absolute always: podman reads a source without a leading / as a named volume (an
+        # empty one, created silently), and Path("./config.toml") prints as "config.toml".
         return [
-            f"{self.data_dir}:/data:z",
-            f"{self.cache_dir}:/cache:z",
-            f"{self.config_file}:/config/config.toml:ro,z",
+            f"{Path(self.data_dir).absolute()}:/data:z",
+            f"{Path(self.cache_dir).absolute()}:/cache:z",
+            f"{Path(self.config_file).absolute()}:/config/config.toml:ro,z",
         ]
 
 
@@ -89,9 +91,7 @@ class SecretMount:
         ]
 
 
-def _usajobs_auth() -> tuple[str, str]:
-    """The registry's ``key_env``/``email_env`` for USAJOBS (defaults if it cannot be read)."""
-    key, email = "USAJOBS_API_KEY", "USAJOBS_EMAIL"
+def _registry_rows() -> list:
     try:
         from importlib import resources
 
@@ -100,9 +100,16 @@ def _usajobs_auth() -> tuple[str, str]:
         text = resources.files("jobhunter.sources").joinpath("registry.yaml").read_text("utf-8")
         rows = YAML(typ="safe").load(text)
     except Exception:
-        return key, email
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, Mapping) or row.get("id") != "usajobs":
+        return []
+    return rows if isinstance(rows, list) else []
+
+
+def _usajobs_auth(rows: list | None = None) -> tuple[str, str]:
+    """The registry's ``key_env``/``email_env`` for USAJOBS (row key containing "usajobs");
+    the defaults if it cannot be read."""
+    key, email = "USAJOBS_API_KEY", "USAJOBS_EMAIL"
+    for row in _registry_rows() if rows is None else rows:
+        if not isinstance(row, Mapping) or "usajobs" not in str(row.get("key", "")):
             continue
         auth = (row.get("config") or {}).get("auth") or {}
         if isinstance(auth, Mapping):
@@ -222,17 +229,27 @@ def secret_names(runner: Runner, podman: Sequence[str]) -> list[str]:
 
 def render_script(layout: Layout, mounts: Sequence[SecretMount] = ()) -> str:
     """The ``jobhunter-ctr`` shell script (POSIX sh). podman is found at run time through the
-    same host-escape chain, so the script works from the host and from a toolbox."""
+    same host-escape chain, so the script works from the host and from a toolbox. Each of
+    ``mounts`` is added only if ``podman secret exists`` says so at run time, so the script
+    never goes stale when a secret is created or removed (podman refuses a missing one)."""
     q = shlex.quote
-    lines = [" ".join(q(arg) for arg in group) for group in option_groups(layout, mounts)]
+    base = [" ".join(q(arg) for arg in group) for group in option_groups(layout)]
     secrets = ", ".join(m.secret for m in mounts) or "none"
-    mkdirs = f"{q(str(layout.data_dir))} {q(str(layout.cache_dir))}"
-    joined = " \\\n  ".join(lines)
+    mkdirs = (
+        f"{q(str(Path(layout.data_dir).absolute()))} {q(str(Path(layout.cache_dir).absolute()))}"
+    )
+    joined = " \\\n  ".join(base)
+    checks = "".join(
+        f"if podman_cmd secret exists {q(m.secret)} >/dev/null 2>&1; then\n"
+        f'  set -- "$@" {" ".join(q(a) for a in m.podman_args())}\n'
+        "fi\n"
+        for m in mounts
+    )
     return f"""#!/bin/sh
 {SCRIPT_HEADER}
 # Regenerate instead of editing: jobhunter container preflight (or jobhunter ctr-script --write).
 # Runs one jobhunter command in a one-off container with the run unit's mounts, user namespace
-# and path variables. Secrets mounted: {secrets}.
+# and path variables. Secrets mounted when they exist: {secrets}.
 # Usage: jobhunter-ctr mail status | jobhunter-ctr secrets status | jobhunter-ctr db migrate
 set -eu
 
@@ -262,9 +279,19 @@ if [ -t 0 ] && [ -t 1 ]; then
   tty_flag=-t
 fi
 
-podman_cmd run -i $tty_flag \\
-  {joined} \\
-  {q(layout.image)} "$@"
+# Options are appended after the user's arguments, which are then rotated to the end.
+n=$#
+set -- "$@" \\
+  {joined}
+{checks}set -- "$@" {q(layout.image)}
+i=0
+while [ "$i" -lt "$n" ]; do
+  set -- "$@" "$1"
+  shift
+  i=$((i + 1))
+done
+
+podman_cmd run -i $tty_flag "$@"
 """
 
 

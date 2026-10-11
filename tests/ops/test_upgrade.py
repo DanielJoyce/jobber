@@ -46,6 +46,7 @@ class FakeHost:
         self.image_commit: str | None = None  # default: whatever was built
         self.built_commit: str | None = None
         self._which = set(which)
+        self.busy: list[str] = []
 
     def which(self, name: str) -> str | None:
         return f"/usr/bin/{name}" if name in self._which else None
@@ -85,7 +86,11 @@ class FakeHost:
         if key == "podman ps":
             return Result(0, self.oneoffs)
         if key == "podman image inspect":
-            return Result(0, self.previous + "\n") if self.previous else Result(125, "", "no image")
+            return (
+                Result(0, self.previous + "\n")
+                if self.previous
+                else Result(125, "", "Error: localhost/jobhunter:current: image not known")
+            )
         if key == "podman build":
             arg = argv[argv.index("--build-arg") + 1]
             self.built_commit = arg.split("=", 1)[1]
@@ -202,6 +207,7 @@ def setup(tmp_path, monkeypatch):
         monotonic=clock.monotonic,
         now=lambda: datetime(2026, 10, 10, 12, 0, 0),
         host_info=host_info,
+        busy=lambda: list(host.busy),
     )
     return ctx, host, out, clock
 
@@ -225,6 +231,7 @@ HAPPY = [
     "systemctl stop",  # timers
     "systemctl list-units",
     "systemctl stop",  # console
+    "podman ps",  # no one-off started meanwhile
     "podman tag",
     "podman run db migrate",
     "podman run version --json",
@@ -244,9 +251,9 @@ def test_happy_path_runs_every_step_in_order(setup):
     assert host.capture[6] is False  # the build streams to the terminal
     assert calls[11] == ["systemctl", "--user", "stop", *upgrade.TIMERS]
     assert calls[13] == ["systemctl", "--user", "stop", upgrade.CONSOLE]
-    assert calls[14] == ["podman", "tag", f"localhost/jobhunter:{SHORT}", ctr.IMAGE]
-    assert calls[17] == ["systemctl", "--user", "start", upgrade.CONSOLE]
-    assert calls[18] == ["systemctl", "--user", "start", *upgrade.TIMERS]
+    assert calls[15] == ["podman", "tag", f"localhost/jobhunter:{SHORT}", ctr.IMAGE]
+    assert calls[18] == ["systemctl", "--user", "start", upgrade.CONSOLE]
+    assert calls[19] == ["systemctl", "--user", "start", *upgrade.TIMERS]
     # the database was backed up before migrating, and is now current
     backups = list((ctx.data_dir / "backups").glob("jobhunter-*-pre-upgrade.db"))
     assert len(backups) == 1 and schema_of(backups[0]) == OLDER
@@ -423,7 +430,6 @@ def test_only_units_that_were_active_are_stopped_and_started(setup):
 
 # step key that fails -> (retagged, migrate started)
 FAILURES = {
-    "stop-console": (False, False),
     "tag": (False, False),
     "migrate": (True, True),
     "verify-commit": (True, True),
@@ -445,7 +451,6 @@ def _arrange_failure(host: FakeHost, which: str) -> None:
         host.fail["podman run version --json"] = Result(1, "", "crashed")
     else:
         target = {
-            "stop-console": ("stop", [upgrade.CONSOLE]),
             "start-console": ("start", [upgrade.CONSOLE]),
             "start-timers": ("start", list(upgrade.TIMERS)),
         }[which]
@@ -474,7 +479,7 @@ def test_failure_stops_everything_and_prints_the_exact_rollback(setup, which):
     retag_line = f"podman tag {OLD_IMAGE} {ctr.IMAGE}"
     assert (retag_line in report) is retagged
     backups = list((ctx.data_dir / "backups").glob("jobhunter-*-pre-upgrade.db"))
-    assert len(backups) == (0 if which == "stop-console" else 1)
+    assert len(backups) == 1
     assert ("jobhunter db restore" in report) is migrated
     if migrated:
         assert f"jobhunter db restore {backups[0]}" in report
@@ -486,7 +491,7 @@ def test_failure_stops_everything_and_prints_the_exact_rollback(setup, which):
         assert "Nothing else changed" in report
     # nothing started after the failure
     keys = host.steps()
-    if which in {"stop-console", "tag", "migrate", "verify-commit", "verify-error"}:
+    if which in {"tag", "migrate", "verify-commit", "verify-error"}:
         assert "systemctl start" not in keys
     # the run lock was released even on failure
     assert RunLock(ctx.db_path, "probe").try_acquire()
@@ -552,3 +557,222 @@ def test_interrupt_mid_upgrade_still_leaves_things_stopped(setup):
         upgrade.run(ctx)
     assert host.calls[-1] == ["systemctl", "--user", "stop", upgrade.CONSOLE, *upgrade.TIMERS]
     assert "jobhunter db restore" in text(out)
+
+
+# --- review round 1 ------------------------------------------------------------------------
+
+
+def _fail_call(host: FakeHost, argv_tail: list[str], result: Result) -> None:
+    real = host.run
+
+    def run(argv, **kw):
+        if list(argv)[2:] == argv_tail:
+            host.calls.append(list(argv))
+            host.capture.append(True)
+            return result
+        return real(argv, **kw)
+
+    host.run = run
+
+
+def test_interrupt_while_waiting_starts_the_timers_again(setup):
+    ctx, host, out, _ = setup
+    host.running_services = ["jobhunter-ctr-run.service"]
+
+    def interrupted(_s):
+        raise KeyboardInterrupt
+
+    ctx.sleep = interrupted
+    with pytest.raises(KeyboardInterrupt):
+        upgrade.run(ctx)
+    assert host.calls[-1] == ["systemctl", "--user", "start", *upgrade.TIMERS]
+    assert "nothing was changed" in text(out)
+    assert "systemctl stop" not in host.after("systemctl list-units")
+    assert RunLock(ctx.db_path, "probe").try_acquire()
+
+
+def test_console_stop_failure_starts_everything_again(setup):
+    ctx, host, out, _ = setup
+    _fail_call(host, ["stop", upgrade.CONSOLE], Result(1, "", "Job canceled"))
+    assert upgrade.run(ctx) == 1
+    assert host.calls[-1] == ["systemctl", "--user", "start", *UNITS]
+    assert "could not stop jobhunter-console" in text(out)
+    assert "nothing was changed" in text(out)
+    assert not (ctx.data_dir / "backups").exists()
+
+
+def test_a_console_holding_the_console_lock_blocks_the_upgrade(setup):
+    from jobhunter.core.runlock import ConsoleLock
+
+    ctx, host, out, _ = setup
+    host.active = set(upgrade.TIMERS)  # e.g. a host `jobhunter console`, not the unit
+    console = ConsoleLock(ctx.db_path)
+    console.acquire()
+    try:
+        assert upgrade.run(ctx) == 1
+    finally:
+        console.release()
+    assert "a jobhunter console is running" in text(out)
+    assert host.calls[-1] == ["systemctl", "--user", "start", *upgrade.TIMERS]
+    assert "podman tag" not in host.steps()
+    assert schema_of(ctx.db_path) == OLDER
+
+
+def test_console_lock_is_held_through_migrate_and_released_before_start(setup):
+    from jobhunter.core.runlock import ConsoleBusy, ConsoleLock
+
+    ctx, host, out, _ = setup
+    seen: dict[str, bool] = {}
+    real = host.run
+
+    def probe(name):
+        try:
+            ConsoleLock(ctx.db_path).acquire()
+        except ConsoleBusy:
+            seen[name] = True
+        else:
+            seen[name] = False
+
+    def run(argv, **kw):
+        key = FakeHost.key(list(argv))
+        if key == "podman run db migrate":
+            probe("migrate")
+        if list(argv)[2:] == ["start", upgrade.CONSOLE]:
+            probe("start")
+        return real(argv, **kw)
+
+    host.run = run
+    assert upgrade.run(ctx) == 0, text(out)
+    assert seen == {"migrate": True, "start": False}
+
+
+def test_busy_report_blocks_the_upgrade(setup):
+    ctx, host, out, _ = setup
+    host.busy = ["console running: 4242 (jobhunter console)"]
+    assert upgrade.run(ctx) == 1
+    assert "4242" in text(out)
+    assert host.calls[-1] == ["systemctl", "--user", "start", *UNITS]
+    assert "podman tag" not in host.steps()
+
+
+def test_one_off_started_during_the_build_blocks_the_upgrade(setup):
+    ctx, host, out, _ = setup
+    real = host.run
+
+    def run(argv, **kw):
+        if FakeHost.key(list(argv)) == "podman build":
+            host.oneoffs = "beef\n"  # started from another terminal meanwhile
+        return real(argv, **kw)
+
+    host.run = run
+    assert upgrade.run(ctx) == 1
+    assert "one-off container running: beef" in text(out)
+    assert host.calls[-1] == ["systemctl", "--user", "start", *UNITS]
+    assert not (ctx.data_dir / "backups").exists()
+
+
+def test_unknown_unit_state_is_an_error_not_inactive(setup):
+    ctx, host, _out, _ = setup
+    host.fail["systemctl is-active"] = Result(1, "", "Failed to connect to bus")
+    with pytest.raises(upgrade.UpgradeError, match="no usable answer"):
+        upgrade.run(ctx)
+    assert "systemctl stop" not in host.steps()
+
+
+def test_failed_unit_counts_as_inactive(setup):
+    ctx, host, out, _ = setup
+    real = host.run
+
+    def run(argv, **kw):
+        if list(argv)[2:] == ["is-active", upgrade.CONSOLE]:
+            host.calls.append(list(argv))
+            host.capture.append(True)
+            return Result(3, "failed\n")
+        return real(argv, **kw)
+
+    host.run = run
+    assert upgrade.run(ctx) == 0, text(out)
+    assert ["systemctl", "--user", "stop", upgrade.CONSOLE] not in host.calls
+
+
+def test_unconfirmed_stop_after_a_failure_is_said(setup):
+    ctx, host, out, _ = setup
+    _arrange_failure(host, "migrate")
+    _fail_call(host, ["stop", upgrade.CONSOLE, *upgrade.TIMERS], Result(1, "", "bus gone"))
+    assert upgrade.run(ctx) == 1
+    report = text(out)
+    assert "could not confirm the console and timers stopped" in report
+    assert "left stopped" not in report
+
+
+def test_rerun_after_a_failure_starts_the_units_and_keeps_the_first_rollback(setup):
+    ctx, host, out, _ = setup
+    _arrange_failure(host, "verify-commit")
+    assert upgrade.run(ctx) == 1
+    first_backup = next((ctx.data_dir / "backups").glob("*-pre-upgrade.db"))
+    pending = json.loads((ctx.data_dir / upgrade.PENDING_FILE).read_text())
+    assert pending["was_active"] == UNITS and pending["previous_image"] == OLD_IMAGE
+
+    # second run: everything is stopped now, :current is the new image, and it fails again
+    host.active = set()
+    host.previous = f"sha256:new {COMMIT}"
+    out.clear()
+    ctx.now = lambda: datetime(2026, 10, 10, 13, 0, 0)
+    assert upgrade.run(ctx) == 1
+    report = text(out)
+    assert "an earlier upgrade failed at step verify" in report
+    assert f"podman tag {OLD_IMAGE} {ctr.IMAGE}" in report
+    assert f"jobhunter db restore {first_backup}" in report
+    assert "systemctl --user start " + " ".join(UNITS) in report
+
+    # third run succeeds: it starts what the first run found active and clears the record
+    host.image_commit = None
+    out.clear()
+    assert upgrade.run(ctx) == 0, text(out)
+    assert host.calls[-2:] == [
+        ["systemctl", "--user", "start", upgrade.CONSOLE],
+        ["systemctl", "--user", "start", *upgrade.TIMERS],
+    ]
+    assert not (ctx.data_dir / upgrade.PENDING_FILE).exists()
+
+
+def test_backup_path_with_a_space_is_quoted_in_the_rollback(setup, tmp_path, monkeypatch):
+    ctx, host, out, _ = setup
+    spaced = tmp_path / "my data"
+    spaced.mkdir()
+    for name in ("jobhunter.db", db.DEPLOYMENT_MARKER):
+        (ctx.data_dir / name).rename(spaced / name)
+    ctx.db_path = spaced / "jobhunter.db"
+    ctx.data_dir = spaced
+    ctx.layout = ctr.Layout(spaced, ctx.layout.cache_dir, ctx.layout.config_file)
+    host.db_path = ctx.db_path
+    _arrange_failure(host, "migrate")
+    assert upgrade.run(ctx) == 1
+    saved = next((spaced / "backups").glob("*-pre-upgrade.db"))
+    assert f"jobhunter db restore '{saved}'" in text(out)
+
+
+def test_no_previous_image_puts_the_restore_first(setup):
+    ctx, host, out, _ = setup
+    host.previous = ""
+    _arrange_failure(host, "migrate")
+    assert upgrade.run(ctx) == 1
+    lines = [line for line in out if line.startswith("  ") and ". " in line]
+    assert "jobhunter db restore" in lines[0] and "no previous" in lines[1]
+
+
+def test_unreadable_previous_image_is_not_called_missing(setup):
+    ctx, host, out, _ = setup
+    host.previous = ""
+    host.fail["podman image inspect"] = Result(125, "", "Error: database is locked")
+    _arrange_failure(host, "migrate")
+    assert upgrade.run(ctx) == 1
+    assert "could not be read before the upgrade" in text(out)
+    assert "database is locked" in text(out)
+
+
+def test_missing_cache_dir_is_created_before_anything_runs(setup):
+    ctx, _host, out, _ = setup
+    assert not ctx.layout.cache_dir.exists()
+    assert upgrade.run(ctx) == 0, text(out)
+    assert ctx.layout.cache_dir.is_dir()

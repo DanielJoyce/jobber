@@ -298,8 +298,9 @@ secrets in the `jobhunter-ctr` column. Use it for `mail status|match|setup|sampl
 `secrets status`, `sources list`, and anything else interactive after the switch.
 The script is rendered by `jobhunter.ops.ctr` (shared with `upgrade`), finds podman at run time
 through the host-escape chain, labels its containers `io.jobhunter.oneoff=1` (no name), and
-mounts only secrets that exist. `jobhunter ctr-script [--write]` prints or installs it from
-`podman secret ls`; rerun after a secret change (C15 decision, until C13 preflight writes it).
+mounts each secret of its column only when `podman secret exists` finds it at run time (so
+it never goes stale after a secret change). `jobhunter ctr-script [--write]` prints or installs
+it (C15 decision); preflight `--leave` should remove it.
 
 ### Compose (convenience, podman-compose only)
 
@@ -381,8 +382,11 @@ C12, C15, D15. The host checkout moves forward on every merge; the image moves w
   previous image. `--dry-run` prints the steps.
   As built (C15 decisions): the image is built **before** anything stops, so a failed build
   changes nothing; timers stop first, then it waits for running `jobhunter-ctr-*` services
-  (`--wait`, default 30m) and takes the run lock, and only then stops the console; a timeout or
-  a held lock starts the timers again and changes nothing. The backup is
+  (`--wait`, default 30m), takes the run lock, stops the console, takes the C6 console lock
+  exclusive and checks no console process or one-off is left; a timeout, a held lock, a busy
+  database or Ctrl-C there starts again what it stopped and changes nothing. A later failure
+  writes `<data dir>/upgrade-pending.json` so a rerun restarts the original units and keeps
+  the first rollback point. The backup is
   `backups/jobhunter-<stamp>-pre-upgrade.db` (manual, never pruned). Only units that were active
   are started again. "Clean" means no changes in the image's inputs (`Containerfile`,
   `.containerignore`, `pyproject.toml`, `uv.lock`, `README.md`, `src/`); `--allow-dirty` builds

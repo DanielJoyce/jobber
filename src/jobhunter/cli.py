@@ -1931,7 +1931,7 @@ def _ctr_layout(settings):
     return ctr.Layout(
         data_dir=resolve_path(settings.paths.data_dir),
         cache_dir=resolve_path(settings.paths.cache_dir),
-        config_file=config_file(None),
+        config_file=config_file(None).absolute(),
     )
 
 
@@ -2028,27 +2028,25 @@ def ctr_script_cmd(
     """Print or install the jobhunter-ctr wrapper (specs/018 One-off commands, C15).
 
     It runs one jobhunter command in a one-off container on localhost/jobhunter:current with
-    the run unit's mounts and the podman secrets that exist (names from `podman secret ls`;
-    values are never read). Rerun after creating or removing a secret. Host only.
+    the run unit's mounts; each secret of the jobhunter-ctr column is mounted when `podman
+    secret exists` finds it at run time, so it needs no rerun after a secret change. Host only.
     """
     from jobhunter.ops import ctr
-    from jobhunter.ops.proc import SubprocessRunner
 
     _host_only("ctr-script")
     settings = load_settings()
-    runner = SubprocessRunner()
+    mounts = ctr.ctr_secret_mounts(settings)
+    text = ctr.render_script(_ctr_layout(settings), mounts)
+    if not write:
+        typer.echo(text, nl=False)
+        return
     try:
-        podman = ctr.find_podman(runner)
-        mounts = ctr.present(ctr.ctr_secret_mounts(settings), ctr.secret_names(runner, podman))
-        text = ctr.render_script(_ctr_layout(settings), mounts)
-        if not write:
-            typer.echo(text, nl=False)
-            return
         dest = ctr.write_script(path or ctr.default_script_path(), text)
-    except ctr.CtrError as exc:
+    except (ctr.CtrError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(f"wrote {dest} (secrets: {', '.join(m.secret for m in mounts) or 'none'})")
+    names = ", ".join(m.secret for m in mounts)
+    typer.echo(f"wrote {dest} (mounts whichever of these exist: {names})")
 
 
 @db_app.command("relativize-paths")

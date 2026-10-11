@@ -95,15 +95,15 @@ def test_upgrade_refusal_is_one_error_line(env):
     assert "uncommitted changes" in result.output and "nothing was changed" in result.output
 
 
-def test_ctr_script_prints_a_wrapper_with_existing_secrets_only(env):
-    data, _fake = env
+def test_ctr_script_prints_a_wrapper_that_checks_secrets_at_run_time(env):
+    data, fake = env
     result = runner.invoke(app, ["ctr-script"])
     assert result.exit_code == 0, result.output
     assert result.output.startswith("#!/bin/sh\n")
-    assert "jobhunter_anthropic,type=mount" in result.output
-    assert "jobhunter_gmail_token,type=mount" in result.output
-    assert "jobhunter_openrouter" not in result.output
+    for mount in ctr.ctr_secret_mounts():
+        assert f"if podman_cmd secret exists {mount.secret} " in result.output
     assert f"{data}:/data:z" in result.output
+    assert fake.calls == []  # nothing is run to render it
 
 
 def test_ctr_script_write_installs_it(env, tmp_path):
@@ -111,7 +111,7 @@ def test_ctr_script_write_installs_it(env, tmp_path):
     result = runner.invoke(app, ["ctr-script", "--write", "--path", str(dest)])
     assert result.exit_code == 0, result.output
     assert ctr.is_ours(dest)
-    assert "secrets: jobhunter_anthropic, jobhunter_gmail_token" in result.output
+    assert "mounts whichever of these exist: jobhunter_anthropic," in result.output
 
 
 def test_ctr_script_refuses_in_container_mode(env, monkeypatch):

@@ -12,23 +12,27 @@ schema or a half-migrated database serving requests:
    (the units use ``:current``, so a new tag changes nothing yet; a failed build leaves
    everything as it was);
 3. stop the timers, wait for running ``jobhunter-ctr-*`` services, take the run lock (C5),
-   stop the console; if waiting or the lock fails, the timers are started again and nothing
-   has changed;
+   stop the console, take the console lock exclusive (C6, sees a console in any PID
+   namespace) and check that no console process and no one-off is left; if any of this
+   fails or is interrupted, what was stopped is started again and nothing has changed;
 4. back up the database (C12 online backup, manual name, never pruned);
 5. retag ``:current``, run ``jobhunter db migrate`` in a one-off container, check the image's
    ``jobhunter version`` against the host's (same commit, same highest migration, database
    current);
-6. start the console and the timers that were running before, then print ``jobhunter
-   version`` for the host and the image.
+6. release the console lock, start the console and the timers that were running before,
+   then print ``jobhunter version`` for the host and the image.
 
-Any failure from step 3's console stop on leaves the console and timers stopped and prints the
-exact rollback: retag the previous image, ``jobhunter db restore`` the backup, start the units.
+Any failure from step 4 on leaves the console and timers stopped and prints the exact
+rollback: retag the previous image, ``jobhunter db restore`` the backup, start the units. It
+also writes ``<data dir>/upgrade-pending.json``, so a rerun starts the units the first run
+found active and keeps the first rollback point; a successful run removes it.
 Every command goes through a :class:`~jobhunter.ops.proc.Runner`.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from collections.abc import Callable, Sequence
@@ -41,6 +45,7 @@ from jobhunter.core import backup, db
 from jobhunter.ops import ctr
 from jobhunter.ops import version as ver
 from jobhunter.ops.proc import Result, Runner
+from jobhunter.xdg import mkdir_private
 
 CONSOLE = "jobhunter-console"
 TIMERS = ("jobhunter-ctr-run.timer", "jobhunter-ctr-collect.timer", "jobhunter-ctr-verify.timer")
@@ -61,6 +66,9 @@ POLL_S = 5.0
 BUILD_TIMEOUT_S = 3600.0
 STEP_TIMEOUT_S = 300.0
 MIGRATE_TIMEOUT_S = 1800.0
+# Written when an upgrade fails after the console stopped, removed when one succeeds, so a
+# rerun starts the units the first run found active and keeps the first rollback point.
+PENDING_FILE = "upgrade-pending.json"
 
 
 class UpgradeError(RuntimeError):
@@ -69,6 +77,11 @@ class UpgradeError(RuntimeError):
 
 class Lock(Protocol):
     def try_acquire(self) -> bool: ...
+    def release(self) -> None: ...
+
+
+class ExclusiveLock(Protocol):
+    def acquire(self) -> None: ...
     def release(self) -> None: ...
 
 
@@ -86,6 +99,9 @@ class Context:
     monotonic: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = datetime.now
     host_info: Callable[[], ver.VersionInfo] | None = None
+    # C6: held exclusive while no console may run (any PID namespace); and /proc checks.
+    console_lock: Callable[[], ExclusiveLock] | None = None
+    busy: Callable[[], list[str]] | None = None
 
 
 @dataclass
@@ -100,7 +116,9 @@ class State:
     was_active: list[str] = field(default_factory=list)
     timers_stopped: list[str] = field(default_factory=list)
     console_stopped: bool = False
+    previous_inspect_error: str | None = None  # podman image inspect failed for another reason
     backup_path: Path | None = None
+    pending: dict | None = None  # an earlier failed upgrade's record (PENDING_FILE)
     db_had_schema: bool = False
     retagged: bool = False
     migrate_started: bool = False
@@ -170,7 +188,7 @@ def _check_layout(ctx: Context) -> None:
             "(/data/jobhunter.db); the run lock and the backup would protect the wrong file. "
             "Point [paths] db_path at the data directory's jobhunter.db"
         )
-    if not ctx.layout.config_file.is_file():
+    if not ctx.layout.config_file.absolute().is_file():
         raise UpgradeError(
             f"{ctx.layout.config_file} does not exist and the containers mount it; "
             "run `jobhunter container preflight` (it creates an empty one)"
@@ -210,7 +228,9 @@ def plan_lines(ctx: Context, state: State) -> list[str]:
         f"3. wait:    for running {SERVICE_PATTERN} (up to {ctx.wait_s:g} s; on timeout the "
         "timers are started again and nothing changes)",
         f"4. lock:    run lock {db_lock(ctx)} (not waiting)",
-        f"5. stop:    {sc('stop', CONSOLE)}   (if active)",
+        f"5. stop:    {sc('stop', CONSOLE)}   (if active), then the console lock (exclusive), "
+        "no console or jobhunter-ctr one-off may be running; else everything is started again "
+        "and nothing changes",
         f"6. backup:  {backup_dest}",
         f"7. retag:   {pod('tag', ctx_image(state.tag), ctr.IMAGE)}",
         f"8. migrate: {_shown(ctr.run_argv(state.podman, ctx.layout, ['db', 'migrate']))}",
@@ -232,9 +252,28 @@ def _backup_dest(ctx: Context) -> Path:
     return Path(ctx.data_dir) / "backups" / f"jobhunter-{stamp}-pre-upgrade.db"
 
 
+class UnitStateUnknown(RuntimeError):
+    """``systemctl is-active`` gave an answer that is neither active, inactive nor failed."""
+
+
+ACTIVE_STATES = {"active", "reloading", "activating", "refreshing"}
+INACTIVE_STATES = {"inactive", "failed", "deactivating"}
+
+
 def _active(ctx: Context, state: State, unit: str) -> bool:
+    """True or False from ``systemctl is-active``. Anything else (a D-Bus error, a failing
+    escape chain) raises, so an error is never read as "not running". A unit that is not
+    loaded at all prints "inactive", which is fine."""
     done = ctx.runner.run(_systemctl(state, "is-active", unit), timeout=STEP_TIMEOUT_S)
-    return done.ok and done.stdout.strip() in {"active", "reloading", "activating"}
+    word = done.stdout.strip().splitlines()[-1].strip() if done.stdout.strip() else ""
+    if word in ACTIVE_STATES:
+        return True
+    if word in INACTIVE_STATES:
+        return False
+    raise UnitStateUnknown(
+        f"systemctl --user is-active {unit} gave no usable answer "
+        f"({word or done.tail() or f'exit {done.returncode}'})"
+    )
 
 
 def _running_services(ctx: Context, state: State) -> list[str]:
@@ -281,6 +320,10 @@ def _previous_image(ctx: Context, state: State) -> None:
         parts = done.stdout.split()
         state.previous_image = parts[0]
         state.previous_revision = parts[1] if len(parts) > 1 and parts[1] != "<no" else None
+        return
+    said = (done.stderr + done.stdout).lower()
+    if "no such image" not in said and "image not known" not in said:
+        state.previous_inspect_error = done.tail() or f"exit {done.returncode}"
 
 
 def _image_version(ctx: Context, state: State) -> dict:
@@ -320,69 +363,258 @@ def verify(ctx: Context, state: State, host: ver.VersionInfo) -> dict:
     return info
 
 
+# --- the record of a failed upgrade ---------------------------------------------------------
+
+
+def _pending_path(ctx: Context) -> Path:
+    return Path(ctx.data_dir) / PENDING_FILE
+
+
+def _load_pending(ctx: Context) -> dict | None:
+    try:
+        data = json.loads(_pending_path(ctx).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _save_pending(ctx: Context, state: State, step: str) -> None:
+    """Keep the first failed run's rollback point and active units across reruns."""
+    first = state.pending or {}
+    record = {
+        "failed_at": step,
+        "when": ctx.now().isoformat(timespec="seconds"),
+        "was_active": state.was_active,
+        "previous_image": first.get("previous_image") or state.previous_image,
+        "previous_revision": first.get("previous_revision") or state.previous_revision,
+        "backup_path": first.get("backup_path")
+        or (str(state.backup_path) if state.backup_path else None),
+        "migrated": bool(first.get("migrated")) or state.migrate_started,
+    }
+    path = _pending_path(ctx)
+    try:
+        path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        os.chmod(path, 0o600)
+    except OSError as exc:
+        ctx.echo(f"warning: could not record the failed upgrade in {path}: {exc}")
+
+
+def _apply_pending(ctx: Context, state: State) -> None:
+    """A rerun after a failure: start what the first run found active, roll back to its point."""
+    pending = state.pending
+    if not pending:
+        return
+    ctx.echo(
+        f"an earlier upgrade failed at step {pending.get('failed_at')} ({pending.get('when')}); "
+        f"its record is {_pending_path(ctx)}"
+    )
+    earlier = [u for u in pending.get("was_active") or [] if u in (CONSOLE, *TIMERS)]
+    state.was_active = [u for u in (CONSOLE, *TIMERS) if u in earlier or u in state.was_active]
+
+
+def _rollback_image(state: State) -> tuple[str | None, str | None]:
+    pending = state.pending or {}
+    if pending.get("previous_image"):
+        return pending["previous_image"], pending.get("previous_revision")
+    return state.previous_image, state.previous_revision
+
+
+def _rollback_backup(state: State) -> str | None:
+    pending = state.pending or {}
+    if pending.get("backup_path"):
+        return pending["backup_path"]
+    return str(state.backup_path) if state.backup_path else None
+
+
 def rollback_lines(state: State, ctx: Context) -> list[str]:
-    """Exact commands to put things back as they were before the upgrade."""
+    """Exact commands to put things back as they were before the (first failed) upgrade."""
     lines = ["Rollback (run on the host, in this order):"]
-    n = 1
-    if state.retagged:
-        if state.previous_image:
-            rev = f" (commit {state.previous_revision})" if state.previous_revision else ""
-            lines.append(
-                f"  {n}. {_shown([*state.podman, 'tag', state.previous_image, ctr.IMAGE])}"
-                f"   # the previous image{rev}"
+    steps: list[str] = []
+    image, revision = _rollback_image(state)
+    migrated = state.migrate_started or bool((state.pending or {}).get("migrated"))
+    retagged = state.retagged or bool(state.pending)
+    restore = None
+    if migrated:
+        saved = _rollback_backup(state)
+        if saved:
+            restore = (
+                f"{_shown(['jobhunter', 'db', 'restore', saved])}   # the database before upgrade"
             )
         else:
-            lines.append(
-                f"  {n}. no previous {ctr.IMAGE} existed: build the last good commit "
-                "(git checkout <commit>, then jobhunter upgrade)"
+            restore = (
+                "no backup was needed (the database had no schema yet); a pre-migrate copy, if "
+                f"any, is in {backup.auto_dir(ctx.data_dir)}"
             )
-        n += 1
-    if state.migrate_started:
-        if state.backup_path is not None:
-            lines.append(
-                f"  {n}. jobhunter db restore {state.backup_path}   # the database before upgrade"
+    if retagged and image:
+        rev = f" (commit {revision})" if revision else ""
+        steps.append(
+            f"{_shown([*state.podman, 'tag', image, ctr.IMAGE])}   # the previous image{rev}"
+        )
+        if restore:
+            steps.append(restore)
+    elif retagged:
+        # Restore first: an older checkout refuses a database that holds newer migrations.
+        if restore:
+            steps.append(restore)
+        if state.previous_inspect_error:
+            steps.append(
+                f"the previous {ctr.IMAGE} could not be read before the upgrade "
+                f"(podman image inspect: {state.previous_inspect_error}); find it with "
+                f"podman images {ctr.IMAGE_REPO} and podman tag it {ctr.IMAGE}"
             )
         else:
-            lines.append(
-                f"  {n}. no backup was needed (the database had no schema yet); "
-                "a pre-migrate copy, if any, is in "
-                f"{backup.auto_dir(ctx.data_dir)}"
+            steps.append(
+                f"no previous {ctr.IMAGE} existed: git checkout <last good commit>, then "
+                "jobhunter upgrade"
             )
-        n += 1
-    units = list(state.was_active)
-    if units:
-        lines.append(f"  {n}. {_shown(_systemctl(state, 'start', *units))}")
+    elif restore:
+        steps.append(restore)
+    if state.was_active:
+        steps.append(_shown(_systemctl(state, "start", *state.was_active)))
     else:
-        lines.append(f"  {n}. nothing was running before; start the units when ready")
-    if state.retagged and state.previous_revision:
+        steps.append("nothing was running before; start the units when ready")
+    lines += [f"  {n}. {text}" for n, text in enumerate(steps, 1)]
+    if retagged and revision:
         lines.append(
             f"Host commands then refuse until the checkout matches: git checkout "
-            f"{state.previous_revision.removesuffix(DIRTY_SUFFIX)}, or fix the cause and run "
-            "jobhunter upgrade again."
+            f"{revision.removesuffix(DIRTY_SUFFIX)}, or fix the cause and run jobhunter "
+            "upgrade again (it starts the units listed above)."
         )
     else:
-        lines.append("Or fix the cause and run jobhunter upgrade again.")
+        lines.append(
+            "Or fix the cause and run jobhunter upgrade again (it starts the units listed above)."
+        )
     return lines
 
 
-def _restart_timers(ctx: Context, state: State) -> None:
-    """Undo step 2 when nothing else has changed (wait timeout, lock held)."""
-    if not state.timers_stopped:
-        return
-    done = ctx.runner.run(_systemctl(state, "start", *state.timers_stopped), timeout=STEP_TIMEOUT_S)
+# --- quiesce and undo -----------------------------------------------------------------------
+
+
+def _start(ctx: Context, state: State, units: list[str]) -> bool:
+    if not units:
+        return True
+    done = ctx.runner.run(_systemctl(state, "start", *units), timeout=STEP_TIMEOUT_S)
     if done.ok:
-        ctx.echo(f"timers started again: {' '.join(state.timers_stopped)}")
-    else:
-        ctx.echo(
-            f"warning: could not start the timers again ({done.tail()}); run: "
-            f"{_shown(_systemctl(state, 'start', *state.timers_stopped))}"
-        )
+        ctx.echo(f"started again: {' '.join(units)}")
+        return True
+    ctx.echo(
+        f"warning: could not start {' '.join(units)} again ({done.tail()}); run: "
+        f"{_shown(_systemctl(state, 'start', *units))}"
+    )
+    return False
 
 
-def _stop_everything(ctx: Context, state: State) -> None:
+def _undo_quiesce(ctx: Context, state: State) -> None:
+    """Before anything changed: start again what this run stopped (console first)."""
+    units = ([CONSOLE] if state.console_stopped else []) + state.timers_stopped
+    _start(ctx, state, units)
+    ctx.echo(f"nothing was changed: {ctr.IMAGE} and the database are as before.")
+
+
+def _stop_everything(ctx: Context, state: State) -> bool:
     """Leave nothing half-running after a failure: console and timers stopped."""
     units = [CONSOLE, *TIMERS]
-    ctx.runner.run(_systemctl(state, "stop", *units), timeout=STEP_TIMEOUT_S)
+    done = ctx.runner.run(_systemctl(state, "stop", *units), timeout=STEP_TIMEOUT_S)
+    if done.ok:
+        ctx.echo("The console and the timers are left stopped.")
+        return True
+    ctx.echo(
+        f"warning: could not confirm the console and timers stopped ({done.tail()}); check "
+        f"{_shown(_systemctl(state, 'status', *units))} and stop them before the rollback."
+    )
+    return False
+
+
+def _wait_for_services(ctx: Context, state: State) -> bool:
+    deadline = ctx.monotonic() + ctx.wait_s
+    told = False
+    while True:
+        try:
+            running = _running_services(ctx, state)
+        except StepFailed as exc:
+            ctx.echo(f"error: {exc.reason}")
+            return False
+        if not running:
+            return True
+        if ctx.monotonic() >= deadline:
+            ctx.echo(
+                f"error: still running after {ctx.wait_s:g} s: {' '.join(running)}. Run "
+                "jobhunter upgrade again when it finishes (or pass a longer --wait)."
+            )
+            return False
+        if not told:
+            ctx.echo(f"waiting for {' '.join(running)} to finish ...")
+            told = True
+        ctx.sleep(POLL_S)
+
+
+def _quiesce(ctx: Context, state: State, lock: Lock, console_lock: ExclusiveLock) -> bool:
+    """Stop timers, wait for jobs, take the run lock, stop the console, then make sure no
+    console and no one-off is left. False when it cannot; nothing has changed yet."""
+    timers = [t for t in TIMERS if t in state.was_active]
+    if timers:
+        done = ctx.runner.run(_systemctl(state, "stop", *timers), timeout=STEP_TIMEOUT_S)
+        state.timers_stopped = timers  # a failed stop may still have stopped some
+        if not done.ok:
+            ctx.echo(f"error: could not stop the timers: {done.tail()}")
+            return False
+        ctx.echo(f"stopped: {' '.join(timers)}")
+    if not _wait_for_services(ctx, state):
+        return False
+    try:
+        got = lock.try_acquire()
+    except Exception as exc:  # StaleHolder: a hung job
+        ctx.echo(f"error: {exc}")
+        got = False
+    if not got:
+        ctx.echo(
+            "error: another jobhunter job holds the run lock. Run jobhunter upgrade again "
+            "when it finishes."
+        )
+        return False
+    if CONSOLE in state.was_active:
+        done = ctx.runner.run(_systemctl(state, "stop", CONSOLE), timeout=STEP_TIMEOUT_S)
+        state.console_stopped = True
+        if not done.ok:
+            ctx.echo(f"error: could not stop {CONSOLE}: {done.tail() or done.returncode}")
+            return False
+        ctx.echo(f"stopped: {CONSOLE}")
+    from jobhunter.core.runlock import ConsoleBusy
+
+    busy: list[str] = []
+    try:
+        console_lock.acquire()
+    except ConsoleBusy as exc:
+        busy.append(str(exc))
+    busy += (ctx.busy or (lambda: _busy_report(ctx)))()
+    try:
+        running = _oneoffs(ctx, state)
+    except UpgradeError as exc:
+        busy.append(str(exc))
+    else:
+        busy += [f"jobhunter-ctr one-off container running: {cid}" for cid in running]
+    if busy:
+        ctx.echo("error: the database is still in use:")
+        for line in busy:
+            ctx.echo(f"  {line}")
+        ctx.echo("Stop it (a host `jobhunter console`: Ctrl-C), then run jobhunter upgrade again.")
+        return False
+    return True
+
+
+def _busy_report(ctx: Context) -> list[str]:
+    from jobhunter.ops import restore
+
+    return restore.busy_report(Path(ctx.db_path))
+
+
+def _default_console_lock(ctx: Context) -> ExclusiveLock:
+    from jobhunter.core.runlock import ConsoleLock
+
+    return ConsoleLock(ctx.db_path, exclusive=True)
+
+
+# --- the upgrade ----------------------------------------------------------------------------
 
 
 def run(ctx: Context, *, allow_dirty: bool = False, dry_run: bool = False) -> int:
@@ -395,11 +627,17 @@ def run(ctx: Context, *, allow_dirty: bool = False, dry_run: bool = False) -> in
     schema, db_state = _check_database(ctx)
     state.db_had_schema = bool(schema)
     _check_layout(ctx)
+    state.pending = _load_pending(ctx)
     if dry_run:
         ctx.echo(
             f"dry run: nothing is run. Would upgrade to {ctx_image(state.tag)} ({state.commit})."
         )
         ctx.echo(f"database: {ctx.db_path} ({db_state})")
+        if state.pending:
+            ctx.echo(
+                f"an earlier upgrade failed at step {state.pending.get('failed_at')}; "
+                f"see {_pending_path(ctx)}"
+            )
         ctx.echo("podman and systemctl are reached through the host-escape chain when not on PATH.")
         for line in plan_lines(ctx, state):
             ctx.echo(line)
@@ -414,6 +652,12 @@ def run(ctx: Context, *, allow_dirty: bool = False, dry_run: bool = False) -> in
             f"a jobhunter-ctr one-off container is running ({', '.join(running)}); "
             "let it finish, then run jobhunter upgrade again"
         )
+    # podman refuses a missing bind source; the units' ExecStartPre would create these.
+    try:
+        mkdir_private(ctx.layout.data_dir)
+        mkdir_private(ctx.layout.cache_dir)
+    except OSError as exc:
+        raise UpgradeError(f"cannot create the container bind sources: {exc}") from exc
     _previous_image(ctx, state)
 
     # 1. Build while everything still runs: the units use :current, not this tag.
@@ -423,74 +667,36 @@ def run(ctx: Context, *, allow_dirty: bool = False, dry_run: bool = False) -> in
         ctx.echo(f"error: podman build failed (exit {built.returncode}); nothing was changed.")
         return 1
 
-    # 2-4. Quiesce. Until the console stops, a failure restores the timers and changes nothing.
-    state.was_active = [u for u in (CONSOLE, *TIMERS) if _active(ctx, state, u)]
-    timers = [t for t in TIMERS if t in state.was_active]
-    if timers:
-        done = ctx.runner.run(_systemctl(state, "stop", *timers), timeout=STEP_TIMEOUT_S)
-        if not done.ok:
-            ctx.echo(f"error: could not stop the timers: {done.tail()}")
-            state.timers_stopped = timers
-            _restart_timers(ctx, state)
-            return 1
-        state.timers_stopped = timers
-        ctx.echo(f"stopped: {' '.join(timers)}")
-    lock = ctx.lock()
     try:
-        if not _wait_for_services(ctx, state):
-            _restart_timers(ctx, state)
-            return 1
+        state.was_active = [u for u in (CONSOLE, *TIMERS) if _active(ctx, state, u)]
+    except UnitStateUnknown as exc:
+        raise UpgradeError(str(exc)) from exc
+    _apply_pending(ctx, state)
+
+    # 2-5. Quiesce. Until it is done, any failure or interrupt starts again what was stopped.
+    lock = ctx.lock()
+    console_lock = (ctx.console_lock or (lambda: _default_console_lock(ctx)))()
+    try:
         try:
-            got = lock.try_acquire()
-        except Exception as exc:  # StaleHolder: a hung job
-            ctx.echo(f"error: {exc}")
-            got = False
-        if not got:
-            ctx.echo(
-                "error: another jobhunter job holds the run lock; nothing was changed. "
-                "Run jobhunter upgrade again when it finishes."
-            )
-            _restart_timers(ctx, state)
+            quiet = _quiesce(ctx, state, lock, console_lock)
+        except BaseException:
+            ctx.echo("interrupted before anything was changed.")
+            console_lock.release()
+            _undo_quiesce(ctx, state)
+            raise
+        if not quiet:
+            console_lock.release()
+            _undo_quiesce(ctx, state)
             return 1
-        return _locked_steps(ctx, state)
+        return _locked_steps(ctx, state, console_lock)
     finally:
+        console_lock.release()
         lock.release()
 
 
-def _wait_for_services(ctx: Context, state: State) -> bool:
-    deadline = ctx.monotonic() + ctx.wait_s
-    told = False
-    while True:
-        try:
-            running = _running_services(ctx, state)
-        except StepFailed as exc:
-            ctx.echo(f"error: {exc.reason}; nothing was changed.")
-            return False
-        if not running:
-            return True
-        if ctx.monotonic() >= deadline:
-            ctx.echo(
-                f"error: still running after {ctx.wait_s:g} s: {' '.join(running)}; nothing was "
-                "changed. Run jobhunter upgrade again when it finishes (or pass a longer --wait)."
-            )
-            return False
-        if not told:
-            ctx.echo(f"waiting for {' '.join(running)} to finish ...")
-            told = True
-        ctx.sleep(POLL_S)
-
-
-def _locked_steps(ctx: Context, state: State) -> int:
-    step = "stop console"
+def _locked_steps(ctx: Context, state: State, console_lock: ExclusiveLock) -> int:
+    step = "backup"
     try:
-        if CONSOLE in state.was_active:
-            done = ctx.runner.run(_systemctl(state, "stop", CONSOLE), timeout=STEP_TIMEOUT_S)
-            state.console_stopped = True
-            if not done.ok:
-                raise StepFailed(step, done.tail() or f"exit {done.returncode}")
-            ctx.echo(f"stopped: {CONSOLE}")
-
-        step = "backup"
         state.backup_path = _take_backup(ctx, state)
 
         step = "retag"
@@ -518,6 +724,7 @@ def _locked_steps(ctx: Context, state: State) -> int:
         image = verify(ctx, state, host)
 
         step = "start"
+        console_lock.release()  # the console takes it shared when it starts
         if CONSOLE in state.was_active:
             done = ctx.runner.run(_systemctl(state, "start", CONSOLE), timeout=STEP_TIMEOUT_S)
             if not done.ok:
@@ -537,15 +744,16 @@ def _locked_steps(ctx: Context, state: State) -> int:
         reason = exc.reason if isinstance(exc, StepFailed) else f"{type(exc).__name__}: {exc}"
         ctx.echo(f"error: upgrade failed at step {step}: {reason}")
         _stop_everything(ctx, state)
-        ctx.echo("The console and the timers are left stopped.")
-        if not state.retagged and not state.migrate_started:
+        if not state.retagged and not state.migrate_started and not state.pending:
             ctx.echo(f"Nothing else changed: {ctr.IMAGE} and the database are as before.")
         for line in rollback_lines(state, ctx):
             ctx.echo(line)
+        _save_pending(ctx, state, step)
         if isinstance(exc, KeyboardInterrupt):
             raise
         return 1
 
+    _pending_path(ctx).unlink(missing_ok=True)
     ctx.echo("upgrade done.")
     ctx.echo("host:")
     for line in host.lines():

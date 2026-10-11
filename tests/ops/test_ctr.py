@@ -19,6 +19,10 @@ from jobhunter.ops import ctr
 from jobhunter.ops.proc import Result
 
 FAKE_PODMAN = """#!/bin/sh
+if [ "$1" = secret ] && [ "$2" = exists ]; then
+  case " $FAKE_SECRETS " in *" $3 "*) exit 0 ;; esac
+  exit 1
+fi
 for a in "$@"; do printf '%s\\n' "$a"; done > "$ARGV_OUT"
 exit "${FAKE_EXIT:-0}"
 """
@@ -32,7 +36,7 @@ def layout(tmp_path) -> ctr.Layout:
     return ctr.Layout(tmp_path / "data", tmp_path / "cache", cfg)
 
 
-def run_script(tmp_path: Path, script: str, *args: str, exit_code: int = 0):
+def run_script(tmp_path: Path, script: str, *args: str, exit_code: int = 0, secrets: str = ""):
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     podman = bindir / "podman"
@@ -44,6 +48,7 @@ def run_script(tmp_path: Path, script: str, *args: str, exit_code: int = 0):
         "PATH": f"{bindir}:/usr/bin:/bin",
         "ARGV_OUT": str(out),
         "FAKE_EXIT": str(exit_code),
+        "FAKE_SECRETS": secrets,
         "HOME": str(tmp_path),
     }
     done = subprocess.run(
@@ -54,8 +59,15 @@ def run_script(tmp_path: Path, script: str, *args: str, exit_code: int = 0):
 
 
 def test_script_runs_the_command_in_a_one_off_container(tmp_path, layout):
-    mounts = ctr.present(ctr.ctr_secret_mounts(), ["jobhunter_openrouter", "unrelated"])
-    done, argv = run_script(tmp_path, ctr.render_script(layout, mounts), "mail", "status")
+    every = ctr.ctr_secret_mounts()
+    mounts = ctr.present(every, ["jobhunter_openrouter"])
+    done, argv = run_script(
+        tmp_path,
+        ctr.render_script(layout, every),
+        "mail",
+        "status",
+        secrets="jobhunter_openrouter unrelated",
+    )
     assert done.returncode == 0, done.stderr
     assert argv[:2] == ["run", "-i"]  # no -t: stdin is not a terminal here
     assert argv[-3:] == [ctr.IMAGE, "mail", "status"]
@@ -99,10 +111,41 @@ def test_script_without_podman_says_so(tmp_path, layout):
     assert "podman not found" in done.stderr
 
 
-def test_no_secret_named_unless_it_exists(layout):
-    script = ctr.render_script(layout, ctr.present(ctr.ctr_secret_mounts(), []))
-    assert "--secret" not in script
-    assert "Secrets mounted: none" in script
+def test_no_secret_named_unless_it_exists_at_run_time(tmp_path, layout):
+    script = ctr.render_script(layout, ctr.ctr_secret_mounts())
+    done, argv = run_script(tmp_path, script, "secrets", "status")
+    assert done.returncode == 0, done.stderr
+    assert "--secret" not in argv
+    # a secret created later is picked up without regenerating the script
+    done, argv = run_script(tmp_path, script, "mail", "status", secrets="jobhunter_gmail_token")
+    assert argv.count("--secret") == 1
+    assert "JOBHUNTER_GMAIL_TOKEN_FILE=/run/secrets/gmail_token" in argv
+
+
+def test_arguments_with_spaces_and_quotes_arrive_intact(tmp_path, layout):
+    _done, argv = run_script(
+        tmp_path, ctr.render_script(layout), "mail", "match", "--q", "a 'b' \"c\" $HOME"
+    )
+    assert argv[-4:] == ["mail", "match", "--q", "a 'b' \"c\" $HOME"]
+
+
+def test_relative_config_path_is_mounted_absolute(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    layout = ctr.Layout(Path("data"), Path("cache"), Path("./config.toml"))
+    volumes = layout.volumes()
+    assert volumes[2] == f"{tmp_path / 'config.toml'}:/config/config.toml:ro,z"
+    assert all(v.startswith("/") for v in volumes)
+
+
+def test_usajobs_names_come_from_the_registry_row():
+    rows = [
+        {"key": "us-other", "config": {"auth": {"key_env": "NOPE"}}},
+        {"key": "us-usajobs", "config": {"auth": {"key_env": "UJ_KEY", "email_env": "UJ_MAIL"}}},
+    ]
+    assert ctr._usajobs_auth(rows) == ("UJ_KEY", "UJ_MAIL")
+    assert ctr._usajobs_auth([]) == ("USAJOBS_API_KEY", "USAJOBS_EMAIL")
+    # the packaged registry has the row (not only the defaults by luck)
+    assert any("usajobs" in str(r.get("key", "")) for r in ctr._registry_rows())
 
 
 def test_ctr_column_has_every_secret_in_the_matrix():
