@@ -8,7 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
+import click
 import typer
+from typer.core import TyperGroup
 
 from jobhunter import container, secrets
 from jobhunter.config import load_env_files, load_settings, resolve_path
@@ -16,8 +18,23 @@ from jobhunter.core import db
 from jobhunter.pipeline import runner
 from jobhunter.sources.registry import enabled_sources, load_registry, sync_sources_table
 
+
+class _JobhunterGroup(TyperGroup):
+    """Turns a schema refusal (newer database, or pending migrations in a container
+    deployment) into a one-line error and exit 1 from any command, instead of a traceback."""
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except db.SchemaError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+
+
 app = typer.Typer(
-    help="jobhunter: sweep job banks, score fit, track applications.", no_args_is_help=True
+    cls=_JobhunterGroup,
+    help="jobhunter: sweep job banks, score fit, track applications.",
+    no_args_is_help=True,
 )
 sources_app = typer.Typer(help="Inspect and verify configured sources.", no_args_is_help=True)
 mail_app = typer.Typer(help="Email alert ingest.", no_args_is_help=True)
@@ -35,6 +52,8 @@ ext_app = typer.Typer(help="The jobhunter browser extension: pairing.", no_args_
 app.add_typer(ext_app, name="ext")
 secrets_app = typer.Typer(help="API keys and other secrets (never prints values).")
 app.add_typer(secrets_app, name="secrets")
+db_app = typer.Typer(help="Database schema and backups.", no_args_is_help=True)
+app.add_typer(db_app, name="db")
 
 NOT_IMPLEMENTED = "not implemented yet"
 
@@ -50,8 +69,41 @@ def _host_only(command: str, host_command: str | None = None) -> None:
 
 
 # Commands that run while old-layout data is unmigrated: they report on it, move it, or do
-# not touch user data at all (schedule only writes systemd units).
-UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets"}
+# not touch user data at all (schedule only writes systemd units, version only reads).
+UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets", "version"}
+
+# specs/018-containers.md#version-skew: commands that neither migrate on their own nor refuse
+# because migrations are pending; they still refuse a newer database where they would write.
+# Every other command that opens the database goes through _migrate. Some of these land in
+# later tickets (secrets status C2, container preflight C13, db backup and restore C6,
+# upgrade C15); each must open the database without _migrate.
+MIGRATION_EXEMPT_COMMANDS = frozenset(
+    {
+        "version",
+        "paths",
+        "secrets status",
+        "container preflight",
+        "db backup",
+        "db restore",
+        "upgrade",
+        "db migrate",
+    }
+)
+
+
+def _migrate(conn) -> list[int]:
+    """Bring the schema up to date the automatic way (specs/018 Version skew).
+
+    Without the deployment marker this migrates, after a pre-migrate backup into
+    ``<data dir>/backups/auto``; with it, pending migrations raise ``MigrationsPending``
+    ("run `jobhunter upgrade`"), which _JobhunterGroup prints as an error.
+    """
+    data_dir = resolve_path(load_settings().paths.data_dir)
+    return db.migrate(conn, data_dir=data_dir, on_backup=_say_backed_up)
+
+
+def _say_backed_up(path: Path) -> None:
+    typer.echo(f"backed up the database to {path} before migrating", err=True)
 
 
 @app.callback()
@@ -121,7 +173,7 @@ def run(
         conn = db.connect(db_path if db_path.is_file() else ":memory:")
         try:
             if not db_path.is_file():
-                db.migrate(conn)
+                _migrate(conn)
             text = runner.dry_run_plan(
                 conn,
                 rows,
@@ -139,7 +191,7 @@ def run(
     db_path = resolve_path(settings.paths.db_path)
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         report = runner.run_pipeline(
             conn,
             settings,
@@ -304,7 +356,7 @@ def score(
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
         typer.echo(notice, err=True)
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     # The screen scorer may not be Anthropic; only build its client where it is needed.
     client = None if screening and not scorer.startswith("anthropic:") else anthropic.Anthropic()
     now = datetime.now(UTC)
@@ -392,7 +444,7 @@ def _score_group(settings, profile, group_id: int, yes: bool) -> None:
     from jobhunter.scoring.scorers import privacy_notice
 
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     now = datetime.now(UTC)
     try:
         est = group_score.estimate(conn, profile, settings.scoring, group_id, now)
@@ -429,7 +481,7 @@ def _score_rescore(settings, profile, scope: str | None, scorer_override: str | 
     from jobhunter.scoring.scorers import ScorerError, privacy_notice
 
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     clock = lambda: datetime.now(UTC)  # noqa: E731
     spec = scorer_override or settings.scoring.screen_scorer
     try:
@@ -571,7 +623,7 @@ def backfill(
     db_path = resolve_path(settings.paths.db_path)
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         result = bf.run_backfill(
             conn,
             settings,
@@ -629,7 +681,7 @@ def dedupe(
     conn = db.connect(db_path)
     try:
         if not dry_run:
-            db.migrate(conn)
+            _migrate(conn)
         now = datetime.now(UTC)
         if apply_url:
             res = merge_by_apply_url(conn, now=now)
@@ -658,7 +710,7 @@ def backfill_salary_cmd() -> None:
     db_path = resolve_path(settings.paths.db_path)
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         before, after = backfill_salary(conn)
     finally:
         conn.close()
@@ -785,7 +837,7 @@ def init() -> None:
     mkdir_private(resolve_path(settings.paths.data_dir))
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
     finally:
         conn.close()
     secure_data(settings)
@@ -919,7 +971,7 @@ def eval_(
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     try:
         if compare is not None:
             try:
@@ -977,7 +1029,7 @@ def sources_verify(
 
     settings = load_settings()
     conn = db.connect(resolve_path(settings.paths.db_path))
-    db.migrate(conn)
+    _migrate(conn)
     rows = load_registry()
     try:
         sync_sources_table(conn, rows)
@@ -1108,7 +1160,7 @@ def mail_match(
         return
     conn = db.connect(resolve_path(settings.paths.db_path))
     try:
-        db.migrate(conn)
+        _migrate(conn)
         result = match.scan(
             conn, auth.build_service(settings), settings, days=days, dry_run=dry_run
         )
@@ -1166,7 +1218,7 @@ def mail_sync(
     db_path = resolve_path(settings.paths.db_path)
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         report = runner.run_pipeline(
             conn,
             settings,
@@ -1237,7 +1289,7 @@ def applylinks_unknown(
         return
     conn = db.connect(path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         rows = unknown_hosts(conn, top=top)
     finally:
         conn.close()
@@ -1379,7 +1431,7 @@ def llm_bench(
         typer.echo("--jobs-per-request is at most 16 for chat scorers", err=True)
         raise typer.Exit(2)
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     try:
         if isinstance(scorer, decisions.DecisionsScorer):  # decisions.py: packed questions
             if jobs_per_request is not None:
@@ -1453,7 +1505,7 @@ def apply_draft(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     now = datetime.now(UTC)
     try:
         if question is not None:
@@ -1547,10 +1599,55 @@ def apply_stats(
     settings = load_settings()
     conn = db.connect(settings.paths.db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         typer.echo(stats.compute(conn, datetime.now(UTC), days).format())
     finally:
         conn.close()
+
+
+@app.command(name="version")
+def version_cmd(
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Package version, git commit, highest migration, and the database's schema (read-only).
+
+    Never migrates and never writes; a database newer than this code is reported, not refused.
+    """
+    from jobhunter.ops import version as ver
+
+    settings = load_settings()
+    info = ver.collect(resolve_path(settings.paths.db_path), resolve_path(settings.paths.data_dir))
+    if as_json:
+        typer.echo(json.dumps(info.as_dict(), indent=2))
+        return
+    for line in info.lines():
+        typer.echo(line)
+
+
+@db_app.command("migrate")
+def db_migrate_cmd() -> None:
+    """Apply pending migrations now, after a pre-migrate backup (backups/auto, newest 3 kept).
+
+    The one way to migrate a container deployment (``jobhunter upgrade`` runs it); on a
+    host-only install every command already does this on its own. Refuses a database newer
+    than this code.
+    """
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    data_dir = resolve_path(settings.paths.data_dir)
+    conn = db.connect(db_path)
+    try:
+        before = db.current_version(conn)
+        applied = db.migrate(conn, data_dir=data_dir, explicit=True, on_backup=_say_backed_up)
+        after = db.current_version(conn)
+    finally:
+        conn.close()
+    if not applied:
+        typer.echo(f"schema up to date at {after} ({db_path})")
+        return
+    typer.echo(
+        f"migrated {db_path} from {before} to {after}: applied {', '.join(map(str, applied))}"
+    )
 
 
 def _api_hint(packet_id: int, letter: bool, question: str | None) -> str:
