@@ -15,7 +15,7 @@ from typing import Any
 
 from markupsafe import Markup, escape
 
-from jobhunter.apply.packets import attach_sent_packet, live_packet_id
+from jobhunter.apply.packets import SENT_STATUSES, attach_sent_packet, live_packet_id
 from jobhunter.console.inbox import _json, _strs, salary_text, set_label
 from jobhunter.console.tracking import APPLY_CLICK_NOTE, rebuild_status
 from jobhunter.core import rejections
@@ -327,6 +327,11 @@ def did_you_apply(conn: sqlite3.Connection, group_id: int) -> bool:
     label = conn.execute("SELECT label FROM label WHERE job_group_id = ?", (group_id,)).fetchone()
     if label and label["label"] in ("not_interesting", "applied"):
         return False
+    app = conn.execute(
+        "SELECT status FROM application WHERE job_group_id = ?", (group_id,)
+    ).fetchone()
+    if app is not None and app["status"] in SENT_STATUSES:
+        return False  # already went out: a repeat Apply click is not a new application
     ev = conn.execute(
         "SELECT MAX(e.at) FROM application_event e JOIN application a ON a.id = e.application_id "
         "WHERE a.job_group_id = ? AND COALESCE(e.note, '') != 'opened apply link'",
@@ -558,6 +563,13 @@ def answer_prompt(
                 (group_id, status, at if yes else None, at, at),
             )
             app_id = cur.lastrowid
+        elif yes and app["status"] in SENT_STATUSES:
+            # Already applied or further on (an interview, say): Yes from a stale banner must
+            # not move it back to applied or reset its applied date (950d5eb (7)). Only the
+            # packet attach runs, which is idempotent.
+            attach_sent_packet(conn, int(app["id"]), data_dir)
+            conn.execute("COMMIT")
+            return
         else:
             app_id = app["id"]
             if yes:

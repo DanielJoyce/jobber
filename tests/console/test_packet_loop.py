@@ -154,6 +154,40 @@ def test_without_rendered_files_the_version_is_still_recorded(client, conn):  # 
     assert attachments(conn, app["id"]) == []
 
 
+def test_files_exported_after_applied_are_attached_then(client, conn, tmp_path):  # noqa: F811
+    """950d5eb (6): marked applied first, exported later: the sent version's files are
+    attached on export. A newer version exported afterwards is not what was sent."""
+    from jobhunter.apply import export
+
+    pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    make_ready(conn, pid, None)
+    client.post(f"/job/{packet_group(conn, pid)}/applied?choice=yes")
+    app = app_of(conn, pid)
+    assert app["resume_version"] == f"packet:{pid}/resume/v2"
+    assert attachments(conn, app["id"]) == []
+    data = tmp_path / "data"
+    for kind in ("resume", "cover_letter"):
+        exp = export.current_export(conn, pid, kind)
+        export.write_export(conn, data, pid, exp, FakeRenderer())
+    d = data / "packets" / str(pid)
+    assert attachments(conn, app["id"]) == sorted(
+        [("resume", str(d / "resume-v2.pdf")), ("cover_letter", str(d / "cover-letter-v2.pdf"))]
+    )
+    assert app_of(conn, pid)["cover_letter_path"] == str(d / "cover-letter-v2.pdf")
+    # A v3 made after applying (the packet goes back to draft) is never attached.
+    cur = conn.execute(
+        "INSERT INTO packet_document (packet_id, kind, version, origin, doc_json, body_md, "
+        "check_report, created_at) VALUES (?, 'resume', 3, 'edited', ?, 'y', ?, ?)",
+        (pid, json.dumps({"base": True}), json.dumps({"ok": True, "items": []}), ISO),
+    )
+    conn.execute(
+        "UPDATE application_packet SET resume_doc_id = ?, status = 'draft' WHERE id = ?",
+        (cur.lastrowid, pid),
+    )
+    export.write_export(conn, data, pid, export.current_export(conn, pid, "resume"), FakeRenderer())
+    assert len(attachments(conn, app["id"])) == 2
+
+
 def test_attach_is_once_and_keeps_your_own_resume_version(client, conn, rendered):  # noqa: F811
     pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
     make_ready(conn, pid, rendered)

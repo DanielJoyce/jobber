@@ -993,6 +993,66 @@
    "label": "How did you earn the trust of a new team?",
    "options": [],
    "expected": null
+  },
+  {
+   "label": "Describe your references to open-source work in your projects",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How would you design an address validation service?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Tell us about your experience with credit card processing systems",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Have you built bank account verification flows?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How did you implement password resets securely?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Describe your work on consent management platforms",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Do you have experience with fixed income trading systems?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Have you supported military customers?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "What is your current base location?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Create a password (see the password policy below)",
+   "options": [],
+   "expected": "credentials"
+  },
+  {
+   "label": "Please list three professional references",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Age group",
+   "options": [],
+   "expected": "identity"
   }
  ]
 }

@@ -276,11 +276,38 @@ _EXCEPTIONS: dict[str, re.Pattern[str]] = {
         r"each|such|issues?|conflicts?|concerns?|problems?|challenges?|feedback|gaps?|risks?|"
         r"needs?|questions?|bugs?|requirements?|disagreements?|technical|performance)\b"
         r"|\b(how|to|would|did|do|will|can|you|we|i)\s+address\b"
+        r"|\baddress\s+(validation|verification|lookup|parsing|normali[sz]ation|autocomplete|"
+        r"geocoding)\s+(service|services|system|systems|api|apis|pipeline|tool|feature|logic)\b"
     ),
-    "military": re.compile(r"\bmilitary[\s-]+(grade|time)\b"),
+    "military": re.compile(
+        r"\bmilitary[\s-]+(grade|time)\b"
+        r"|\bmilitary\s+(customers?|clients?|users?|contracts?|programs?|systems?|applications?)\b"
+    ),
     "criminal": re.compile(r"\bcriminal\s+justice\b"),
     "birth": re.compile(r"\bbirth\s+of\b"),
-    "references": re.compile(r"\bcross[\s-]references\b"),
+    "references": re.compile(
+        r"\bcross[\s-]references\b"
+        r"|\breferences\s+to\s+(open[\s-]source|your\s+(own\s+)?work|code|docs|documentation|"
+        r"papers?|publications?|projects?|repositories|repos?)\b"
+    ),
+    # 950d5eb (4): engineering questions about systems that handle these things. The bare
+    # field ("Credit card number", "Password", "Desired income") still matches.
+    "credit card": re.compile(
+        r"\bcredit[\s-]+card\s+(processing|payments?|transactions?|fraud|tokeni[sz]ation|"
+        r"integrations?|systems?|platforms?|data)\b"
+    ),
+    "bank account": re.compile(
+        r"\bbank\s+account\s+(verification|linking|aggregation|integrations?|systems?|data)\b"
+    ),
+    "password": re.compile(
+        r"\bpassword\s+(resets?|reset\s+flows?|hashing|hashes|policies|policy|managers?|"
+        r"storage|rotation|spraying|strength)\b"
+    ),
+    "consent": re.compile(
+        r"\bconsent\s+(management|platforms?|banners?|flows?|tooling|frameworks?|records?)\b"
+    ),
+    "income": re.compile(r"\bfixed[\s-]+income\b|\bincome\s+statements?\b"),
+    "current base": re.compile(r"\bcurrent\s+base\s+(location|city|of\s+operations)\b"),
 }
 
 # "Are you 18 or older?" and "Are you of legal working age?" are yes/no eligibility questions,

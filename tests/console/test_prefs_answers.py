@@ -275,11 +275,16 @@ def test_hand_edited_never_store_answer_is_dropped_with_a_warning(client, pdir):
         "answers: just a string\n",
         "answers:\n  custom: 5\n  links: [a, b]\n  work_authorization: {x: 1}\n",
         "answers:\n  - one\n  - two\n",
+        # 950d5eb (2): hand edits the line-based cut-out used to get wrong.
+        'answers:\n  custom:\n    - question: "Why\nus?"\n      answer: x\n  custom: 5\n',
+        '"answers":\n  custom: 5\n  custom: 6\n',
+        "\ufeffanswers:\n  custom: 5\n  custom: 6\n",
     ],
 )
 def test_bad_answers_never_affect_the_profile_or_the_nightly_loader(tmp_path, block):
     clean, edited = tmp_path / "clean", tmp_path / "edited"
-    for d, text in ((clean, BASE), (edited, BASE + block)):
+    first = block.startswith("\ufeff")  # a BOM only means anything at the start of the file
+    for d, text in ((clean, BASE), (edited, block + BASE if first else BASE + block)):
         d.mkdir()
         (d / "preferences.yaml").write_text(text, encoding="utf-8")
         (d / "resume.md").write_text("Synthetic Person\n", encoding="utf-8")
@@ -411,3 +416,122 @@ def test_a_duplicate_key_inside_answers_never_stops_the_profile(tmp_path):
     )()
     assert nightly is not None
     assert answers.load_answers(d).answers.notice_period in ("one week", "two weeks")
+
+
+def test_a_form_save_keeps_custom_entries_the_lenient_load_ignored(client, pdir):
+    """950d5eb (5): the form never shows a hand-edited entry that does not validate, so a save
+    that changes the custom list must not delete it from the file."""
+    block = (
+        "answers:\n  custom:\n    - question: Why us?\n      answer: Calm teams.\n"
+        "    - question: Missing its answer\n"
+    )
+    (pdir / "preferences.yaml").write_text(BASE + block, encoding="utf-8")
+    form = page_form(pdir, custom=[("Why us?", "Calm teams."), ("Why now?", "Good timing.")])
+    assert post(client, "/prefs/save", form).status_code == 303
+    custom = answers_in_file(pdir)["custom"]
+    assert {"question": "Missing its answer"} in custom
+    assert [c["question"] for c in custom if "answer" in c] == ["Why us?", "Why now?"]
+
+
+MIDDLE = """\
+answers:
+  custom:
+    - question: Why us?
+      answer: Template A.
+    # Template B: for startups
+    - question: What makes you a fit?
+      answer: Template B.  # keep short
+    # Template C: for agencies
+    - question: Why the public sector?
+      answer: Template C.
+# ---- scoring notes ----
+scoring_notes: synthetic
+"""
+
+
+def _answers_layout(text):
+    return [ln.strip() for ln in text.splitlines() if ln.strip().startswith(("#", "- q"))]
+
+
+def test_removing_a_middle_answer_takes_its_comment_with_it(client, pdir):
+    """950d5eb (1): the comment above a removed custom answer goes with it, and the next
+    answer keeps its own comment."""
+    (pdir / "preferences.yaml").write_text(BASE + MIDDLE, encoding="utf-8")
+    form = page_form(
+        pdir, custom=[("Why us?", "Template A."), ("Why the public sector?", "Template C.")]
+    )
+    assert post(client, "/prefs/save", form).status_code == 303
+    assert _answers_layout(text_of(pdir)) == [
+        "# synthetic test profile",
+        "- question: Why us?",
+        "# Template C: for agencies",
+        "- question: Why the public sector?",
+        "# ---- scoring notes ----",
+    ]
+
+
+def test_removing_the_last_answer_keeps_the_next_sections_heading(client, pdir):
+    """950d5eb (1): with answers: not the last block, deleting the last custom answer used to
+    drop the next section's heading comment (ruamel keeps it on that answer)."""
+    (pdir / "preferences.yaml").write_text(BASE + MIDDLE, encoding="utf-8")
+    form = page_form(
+        pdir, custom=[("Why us?", "Template A."), ("What makes you a fit?", "Template B.")]
+    )
+    assert post(client, "/prefs/save", form).status_code == 303
+    text = text_of(pdir)
+    assert _answers_layout(text) == [
+        "# synthetic test profile",
+        "- question: Why us?",
+        "# Template B: for startups",
+        "- question: What makes you a fit?",
+        "# ---- scoring notes ----",
+    ]
+    assert "answer: Template B.  # keep short\n" in text
+    assert "# ---- scoring notes ----\nscoring_notes: synthetic" in text
+
+
+DUP_BLOCK = (
+    "answers:\n  notice_period: one week\n  notice_period: two weeks\n"
+    "  # keep this comment\n"
+    "# section heading for scoring\n"
+)
+
+
+def test_a_duplicate_key_in_answers_never_blocks_other_prefs_saves(tmp_path):
+    """950d5eb (3): a hand-added duplicate key inside answers: used to make every /prefs save
+    fail. A save that does not change answers keeps the block exactly as written."""
+    from jobhunter.scoring.profile import save_profile_changes
+
+    d = tmp_path / "dup"
+    d.mkdir()
+    (d / "resume.md").write_text("Synthetic Person\n", encoding="utf-8")
+    (d / "preferences.yaml").write_text(
+        "resume_path: resume.md\ntarget_titles: [Systems Engineer]\n"
+        + DUP_BLOCK
+        + "narrative:\n  want: Synthetic.\n",
+        encoding="utf-8",
+    )
+    save_profile_changes(
+        d,
+        {"target_titles": ["Systems Engineer", "Staff Engineer"]},
+        expected_mtime_ns=preferences_mtime_ns(d),
+        require_resume=False,
+    )
+    text = (d / "preferences.yaml").read_text(encoding="utf-8")
+    assert DUP_BLOCK in text  # verbatim, both values and both comments
+    assert "Staff Engineer" in text
+    assert load_profile(d).target_titles == ["Systems Engineer", "Staff Engineer"]
+
+
+def test_a_duplicate_key_in_answers_is_named_by_line_without_its_values(tmp_path):
+    d = tmp_path / "dup"
+    d.mkdir()
+    (d / "preferences.yaml").write_text(BASE + DUP_BLOCK, encoding="utf-8")
+    loaded = answers.load_answers(d)
+    assert loaded.answers.notice_period == "one week"  # ruamel keeps the first
+    line = BASE.count("\n") + 3
+    (warning,) = [w for w in loaded.warnings if "repeats a key" in w]
+    assert f"line {line}" in warning
+    assert "one week" not in warning and "two weeks" not in warning
+    (d / "preferences.yaml").write_text(BASE + ANSWERS, encoding="utf-8")
+    assert not any("repeats a key" in w for w in answers.load_answers(d).warnings)

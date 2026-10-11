@@ -30,6 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import DuplicateKeyError
 from ruamel.yaml.error import YAMLError
 
 from jobhunter.apply import labels
@@ -322,6 +323,9 @@ class LoadedAnswers:
     warnings: list[str] = field(default_factory=list)
     # The subset of ``warnings`` that are never-store drops (a save must refuse these).
     refused: list[str] = field(default_factory=list)
+    # ``answers.custom`` entries as written that did not validate (not never-store ones): the
+    # form never shows them, so a form save keeps them in the file rather than deleting them.
+    ignored_custom: list[Any] = field(default_factory=list)
 
 
 def _warn(out: LoadedAnswers, message: str, *, never_store: bool = False) -> None:
@@ -402,16 +406,40 @@ def _lenient_custom(value: Any, out: LoadedAnswers) -> list[SavedAnswer]:
             items.append(SavedAnswer.model_validate(item))
         except ValidationError as exc:
             where = ".".join(str(p) for p in exc.errors()[0]["loc"]) or "entry"
-            _warn(out, f"answers.custom item {i} ({where}) does not validate; ignored.")
+            _warn(
+                out,
+                f"answers.custom item {i} ({where}) does not validate; ignored here and kept in "
+                "the file as written.",
+            )
+            out.ignored_custom.append(item)
     return items
 
 
 def _yaml(typ: str) -> YAML:
     yaml = YAML(typ=typ, pure=True)
-    # A hand-added second answer that forgot its "- " repeats a key; read it (last one wins)
-    # rather than losing every answer.
+    # A hand-added second answer that forgot its "- " repeats a key; read it (ruamel keeps
+    # the first value) rather than losing every answer. ``_duplicate_key_line`` warns.
     yaml.allow_duplicate_keys = True
     return yaml
+
+
+def _duplicate_key_line(text: str) -> int | None:
+    """The 1-based line of the first repeated key inside the ``answers:`` block, if any."""
+    from jobhunter.scoring.profile import split_separate_blocks
+
+    # Everything but the answers block becomes blank lines, so line numbers are the file's.
+    only = "".join(
+        run if key == "answers" else "\n" * run.count("\n")
+        for key, run in split_separate_blocks(text)
+    )
+    try:
+        YAML(typ="safe", pure=True).load(only)
+    except DuplicateKeyError as exc:
+        mark = exc.problem_mark
+        return mark.line + 1 if mark is not None else 0
+    except YAMLError:
+        return None
+    return None
 
 
 def answers_from_text(text: str) -> LoadedAnswers:
@@ -421,7 +449,17 @@ def answers_from_text(text: str) -> LoadedAnswers:
         out = LoadedAnswers()
         _warn(out, "preferences.yaml is not valid YAML, so no answers were loaded.")
         return out
-    return answers_from_data(data.get("answers") if isinstance(data, Mapping) else None)
+    out = answers_from_data(data.get("answers") if isinstance(data, Mapping) else None)
+    if (line := _duplicate_key_line(text)) is not None:
+        where = f"line {line}" if line else "the answers block"
+        # Names the line, never the values (logs and warnings carry no answer values).
+        _warn(
+            out,
+            f"preferences.yaml repeats a key inside answers: ({where}); only the first value is "
+            "used, and saving answers on this page is refused until you fix it in the raw "
+            "editor (other preferences still save).",
+        )
+    return out
 
 
 def refused_in_text(text: str) -> list[str]:
@@ -495,10 +533,13 @@ def validate_for_save(data: Mapping[str, Any]) -> Answers:
         ) from exc
 
 
-def answer_writes(new: Answers, old: Answers | None = None) -> dict[str, Any]:
+def answer_writes(
+    new: Answers, old: Answers | None = None, keep: list[Any] | None = None
+) -> dict[str, Any]:
     """``{dotted path: value}`` for the 014 round-trip writer, only where ``new`` differs from
     ``old``; ``None`` deletes a key (and prunes maps it leaves empty). Keys under ``answers:``
-    that jobhunter does not manage are left in the file as they are."""
+    that jobhunter does not manage are left in the file as they are, and so are the ``keep``
+    custom entries (``LoadedAnswers.ignored_custom``) when the custom list is rewritten."""
     old = old or Answers()
     out: dict[str, Any] = {}
     for k in LINK_KEYS:
@@ -508,7 +549,7 @@ def answer_writes(new: Answers, old: Answers | None = None) -> dict[str, Any]:
         if getattr(new, k) != getattr(old, k):
             out[f"answers.{k}"] = getattr(new, k)
     if new.custom != old.custom:
-        out["answers.custom"] = [c.model_dump() for c in new.custom] or None
+        out["answers.custom"] = [c.model_dump() for c in new.custom] + list(keep or []) or None
     return out
 
 

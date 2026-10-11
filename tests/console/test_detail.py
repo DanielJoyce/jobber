@@ -344,6 +344,20 @@ def test_post_applied_yes(client, conn):
     assert "Did you apply?" not in client.get("/job/5").text
 
 
+def test_yes_never_moves_an_interview_back_to_applied(client, conn):
+    """950d5eb (7): a repeat Apply click on an application at interview asks nothing, and a
+    Yes from a stale banner leaves its status, applied date and events alone."""
+    add_app(conn, 5, "interview")
+    conn.execute("UPDATE application SET applied_at = '2026-09-01T00:00:00+00:00'")
+    client.get("/apply/5")
+    assert "Did you apply?" not in client.get("/job/5").text
+    before = conn.execute("SELECT count(*) FROM application_event").fetchone()[0]
+    assert client.post("/job/5/applied?choice=yes").status_code == 200
+    app = conn.execute("SELECT status, applied_at FROM application").fetchone()
+    assert tuple(app) == ("interview", "2026-09-01T00:00:00+00:00")
+    assert conn.execute("SELECT count(*) FROM application_event").fetchone()[0] == before
+
+
 def test_post_applied_without_application(client, conn):
     client.get("/apply/6")
     client.post("/job/6/applied?choice=yes")

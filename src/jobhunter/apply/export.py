@@ -480,11 +480,16 @@ def write_export(
     if err is not None:
         vpdf.unlink(missing_ok=True)
         written.pdf_error = err
+    from jobhunter.apply.packets import attach_late_export  # late: packets imports tracking
+
     with db.transaction(conn):
         conn.execute(
             "UPDATE packet_document SET rendered_path = ? WHERE id = ?",
             (str(vpdf.relative_to(data_dir)) if err is None else None, exp.version.id),
         )
+        if err is None:
+            # Marked applied before this export: attach the file now (950d5eb (6)).
+            attach_late_export(conn, packet_id, data_dir)
     # An explicit export replaces the copies of this document, whatever their version or name
     # (the manifest says they are ours) and a file of the exact same name.
     for f in named_files(data_dir, packet_id, exp.kind):
