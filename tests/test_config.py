@@ -199,17 +199,25 @@ def test_cli_bad_configured_scorer_is_one_line(tmp_path, monkeypatch):
     assert len(res.output.strip().splitlines()) == 1
 
 
-def test_cli_collect_pending_ignores_a_bad_screen_scorer(tmp_path, monkeypatch):
+def test_cli_pending_modes_ignore_a_bad_screen_scorer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     from typer.testing import CliRunner
 
     from jobhunter import cli
+    from jobhunter.scoring import rescore, screen
 
     cfg = _write(tmp_path / "c.toml", '[scoring]\nscreen_scorer = "openroute:x"\n')
     monkeypatch.setenv(CONFIG_ENV_VAR, str(cfg))
-    # past the scorer check, the next thing --collect-pending does is read the profile
-    res = CliRunner().invoke(cli.app, ["score", "--collect-pending"])
-    assert "scorer error" not in res.output
-    res = CliRunner().invoke(cli.app, ["score", "--rescore-pending"])
-    assert "scorer error" not in res.output
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unused-test-key")
+    monkeypatch.setattr("jobhunter.scoring.profile.load_profile", lambda *a, **k: SimpleNamespace())
+    calls = []
+    monkeypatch.setattr(screen, "collect_pending", lambda *a, **k: calls.append("collect") or {})
+    monkeypatch.setattr(rescore, "drain_pending", lambda *a, **k: calls.append("drain") or {})
+    for flag in ("--collect-pending", "--rescore-pending"):
+        res = CliRunner().invoke(cli.app, ["score", flag])
+        assert "scorer error" not in res.output, res.output
+        assert res.exit_code == 0, res.output
+    assert calls == ["collect", "drain"]
     res = CliRunner().invoke(cli.app, ["score", "--rescore-pending", "--scorer", "jev:"])
     assert res.exit_code == 2 and "scorer error" in res.output

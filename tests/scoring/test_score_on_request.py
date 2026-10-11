@@ -483,3 +483,4 @@ def test_estimate_refuses_a_malformed_scorer_spec(conn, profile, bad):  # noqa: 
     add_group(conn, 1, profile)
     est = group_score.estimate(conn, profile, Scoring(screen_scorer=bad), 1, NOW)
     assert est.refusal and f'screen_scorer "{bad}"' in est.refusal
+    assert est.batch is False  # reading it must not raise

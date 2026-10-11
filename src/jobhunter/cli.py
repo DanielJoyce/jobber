@@ -709,7 +709,8 @@ def _score_rescore(
     _migrate(conn)
     clock = lambda: datetime.now(UTC)  # noqa: E731
     spec = scorer_override or settings.scoring.screen_scorer
-    _check_scorer_override(settings, scorer_override)
+    # --rescore-pending reads each request's own spec; only an explicit --scorer is checked
+    _check_scorer_override(settings, scorer_override, screen=scope is not None)
     try:
         if scope is None:
             results = rs.drain_pending(

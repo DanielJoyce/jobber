@@ -69,7 +69,7 @@ class Estimate:
 
     @property
     def batch(self) -> bool:
-        return rescore.is_anthropic(self.scorer)
+        return self.refusal is None and rescore.is_anthropic(self.scorer)
 
     @property
     def token(self) -> str:
