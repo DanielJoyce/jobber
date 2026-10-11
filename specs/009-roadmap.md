@@ -160,14 +160,18 @@ See [020](020-model-selection.md). A `/models` page with one row per model use, 
 dropdown of usable models, its price, whether its key or Claude subscription is there (local,
 free checks; live checks only on click), and Save or Save + re-run (the existing re-score
 confirm, never an automatic spend). Choices are saved to `<data dir>/models.toml`, layered over
-`config.toml`. The catalog (M1) and credential detection (M3) first, after PR 117 and 019 S1;
-then storage (M2), the page (M4) and Save + re-run (M5); then help (M6), banners on other pages
-(M7) and the config-watch hook (M8, after 019 S12a). About 7 h of continuous run (the M1, M2,
-M4, M5 chain binds; 8 tickets by the calibrated rule), about 9M subagent tokens.
+`config.toml`; an invalid screening or deep choice blocks that use rather than falling back to
+another provider. First the per-model spend reservation (M0), the catalog (M1) and credential
+detection (M3, after 019 S1); then storage (M2), the page (M4) and Save + re-run (M5); then
+help (M6), banners on other pages (M7), the config-watch hook (M8, after 019 S12a) and the
+readiness rows (M10, after 019 S2). M9 (`score --submit` only scores new jobs) is independent.
+About 9 h of continuous run (range 8.4 to 14.6 h, 12 tickets by the calibrated rule), about
+17M subagent tokens.
 
 **Done when** a fresh install with no Anthropic credential shows the message on `/models` with
-a working help link, a model saved there is the one the next nightly run uses, and no page
-render, save or banner spent a credit or made a network call.
+a working help link, a model saved there is the one the next nightly run uses, a broken
+`models.toml` skips scoring instead of spending on another provider, and no page render, save
+or banner spent a credit or made a network call.
 
 ### Achievements
 
