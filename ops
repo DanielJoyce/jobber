@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791747698,"nonce":"+2p/EC0dM8yXbGUMBS+Iy+DEwO4=","message":"Spec 019 merged as PR 108. Tickets: S0 d5cc088, S1 a1af329, S2 3cdd9d1, S3a 9512dd7, S3b d864987, S4 c234282, S5 2908cba, S6 531b700, S7 29ab958, S8 e8b75d2, S9 9562c77, S10 14bb5ac.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791747698,"nonce":"OdCTgK4ZmUuGQeb1W2MSPhA8564=","status":2}]}
