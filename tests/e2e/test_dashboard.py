@@ -625,3 +625,64 @@ def test_no_data_labels_stay_readable_over_the_hatch_lines(page, server, scheme)
         assert _rgb(page, t["stroke"]) == surface and t["sw"] >= 2
         assert t["po"].startswith("stroke")
     assert over_surface >= 4.5
+
+
+# ─── excluded states (profile hard.states_excluded) ──────────────────────────────────────
+
+_EXCLUDED = ["NV", "PR"]
+
+
+def _load_excluded(page, server, scheme, excluded=None):
+    def handler(route):
+        payload = route.fetch().json()
+        payload["excluded"] = _EXCLUDED if excluded is None else excluded
+        route.fulfill(json=payload)
+
+    page.emulate_media(color_scheme=scheme)
+    page.route("**/api/dash/map*", handler)
+    page.goto(f"{server.url}/")
+    page.wait_for_selector(PATHS)
+    page.wait_for_function("() => !document.querySelector('.map-loading')")
+    return page
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_excluded_states_use_the_excluded_pattern_and_legend_entry(page, server, scheme):
+    _load_excluded(page, server, scheme)
+    for st in _EXCLUDED:  # a state (path) and a territory (rect)
+        fill = page.get_attribute(f'#map g.targets [data-state="{st}"]', "fill")
+        assert fill == "url(#map-excluded)"
+    assert _fill_of(page, "CO") != "url(#map-excluded)"
+    # The pattern is its own element, distinct from the no-data hatch, drawn the other way.
+    assert page.eval_on_selector("#map-excluded", "n => n.getAttribute('patternTransform')") == (
+        "rotate(-45)"
+    )
+    assert "Excluded" in page.inner_text("#map-legend .legend-scale")
+    sw = page.eval_on_selector(
+        "#map-legend .swatch.excluded", "n => getComputedStyle(n).backgroundImage"
+    )
+    assert sw.startswith("repeating-linear-gradient(")
+    base = _rgb(page, page.evaluate(_TOKEN_JS, "--map-excluded-bg"))
+    line = _rgb(page, page.evaluate(_TOKEN_JS, "--map-excluded-line"))
+    assert _contrast(line, base) >= 1.5
+    # Labels keep contrast against the pattern's grey base.
+    ink = page.evaluate(
+        "s => { const t = Array.from(document.querySelectorAll('#map g.labels text.lbl'))"
+        ".find(t => t.textContent.trim() === s); return t ? getComputedStyle(t).fill : null; }",
+        "NV",
+    )
+    assert _contrast(_rgb(page, ink), base) >= 4.5
+
+
+def test_excluded_state_says_so_in_tooltip_and_aria_label(page, server):
+    _load_excluded(page, server, "light")
+    cell = page.locator('#map g.targets [data-state="NV"]')
+    assert "excluded in your preferences" in cell.get_attribute("aria-label")
+    cell.hover()
+    expect(page.locator(".map-tooltip")).to_contain_text("in your preferences")
+
+
+def test_no_exclusions_means_no_excluded_fill_or_legend_entry(page, server):
+    _load_excluded(page, server, "light", excluded=[])
+    assert page.locator('#map g.targets [fill="url(#map-excluded)"]').count() == 0
+    assert "Excluded" not in page.inner_text("#map-legend .legend-scale")

@@ -56,6 +56,9 @@
   --map-3: #58ae74;
   --map-4: #2e8f55;
   --map-5: #14663a;
+  /* Excluded states (profile hard.states_excluded): grey base with red diagonal lines, drawn in the opposite direction to the no-data hatch so the two never read alike. */
+  --map-excluded-bg: #d9d8d3;
+  --map-excluded-line: #c0392b;
 
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
@@ -87,6 +90,8 @@
     --map-3: #3fb374;
     --map-4: #5ed38f;
     --map-5: #8ff0b5;
+    --map-excluded-bg: #4a4a47;
+    --map-excluded-line: #e5584a;
 
     /* Dark sequential ramp: low values recede toward the surface (>= 1.5:1), high values
        are brightest. Same step names as the light ramp so consumers don't change. */
@@ -141,6 +146,8 @@
   --map-3: #3fb374;
   --map-4: #5ed38f;
   --map-5: #8ff0b5;
+  --map-excluded-bg: #4a4a47;
+  --map-excluded-line: #e5584a;
 
   /* Dark sequential ramp: low values recede toward the surface (>= 1.5:1), high values
      are brightest. Same step names as the light ramp so consumers don't change. */
@@ -310,6 +317,10 @@ h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .swatch.nodata { background: repeating-linear-gradient(-45deg, var(--surface-1) 0 4.75px, var(--text-muted) 4.75px 6px); }
 .map-svg .nodata-hatch { stroke: var(--text-muted); stroke-width: 1.25; }
 .map-svg .nodata-bg { fill: var(--surface-1); }
+/* Excluded: grey base, red '\' lines (no-data is '/'); the swatch matches the SVG tile (6px, 1.5px line). */
+.swatch.excluded { background: repeating-linear-gradient(45deg, var(--map-excluded-bg) 0 4.5px, var(--map-excluded-line) 4.5px 6px); }
+.map-svg .excluded-hatch { stroke: var(--map-excluded-line); stroke-width: 1.5; }
+.map-svg .excluded-bg { fill: var(--map-excluded-bg); }
 .badge-html { display: inline-block; min-width: 16px; height: 16px; line-height: 14px; text-align: center; font-size: 10px; font-weight: 600; border: 1px solid var(--text-secondary); border-radius: 8px; color: var(--text-primary); }
 
 .map-tooltip {

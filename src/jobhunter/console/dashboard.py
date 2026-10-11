@@ -672,13 +672,19 @@ def map_payload(
     range_days: int,
     buckets: Sequence[str] = DEFAULT_GROUP,
     totals: dict[str, int] | None = None,
+    excluded: Sequence[str] = (),
+    ranking: Sequence[str] = (),
 ) -> dict[str, Any]:
     metric = clamp_metric(metric)
     label, kind = METRICS[metric]
     picked = list(buckets)
     # Every metric covers only the selected buckets, so the label says which.
     label = f"{'New' if metric == 'new_ab' else label}: {group_name(picked)}"
-    breaks = class_breaks((r["value"] for r in rows if r["state"] != REMOTE), kind)
+    # Excluded states are painted hatched, so their values must not shape the colour classes.
+    hidden = set(excluded)
+    breaks = class_breaks(
+        (r["value"] for r in rows if r["state"] != REMOTE and r["state"] not in hidden), kind
+    )
     return {
         "metric": metric,
         "label": label,
@@ -690,6 +696,9 @@ def map_payload(
         "default_buckets": list(DEFAULT_GROUP),
         "range": range_days,
         "breaks": breaks,
+        # Profile hard.states_excluded (drawn greyed with red hatching) and soft.state_ranking.
+        "excluded": list(excluded),
+        "ranking": list(ranking),
         "states": list(rows),
     }
 

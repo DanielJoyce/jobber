@@ -1087,3 +1087,41 @@ def test_today_page_wires_the_rejection_table_into_sankey(client, tmp_path):
     links = {(x["source"], x["target"]): x["value"] for x in payload["links"]}
     assert links[("elsewhere", "applied")] >= 1
     _assert_conserved(payload)
+
+
+def _client_with(tmp_path, profile):
+    path = tmp_path / "t.db"
+    c = db.connect(path)
+    db.migrate(c)
+    seed(c)
+    c.close()
+    return TestClient(
+        create_app(Settings(), lambda: db.connect(path), lambda: profile, lambda: NOW)
+    )
+
+
+def test_api_map_passes_excluded_states_and_territories_and_ranking(tmp_path):
+    profile = Profile()
+    profile.hard.states_excluded = ["TX", "PR", "GU"]
+    profile.soft.state_ranking = ["CO", "WA"]
+    body = _client_with(tmp_path, profile).get("/api/dash/map").json()
+    assert body["excluded"] == ["TX", "PR", "GU"]
+    assert body["ranking"] == ["CO", "WA"]
+    states = {s["state"] for s in body["states"]}
+    assert {"PR", "GU"} <= states, "excluded territories have rows to draw"
+
+
+def test_api_map_without_exclusions_lists_none(client):
+    assert client.get("/api/dash/map").json()["excluded"] == []
+
+
+def test_map_payload_defaults_to_no_exclusions():
+    assert dash.map_payload([], "new_ab", 7)["excluded"] == []
+
+
+def test_map_payload_breaks_ignore_excluded_states():
+    rows = [{"state": s, "value": v} for s, v in (("CO", 1), ("WA", 2), ("TX", 100))]
+    plain = dash.map_payload(rows, "new_ab", 7)
+    assert max(plain["breaks"]) >= 100
+    body = dash.map_payload(rows, "new_ab", 7, excluded=["TX"])
+    assert max(body["breaks"]) <= 2

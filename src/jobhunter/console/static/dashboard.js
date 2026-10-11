@@ -119,7 +119,16 @@
     return classOf(row ? row.value : null, data.breaks) < 0;
   }
 
+  var EXCLUDED_PAINT = "url(#map-excluded)";
+
+  // States in the profile's hard states_excluded: grey with red diagonal lines, overriding the
+  // count-based fill. The label ink is computed against the pattern's grey base.
+  function isExcluded(usps) {
+    return !!(data && data.excluded && data.excluded.indexOf(usps) >= 0);
+  }
+
   function fillFor(row) {
+    if (row && isExcluded(row.state)) return token("--map-excluded-bg");
     var cls = classOf(row ? row.value : null, data.breaks);
     if (cls < 0) return token("--surface-1");
     if (cls === 0) return token(ZERO);
@@ -233,8 +242,13 @@
     return (data && data.byState[usps]) || null;
   }
 
+  function excludedNote(row) {
+    return "excluded in your preferences" + (row.scored ? " \u00b7 " + row.scored + " jobs" : "");
+  }
+
   function ariaLabel(row) {
     if (!row) return "";
+    if (isExcluded(row.state)) return row.name + ": " + excludedNote(row);
     return row.name + ": " + data.label + " " + fmt(row.value, data.kind) + ", " +
       (row.coverage_label || (COVERAGE[row.coverage] || COVERAGE.none)[1]) +
       (row.applications ? ", " + row.applications + " applications" : "");
@@ -255,6 +269,10 @@
       patternTransform: "rotate(45)" }, defs);
     el("rect", { width: 6, height: 6, "class": "nodata-bg" }, pat);
     el("line", { x1: 3, y1: 0, x2: 3, y2: 6, "class": "nodata-hatch" }, pat);
+    var ex = el("pattern", { id: "map-excluded", width: 6, height: 6, patternUnits: "userSpaceOnUse",
+      patternTransform: "rotate(-45)" }, defs);
+    el("rect", { width: 6, height: 6, "class": "excluded-bg" }, ex);
+    el("line", { x1: 3, y1: 0, x2: 3, y2: 6, "class": "excluded-hatch" }, ex);
     var gLeaders = el("g", { "class": "leaders", "aria-hidden": "true" }, svg);
     var gTargets = el("g", { "class": "targets" }, svg);
     var gLabels = el("g", { "class": "labels", "aria-hidden": "true" }, svg);
@@ -270,7 +288,8 @@
         node = el("rect", { x: c.x, y: c.y, width: c.w, height: c.h, rx: 4 }, gTargets);
       }
       node.setAttribute("class", "cell" + (c.callout ? " callout" : "") + (c.remote ? " remote" : ""));
-      node.setAttribute("fill", isNoData(row) ? NODATA_PAINT : fill);
+      var excluded = isExcluded(c.usps);
+      node.setAttribute("fill", excluded ? EXCLUDED_PAINT : isNoData(row) ? NODATA_PAINT : fill);
       node.dataset.state = c.usps;
       if (c.focus) {
         node.setAttribute("tabindex", "0");
@@ -288,17 +307,19 @@
       var sink = statusInk(row.coverage, fill, ink);
       // On the hatch the ink also crosses the grey lines, which it may not outcontrast, so
       // no-data labels get a surface-colored halo that keeps them readable over the lines.
-      var lblCls = isNoData(row) ? "lbl halo" : "lbl";
-      var valCls = isNoData(row) ? "lbl-value halo" : "lbl-value";
+      // Excluded states take the same halo, in the pattern's grey base.
+      var hatched = excluded || isNoData(row);
+      var lblCls = hatched ? "lbl halo" : "lbl";
+      var valCls = hatched ? "lbl-value halo" : "lbl-value";
       if (c.remote) {
-        text(gLabels, c.lx, c.ly - 6, "Remote (US)", lblCls, ink, isNoData(row) ? fill : null);
-        text(gLabels, c.lx, c.ly + 18, fmt(row.value, data.kind), valCls, ink, isNoData(row) ? fill : null);
+        text(gLabels, c.lx, c.ly - 6, "Remote (US)", lblCls, ink, hatched ? fill : null);
+        text(gLabels, c.lx, c.ly + 18, fmt(row.value, data.kind), valCls, ink, hatched ? fill : null);
         text(gLabels, c.lx, c.ly + 40, cov[0], "status", sink, fill);
       } else if (c.callout) {
-        text(gLabels, c.lx, c.ly + 5, c.usps, lblCls, ink, isNoData(row) ? fill : null);
+        text(gLabels, c.lx, c.ly + 5, c.usps, lblCls, ink, hatched ? fill : null);
         text(gLabels, c.x + 58, c.ly + 5, cov[0], "status", sink, fill);
       } else {
-        text(gLabels, c.lx, c.ly, c.usps, lblCls, ink, isNoData(row) ? fill : null);
+        text(gLabels, c.lx, c.ly, c.usps, lblCls, ink, hatched ? fill : null);
         text(gLabels, c.lx, c.ly + 15, cov[0], "status", sink, fill);
       }
       if (showBadge && row.applications > 0) {
@@ -364,6 +385,13 @@
     nd.firstChild.className = "swatch nodata";
     nd.firstChild.style.background = "";
     scale.appendChild(nd);
+    if (data.excluded && data.excluded.length) {
+      var exItem = swatch("", "Excluded");
+      exItem.firstChild.className = "swatch excluded";
+      exItem.firstChild.style.background = "";
+      exItem.title = "States in your preferences' excluded list";
+      scale.appendChild(exItem);
+    }
     box.appendChild(scale);
 
     var status = document.createElement("div");
@@ -416,6 +444,7 @@
         return acc;
       }, []);
     var head = [[data.label, fmt(row.value, data.kind)]];
+    if (isExcluded(row.state)) head.unshift(["Excluded", excludedNote(row).slice(9)]);
     if (data.metric === "new_ab") head = head.concat(split);
     return head.concat(lines, [
       ["Coverage", cov[0] + " " + (row.coverage_label || cov[1])],

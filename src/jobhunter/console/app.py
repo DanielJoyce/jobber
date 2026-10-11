@@ -422,10 +422,19 @@ def create_app(
         range_ = dash.clamp_range(range)
         metric_ = dash.clamp_metric(metric)
         picked = dash.clamp_buckets(buckets)
-        rows, totals = dash.state_stats_with_totals(
-            conn, get_profile(), metric_, range_, now(), picked
+        profile = get_profile()
+        rows, totals = dash.state_stats_with_totals(conn, profile, metric_, range_, now(), picked)
+        return JSONResponse(
+            dash.map_payload(
+                rows,
+                metric_,
+                range_,
+                picked,
+                totals,
+                excluded=profile.hard.states_excluded,
+                ranking=profile.soft.state_ranking,
+            )
         )
-        return JSONResponse(dash.map_payload(rows, metric_, range_, picked, totals))
 
     @app.get("/api/dash/series")
     def api_series(
