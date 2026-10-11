@@ -2477,7 +2477,7 @@ def container_preflight_cmd(
             return False
         return typer.confirm(
             f"Write {marker}? From then on no jobhunter command (host or container) migrates "
-            "the database on its own: run `jobhunter db migrate` after each update, or "
+            "the database on its own: run `jobhunter upgrade` after each update, or "
             "`jobhunter container preflight --leave` to go back",
             default=False,
         )

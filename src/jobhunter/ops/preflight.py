@@ -884,7 +884,7 @@ def write_marker(path: Path) -> None:
     text = (
         "# written by jobhunter container preflight (specs/018 C12, C13). While this file\n"
         "# exists no jobhunter command migrates the database on its own: run\n"
-        "# `jobhunter db migrate` (it backs up first). Remove it with\n"
+        "# `jobhunter upgrade` (or `jobhunter db migrate`). Remove it with\n"
         "# `jobhunter container preflight --leave` to go back to the host install.\n"
         'mode = "container"\n'
     )

@@ -210,7 +210,7 @@ def test_marker_blocks_automatic_migration(tmp_path, monkeypatch):
     (tmp_path / "deployment.toml").write_text('mode = "container"\n')
     before = digest(path)
     conn = db.connect(path)
-    with pytest.raises(db.MigrationsPending, match="run `jobhunter db migrate`"):
+    with pytest.raises(db.MigrationsPending, match="run `jobhunter upgrade`"):
         db.migrate(conn)
     conn.close()
     assert digest(path) == before

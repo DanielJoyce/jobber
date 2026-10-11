@@ -74,7 +74,7 @@ def test_restored_older_database_is_not_remigrated_in_a_container_deployment(env
     (env / "deployment.toml").write_text('mode = "container"\n')
     result = runner.invoke(app, ["apply", "stats"])
     assert result.exit_code == 1
-    assert "run `jobhunter db migrate`" in result.output
+    assert "run `jobhunter upgrade`" in result.output
     assert "Traceback" not in result.output
     assert version_of(path) == OLDER
     assert not (env / "backups").exists()
@@ -205,7 +205,7 @@ def test_console_command_prints_the_refusal(env, monkeypatch):
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: pytest.fail("console started"))
     result = runner.invoke(app, ["console"])
     assert result.exit_code == 1
-    assert "run `jobhunter db migrate`" in result.output
+    assert "run `jobhunter upgrade`" in result.output
 
 
 def test_console_backs_up_before_migrating_on_a_host_install(tmp_path, monkeypatch):
