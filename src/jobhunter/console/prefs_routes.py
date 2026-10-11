@@ -1,6 +1,7 @@
 """Routes for /prefs (specs/014): page, live preview, save, revert, state picker cycle."""
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
@@ -46,6 +47,10 @@ SECTIONS = [
 ]
 
 
+def _json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=list)
+
+
 def register(
     app: FastAPI,
     templates: Jinja2Templates,
@@ -88,6 +93,7 @@ def register(
         upload: dict[str, Any] | None = None,
         upload_error: str | None = None,
         answers_form: pa.AnswersForm | None = None,
+        section_result: tuple[str, str] | None = None,
     ) -> HTMLResponse:
         settings = request.app.state.settings
         profile = st.profile
@@ -98,6 +104,13 @@ def register(
         # Application answers: loaded on their own, never through Profile (specs/017).
         loaded = ans.load_answers(profile_dir(request))
         ans_view = answers_form.view if answers_form is not None else pa.view_of(loaded.answers)
+        file_view = pf.view_from_data(profile_data(profile))
+        ans_file_view = pa.view_of(loaded.answers)
+        unsaved = pf.dirty_sections(
+            view,
+            file_view,
+            answers_form is not None and _json(ans_view) != _json(ans_file_view),
+        )
         known = set(view) | {"weights"} | set(ans_view)
         known |= {k for k in errors if k.startswith("ans.")}
         ctx = {
@@ -144,6 +157,9 @@ def register(
             "ans_text_fields": ans.TEXT_FIELDS,
             "ans_work_auth_label": ans.WORK_AUTH_LABEL,
             "ans_work_auth_choices": pa.WORK_AUTH_CHOICES,
+            "unsaved_sections": unsaved,
+            "sec_for": section_result[0] if section_result else None,
+            "sec_html": section_result[1] if section_result else "",
         }
         return templates.TemplateResponse(request, "prefs.html", ctx, status_code=status)
 
@@ -361,6 +377,201 @@ def register(
             queued = f"&rescore={scope}"
         saved = len(changes) + len(answer_writes)
         return RedirectResponse(f"/prefs?saved={saved}{queued}", status_code=303)
+
+    @app.post("/prefs/section/{section}", response_class=HTMLResponse)
+    async def save_section(request: Request, conn: Conn, section: str) -> Response:
+        """Save one section's fields only, over the file as it is now (b25ec96)."""
+        if section not in pf.SAVEABLE_SECTIONS:
+            raise HTTPException(404, "no such section")
+        form = pf.parse_form(await request.body())
+        return await run_in_threadpool(save_section_work, request, conn, section, form)
+
+    def section_response(
+        request: Request,
+        conn: sqlite3.Connection,
+        section: str,
+        result: dict[str, Any],
+        *,
+        status: int = 200,
+        af: pa.AnswersForm | None = None,
+        mtime_ns: int | None = None,
+        saved_now: bool = False,
+    ) -> Response:
+        """The status block for ``section`` (swapped in place); on a save, also the new
+        mtime, the re-score panel and the events that re-baseline the page."""
+        result["section"] = section
+        result["mtime_ns"] = mtime_of(request) if saved_now else None
+        if saved_now:
+            result["rescore_panel"] = request.app.state.rescore_panel_context(request, conn)
+        tpl = templates.get_template("_prefs_section_result.html")
+        main = tpl.render(request=request, part="main", **result)
+        oob = tpl.render(request=request, part="oob", **result)
+        if section == pf.ANSWERS_SECTION:
+            # The answers section is re-rendered whole: its rows (a saved custom answer
+            # becomes a row of its own) and its inline errors come from the server.
+            st = state_of(request)
+            page = render_page(
+                request,
+                conn,
+                st,
+                view=pf.view_from_data(profile_data(st.profile)),
+                errors={k: m for k, m in result.get("errors", {}).items() if k.startswith("ans.")},
+                mtime_ns=mtime_ns,
+                answers_form=None if saved_now else af,
+                section_result=(section, main),
+            )
+            body = page.body.decode()
+            start = body.index('<section class="panel" id="sec-answers"')
+            end = body.index("</section>", start) + len("</section>")
+            response = HTMLResponse(body[start:end] + oob, status_code=status)
+            response.headers["HX-Retarget"] = "#sec-answers"
+            response.headers["HX-Reswap"] = "outerHTML"
+        else:
+            response = HTMLResponse(main + oob, status_code=status)
+        if saved_now:
+            response.headers["HX-Trigger-After-Swap"] = json.dumps(
+                {"prefs-changed": "", "prefs-saved": {"section": section}}
+            )
+        return response
+
+    def save_section_work(
+        request: Request, conn: sqlite3.Connection, section: str, form: pf.Form
+    ) -> Response:
+        st = state_of(request)
+        if st.writes_whole_file:
+            return section_response(
+                request,
+                conn,
+                section,
+                {"kind": "whole", "errors": {}},
+                status=409,
+            )
+        profile = st.profile
+        pf.detect_file_edits(conn, profile, now())
+        try:
+            expected = int(pf.form_value(form, "mtime_ns"))
+        except ValueError:
+            expected = -1
+        af = pa.parse(form) if section == pf.ANSWERS_SECTION else None
+        before = profile_data(profile)
+        after: Profile | None = None
+        changes: dict[str, Any] = {}
+        answer_writes: dict[str, Any] = {}
+        errors: dict[str, str] = {}
+        if af is None:
+            data, errors = pf.section_to_data(section, form, before)
+            if not errors:
+                try:
+                    after = validate_profile_data(data, base=profile)
+                    changes = pf.diff(before, profile_data(after))
+                except ProfileValidationError as exc:
+                    errors = pf.errors_for_form(exc)
+        else:
+            errors = dict(af.errors)
+            if not af.present:
+                errors["answers"] = "The answers fields were not sent."
+            elif af.answers is not None and not errors:
+                loaded = ans.load_answers(profile_dir(request))
+                answer_writes = ans.answer_writes(af.answers, loaded.answers, loaded.ignored_custom)
+                if loaded.custom_unmanaged and "answers.custom" in answer_writes:
+                    errors["answers"] = (
+                        "answers.custom in preferences.yaml is not a list, so custom answers "
+                        "were not saved; fix it in the raw editor first."
+                    )
+        fail = {"errors": errors}
+        if errors:
+            return section_response(
+                request,
+                conn,
+                section,
+                {"kind": "errors", **fail},
+                status=422,
+                af=af,
+                mtime_ns=expected,
+            )
+        if mtime_of(request) != expected:
+            return section_response(
+                request,
+                conn,
+                section,
+                {"kind": "conflict", **fail},
+                status=409,
+                af=af,
+                mtime_ns=expected,
+            )
+        if not changes and not answer_writes:
+            return section_response(
+                request, conn, section, {"kind": "nochange", **fail}, af=af, mtime_ns=expected
+            )
+        paid = any(pf.is_paid(p) for p in changes)
+        if paid and pf.form_value(form, "confirm") != "1":
+            # The cost and re-score choice come before the write, as with the full Save.
+            estimate = pf.rescore_estimate(conn, after or profile, now())
+            return section_response(
+                request,
+                conn,
+                section,
+                {"kind": "confirm", "estimate": estimate, "changes": len(changes), **fail},
+                af=af,
+                mtime_ns=expected,
+            )
+        try:
+            new = pf.apply_changes(
+                conn,
+                profile_dir(request),
+                changes,
+                expected_mtime_ns=expected,
+                source="ui",
+                now=now(),
+                require_resume=st.kind == "ok",
+                extra_writes=answer_writes,
+            )
+        except ProfileConflict:
+            return section_response(
+                request,
+                conn,
+                section,
+                {"kind": "conflict", **fail},
+                status=409,
+                af=af,
+                mtime_ns=expected,
+            )
+        except ProfileValidationError as exc:
+            return section_response(
+                request,
+                conn,
+                section,
+                {"kind": "errors", "errors": pf.errors_for_form(exc)},
+                status=422,
+                af=af,
+                mtime_ns=expected,
+            )
+        except ProfileError as exc:
+            return section_response(
+                request,
+                conn,
+                section,
+                {"kind": "errors", "errors": {"profile": str(exc)}},
+                status=422,
+                af=af,
+                mtime_ns=expected,
+            )
+        scope = pf.form_value(form, "section_rescore", "none")
+        queued = paid and pf.record_rescore(conn, scope, new, now())
+        return section_response(
+            request,
+            conn,
+            section,
+            {
+                "kind": "saved",
+                "count": len(changes) + len(answer_writes),
+                "queued": scope if queued else "",
+                "errors": {},
+            },
+            af=af,
+            saved_now=True,
+            mtime_ns=mtime_of(request),
+        )
 
     @app.post("/prefs/raw", response_class=HTMLResponse)
     async def save_raw(request: Request, conn: Conn) -> Response:

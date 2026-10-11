@@ -139,3 +139,25 @@ label .hint { margin: 0; }
    and while the preview request runs (.htmx-request, added by hx-indicator). */
 .preview-pending { display: none; margin: 0 0 8px; color: var(--text-secondary); font-size: 0.8125rem; }
 .preview-pending.is-pending, .preview-pending.htmx-request { display: block; }
+
+/* Per-section Save and the unsaved-changes bar (b25ec96) */
+.section-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
+.section-hint { font-size: 0.8125rem; }
+.panel.is-dirty { border-color: var(--status-warning); }
+.panel.is-dirty .section-hint { color: var(--text-primary); }
+.section-status:empty { display: none; }
+.section-status { margin-top: 8px; font-size: 0.875rem; }
+.section-status p { margin: 0; }
+.section-ok { border-left: 3px solid var(--status-good); padding: 2px 10px; }
+.section-bad { border-left: 3px solid var(--status-critical); padding: 4px 10px; }
+.dirty-bar {
+  position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: 6px 12px; padding: 8px 12px; margin-top: 8px;
+  border: 1px solid var(--status-warning); border-radius: 8px;
+  background: var(--surface-1); color: var(--text-primary);
+}
+.dirty-bar[hidden] { display: none; }
+.button.save-all { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--btn-primary-text); }
+.button.save-all:hover { background: var(--btn-primary-hover); border-color: var(--btn-primary-hover); }
+.button.save-all:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.section-status { scroll-margin-bottom: 90px; }

@@ -1,0 +1,35 @@
+{# Result of a per-section Save (b25ec96): the status block under the section's button
+   (part "main"), and the out-of-band updates after a write (part "oob"). #}
+{% if part == "main" %}
+{% if kind == "saved" %}
+<p class="section-ok" role="status">Saved {{ count }} change{{ "" if count == 1 else "s" }}.{% if queued %} Re-score ({{ queued }}) queued; run it from Re-score now above.{% endif %}</p>
+{% elif kind == "nochange" %}
+<p class="section-ok" role="status">No changes to save in this section.</p>
+{% elif kind == "conflict" %}
+<p class="section-bad" role="alert"><strong>Not saved.</strong> The preferences file changed on disk since this page loaded, and a hand edit is not overwritten. <a class="button small" href="/prefs">Reload from file</a> (this discards unsaved edits; copy anything you need first).</p>
+{% elif kind == "whole" %}
+<p class="section-bad" role="alert">There is no readable profile file to merge into yet. Use the Save at the bottom to create or repair it.</p>
+{% elif kind == "errors" %}
+<div class="section-bad" role="alert"><strong>Not saved.</strong> Nothing is written until the result validates.
+  <ul class="plain">{% for k, m in errors.items() %}<li><code>{{ k }}</code>: {{ m }}</li>{% endfor %}</ul></div>
+{% elif kind == "confirm" %}
+<fieldset class="preview-paid section-confirm">
+  <legend>This section is paid. Applies to new jobs automatically from the next run. Re-score existing open jobs too?</legend>
+  {% for o in estimate.options %}
+  <label class="option">
+    <input type="radio" name="section_rescore" value="{{ o.scope }}"{% if o.scope == "none" %} checked{% endif %}>
+    <span>{{ o.label }}{% if o.scope != "none" %} <span class="muted">({{ o.jobs }} jobs)</span>{% endif %}</span>
+    <span class="cost">{% if o.scope == "none" %}$0.00{% else %}≈ ${{ "%.2f" | format(o.cost_usd) }}{% endif %}</span>
+  </label>
+  {% endfor %}
+  <p class="hint">At ${{ "%.4f" | format(estimate.cost_per_job) }} per job ({% if estimate.cost_source == "default" %}no spend measured yet; assumed{% else %}measured from {{ estimate.cost_source }}{% endif %}). Saving queues the re-score; run it from Re-score now on this page. It counts against the spend cap.</p>
+  <div class="actions">
+    <button type="button" class="button" data-dismiss-status="{{ section }}">Cancel</button>
+    <button type="button" class="button primary" hx-post="/prefs/section/{{ section }}" hx-include="#prefs-form" hx-vals='{"confirm": "1"}' hx-target="#status-{{ section }}" hx-swap="innerHTML" hx-sync="this:abort" data-section-confirm="{{ section }}">Save {{ changes }} change{{ "" if changes == 1 else "s" }}</button>
+  </div>
+</fieldset>
+{% endif %}
+{% else %}
+{% if mtime_ns is not none %}<input type="hidden" name="mtime_ns" value="{{ mtime_ns }}" id="mtime-ns" hx-swap-oob="true">{% endif %}
+{% if rescore_panel is defined %}<div id="rescore-panel" hx-swap-oob="true">{% with rs = rescore_panel %}{% include "_rescore_panel.html" %}{% endwith %}</div>{% endif %}
+{% endif %}

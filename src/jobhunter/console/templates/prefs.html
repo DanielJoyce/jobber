@@ -1,8 +1,5 @@
 {% extends "base.html" %}
-{% macro err(name) %}{% if errors.get(name) %}<p class="field-error" id="err-{{ name | replace('.', '-') }}" role="alert">{{ errors[name] }}</p>{% endif %}{% endmacro %}
-{% macro inv(name) %}{% if errors.get(name) %} aria-invalid="true" aria-describedby="err-{{ name | replace('.', '-') }}"{% endif %}{% endmacro %}
-{% macro help_btn(id, label) %}<button type="button" class="help-btn" data-help="{{ id }}" aria-expanded="false" aria-controls="help-{{ id }}" aria-label="Help: {{ label }}" title="What is this?">?</button>{% endmacro %}
-{% macro help_body(id, label) %}<div class="help-body" id="help-{{ id }}" role="region" aria-label="{{ label }} help" hidden>{{ caller() }}</div>{% endmacro %}
+{% from "_prefs_macros.html" import err, inv, help_btn, help_body, section_save with context %}
 {% block head %}<link rel="stylesheet" href="{{ static_url('prefs.css') }}">{% endblock %}
 {% block main %}
 <div class="prefs">
@@ -71,11 +68,12 @@
   </section>
 
   <div class="prefs-layout">
-    <form id="prefs-form" class="prefs-form" method="post" action="/prefs/save"
+    <form id="prefs-form" class="prefs-form" method="post" action="/prefs/save" autocomplete="off"
+          data-unsaved="{{ unsaved_sections | join(' ') }}" data-whole-file="{{ 'true' if st.writes_whole_file else 'false' }}"
           hx-post="/prefs/preview" hx-target="#prefs-preview" hx-swap="innerHTML"
           hx-trigger="input delay:500ms, change delay:500ms, prefs-changed from:body delay:800ms"
           hx-sync="this:replace" hx-indicator="#preview-pending" hx-disinherit="hx-sync hx-indicator">
-      <input type="hidden" name="mtime_ns" value="{{ mtime_ns }}">
+      <input type="hidden" name="mtime_ns" value="{{ mtime_ns }}" id="mtime-ns">
 
       <section class="panel" id="sec-pay">
         <h2>Pay <span class="kind free">free</span> {{ help_btn('pay', 'Pay') }}</h2>
@@ -96,6 +94,7 @@
         {{ err('hard.salary_floor.amount') }}{{ err('hard.salary_target.amount') }}{{ err('salary_period') }}
         <label class="check"><input type="checkbox" name="hard.hide_unstated_salary" value="1"{% if v['hard.hide_unstated_salary'] %} checked{% endif %}> Hide jobs with no stated salary</label>
         <p class="hint">Off by default: a missing salary is not evidence of low pay.</p>
+        {{ section_save('pay', 'Pay') }}
       </section>
 
       <section class="panel" id="sec-where">
@@ -114,6 +113,7 @@
           <label class="check"><input type="checkbox" name="hard.relocation_ok" value="1"{% if v['hard.relocation_ok'] %} checked{% endif %}> Relocation OK</label>
         </div>
         {{ err('soft.remote_bonus') }}
+        {{ section_save('where', 'Where') }}
       </section>
 
       <section class="panel" id="sec-what">
@@ -138,6 +138,7 @@
           {% for c in credential_choices %}<label class="check"><input type="checkbox" name="hard.requires_i_lack" value="{{ c }}"{% if c in v['hard.requires_i_lack'] %} checked{% endif %}> {{ c | replace('_', ' ') }}</label>{% endfor %}
         </fieldset>
         {{ err('hard.requires_i_lack') }}
+        {{ section_save('what', 'What') }}
       </section>
 
       <section class="panel" id="sec-weights">
@@ -154,6 +155,7 @@
           {% endfor %}
         </div>
         {{ err('weights') }}
+        {{ section_save('weights', 'Weights') }}
       </section>
 
       <section class="panel" id="sec-buckets">
@@ -185,6 +187,7 @@
         </fieldset>
         {% endfor %}
         {% for k in threshold_keys %}{{ err('buckets.' ~ k) }}{% endfor %}
+        {{ section_save('buckets', 'Buckets') }}
       </section>
 
       <section class="panel" id="sec-queries">
@@ -193,6 +196,7 @@
         <p class="hint">What's sent to the job boards &mdash; keep it broad, the model does the filtering. One query per line: comma-separated keywords, or a mapping such as <code>{keywords: [systems], occupation_code: "2210"}</code>.</p>
         <textarea name="queries" rows="5" class="mono"{{ inv('queries') }}>{{ v['queries'] }}</textarea>
         {{ err('queries') }}
+        {{ section_save('queries', 'Search queries') }}
       </section>
 
       <section class="panel" id="sec-spend">
@@ -229,6 +233,7 @@
           </label>
         </div>
         {{ err('current_focus.doing') }}{{ err('current_focus.want_more_of') }}{{ err('current_focus.done_with') }}
+        {{ section_save('recency', 'Recency', true) }}
       </section>
 
       <section class="panel paid" id="sec-narrative">
@@ -240,6 +245,7 @@
         </label>
         {{ err('narrative.' ~ k) }}
         {% endfor %}
+        {{ section_save('narrative', 'Narrative', true) }}
       </section>
 
       <section class="panel paid" id="sec-resume">
@@ -269,6 +275,10 @@
       <div class="actions">
         <a class="button" href="/prefs">Cancel</a>
         <button type="submit" class="button primary">{% if st.kind == "missing" %}Save and create profile{% else %}Save{% endif %}</button>
+      </div>
+      <div class="dirty-bar" id="dirty-bar" role="status" aria-live="polite" hidden>
+        <span id="dirty-count">0 sections with unsaved changes</span>
+        <button type="submit" class="button save-all" id="save-all">Save all</button>
       </div>
     </form>
     <form id="resume-upload" method="post" action="/prefs/resume" enctype="multipart/form-data"></form>

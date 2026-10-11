@@ -1,0 +1,11 @@
+{% macro err(name) %}{% if errors.get(name) %}<p class="field-error" id="err-{{ name | replace('.', '-') }}" role="alert">{{ errors[name] }}</p>{% endif %}{% endmacro %}
+{% macro inv(name) %}{% if errors.get(name) %} aria-invalid="true" aria-describedby="err-{{ name | replace('.', '-') }}"{% endif %}{% endmacro %}
+{% macro help_btn(id, label) %}<button type="button" class="help-btn" data-help="{{ id }}" aria-expanded="false" aria-controls="help-{{ id }}" aria-label="Help: {{ label }}" title="What is this?">?</button>{% endmacro %}
+{% macro help_body(id, label) %}<div class="help-body" id="help-{{ id }}" role="region" aria-label="{{ label }} help" hidden>{{ caller() }}</div>{% endmacro %}
+{% macro section_save(id, label, paid=false) %}{% if not st.writes_whole_file %}<div class="section-actions">
+  <button type="button" class="button primary section-save" data-section-save="{{ id }}" disabled
+          hx-post="/prefs/section/{{ id }}" hx-include="#prefs-form" hx-target="#status-{{ id }}" hx-swap="innerHTML" hx-sync="this:abort"
+          aria-describedby="status-{{ id }}">Save {{ label }}{% if paid %} (paid){% endif %}</button>
+  <span class="section-hint muted" data-section-hint="{{ id }}">No unsaved changes</span>
+</div>
+<div class="section-status" id="status-{{ id }}" aria-live="polite">{% if sec_for == id %}{{ sec_html | safe }}{% endif %}</div>{% endif %}{% endmacro %}
