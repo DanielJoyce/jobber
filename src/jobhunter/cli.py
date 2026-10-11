@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextvars
 import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -162,6 +164,51 @@ def _stub() -> None:
     typer.echo(NOT_IMPLEMENTED)
 
 
+WAIT_HELP = (
+    "Wait up to DURATION (e.g. 30m, 2h) for another jobhunter job to finish, then run; "
+    "exit 75 if it does not. Timers pass this. Without it, a running job means: report and "
+    "exit 0, nothing done."
+)
+WaitOption = Annotated[str | None, typer.Option("--wait", metavar="DURATION", help=WAIT_HELP)]
+
+
+def _parse_wait(wait: str | None) -> float | None:
+    from jobhunter.core.runlock import parse_duration
+
+    if wait is None:
+        return None
+    try:
+        return parse_duration(wait)
+    except ValueError as exc:
+        typer.echo(f"--wait: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+
+@contextmanager
+def _job_lock(settings, command: str, wait: float | None) -> Iterator[None]:
+    """Hold the run lock (specs/018 Run lock, C5) for the whole job.
+
+    Held by another job: without ``wait``, say so and exit 0 (nothing spent); with ``wait``,
+    retry until it runs out, then exit 75. A holder older than 6 h exits 75 either way, so
+    systemd's OnFailure= reports a hung job.
+    """
+    from jobhunter.core import runlock
+
+    lock = runlock.RunLock(resolve_path(settings.paths.db_path), command)
+    try:
+        lock.acquire(wait)
+    except (runlock.StaleHolder, runlock.LockTimeout) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(runlock.EXIT_STALE) from exc
+    except runlock.LockHeld as exc:
+        typer.echo(f"{exc}; not started, nothing spent. Try again when it finishes.", err=True)
+        raise typer.Exit(0) from exc
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 @app.command()
 def run(
     stage: Annotated[
@@ -177,6 +224,7 @@ def run(
     max_resolve: Annotated[
         int, typer.Option(help="Cap on detail-page fetches per run.")
     ] = runner.DEFAULT_MAX_RESOLVE,
+    wait: WaitOption = None,
 ) -> None:
     """Run the ingest pipeline."""
     try:
@@ -185,6 +233,7 @@ def run(
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
+    wait_s = _parse_wait(wait)
     states = runner.parse_states(state)
     settings = load_settings()
     rows = load_registry()
@@ -211,22 +260,23 @@ def run(
         return
 
     db_path = resolve_path(settings.paths.db_path)
-    conn = db.connect(db_path)
-    try:
-        _migrate(conn)
-        report = runner.run_pipeline(
-            conn,
-            settings,
-            rows,
-            profile_loader=loader,
-            stages=stages,
-            states=states,
-            since=since_dt,
-            full=full,
-            max_resolve=max_resolve,
-        )
-    finally:
-        conn.close()
+    with _job_lock(settings, "run", wait_s):
+        conn = db.connect(db_path)
+        try:
+            _migrate(conn)
+            report = runner.run_pipeline(
+                conn,
+                settings,
+                rows,
+                profile_loader=loader,
+                stages=stages,
+                states=states,
+                since=since_dt,
+                full=full,
+                max_resolve=max_resolve,
+            )
+        finally:
+            conn.close()
     summary = runner.format_summary(report)
     if summary:
         typer.echo(summary)
@@ -306,6 +356,14 @@ def score(
             "(jev:/decisions:) default to 8, at most 25. specs/016 Packed requests.",
         ),
     ] = None,
+    wait: Annotated[
+        str | None,
+        typer.Option(
+            "--wait",
+            metavar="DURATION",
+            help=WAIT_HELP + " --collect-pending waits 2h unless given.",
+        ),
+    ] = None,
 ) -> None:
     """Screen batches (specs/006 Stage 2) or the Opus deep pass (Stage 3)."""
     modes = [
@@ -331,7 +389,49 @@ def score(
     if yes and rescore is None and group is None:
         typer.echo("--yes applies to --rescore and --group only", err=True)
         raise typer.Exit(2)
+    wait_s = _parse_wait(wait)
+    if wait_s is None and collect_pending:
+        # Collecting spends nothing new (the batches are paid for), so waiting is always safe.
+        wait_s = COLLECT_PENDING_WAIT_S
+    names = ["submit", "collect", "collect-pending", "deep", "deep-group", "rescore-pending"]
+    names += ["rescore", "group"]
+    mode = next(name for name, on in zip(names, modes, strict=True) if on)
+    with _job_lock(load_settings(), f"score --{mode}", wait_s):
+        _score_mode(
+            submit=submit,
+            collect=collect,
+            collect_pending=collect_pending,
+            rescore_pending=rescore_pending,
+            rescore=rescore,
+            group=group,
+            yes=yes,
+            limit=limit,
+            deep=deep,
+            deep_group=deep_group,
+            scorer_override=scorer_override,
+            jobs_per_request=jobs_per_request,
+        )
 
+
+COLLECT_PENDING_WAIT_S = 2 * 3600.0
+
+
+def _score_mode(
+    *,
+    submit: bool,
+    collect: str | None,
+    collect_pending: bool,
+    rescore_pending: bool,
+    rescore: str | None,
+    group: int | None,
+    yes: bool,
+    limit: int,
+    deep: int | None,
+    deep_group: int | None,
+    scorer_override: str | None,
+    jobs_per_request: int | None,
+) -> None:
+    """The body of ``score``, run while holding the run lock."""
     from datetime import UTC, datetime
 
     import anthropic
@@ -641,28 +741,31 @@ def backfill(
         )
 
     db_path = resolve_path(settings.paths.db_path)
-    conn = db.connect(db_path)
-    try:
-        _migrate(conn)
-        result = bf.run_backfill(
-            conn,
-            settings,
-            rows,
-            scorer=scorer,
-            client=client,
-            days=days,
-            states=runner.parse_states(state),
-            budget_usd=budget,
-            chunk_size=chunk_size,
-            max_resolve=max_resolve,
-            dry_run=dry_run,
-            confirm=confirm,
-            wait=wait,
-            max_wait_s=max_wait_minutes * 60.0,
-            out=typer.echo,
-        )
-    finally:
-        conn.close()
+    # Interactive and paid: a running job means report and exit 0 (its own --wait polls
+    # batches, not the lock).
+    with _job_lock(settings, "backfill", None):
+        conn = db.connect(db_path)
+        try:
+            _migrate(conn)
+            result = bf.run_backfill(
+                conn,
+                settings,
+                rows,
+                scorer=scorer,
+                client=client,
+                days=days,
+                states=runner.parse_states(state),
+                budget_usd=budget,
+                chunk_size=chunk_size,
+                max_resolve=max_resolve,
+                dry_run=dry_run,
+                confirm=confirm,
+                wait=wait,
+                max_wait_s=max_wait_minutes * 60.0,
+                out=typer.echo,
+            )
+        finally:
+            conn.close()
     if result.status == "declined" and not sys.stdin.isatty():
         typer.echo("no terminal to confirm on; re-run with --yes to submit", err=True)
     raise typer.Exit(result.exit_code)
@@ -1016,6 +1119,7 @@ def sources_verify(
         str | None, typer.Option(help="Comma list of state codes; US includes national rows.")
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
+    wait: WaitOption = None,
 ) -> None:
     """Probe every registry entry and diff against recorded values (specs/003 breakage detection).
 
@@ -1026,22 +1130,24 @@ def sources_verify(
     """
     from jobhunter.sources import verify as vf
 
+    wait_s = _parse_wait(wait)
     settings = load_settings()
-    conn = db.connect(resolve_path(settings.paths.db_path))
-    _migrate(conn)
-    rows = load_registry()
-    try:
-        sync_sources_table(conn, rows)
-        report = vf.verify_all(
-            conn,
-            rows,
-            now=datetime.now(UTC),
-            states=runner.parse_states(state),
-            settings=settings,
-            on_result=None if as_json else lambda r: typer.echo(vf.format_row(r)),
-        )
-    finally:
-        conn.close()
+    with _job_lock(settings, "sources verify", wait_s):
+        conn = db.connect(resolve_path(settings.paths.db_path))
+        _migrate(conn)
+        rows = load_registry()
+        try:
+            sync_sources_table(conn, rows)
+            report = vf.verify_all(
+                conn,
+                rows,
+                now=datetime.now(UTC),
+                states=runner.parse_states(state),
+                settings=settings,
+                on_result=None if as_json else lambda r: typer.echo(vf.format_row(r)),
+            )
+        finally:
+            conn.close()
     if as_json:
         typer.echo(report.to_json())
     else:

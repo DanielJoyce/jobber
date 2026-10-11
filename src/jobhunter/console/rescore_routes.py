@@ -23,7 +23,9 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from jobhunter.config import resolve_path
 from jobhunter.console import prefs_graceful as gr
+from jobhunter.core import runlock
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.scoring import rescore as rs
 from jobhunter.scoring.decisions import JEV_DEFAULT_MODEL
@@ -63,6 +65,22 @@ def local_time(value: str | None) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+
+
+def take_run_lock(settings: Any) -> runlock.RunLock:
+    """The run lock for the console's paid re-score, taken without waiting.
+
+    Raises RescoreRefused (the panel shows it with the form, so the user can retry) when
+    another jobhunter job (a timer run, a CLI score) holds it.
+    """
+    lock = runlock.RunLock(resolve_path(settings.paths.db_path), "console re-score")
+    try:
+        lock.acquire(None)
+    except runlock.LockHeld as exc:
+        raise rs.RescoreRefused(
+            f"{exc}. Re-score not started; nothing spent. Try again when it finishes."
+        ) from exc
+    return lock
 
 
 class RescoreManager:
@@ -118,33 +136,52 @@ class RescoreManager:
                 raise rs.RescoreRefused(plan.refusal)
             if not token or token != plan.token:
                 raise rs.PlanChanged(plan)
-            if request_id is not None:
-                rs.attach_plan(conn, request_id, plan)
-                rid = request_id
-            else:
-                rid = rs.create_request(conn, profile, plan, now())
-            self.current = rid
-            self._thread = threading.Thread(
-                target=self._work,
-                args=(
-                    conn_factory,
-                    rid,
-                    profile,
-                    settings,
-                    spec,
-                    now,
-                    scorer_factory,
-                    client_factory,
-                    plan.prefilter,
-                ),
-                name=f"rescore-{rid}",
-                daemon=True,
-            )
-            self._thread.start()
+            # The paid part holds the run lock (specs/018 Run lock, C5), never waiting for it:
+            # a request thread must not block, and a timer job may hold it for hours.
+            lock = take_run_lock(settings)
+            try:
+                if request_id is not None:
+                    rs.attach_plan(conn, request_id, plan)
+                    rid = request_id
+                else:
+                    rid = rs.create_request(conn, profile, plan, now())
+                self.current = rid
+                self._thread = threading.Thread(
+                    target=self._work,
+                    args=(
+                        conn_factory,
+                        rid,
+                        profile,
+                        settings,
+                        spec,
+                        now,
+                        scorer_factory,
+                        client_factory,
+                        plan.prefilter,
+                        lock,
+                    ),
+                    name=f"rescore-{rid}",
+                    daemon=True,
+                )
+                self._thread.start()
+            except BaseException:
+                lock.release()
+                raise
             return rid
 
     @staticmethod
-    def _work(conn_factory, rid, profile, settings, spec, now, scorer_factory, client_factory, pre):
+    def _work(
+        conn_factory, rid, profile, settings, spec, now, scorer_factory, client_factory, pre, lock
+    ):
+        try:
+            RescoreManager._run(
+                conn_factory, rid, profile, settings, spec, now, scorer_factory, client_factory, pre
+            )
+        finally:
+            lock.release()
+
+    @staticmethod
+    def _run(conn_factory, rid, profile, settings, spec, now, scorer_factory, client_factory, pre):
         conn = conn_factory()  # its own connection: never the request's
         try:
             rs.run_request(

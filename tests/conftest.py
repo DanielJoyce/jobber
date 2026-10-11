@@ -467,3 +467,69 @@ def claude_run(
 @pytest.fixture
 def claude_stream():
     return claude_run
+
+
+# --- run lock (specs/018 Run lock, C5) --------------------------------------------------
+
+_RUN_LOCK_HOLDER = """
+import sys, time
+from pathlib import Path
+from jobhunter.core.runlock import RunLock
+db, ready, release = sys.argv[1:4]
+lock = RunLock(db, "run")
+lock.acquire(None)
+Path(ready).write_text("ok")
+deadline = time.monotonic() + 30
+while not Path(release).exists() and time.monotonic() < deadline:
+    time.sleep(0.02)
+lock.release()
+"""
+
+
+class RunLockHolder:
+    """Another process holding the run lock on ``db_path`` until ``release()`` or ``kill()``,
+    as a timer job or a container would (flock is per open file, dropped when a process dies).
+    """
+
+    def __init__(self, tmp_path: Path, db_path: Path) -> None:
+        import sys
+        import time
+
+        n = len(list(tmp_path.glob("holder-*.ready")))
+        self.ready = tmp_path / f"holder-{n}.ready"
+        self.release_file = tmp_path / f"holder-{n}.release"
+        self.proc = subprocess.Popen(
+            [sys.executable, "-c", _RUN_LOCK_HOLDER, str(db_path), str(self.ready),
+             str(self.release_file)]
+        )  # fmt: skip
+        deadline = time.monotonic() + 20
+        while not self.ready.exists():
+            assert self.proc.poll() is None, "holder exited early"
+            assert time.monotonic() < deadline, "holder never took the lock"
+            time.sleep(0.02)
+
+    def release(self) -> None:
+        self.release_file.write_text("go")
+
+    def wait(self) -> None:
+        self.proc.wait(10)
+
+    def kill(self) -> None:
+        self.proc.kill()
+        self.proc.wait(10)
+
+
+@pytest.fixture
+def run_lock_holder(tmp_path):
+    """``run_lock_holder(db_path)`` starts a holder process; all are killed at teardown."""
+    started: list[RunLockHolder] = []
+
+    def start(db_path: Path) -> RunLockHolder:
+        holder = RunLockHolder(tmp_path, db_path)
+        started.append(holder)
+        return holder
+
+    yield start
+    for holder in started:
+        if holder.proc.poll() is None:
+            holder.kill()
