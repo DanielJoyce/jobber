@@ -306,13 +306,24 @@ jobhunter-ctr sources list
 jobhunter-ctr secrets status
 ```
 
-Drafting stays on the host. The container has no `claude` CLI and no SDK drafting. The packet
-page in the console shows the host command to copy; save your notes in the console first, then
-run it in a host terminal:
+Drafting stays on the host. The container has no `claude` CLI and no SDK drafting, and the
+console refuses a drafting request with 409. On a packet page the console shows the host
+command to copy instead. First save what the draft should use, in the console: **Save notes
+only** stores employer notes and **Save story facts** stores story facts; the host draft reads
+both. Then run, in a host terminal:
 
 ```
 jobhunter apply draft 42
+jobhunter apply draft 42 --letter
+jobhunter apply draft 42 --question -
+jobhunter apply draft 42 --question-file ./question.txt
+jobhunter apply draft 42 --letter --instruction "shorter"
 ```
+
+The first drafts the resume, `--letter` the cover letter. `--question -` reads the custom
+question from stdin (paste it, then press Ctrl-D), which avoids shell quoting problems;
+`--question-file PATH` reads it from a file. Per-run instructions go on the host with
+`--instruction`; the console hides those fields in container mode.
 
 (`42` stands for a packet id.) The host-only commands (they refuse inside a container): `mail auth`, `schedule install|status|uninstall`,
 `migrate-paths`, `apply draft`, `upgrade`, `ctr-script`, `db relativize-paths`, `db restore` and
