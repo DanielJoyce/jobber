@@ -1,0 +1,24 @@
+# Base unit (specs/018, C4). No Secret= lines: `jobhunter container preflight` writes one
+# drop-in per secret in jobhunter-ctr-verify.container.d/. Install to ~/.config/containers/systemd/.
+[Unit]
+Description=jobhunter weekly source verification
+OnFailure=jobhunter-ctr-notify@%n.service
+
+[Container]
+Image=localhost/jobhunter:current
+ContainerName=jobhunter-ctr-verify
+UserNS=keep-id:uid=1000,gid=1000
+Timezone=local
+Volume=%h/.local/share/jobhunter:/data:z
+Volume=%h/.cache/jobhunter:/cache:z
+Volume=%h/.config/jobhunter/config.toml:/config/config.toml:ro,z
+Environment=JOBHUNTER_DATA_DIR=/data
+Environment=JOBHUNTER_DB_PATH=/data/jobhunter.db
+Environment=JOBHUNTER_PROFILE_DIR=/data/profile
+Environment=JOBHUNTER_RESUME_PATH=/data/resume
+Environment=JOBHUNTER_CACHE_DIR=/cache
+Exec=sources verify --wait 2h
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/mkdir -p -m 0700 %h/.local/share/jobhunter %h/.cache/jobhunter

@@ -1,0 +1,12 @@
+# Same schedule as the host timers from `jobhunter schedule install` (tested to match).
+# Install to ~/.config/systemd/user/, then enable --now.
+[Unit]
+Description=Collect jobhunter score batches at 03:30 (container)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=jobhunter-ctr-collect.service
+
+[Install]
+WantedBy=timers.target
