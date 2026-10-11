@@ -613,6 +613,10 @@ def run_pipeline(
         report.counts["dedupe_url"] = {k: v for k, v in vars(m).items() if isinstance(v, int)}
         x = merge_cross_state(conn, now=now)
         report.counts["dedupe_xstate"] = {k: v for k, v in vars(x).items() if isinstance(v, int)}
+        # A merge can abandon a packet: its employer-named copies go now (019561b (3)).
+        from jobhunter.apply.export import sync_abandoned
+
+        sync_abandoned(conn, resolve_path(settings.paths.data_dir))
     if "prefilter" in stages and profile is not None:
         report.counts["prefilter"] = run_prefilter(conn, profile, now=now)
     if "score" in stages:

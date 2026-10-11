@@ -993,6 +993,166 @@
    "label": "How did you earn the trust of a new team?",
    "options": [],
    "expected": null
+  },
+  {
+   "label": "How do you add references to open-source projects in your docs?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How would you design an address validation service?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Tell us about your experience with credit card processing systems",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Have you built bank account verification flows?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "How did you implement password resets securely?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Describe your work on consent management platforms",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Do you have experience with fixed income trading systems?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Have you supported military customers?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "What is your current base location?",
+   "options": [],
+   "expected": null
+  },
+  {
+   "label": "Create a password (see the password policy below)",
+   "options": [],
+   "expected": "credentials"
+  },
+  {
+   "label": "Please list three professional references",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Age group",
+   "options": [],
+   "expected": "identity"
+  },
+  {
+   "label": "Expected fixed income",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Current fixed income (annual)",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Fixed income expectations",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Desired fixed income",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Your fixed income",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Fixed income",
+   "options": [],
+   "expected": "pay"
+  },
+  {
+   "label": "Credit card payment information",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Credit Card Payment (application fee)",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Credit card data",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Credit card payments",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Professional references to your work history",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "References to your work (name, phone, email of a former manager)",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "References to your work history",
+   "options": [],
+   "expected": "references"
+  },
+  {
+   "label": "Password reset question",
+   "options": [],
+   "expected": "credentials"
+  },
+  {
+   "label": "Password reset answer",
+   "options": [],
+   "expected": "credentials"
+  },
+  {
+   "label": "Have you participated in any military programs?",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Military programs participation",
+   "options": [],
+   "expected": "eeo"
+  },
+  {
+   "label": "Bank account verification",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Bank account verification (for direct deposit)",
+   "options": [],
+   "expected": "payment"
+  },
+  {
+   "label": "Expected fixed income trading desk bonus",
+   "options": [],
+   "expected": "pay"
   }
  ]
 }

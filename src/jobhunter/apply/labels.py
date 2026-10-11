@@ -276,12 +276,55 @@ _EXCEPTIONS: dict[str, re.Pattern[str]] = {
         r"each|such|issues?|conflicts?|concerns?|problems?|challenges?|feedback|gaps?|risks?|"
         r"needs?|questions?|bugs?|requirements?|disagreements?|technical|performance)\b"
         r"|\b(how|to|would|did|do|will|can|you|we|i)\s+address\b"
+        r"|\baddress\s+(validation|verification|lookup|parsing|normali[sz]ation|autocomplete|"
+        r"geocoding)\s+(service|services|system|systems|api|apis|pipeline|tool|feature|logic)\b"
     ),
-    "military": re.compile(r"\bmilitary[\s-]+(grade|time)\b"),
+    "military": re.compile(
+        r"\bmilitary[\s-]+(grade|time)\b"
+        r"|\bmilitary\s+(customers?|clients?|contracts?)\b"
+    ),
     "criminal": re.compile(r"\bcriminal\s+justice\b"),
     "birth": re.compile(r"\bbirth\s+of\b"),
-    "references": re.compile(r"\bcross[\s-]references\b"),
+    "references": re.compile(
+        r"\bcross[\s-]references\b"
+        r"|\breferences\s+to\s+(open[\s-]source\s+(work|projects?|code|repositories)|code|"
+        r"docs|documentation|papers?|publications?|repositories)\b"
+    ),
+    # 950d5eb (4): engineering questions about systems that handle these things. Each needs a
+    # domain word after the phrase, and none applies after expected/current/desired/your/...
+    # (``_GUARD``), so the fields ("Credit card payment information", "Desired fixed income",
+    # "Password reset question", "Bank account verification") still match.
+    "credit card": re.compile(
+        r"\bcredit[\s-]+card\s+(processing|payments?|transactions?|tokeni[sz]ation|fraud)\s+"
+        r"(systems?|pipelines?|services?|platforms?|integrations?|infrastructure|apis?|"
+        r"detection|engineering)\b"
+    ),
+    "bank account": re.compile(
+        r"\bbank\s+account\s+(verification|linking|aggregation)\s+(flows?|systems?|services?|"
+        r"apis?|integrations?|pipelines?|features?|products?)\b"
+    ),
+    "password": re.compile(
+        r"\bpassword\s+(hashing|spraying)\b"
+        r"|\bpassword\s+resets?\s+(flows?|systems?|services?|features?|apis?|logic|securely|"
+        r"at\s+scale)\b"
+    ),
+    "consent": re.compile(
+        r"\bconsent\s+(management|banner)\s+(platforms?|systems?|tools?|tooling|solutions?|"
+        r"features?|frameworks?)\b"
+    ),
+    "income": re.compile(
+        r"\bfixed[\s-]+income\s+(trading|securities|markets?|desks?|systems?|portfolios?|"
+        r"analytics|instruments?|platforms?)\b"
+        r"|\bincome\s+statements?\s+(data|reports?|reporting|systems?|pipelines?)\b"
+    ),
+    "current base": re.compile(r"\bcurrent\s+base\s+(location|city)\b"),
 }
+# The exceptions above are not applied right after one of these words: "Expected fixed income
+# trading desk", "Your credit card processing ..." stay never-store.
+_GUARDED = frozenset(
+    {"military", "references", "credit card", "bank account", "password", "consent", "income"}
+)
+_GUARD = re.compile(r"\b(expected|current|desired|your|annual|my|target|monthly|hourly)\s+$")
 
 # "Are you 18 or older?" and "Are you of legal working age?" are yes/no eligibility questions,
 # not an age; a field asking for the age itself ("Age (must be 18 or older)") is never-store.
@@ -336,7 +379,11 @@ def _excepted(phrase: str, norm: str) -> bool:
         return False
     # Excepted only if every occurrence of the phrase sits inside an excepted use.
     hits = list(_pattern(phrase).finditer(norm))
-    spans = [m.span() for m in exc.finditer(norm)]
+    spans = [
+        m.span()
+        for m in exc.finditer(norm)
+        if phrase not in _GUARDED or not _GUARD.search(norm[: m.start()])
+    ]
     return all(any(s <= h.start() and h.end() <= e for s, e in spans) for h in hits)
 
 

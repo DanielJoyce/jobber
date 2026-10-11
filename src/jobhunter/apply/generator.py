@@ -532,13 +532,61 @@ def _run_cli(
     environ: Mapping[str, str] | None,
     allow_overage: bool,
     max_budget_usd: str = cli_runner.MAX_BUDGET_USD,
+    confirmed_paid: bool = False,
 ) -> tuple[Call, bool]:
     """One CLI call; returns (call, paid). Turns the runner off on an init or auth failure.
 
     ``allow_overage``: may this call continue if the stream reports paid extra usage? True
     for a run the user confirmed as paid, and for the first call of a click while no hold was
     set (the spec accepts that one call, under the cap). Otherwise the child is killed. Every
-    overage report sets the hold; only the user's Clear removes it."""
+    overage report sets the hold; only the user's Clear removes it.
+
+    A call that is not ``confirmed_paid`` (one made inside ``spend_section`` after a paid
+    click) runs under ``inflight.probe``: one at a time across the console and the CLI, and
+    refused (nothing run) if the call before it set the hold while this one waited. Without
+    it, two documents drafted side by side could both be charged before either reported paid
+    usage (a7a1b40 (5))."""
+    data_dir = settings.paths.data_dir
+    args = dict(
+        model=model,
+        effort=effort,
+        now=now,
+        estimate_usd=estimate_usd,
+        environ=environ,
+        allow_overage=allow_overage,
+        max_budget_usd=max_budget_usd,
+    )
+    if confirmed_paid:
+        return _run_cli_call(conn, settings, req, **args)
+    try:
+        with inflight.probe(data_dir):
+            if runner_state.load(data_dir).overage:
+                raise ApplyRefused(
+                    "your subscription is on paid extra usage (a run that just finished "
+                    f"reported it), so this run would be charged (about ${estimate_usd:.2f}, "
+                    "against the [apply] daily cap). Confirm to run it",
+                    offer_api=True,
+                    needs_paid_confirm=True,
+                )
+            return _run_cli_call(conn, settings, req, **args)
+    except inflight.Busy as exc:
+        raise ApplyRefused(str(exc), offer_api=True) from exc
+
+
+def _run_cli_call(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    req: Request,
+    *,
+    model: str,
+    effort: str | None,
+    now: datetime,
+    estimate_usd: float,
+    environ: Mapping[str, str] | None,
+    allow_overage: bool,
+    max_budget_usd: str,
+) -> tuple[Call, bool]:
+    """``_run_cli`` without the probe lock."""
     data_dir = settings.paths.data_dir
     binary = cli_runner.find_binary()
     if binary is None:
@@ -881,7 +929,12 @@ def _entail(
                     if left < ENTAILMENT_ESTIMATE_USD:
                         return {}, capped, 0.0
                     call, _paid = _run_cli(
-                        conn, settings, req, max_budget_usd=_budget(left), **cli_args
+                        conn,
+                        settings,
+                        req,
+                        max_budget_usd=_budget(left),
+                        confirmed_paid=True,
+                        **cli_args,
                     )
             else:
                 call, _paid = _run_cli(conn, settings, req, **cli_args)
@@ -1033,7 +1086,12 @@ def _generate_locked(
                 _preflight(conn, settings, runner, **pre)  # the cap again, inside the section
                 left = remaining_cap(conn, settings, now)
                 call, _paid = _run_cli(
-                    conn, settings, req, max_budget_usd=_budget(left), **cli_args
+                    conn,
+                    settings,
+                    req,
+                    max_budget_usd=_budget(left),
+                    confirmed_paid=True,
+                    **cli_args,
                 )
         else:
             # No hold was set: the spec accepts this one call if it turns out to be on paid

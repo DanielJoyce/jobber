@@ -549,7 +549,7 @@ def register(
             raise HTTPException(404, "no such export")
         data_dir = request.app.state.settings.paths.data_dir
         path = export.versioned_path(data_dir, p.id, exp, fmt)
-        if not path.is_file():
+        if not path.is_file() or not export.exported(data_dir, p.id, exp):
             raise HTTPException(404, "not exported yet: press Export on the packet page")
         return FileResponse(
             path,

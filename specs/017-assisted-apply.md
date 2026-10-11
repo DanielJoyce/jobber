@@ -236,7 +236,8 @@ claude -p --output-format stream-json --verbose
 | Auth check before the first call of a console process | `claude auth status` (JSON) must report a claude.ai login (`authMethod` claude.ai, `apiProvider` firstParty). Anything else (a third-party provider or a bearer token) turns the CLI runner off with the reason shown. Cached for the process |
 | Output | `stream-json` lines, read as they arrive. The `system`/`init` line carries `apiKeySource`, `model`, `tools` and `mcp_servers`. `rate_limit_event` lines carry `rate_limit_info`. The final `result` line carries `is_error`, `structured_output` (the object `--json-schema` validated), `usage` (input, output and cache tokens), `modelUsage` and `total_cost_usd`. jobhunter validates `structured_output` with the same pydantic model as the API path |
 | Checks on `init`, before the model is called | `apiKeySource` must be `none`, `tools` must be exactly `["StructuredOutput"]` (Claude Code adds that tool for `--json-schema` after `--tools ''` filtering; any other tool fails), and `mcp_servers` must be `[]`. On a mismatch jobhunter **kills the child at once**, before the request reaches the model, so nothing is billed; the CLI runner is turned off and the page says why |
-| Paid usage | If a `rate_limit_event` reports `isUsingOverage` or `overageInUse` (your subscription's extra usage, which is paid), the call is treated as paid: its `total_cost_usd` is logged under tier `packet` against `[apply] daily_cap_usd`, and further CLI calls wait for your click with "subscription is on paid extra usage". If the cap is already reached when overage shows, the child is killed |
+| Paid usage | If a `rate_limit_event` reports `isUsingOverage` or `overageInUse` (your subscription's extra usage, which is paid), the call is treated as paid: its `total_cost_usd` is logged under tier `packet` against `[apply] daily_cap_usd`, and further CLI calls wait for your click with "subscription is on paid extra usage". If the cap is already reached when overage shows, the child is killed. While no hold is set, CLI calls not confirmed as paid run **one at a time** (a `flock` across the console and the CLI command, waiting up to 240 s), and each re-reads the hold when its turn comes: two documents drafted side by side would otherwise both be charged before either reported paid usage. A call that finds the hold set while it waited runs nothing and asks for the paid click |
+| Stopping | Each child runs in its own session (a terminal's Ctrl-C does not reach it). Stopping the console (one Ctrl-C, SIGTERM) does not cut a draft short: uvicorn waits for running requests, so the run finishes (at most the 180 s timeout) and logs its usage before the process exits. `cli_runner.kill_all` (lifespan shutdown and interpreter exit) is only a backstop for a child whose run is gone; in practice it finds none. A hard kill of the console (SIGKILL, the OOM killer, a podman stop timeout) leaves the child running, and a request it finishes is not logged |
 | Result | Fails unless `is_error` is false and `structured_output` validates. Otherwise `total_cost_usd` (an API-equivalent figure) is shown on `/costs` for information only |
 | Runner off | "CLI runner off" is stored in `<data dir>/apply-runner.json` (reason and time; there is no general key-value table in the database), shown on the packet page and `/costs` with **Turn back on**. It survives restarts until you clear it |
 | Same request | `--system-prompt` replaces Claude Code's default agentic prompt, so both runners send jobhunter's system prompt, the same user message and the same schema. `--effort medium` matches the API path for Opus calls; the Haiku entailment call sets no effort on either runner (Haiku rejects it). The CLI may add a small context block of its own; the live smoke test records what reaches the model |
@@ -351,6 +352,13 @@ Files go to `<data dir>/packets/<packet_id>/`, named for employers as
 `<First>-<Last>-Resume.pdf` and `-Cover-Letter.pdf`. `<data dir>` is
 `settings.paths.data_dir`, which since `e7da19f` (#81) defaults to `$XDG_DATA_HOME/jobhunter`;
 code resolves it through settings, never a repo-relative path.
+
+Review follow-ups (019561b): a versioned file (`resume-v3.md`) is trusted as v3's export only
+when its Markdown matches the current v3 (the HTML and PDF also depend on the template, so a restyle does not untrust them) (after a database restore a new v3 can reuse an
+old v3's number); otherwise nothing is offered or attached until you press Export again. A
+question draft's **Copy** is gated like Export: hidden while a sentence is unsupported. A packet
+a merge abandons (nightly dedupe, cross-state, **Link them**) loses its employer-named copies
+right after the merge, not when its page is next opened.
 
 ### Checklists
 
@@ -798,7 +806,8 @@ the extension never acts on linkedin.com).
 | What matched | Response | Writes |
 |---|---|---|
 | The ATS URL matches a group (an ingested Greenhouse posting, a pasted one), the URL **identifies one posting**, and the titles agree (equal after `normalize_title`, or similarity at least 92) | `existing`: "This LinkedIn job is *Title* at *Employer*, from Greenhouse" | `job_board_ref` mapping the LinkedIn id to that group's canonical job (`linked`) |
-| The ATS URL matches but is a careers home (LinkedIn's off-site link often is), or the titles disagree | `same_job` offer, on your click only | nothing until you click |
+| The ATS URL identifies one posting but the titles disagree, or it is a generic careers path on the employer's site (not an ATS posting URL) and the titles agree | `same_job` offer, on your click only | nothing until you click |
+| A careers home (LinkedIn's off-site link often is), or a generic careers path whose titles disagree (one shared apply path would otherwise offer every later job of that employer, 56d7fcf) | no match; added or previewed as usual | as usual |
 | The LinkedIn id matches a group (an alert group from `430a0e7`, or an earlier capture) | `existing`; the group's `apply_link` is written from the decoded destination when it has none or its row is `unresolved` or `blocked` (never over a `live` or `expired` one; `status = 'unresolved'`, no request made), so its Apply button goes straight to the ATS | `job_board_ref`, `apply_link` |
 | Both, and they are **different groups** | `same_job`: both shown, **Link them** on your click ([below](#linking-two-groups)) | nothing until you click |
 | Neither | added or previewed as usual, with the `job_board_ref` row; when the destination is a supported ATS, the popup also offers **Fetch from greenhouse.io** (1a's Fetch posting text, robots.txt decides) for the employer's own text | the new group, `job_board_ref` |
@@ -836,6 +845,13 @@ progress; link when it finishes".
 | Exactly one is scored | The scored one | as the kept group's (so an unscored ingested group absorbed into a scored capture is not scored again) |
 | Both scored, or neither, and one is ingested | The ingested one | 0, its own |
 | Neither is ingested (two captures, or a capture and an `email-manual` group) | The scored one; else the one with an application or packet; else the ATS capture; else the older | 1 |
+
+This differs on purpose from [A later ingest of a captured posting](#a-later-ingest-of-a-captured-posting),
+where an applied capture stays on request: there the ingested job had no group yet, so keeping
+the flag prevents a new nightly score. Here the unscored ingested group already existed with flag
+0 and was in the nightly queue before the link, so a link of an applied, unscored capture with it
+gives flag 0 and the nightly run scores the kept group once, as it would have without the link
+(review follow-up 56d7fcf).
 
 After that, the LinkedIn alert email, the LinkedIn page and the ATS posting are one job.
 
@@ -1572,6 +1588,14 @@ set.
 
 A packet `ready` for 7 days whose application has **no `applied` event** shows on `/followups`
 as "ready, not applied?".
+
+Review follow-ups (950d5eb): files exported **after** the application was marked applied are
+attached on that export (`packets.attach_late_export`): the resume version the `packet:` ref
+names, and the letter while the packet is still `ready` with that resume and the letter version
+was written no later than the application's applied date (a letter written after applying is
+never attached, even if the packet is marked ready again). "Did you apply?" is not
+asked again for an application already at `applied` or later, and a *Yes* from a stale banner
+leaves such an application's status, applied date and events alone.
 
 ## Security and privacy
 

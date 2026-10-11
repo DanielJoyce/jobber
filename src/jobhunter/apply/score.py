@@ -177,11 +177,15 @@ def _claim_refusal(conn: sqlite3.Connection, job_id: int, now: datetime) -> str 
     """Why a new Score now must wait, or None.
 
     A Score now marks the job with a ``user-requested`` prefilter row and removes it again if
-    it scores nothing (including on Ctrl-C). A row from the last ``CLAIM_TTL`` with no score is
-    a run still going, or one whose process was killed; the message says when to retry.
+    it scores nothing (including on Ctrl-C). A row from the last ``CLAIM_TTL`` with no score
+    written since it was taken is a run still going, or one whose process was killed; the
+    message says when to retry. A claim that a score answered has finished, even when that
+    score no longer counts (the description was re-pasted since), so a retry is not refused.
     """
     row = conn.execute(
-        "SELECT reasons, evaluated_at FROM prefilter_result WHERE job_id = ?", (job_id,)
+        "SELECT p.reasons, p.evaluated_at, j.job_group_id FROM prefilter_result p "
+        "JOIN job j ON j.id = p.job_id WHERE p.job_id = ?",
+        (job_id,),
     ).fetchone()
     if row is None or json.loads(row["reasons"] or "[]") != [USER_REQUESTED]:
         return None
@@ -191,12 +195,27 @@ def _claim_refusal(conn: sqlite3.Connection, job_id: int, now: datetime) -> str 
         return None
     if now - started >= CLAIM_TTL:
         return None
+    if _scored_since(conn, row["job_group_id"], started):
+        return None
     retry = (started + CLAIM_TTL).astimezone()
     return (
         f"a Score now for this posting started at {started.astimezone():%H:%M} and has not "
         f"finished. If it is still running, its result will show here; if it was stopped, "
         f"you can retry after {retry:%H:%M}"
     )
+
+
+def _scored_since(conn: sqlite3.Connection, group_id: int | None, since: datetime) -> bool:
+    """A score for the group was written at or after ``since`` (any description revision)."""
+    if group_id is None:
+        return False
+    for r in conn.execute("SELECT created_at FROM fit_score WHERE job_group_id = ?", (group_id,)):
+        try:
+            if from_iso(r[0]) >= since:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _snapshot(conn: sqlite3.Connection, job_id: int) -> tuple[sqlite3.Row | None, str]:

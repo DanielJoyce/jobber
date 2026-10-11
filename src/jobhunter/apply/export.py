@@ -279,6 +279,23 @@ def versioned_path(data_dir: Path, packet_id: int, exp: Export, fmt: str) -> Pat
     return packet_dir(data_dir, packet_id) / f"{VERSIONED[exp.kind]}-v{exp.version.version}.{fmt}"
 
 
+def exported(data_dir: Path, packet_id: int, exp: Export) -> bool:
+    """The versioned files on disk are this version's export.
+
+    Their names (``resume-v3.md``) are trusted only when their content matches: after the
+    database is restored from a backup, a new v3 can reuse the number of an old v3 whose
+    files are still on disk, and those must never be attached or downloaded as the new one.
+    Only the Markdown, the version's content, is compared: the HTML and PDF also depend on
+    the template and its libraries, and an upgrade that restyles them must not untrust (and
+    so hide, and make you re-export over) every export already made.
+    """
+    try:
+        md = versioned_path(data_dir, packet_id, exp, "md").read_bytes()
+    except FileNotFoundError:
+        return False
+    return md == exp.md.encode("utf-8")
+
+
 def packet_refusal(status: str) -> str | None:
     return (
         "This packet was abandoned; nothing is exported for it." if status == "abandoned" else None
@@ -348,7 +365,7 @@ def sync_named(conn: sqlite3.Connection, data_dir: Path, packet_id: int) -> None
     keep: dict[str, Path] = {}
     for kind in KINDS:
         exp = current_export(conn, packet_id, kind) if live else None
-        if exp is not None and refusal(exp) is None:
+        if exp is not None and refusal(exp) is None and exported(data_dir, packet_id, exp):
             for fmt in FORMATS:
                 src = versioned_path(data_dir, packet_id, exp, fmt)
                 if src.is_file():
@@ -386,6 +403,32 @@ def safe_sync(conn: sqlite3.Connection, data_dir: Path, packet_id: int) -> str |
         log.warning("could not refresh the exported files of packet %s: %s", packet_id, exc)
         return f"Could not refresh the exported files in the data folder ({exc.strerror or exc})."
     return None
+
+
+def sync_abandoned(conn: sqlite3.Connection, data_dir: Path) -> int:
+    """``safe_sync`` every packet that still has employer-named copies but is abandoned.
+
+    A merge (the nightly ``dedupe_url`` pass, a cross-state merge, **Link them**) can abandon
+    a packet without its page being opened; its named copies, the files you attach, must go
+    then and not wait for that page. Run after those. Returns how many packets were synced.
+    """
+    root = Path(data_dir) / "packets"
+    try:
+        dirs = [d for d in root.iterdir() if d.is_dir() and d.name.isdigit()]
+    except FileNotFoundError:
+        return 0
+    n = 0
+    for d in sorted(dirs):
+        if not _owned(d):
+            continue
+        row = conn.execute(
+            "SELECT status FROM application_packet WHERE id = ?", (int(d.name),)
+        ).fetchone()
+        if row is not None and packet_refusal(row["status"]) is None:
+            continue
+        safe_sync(conn, data_dir, int(d.name))
+        n += 1
+    return n
 
 
 def named_version(data_dir: Path, packet_id: int, exp: Export) -> int | None:
@@ -437,11 +480,16 @@ def write_export(
     if err is not None:
         vpdf.unlink(missing_ok=True)
         written.pdf_error = err
+    from jobhunter.apply.packets import attach_late_export  # late: packets imports tracking
+
     with db.transaction(conn):
         conn.execute(
             "UPDATE packet_document SET rendered_path = ? WHERE id = ?",
             (str(vpdf.relative_to(data_dir)) if err is None else None, exp.version.id),
         )
+        if err is None:
+            # Marked applied before this export: attach the file now (950d5eb (6)).
+            attach_late_export(conn, packet_id, data_dir)
     # An explicit export replaces the copies of this document, whatever their version or name
     # (the manifest says they are ours) and a file of the exact same name.
     for f in named_files(data_dir, packet_id, exp.kind):
@@ -457,5 +505,7 @@ def write_export(
 
 
 def available(data_dir: Path, packet_id: int, exp: Export) -> dict[str, bool]:
-    """Which formats of the current version are on disk."""
-    return {f: versioned_path(data_dir, packet_id, exp, f).is_file() for f in FORMATS}
+    """Which formats of the current version are on disk (none when they are another
+    version's files under the same name, ``exported``)."""
+    ok = exported(data_dir, packet_id, exp)
+    return {f: ok and versioned_path(data_dir, packet_id, exp, f).is_file() for f in FORMATS}

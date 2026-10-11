@@ -410,8 +410,10 @@ def _score_group(settings, profile, group_id: int, yes: bool) -> None:
             typer.echo("not run")
             raise typer.Exit(1)
         try:
+            # The claim's clock starts now, not when the estimate was shown: a long wait at the
+            # prompt must not shorten the claim window (or score against a stale day's cap).
             out = group_score.score_now(
-                conn, profile, settings.scoring, group_id, token=est.token, now=now
+                conn, profile, settings.scoring, group_id, token=est.token, now=datetime.now(UTC)
             )
         except group_score.ScoreRefused as exc:
             typer.echo(f"not scored: {exc}", err=True)
@@ -638,6 +640,11 @@ def dedupe(
                 ("dry-run: would merge " if dry_run else "merged ") + f"{xres.would_merge} groups"
             )
             typer.echo(", ".join(f"{k}={v}" for k, v in vars(xres).items()))
+        if not dry_run:
+            # A merge can abandon a packet: its employer-named copies go now (019561b (3)).
+            from jobhunter.apply.export import sync_abandoned
+
+            sync_abandoned(conn, resolve_path(settings.paths.data_dir))
     finally:
         conn.close()
 
@@ -797,7 +804,15 @@ def console(
     host: Annotated[str | None, typer.Option(help="Bind host (default: config).")] = None,
     port: Annotated[int | None, typer.Option(help="Bind port (default: config).")] = None,
     allow_remote: Annotated[
-        bool, typer.Option("--allow-remote", help="Allow a non-loopback host (no auth!).")
+        bool,
+        typer.Option(
+            "--allow-remote",
+            help=(
+                "Allow a non-loopback host (no auth!). Without it every request must name "
+                "localhost or a loopback IP in Host; foo.localhost, 0.0.0.0 or an /etc/hosts "
+                "alias get 403."
+            ),
+        ),
     ] = False,
 ) -> None:
     """Start the local web console."""
