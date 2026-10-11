@@ -139,13 +139,15 @@ and appear in the jobhunter inbox as scored jobs.
 
 See [019](019-setup-and-readiness.md). A `/setup` page, a banner on Today and the inbox until
 the essentials are present, and `jobhunter doctor`, all from one set of local, free checks.
-First a fix so the run and the console resolve the resume the same way (S0), then the checks
-module (S1), then `doctor` and the page in parallel (S2, S3), then the container snapshot (S4),
-Gmail token age (S5), the free live checks (S6), a clear "no scorer credential" message in the
-run (S7), and docs (S8).
+S0 (every command resolves the resume the same way), S1 (the checks module), S9 and S10 first;
+then `doctor` (S2), the page (S3a), Gmail token age (S5) and the run's "no scorer credential"
+line (S7); then the banner and first-run redirect (S3b); last the nightly-run snapshot (S4) and
+the free live checks (S6). Docs (S8) once the page and `doctor` exist.
 
-**Done when** a fresh install with default config and no API key shows the banner naming the
-screen scorer, `jobhunter doctor` exits 1 saying the same, and neither made a network call.
+**Done when** a fresh install with default config, no Anthropic credential and no jobs
+redirects `/` to `/setup` naming the screen scorer, `/inbox` shows the banner, `jobhunter
+doctor` exits 1 saying the same, the nightly run's summary says why it did not score, and none
+of it made a network call.
 
 ## Dependency order
 
