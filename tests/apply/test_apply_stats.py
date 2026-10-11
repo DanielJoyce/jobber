@@ -43,9 +43,9 @@ def packet(conn, n, url, *, status="ready", app_status=None):
     conn.execute("UPDATE application_packet SET status = ? WHERE id = ?", (status, pid))
     if app_status:
         conn.execute(
-            "UPDATE application SET status = ? WHERE id = "
+            "UPDATE application SET status = ?, applied_at = ? WHERE id = "
             "(SELECT application_id FROM application_packet WHERE id = ?)",
-            (app_status, pid),
+            (app_status, NOW.isoformat(), pid),
         )
     return pid
 
@@ -121,3 +121,17 @@ def test_cli(tmp_path, monkeypatch):
     r = CliRunner().invoke(app, ["apply", "stats"])
     assert r.exit_code == 0, r.output
     assert "Packets: 1 (ready 1)" in r.output and "workable: 1" in r.output
+
+
+def test_sent_with_a_packet_counts_rejected_ones_and_never_drafts_or_abandoned(conn):
+    packet(conn, 1, URLS["lever"], app_status="rejected")  # sent, later rejected
+    packet(conn, 2, URLS["lever"], app_status="no_response")
+    packet(conn, 3, URLS["lever"], status="draft", app_status="applied")  # sent something else
+    packet(conn, 4, URLS["lever"], status="abandoned", app_status="applied")
+    pid = packet(conn, 5, URLS["lever"], status="draft")
+    conn.execute(
+        "UPDATE application SET resume_version = ? WHERE id = "
+        "(SELECT application_id FROM application_packet WHERE id = ?)",
+        (f"packet:{pid}/resume/v1", pid),
+    )  # recorded by attach_sent_packet when it was ready
+    assert stats.compute(conn, NOW).sent_with_packet == 3

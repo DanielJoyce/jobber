@@ -459,6 +459,8 @@ def guess_employer_from_url(url: str) -> str | None:
     rule = match_ats(url)
     if rule is None or rule.name not in ("greenhouse", "lever", "ashby", "workable"):
         return None
+    if rule.name == "workable" and not rule.is_posting(url):
+        return None  # /j/<code> share links and /api/ widget URLs name no account
     seg = urlsplit(url).path.strip("/").split("/")[0]
     return seg.replace("-", " ").replace("_", " ").title() if seg else None
 

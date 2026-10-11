@@ -329,3 +329,25 @@ def test_answers_saved_before_a_label_joined_the_list_are_hidden(client, conn): 
     page = client.get(f"/packet/{b}").text
     assert "SECRET-COMP" not in page
     assert 'id="hidden-answers"' in page
+
+
+def test_a_pasted_usajobs_url_gets_the_usajobs_checklist(client):  # noqa: F811
+    pid = new_packet(
+        client,
+        url="https://www.usajobs.gov/job/812345600",
+        employer="Synthetic Agency",
+        title="IT Specialist",
+    )
+    assert 'data-board="usajobs"' in client.get(f"/packet/{pid}").text
+
+
+def test_already_applied_still_warns_after_a_rejection(client, conn):  # noqa: F811
+    first = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    gid = packet_group(conn, first)
+    client.post(f"/job/{gid}/applied?choice=yes")
+    app_id = conn.execute("SELECT id FROM application WHERE job_group_id = ?", (gid,)).fetchone()[0]
+    client.post(f"/pipeline/{app_id}/move?to=rejected")
+    again = new_packet(
+        client, text="Synthetic posting text.", employer="Acme", title="Systems Engineer", force="1"
+    )
+    assert 'id="already-applied"' in client.get(f"/packet/{again}").text

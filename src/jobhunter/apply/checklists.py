@@ -10,6 +10,7 @@ import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from jobhunter.pipeline.ats_rules import match_ats
 
@@ -105,6 +106,10 @@ def ats_of(urls: Mapping[str, str | None]) -> str | None:
 def board_of(urls: Mapping[str, str | None]) -> str:
     if urls.get("family") == "usajobs":
         return "usajobs"
+    for key in ("final_url", "start_url", "apply_url", "url"):
+        host = (urlsplit(urls.get(key) or "").hostname or "").lower()
+        if host == "usajobs.gov" or host.endswith(".usajobs.gov"):
+            return "usajobs"  # a pasted USAJOBS announcement
     return _BOARD_OF_ATS.get(ats_of(urls) or "", "any")
 
 

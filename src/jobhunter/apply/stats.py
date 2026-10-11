@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from jobhunter.apply import checklists
-from jobhunter.apply.packets import SENT_STATUSES
+from jobhunter.apply.packets import PACKET_REF_PREFIX
 
 GATE_READY_ON_PUBLIC_ATS = 8
 CAPTURE_TABLE = "capture_log"
@@ -52,7 +52,7 @@ class Stats:
         others = sorted(set(self.ready_by_ats) - set(checklists.PUBLIC_ATS))
         for ats in (*checklists.PUBLIC_ATS, *others):
             out.append(f"  {ats}: {self.ready_by_ats[ats]}")
-        out.append(f"Sent with a packet (applied or later): {self.sent_with_packet}")
+        out.append(f"Sent with a packet: {self.sent_with_packet}")
         if self.documents:
             out.append("Documents:")
             for (kind, how), n in sorted(self.documents.items()):
@@ -90,7 +90,8 @@ def compute(conn: sqlite3.Connection, now: datetime, days: int | None = None) ->
     s = Stats(since=since)
     cut = since or ""
     rows = conn.execute(
-        "SELECT p.id, p.status, a.status AS app_status FROM application_packet p "
+        "SELECT p.id, p.status, a.status AS app_status, a.applied_at, a.resume_version "
+        "FROM application_packet p "
         "JOIN application a ON a.id = p.application_id WHERE p.created_at >= ?",
         (cut,),
     ).fetchall()
@@ -99,7 +100,11 @@ def compute(conn: sqlite3.Connection, now: datetime, days: int | None = None) ->
         if r["status"] == "ready":
             ats = checklists.ats_of(checklists.packet_urls(conn, r["id"])) or "other"
             s.ready_by_ats[ats] += 1
-        if r["status"] != "abandoned" and r["app_status"] in SENT_STATUSES:
+        # Sent with this packet: attach_sent_packet recorded it, or the application went out
+        # (an applied date) while the packet was ready. A later rejection or no_response does
+        # not unsend it; a draft packet was not what went out.
+        ref = (r["resume_version"] or "").startswith(f"{PACKET_REF_PREFIX}{r['id']}/")
+        if ref or (r["status"] == "ready" and r["applied_at"] is not None):
             s.sent_with_packet += 1
     for r in conn.execute(
         "SELECT kind, origin, runner, count(*) AS n FROM packet_document "

@@ -102,3 +102,11 @@ def test_unwrap(url, dest):
 )
 def test_unwrap_declines(url):
     assert unwrap(url) is None
+
+
+def test_workable_share_links_name_no_employer():
+    from jobhunter.apply.paste import guess_employer_from_url
+
+    assert guess_employer_from_url("https://apply.workable.com/acme-co/j/1A2B3C4D5E/") == "Acme Co"
+    assert guess_employer_from_url("https://apply.workable.com/j/1A2B3C4D5E") is None
+    assert guess_employer_from_url("https://apply.workable.com/api/v1/widget/x") is None
