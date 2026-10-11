@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -277,3 +278,88 @@ def test_busy_report_sees_another_process_holding_the_database(tmp_path, monkeyp
     finally:
         holder.stdin.close()
         holder.wait(10)
+
+
+def test_python_m_jobhunter_cli_console_is_a_console():
+    assert rst.is_console_argv(["python3", "-m", "jobhunter.cli", "console"])
+    assert not rst.is_console_argv(["python3", "jobhunter.cli", "console"])
+
+
+def test_a_wal_header_backup_on_a_read_only_path_restores_without_litter(layout, tmp_path):
+    data, live, saved, _keeper = layout
+    ro = tmp_path / "snapshot"
+    ro.mkdir()
+    legacy = ro / "legacy.db"
+    # A raw copy of a checkpointed WAL database: its header says WAL, and it has no -wal.
+    src = sqlite3.connect(saved)
+    src.execute("PRAGMA journal_mode=WAL")
+    src.close()
+    legacy.write_bytes(saved.read_bytes())
+    assert legacy.read_bytes()[18:20] == b"\x02\x02"
+    legacy.chmod(0o400)
+    ro.chmod(0o500)
+    try:
+        rst.restore(legacy, live, data, now=NOW)
+        assert sorted(p.name for p in ro.iterdir()) == ["legacy.db"]
+    finally:
+        ro.chmod(0o700)
+    assert scratch(live) == (10, "old")
+
+
+def test_a_source_with_its_own_wal_is_restored_with_the_wal_rows(layout, tmp_path, monkeypatch):
+    data, live, _saved, _keeper = layout
+    other = make_db(tmp_path / "other" / "jobhunter.db", monkeypatch, rows=2, tag="main")
+    holder = sqlite3.connect(other, isolation_level=None)
+    holder.execute("PRAGMA wal_autocheckpoint=0")
+    holder.executemany("INSERT INTO scratch VALUES (?, 'walonly')", [(i,) for i in range(3)])
+    # Snapshot the files while the -wal still holds the last rows.
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    (snap / "x.db").write_bytes(other.read_bytes())
+    (snap / "x.db-wal").write_bytes(Path(f"{other}-wal").read_bytes())
+    holder.close()
+    rst.restore(snap / "x.db", live, data, now=NOW)
+    assert scratch(live) == (5, "main,walonly")
+    assert sorted(p.name for p in snap.iterdir()) == ["x.db", "x.db-wal"]  # untouched
+
+
+def test_a_page_size_mismatch_is_explained_and_nothing_changes(layout, tmp_path):
+    data, live, saved, _keeper = layout
+    b8 = tmp_path / "b8.db"
+    b8.write_bytes(saved.read_bytes())  # a DELETE-mode backup: VACUUM can change its page size
+    conn = sqlite3.connect(b8)
+    conn.execute("PRAGMA page_size=8192")
+    conn.execute("VACUUM")
+    conn.close()
+    conn = sqlite3.connect(b8)
+    assert conn.execute("PRAGMA page_size").fetchone()[0] == 8192
+    conn.close()
+    with pytest.raises(rst.RestoreError, match="page size"):
+        rst.restore(tmp_path / "b8.db", live, data, now=NOW)
+    assert scratch(live) == (35, "old,new")
+    assert not (data / "backups").exists()
+
+
+def test_stale_staging_dirs_are_cleaned_but_nothing_else(tmp_path):
+    (tmp_path / ".restore-abc123").mkdir()
+    (tmp_path / ".restore-abc123" / "staged.db").write_text("x")
+    (tmp_path / ".restore-notes.txt").write_text("keep")  # a file, not ours
+    (tmp_path / "restore-abc").mkdir()
+    removed = rst.clean_stale_staging(tmp_path)
+    assert [p.name for p in removed] == [".restore-abc123"]
+    assert (tmp_path / ".restore-notes.txt").exists() and (tmp_path / "restore-abc").exists()
+
+
+def test_safety_is_reported_before_the_live_database_is_touched(layout):
+    data, live, saved, _keeper = layout
+    seen = []
+
+    def on_safety(path):
+        seen.append((path.exists(), scratch(live)))
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        rst.restore(saved, live, data, now=NOW, on_safety=on_safety)
+    assert seen == [(True, (35, "old,new"))]
+    assert scratch(live) == (35, "old,new")
+    assert [p.name for p in data.iterdir() if p.name.startswith(".restore-")] == []

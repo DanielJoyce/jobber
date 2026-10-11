@@ -272,3 +272,65 @@ class RunLock:
 
     def __exit__(self, *exc: object) -> None:
         self.release()
+
+
+# ─── console presence lock (C6) ─────────────────────────────────────────────
+
+CONSOLE_SUFFIX = ".console.lock"
+
+
+def console_lock_path(db_path: Path | str) -> Path:
+    """``<db_path>.console.lock``: every running console holds ``LOCK_SH`` on it."""
+    return Path(f"{db_path}{CONSOLE_SUFFIX}")
+
+
+class ConsoleBusy(RuntimeError):
+    """The console lock is held the other way (a restore is running, or a console is up)."""
+
+
+class ConsoleLock:
+    """``flock`` on ``<db_path>.console.lock``, shared or exclusive.
+
+    The console holds it shared for its whole life, so a ``db restore`` can tell that a
+    console is running even from another PID namespace (a sandbox or container sharing the
+    data directory), where /proc shows nothing; the kernel drops it when the console dies,
+    however it dies. A restore holds it exclusive while it works, so no console starts
+    against a half-restored database. The fd is O_CLOEXEC: children (claude drafts) do not
+    inherit it and cannot keep it held after the console exits.
+    """
+
+    def __init__(self, db_path: Path | str, *, exclusive: bool = False) -> None:
+        self.path = console_lock_path(db_path)
+        self.exclusive = exclusive
+        self._fd: int | None = None
+
+    @property
+    def held(self) -> bool:
+        return self._fd is not None
+
+    def acquire(self) -> None:
+        """Take it without waiting; raise :class:`ConsoleBusy` when held the other way."""
+        if self._fd is not None:
+            return
+        mkdir_private(self.path.parent)
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        mode = fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
+        try:
+            fcntl.flock(fd, mode | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            if self.exclusive:
+                raise ConsoleBusy(f"a jobhunter console is running (it holds {self.path})") from exc
+            raise ConsoleBusy(
+                f"a jobhunter db restore is in progress (it holds {self.path}); start the "
+                "console when it finishes"
+            ) from exc
+        self._fd = fd
+
+    def release(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            os.close(fd)  # closing the only fd drops the flock
+
+    def __del__(self) -> None:
+        self.release()

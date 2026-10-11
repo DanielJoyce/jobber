@@ -222,3 +222,46 @@ def test_restore_of_an_older_backup_does_not_migrate_it(env, monkeypatch, tmp_pa
     assert version_of(live) == OLDER
     assert "migrates it" in result.output
     assert not list((env / "backups").glob("auto/pre-migrate-*"))
+
+
+def test_an_interrupted_restore_says_where_the_safety_copy_is(env, restorable, monkeypatch):
+    live, saved = restorable
+    real = backup.table_counts
+    calls = []
+
+    def counts(conn):  # backup, live before, live after: interrupt at the third
+        calls.append(1)
+        if len(calls) == 3:
+            raise KeyboardInterrupt
+        return real(conn)
+
+    monkeypatch.setattr(backup, "table_counts", counts)
+    result = runner.invoke(app, ["db", "restore", str(saved)])
+    assert result.exit_code != 0
+    [safety] = (env / "backups").glob("jobhunter-*Z-pre-restore.db")
+    assert f"saved the current database to {safety}" in result.output
+    assert "interrupted" in result.output and str(safety) in result.output
+    assert rows(live) == 5  # the write had committed before the interruption
+
+
+def test_restore_cleans_staging_left_by_an_interrupted_restore(env, restorable):
+    _live, saved = restorable
+    stale = env / ".restore-k1lled"
+    stale.mkdir()
+    (stale / "staged.db").write_text("x" * 1000)
+    result = runner.invoke(app, ["db", "restore", str(saved)])
+    assert result.exit_code == 0, result.output
+    assert not stale.exists() and "left by an interrupted restore" in result.output
+
+
+def test_auto_backup_reports_leftover_temp_files(env, monkeypatch):
+    make_db(env / "jobhunter.db", monkeypatch)
+    autod = env / "backups" / "auto"
+    autod.mkdir(parents=True)
+    left = autod / ".jobhunter-auto-20200101T030000Z.db.x1.tmp"
+    left.write_text("x")
+    os.utime(left, (0, 0))
+    result = runner.invoke(app, ["db", "backup", "--auto"])
+    assert result.exit_code == 0
+    assert left.name in result.output and "remove them by hand" in result.output
+    assert left.exists()

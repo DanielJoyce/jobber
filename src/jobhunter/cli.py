@@ -1089,11 +1089,17 @@ def console(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
-    app_ = create_app(
-        settings,
-        allow_remote=allow_remote,
-        ext_port=settings.console.public_port or bind_port,
-    )
+    from jobhunter.core.runlock import ConsoleBusy
+
+    try:
+        app_ = create_app(
+            settings,
+            allow_remote=allow_remote,
+            ext_port=settings.console.public_port or bind_port,
+        )
+    except ConsoleBusy as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
     uvicorn.run(app_, host=bind_host, port=bind_port)
 
 
@@ -2051,6 +2057,15 @@ def db_backup_cmd(
     typer.echo(f"backed up {db_path} to {saved} ({size_mb:.1f} MB, integrity_check ok)")
     for path in removed:
         typer.echo(f"pruned {path}")
+    leftovers = backup.leftover_temp_files(saved.parent)
+    if leftovers:
+        total = sum(p.stat().st_size for p in leftovers) / 1_000_000
+        typer.echo(
+            f"note: {len(leftovers)} temp file(s) from interrupted backups ({total:.0f} MB) in "
+            f"{saved.parent}; nothing deletes them, remove them by hand: "
+            + " ".join(p.name for p in leftovers),
+            err=True,
+        )
 
 
 @db_app.command("restore")
@@ -2086,8 +2101,16 @@ def db_restore_cmd(
     except runlock.LockHeld as exc:
         typer.echo(f"error: {exc}. Wait for it to finish; nothing was changed.", err=True)
         raise typer.Exit(1) from exc
+    # Held exclusive for the whole restore: refused while any console holds it shared (also
+    # one in another PID namespace, invisible to /proc), and no console starts meanwhile.
+    console_lock = runlock.ConsoleLock(db_path, exclusive=True)
     try:
-        busy = rst.busy_report(db_path)
+        busy = []
+        try:
+            console_lock.acquire()
+        except runlock.ConsoleBusy as exc:
+            busy.append(str(exc))
+        busy += rst.busy_report(db_path)
         if busy:
             for line in busy:
                 typer.echo(f"  {line}", err=True)
@@ -2103,15 +2126,31 @@ def db_restore_cmd(
                 "will see the restored data; anything they write meanwhile may be lost.",
                 err=True,
             )
+        for stale in rst.clean_stale_staging(data_dir):
+            typer.echo(f"removed {stale} (left by an interrupted restore)", err=True)
+        saved: list[Path] = []
+
+        def said_safety(p: Path) -> None:
+            saved.append(p)
+            typer.echo(f"saved the current database to {p}")
+
         try:
-            result = rst.restore(path, db_path, data_dir)
+            result = rst.restore(path, db_path, data_dir, on_safety=said_safety)
         except rst.RestoreError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
+        except BaseException:
+            if saved:
+                typer.echo(
+                    f"error: the restore was interrupted after the current database was saved "
+                    f"to {saved[0]}. The live database holds either the old or the restored "
+                    "data (SQLite commits all or nothing); check it before restarting anything.",
+                    err=True,
+                )
+            raise
     finally:
+        console_lock.release()
         lock.release()
-    if result.safety_backup:
-        typer.echo(f"saved the current database to {result.safety_backup}")
     typer.echo(
         f"restored {result.source} into {db_path} (schema {result.source_version}); "
         "integrity_check ok"

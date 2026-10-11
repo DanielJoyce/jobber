@@ -36,7 +36,7 @@ from jobhunter.console import (
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
-from jobhunter.core import bucketnames, db, geo
+from jobhunter.core import bucketnames, db, geo, runlock
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
 logger = logging.getLogger(__name__)
@@ -204,8 +204,14 @@ def create_app(
     # specs/018 Version skew: a newer database, or pending migrations in a container
     # deployment, raise db.SchemaError here and the console does not start.
     boot = factory()
+    console_lock: runlock.ConsoleLock | None = None
     try:
         boot_file = db.database_file(boot)
+        if boot_file is not None:
+            # Held (shared) for the console's life: `db restore` refuses while it is, even
+            # from another PID namespace (C6). Raises ConsoleBusy while a restore runs.
+            console_lock = runlock.ConsoleLock(boot_file)
+            console_lock.acquire()
         db.migrate(
             boot,
             data_dir=None
@@ -213,6 +219,10 @@ def create_app(
             else db.owning_data_dir(boot_file, resolve_path(settings.paths.data_dir)),
             on_backup=lambda p: logger.warning("console: backed up %s before migrating", p),
         )
+    except BaseException:
+        if console_lock is not None:
+            console_lock.release()
+        raise
     finally:
         boot.close()
 
@@ -223,6 +233,8 @@ def create_app(
         # run has already logged its usage; any claude child still tracked here has lost its
         # run and is killed with its process group (a7a1b40 (4)).
         cli_runner.kill_all()
+        if console_lock is not None:
+            console_lock.release()
 
     app = FastAPI(
         title="jobhunter console",
@@ -240,6 +252,7 @@ def create_app(
         return PlainTextResponse(f"jobhunter console stopped: {exc}", status_code=503)
 
     app.state.settings = settings
+    app.state.console_lock = console_lock  # kept alive with the app
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["sparkline"] = sparkline
     templates.env.globals["static_url"] = static_url

@@ -1,11 +1,14 @@
 """``jobhunter db restore PATH`` (specs/018-containers.md#restore, ticket C6).
 
-Host only; the CLI refuses in container mode, holds the run lock (C5) and checks that nothing
-else has the database open before calling :func:`restore`, which:
+Host only; the CLI refuses in container mode, holds the run lock (C5), holds the console
+lock exclusive (refused while any console holds it shared, in any PID namespace) and checks
+/proc for other processes using the database before calling :func:`restore`, which:
 
-1. copies the backup through the SQLite online backup API into a staging file **inside the
-   data directory** (so it carries the directory's SELinux label), with ``integrity_check``
-   (C12's :func:`jobhunter.core.backup.online_backup`);
+1. copies the backup file (and its ``-wal``, if any) byte for byte into a private temp
+   directory **inside the data directory** (so it carries the directory's SELinux label, and
+   a backup on a read-only snapshot or mount works and gets no ``-shm`` litter), then through
+   the SQLite online backup API into a staging file, with ``integrity_check`` (C12's
+   :func:`jobhunter.core.backup.online_backup`);
 2. refuses a backup holding a migration this code does not know (the C12 guard) or one with
    no jobhunter schema at all; an older schema is allowed and reported;
 3. backs up the current database under a manual name (``backups/jobhunter-<UTC>Z-pre-restore.db``,
@@ -20,17 +23,22 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
+import shutil
 import sqlite3
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote
 
 from jobhunter.core import backup, db
 from jobhunter.ops.migrate_paths import other_holders
 from jobhunter.xdg import mkdir_private
 
 BUSY_TIMEOUT_MS = 30_000
+STAGING_PREFIX = ".restore-"
+_STAGING_RE = re.compile(r"^\.restore-[A-Za-z0-9_]+$")
 STOP_HINT = (
     "Stop the console and timers first. Containers: systemctl --user stop jobhunter-console "
     "jobhunter-ctr-run.timer jobhunter-ctr-collect.timer jobhunter-ctr-verify.timer (and wait "
@@ -85,10 +93,13 @@ def console_processes(proc_root: Path = Path("/proc")) -> list[str]:
 
 
 def is_console_argv(argv: list[str]) -> bool:
-    """``jobhunter console ...``, ``python /path/to/jobhunter console`` or ``python -m jobhunter
-    console``: the first argument named ``jobhunter`` is followed somewhere by ``console``."""
+    """``jobhunter console ...``, ``python /path/to/jobhunter console``, ``python -m jobhunter
+    console`` or ``python -m jobhunter.cli console``: the first argument naming jobhunter is
+    followed somewhere by ``console``."""
     for i, arg in enumerate(argv):
-        if Path(arg).name == "jobhunter":
+        if Path(arg).name == "jobhunter" or (
+            arg == "jobhunter.cli" and i > 0 and argv[i - 1] == "-m"
+        ):
             return "console" in argv[i + 1 :]
     return False
 
@@ -102,13 +113,6 @@ def busy_report(db_path: Path, proc_root: Path = Path("/proc")) -> list[str]:
     ]
     who += [f"console running: {c}" for c in console_processes(proc_root)]
     return who
-
-
-def _ro_connect(path: Path) -> sqlite3.Connection:
-    """Open ``path`` read-only (never creates it, never writes to it)."""
-    conn = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True, isolation_level=None)
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-    return conn
 
 
 def _live_connect(path: Path) -> sqlite3.Connection:
@@ -126,20 +130,43 @@ def _same_file(a: Path, b: Path) -> bool:
         return False
 
 
-def _stage(source: Path, data_dir: Path, now: datetime) -> Path:
-    """Copy ``source`` into a checked staging file inside ``data_dir``."""
-    staging = Path(data_dir) / f".restore-{backup.utc_stamp(now)}Z.db"
+def clean_stale_staging(data_dir: Path) -> list[Path]:
+    """Remove staging directories an interrupted restore left in ``data_dir`` (only names made
+    by :func:`restore`). Safe only while holding the run lock, as the CLI does."""
+    removed: list[Path] = []
+    if not Path(data_dir).is_dir():
+        return removed
+    for entry in Path(data_dir).iterdir():
+        if _STAGING_RE.match(entry.name) and entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+            removed.append(entry)
+    return removed
+
+
+def _stage(source: Path, workdir: Path) -> Path:
+    """Copy ``source`` (and its -wal) into ``workdir``, then into a checked staging file there.
+
+    The byte copy means SQLite never opens the user's file itself: a backup on a read-only
+    path works even when its header says WAL, and nothing (-shm, -wal) is created beside it.
+    """
+    copy = workdir / "source.db"
     try:
-        src = _ro_connect(source)
+        shutil.copyfile(source, copy)
+        wal = Path(f"{source}-wal")
+        if wal.is_file():
+            shutil.copyfile(wal, Path(f"{copy}-wal"))
+    except OSError as exc:
+        raise RestoreError(f"cannot read {source}: {exc}. Nothing was changed.") from exc
+    try:
+        src = sqlite3.connect(str(copy), isolation_level=None)
     except sqlite3.Error as exc:
-        raise RestoreError(f"cannot open {source}: {exc}") from exc
+        raise RestoreError(f"cannot open {source}: {exc}. Nothing was changed.") from exc
     try:
-        backup.online_backup(src, staging)
-    except backup.BackupError as exc:  # not SQLite, unreadable, or fails integrity_check
+        return backup.online_backup(src, workdir / "staged.db")
+    except (backup.BackupError, OSError) as exc:  # not SQLite, or fails integrity_check
         raise RestoreError(f"{source} is not a usable backup: {exc}. Nothing was changed.") from exc
     finally:
         src.close()
-    return staging
 
 
 def _check_schema(staged: sqlite3.Connection, source: Path) -> tuple[int, int]:
@@ -167,11 +194,15 @@ def restore(
     data_dir: Path,
     *,
     now: datetime | None = None,
+    on_safety: Callable[[Path], object] | None = None,
 ) -> RestoreResult:
     """Restore ``source`` into the live database at ``db_path``. See the module docstring.
 
     The caller holds the run lock and has checked that nothing else uses the database.
-    ``data_dir`` is where the staging file and the safety backup go (``db.owning_data_dir``).
+    ``data_dir`` is where the staging directory and the safety backup go
+    (``db.owning_data_dir``). ``on_safety(path)`` is called as soon as the current database
+    is saved, before the live database is touched, so the caller can tell the user even if
+    the restore is then interrupted.
     """
     now = (now or datetime.now(UTC)).astimezone(UTC)
     source = Path(source).expanduser().resolve()
@@ -181,20 +212,45 @@ def restore(
     if any(_same_file(source, Path(f"{db_path}{s}")) for s in ("", "-wal", "-shm")):
         raise RestoreError(f"{source} is the live database itself; pick a backup file")
     mkdir_private(data_dir)
-    staging = _stage(source, data_dir, now)
+    workdir = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=data_dir))  # 0700
     try:
-        staged = _ro_connect(staging)
+        staged = _live_connect(_stage(source, workdir))
         try:
             source_version, code_version = _check_schema(staged, source)
             expected = backup.table_counts(staged)
             return _write_live(
-                staged, source, db_path, data_dir, now, source_version, code_version, expected
+                staged,
+                source,
+                db_path,
+                data_dir,
+                now,
+                source_version,
+                code_version,
+                expected,
+                on_safety,
             )
         finally:
             staged.close()
     finally:
-        with contextlib.suppress(FileNotFoundError):
-            staging.unlink()
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _check_page_size(staged: sqlite3.Connection, live: sqlite3.Connection, db_path: Path) -> None:
+    """SQLite cannot back up into a WAL database with a different page size (it reports a
+    misleading "readonly database"); say what is going on instead, before anything changes."""
+    try:
+        mode = live.execute("PRAGMA journal_mode").fetchone()[0]
+        theirs = staged.execute("PRAGMA page_size").fetchone()[0]
+        ours = live.execute("PRAGMA page_size").fetchone()[0]
+    except sqlite3.DatabaseError:
+        return  # a damaged live database: the safety backup step reports it
+    if mode == "wal" and theirs != ours:
+        raise RestoreError(
+            f"the backup's page size ({theirs}) differs from the live database's ({ours}), and "
+            "SQLite cannot restore into a WAL database with a different page size. Stop "
+            f"everything, move {db_path} and its -wal and -shm files aside, and run this again "
+            "(a missing database is restored into a new file). Nothing was changed."
+        )
 
 
 def _write_live(
@@ -206,6 +262,7 @@ def _write_live(
     source_version: int,
     code_version: int,
     expected: dict[str, int],
+    on_safety: Callable[[Path], object] | None,
 ) -> RestoreResult:
     notes: list[str] = []
     existed = db_path.exists() and db_path.stat().st_size > 0
@@ -217,6 +274,7 @@ def _write_live(
         before: dict[str, int] | None = None
         safety: Path | None = None
         if existed:
+            _check_page_size(staged, live, db_path)
             with contextlib.suppress(sqlite3.DatabaseError):
                 before = backup.table_counts(live)
             dest = backup.manual_dir(data_dir) / backup.manual_name(now, "restore")
@@ -229,6 +287,8 @@ def _write_live(
                     f"{db_path} and its -wal and -shm files aside by hand, and run this again "
                     "(a missing database is restored into a new file)."
                 ) from exc
+            if on_safety is not None:
+                on_safety(safety)
         try:
             # pages=-1: one step, so the whole copy happens under one write lock and no other
             # connection can interleave a write; it waits (busy_timeout) for a current writer.
@@ -241,15 +301,17 @@ def _write_live(
     finally:
         live.close()
 
+    where = f" The database before this restore is saved at {safety}." if safety else ""
     check = _live_connect(db_path)
     try:
         row = check.execute("PRAGMA integrity_check").fetchone()
         if not row or row[0] != "ok":
-            where = f" The database before this restore is saved at {safety}." if safety else ""
             raise RestoreError(
                 f"integrity_check after restoring into {db_path}: {row[0] if row else row}.{where}"
             )
         after = backup.table_counts(check)
+    except sqlite3.DatabaseError as exc:
+        raise RestoreError(f"checking {db_path} after the restore failed: {exc}.{where}") from exc
     finally:
         check.close()
 

@@ -172,3 +172,67 @@ def test_table_counts_skips_fts_shadow_tables(tmp_path):
     conn.execute("INSERT INTO f VALUES ('hello')")
     assert backup.table_counts(conn) == {"a": 2}
     conn.close()
+
+
+def test_days_are_utc_days_whatever_the_local_timezone(tmp_path, monkeypatch):
+    """23:30Z and 00:30Z the next morning are two UTC days, though one local day in many zones;
+    two runs in one UTC day are one day, though two local days east of UTC."""
+    import time
+
+    for tz in ("America/Los_Angeles", "Asia/Tokyo", "UTC"):
+        monkeypatch.setenv("TZ", tz)
+        time.tzset()
+        autod = tmp_path / tz.replace("/", "_")
+        for stamp in ["20261009T233000", "20261010T003000", "20261010T143000"]:
+            auto(autod, stamp)
+        backup.prune_auto(autod, NOW, daily=2, weekly=0)
+        assert names(autod) == [
+            "jobhunter-auto-20261009T233000Z.db",
+            "jobhunter-auto-20261010T143000Z.db",
+        ], tz
+    monkeypatch.delenv("TZ")
+    time.tzset()
+
+
+def test_weeks_are_iso_weeks_across_a_year_end(tmp_path):
+    """2026-12-28 .. 2027-01-03 is one ISO week (2026-W53), though it spans two calendar years,
+    and the same week number in another year is another week."""
+    autod = tmp_path / "auto"
+    for stamp in [
+        "20261228T030000",  # 2026-W53 (Mon)
+        "20270102T030000",  # 2026-W53 (Sat): newest of that week
+        "20261221T030000",  # 2026-W52
+        "20250106T030000",  # 2025-W02
+        "20260105T030000",  # 2026-W02: same week number, other year
+    ]:
+        auto(autod, stamp)
+    backup.prune_auto(autod, datetime(2027, 1, 3, tzinfo=UTC), daily=0, weekly=4)
+    assert names(autod) == [
+        "jobhunter-auto-20250106T030000Z.db",
+        "jobhunter-auto-20260105T030000Z.db",
+        "jobhunter-auto-20261221T030000Z.db",
+        "jobhunter-auto-20270102T030000Z.db",
+    ]
+
+
+def test_the_same_day_in_another_year_is_another_day(tmp_path):
+    autod = tmp_path / "auto"
+    auto(autod, "20251010T030000")
+    auto(autod, "20261010T030000")
+    backup.prune_auto(autod, NOW, daily=2, weekly=0)
+    assert len(names(autod)) == 2
+
+
+def test_leftover_temp_files_are_reported_not_deleted(tmp_path):
+    autod = tmp_path / "auto"
+    old = touch(autod / ".jobhunter-auto-20261001T030000Z.db.ab_c1.tmp")
+    fresh = touch(autod / ".jobhunter-auto-20261010T030000Z.db.zz9.tmp")
+    pre = touch(autod / ".pre-migrate-28-33-20261001T000000Z.db.q1.tmp")
+    other = touch(autod / ".something.tmp")
+    past = (NOW - timedelta(days=2)).timestamp()
+    for p in (old, pre, other):
+        os.utime(p, (past, past))
+    os.utime(fresh, (NOW.timestamp(), NOW.timestamp()))
+    assert backup.leftover_temp_files(autod, NOW) == sorted([old, pre])
+    backup.prune_auto(autod, NOW)
+    assert all(p.exists() for p in (old, fresh, pre, other))

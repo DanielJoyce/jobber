@@ -71,10 +71,24 @@ def online_backup(src: sqlite3.Connection, dest: Path) -> Path:
         if not row or row[0] != "ok":
             raise BackupError(f"backup to {dest} failed integrity_check: {row[0] if row else row}")
         os.replace(tmp, dest)
+        _fsync_dir(dest.parent)  # the rename itself is durable before anyone relies on it
     finally:
         with contextlib.suppress(FileNotFoundError):
             tmp.unlink()
     return dest
+
+
+def _fsync_dir(directory: Path) -> None:
+    """fsync a directory so a rename into it survives a power cut (best effort)."""
+    try:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+    try:
+        with contextlib.suppress(OSError):
+            os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def pre_migrate_name(from_version: int, to_version: int, now: datetime | None = None) -> str:
@@ -256,6 +270,28 @@ def auto_backup(
     directory = auto_dir(data_dir)
     dest = online_backup(conn, directory / auto_name(now))
     return dest, prune_auto(directory, now, protect=dest)
+
+
+LEFTOVER_TEMP_RE = re.compile(r"^\.(jobhunter-auto-\d{8}T\d{6}Z|pre-migrate-.+Z)\.db\..+\.tmp$")
+LEFTOVER_AGE = timedelta(hours=6)
+
+
+def leftover_temp_files(directory: Path, now: datetime | None = None) -> list[Path]:
+    """Temp files that a killed backup left in ``directory`` (older than 6 h, so not one being
+    written now). Reported, never deleted: pruning only ever deletes the two exact backup
+    name patterns (specs/018 Backups)."""
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+    found = []
+    for entry in directory.iterdir():
+        if not LEFTOVER_TEMP_RE.match(entry.name) or entry.is_symlink() or not entry.is_file():
+            continue
+        mtime = datetime.fromtimestamp(entry.stat().st_mtime, UTC)
+        if now - mtime > LEFTOVER_AGE:
+            found.append(entry)
+    return sorted(found)
 
 
 def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
