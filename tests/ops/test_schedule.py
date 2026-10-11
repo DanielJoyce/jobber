@@ -77,18 +77,19 @@ def test_services_use_absolute_exec_and_repo_paths(inst):
         assert exec_start is not None
         assert exec_start.group(1) == str(EXEC)
         assert Path(exec_start.group(1)).is_absolute()
-    assert (
-        "ExecStart=/opt/jobber/.venv/bin/jobhunter run --wait 4h\n"
-        in units["jobhunter-run.service"]
-    )
-    assert (
-        "ExecStart=/opt/jobber/.venv/bin/jobhunter score --collect-pending"
-        in units["jobhunter-collect.service"]
-    )
-    assert (
-        "ExecStart=/opt/jobber/.venv/bin/jobhunter sources verify"
-        in units["jobhunter-verify.service"]
-    )
+
+    # Every timer job passes --wait (the run lock, specs/018 C5): without it a job that finds
+    # the lock held exits 0 and is silently skipped. Pin each whole ExecStart line.
+    def exec_lines(name: str) -> list[str]:
+        return [ln for ln in units[name].splitlines() if ln.startswith("ExecStart=")]
+
+    bin_ = "ExecStart=/opt/jobber/.venv/bin/jobhunter"
+    assert exec_lines("jobhunter-run.service") == [f"{bin_} run --wait 4h"]
+    assert exec_lines("jobhunter-collect.service") == [
+        f"{bin_} score --collect-pending --wait 2h",
+        f"{bin_} score --rescore-pending --wait 2h",
+    ]
+    assert exec_lines("jobhunter-verify.service") == [f"{bin_} sources verify --wait 4h"]
 
 
 def test_services_are_oneshot_niced_with_path_and_xdg_env(inst):
