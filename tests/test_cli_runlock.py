@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -63,6 +62,23 @@ def hold(run_lock_holder):
     return run_lock_holder
 
 
+def release_once_waiting(monkeypatch, holder) -> None:
+    """Tell ``holder`` to release only once the command has found the lock held and begun
+    to wait, never on a timer: on a slow CI runner the CLI can take longer to start than any
+    fixed delay, and would then find the lock already free and never wait."""
+    real = runlock.RunLock.acquire
+
+    def acquire(self, wait=None, on_wait=None):
+        def waiting(h):
+            if on_wait is not None:
+                on_wait(h)
+            holder.release()
+
+        return real(self, wait, waiting)
+
+    monkeypatch.setattr(runlock.RunLock, "acquire", acquire)
+
+
 def test_second_submit_spends_nothing_while_another_job_runs(env, hold):
     h = hold(env.db_path)
     result = cli.invoke(app, ["score", "--submit"])
@@ -97,18 +113,18 @@ def test_rescore_pending_without_wait_exits_zero(env, hold, monkeypatch):
     assert drained == []
 
 
-def test_timer_run_waits_its_turn_then_runs(env, hold):
+def test_timer_run_waits_its_turn_then_runs(env, hold, monkeypatch):
     # After downtime Persistent=true fires several timers at once: each must run in turn.
     h = hold(env.db_path)
-    threading.Timer(0.3, h.release).start()
+    release_once_waiting(monkeypatch, h)
     result = cli.invoke(app, ["run", "--wait", "20s"])
     assert result.exit_code == 0, result.output
     assert env.run == 1
 
 
-def test_collect_waits_for_the_running_job_then_collects(env, hold):
+def test_collect_waits_for_the_running_job_then_collects(env, hold, monkeypatch):
     h = hold(env.db_path)
-    threading.Timer(0.3, h.release).start()
+    release_once_waiting(monkeypatch, h)
     result = cli.invoke(app, ["score", "--collect-pending"])  # waits 2h by default
     assert result.exit_code == 0, result.output
     assert env.collect == 1
@@ -182,9 +198,9 @@ def _lock_is_free(db_path) -> bool:
     return False
 
 
-def test_waiting_says_what_it_waits_for(env, hold):
+def test_waiting_says_what_it_waits_for(env, hold, monkeypatch):
     h = hold(env.db_path)
-    threading.Timer(0.3, h.release).start()
+    release_once_waiting(monkeypatch, h)
     result = cli.invoke(app, ["score", "--collect-pending"])
     assert result.exit_code == 0, result.output
     assert "waiting up to 2h for the run lock held by run, pid" in result.output
