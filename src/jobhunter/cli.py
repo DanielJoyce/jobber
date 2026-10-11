@@ -5,8 +5,8 @@ from __future__ import annotations
 import contextvars
 import json
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -184,6 +184,14 @@ def _parse_wait(wait: str | None) -> float | None:
         raise typer.Exit(2) from exc
 
 
+def _human(seconds: float) -> str:
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds / 3600:g}h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds / 60:g}m"
+    return f"{seconds:g}s"
+
+
 @contextmanager
 def _job_lock(settings, command: str, wait: float | None) -> Iterator[None]:
     """Hold the run lock (specs/018 Run lock, C5) for the whole job.
@@ -195,8 +203,13 @@ def _job_lock(settings, command: str, wait: float | None) -> Iterator[None]:
     from jobhunter.core import runlock
 
     lock = runlock.RunLock(resolve_path(settings.paths.db_path), command)
+
+    def waiting(holder: runlock.Holder | None) -> None:
+        who = holder.describe() if holder else "details unknown"
+        typer.echo(f"waiting up to {_human(wait or 0)} for the run lock held by {who}", err=True)
+
     try:
-        lock.acquire(wait)
+        lock.acquire(wait, on_wait=waiting)
     except (runlock.StaleHolder, runlock.LockTimeout) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(runlock.EXIT_STALE) from exc
@@ -396,8 +409,17 @@ def score(
     names = ["submit", "collect", "collect-pending", "deep", "deep-group", "rescore-pending"]
     names += ["rescore", "group"]
     mode = next(name for name, on in zip(names, modes, strict=True) if on)
-    with _job_lock(load_settings(), f"score --{mode}", wait_s):
+    settings = load_settings()
+
+    def lock() -> AbstractContextManager[None]:
+        return _job_lock(settings, f"score --{mode}", wait_s)
+
+    # --group and --rescore ask y/N first: they take the lock only after the answer (and
+    # re-check what was confirmed), so an open prompt never blocks the timers.
+    prompts = mode in ("group", "rescore")
+    with nullcontext() if prompts else lock():
         _score_mode(
+            paid_lock=lock if prompts else nullcontext,
             submit=submit,
             collect=collect,
             collect_pending=collect_pending,
@@ -430,8 +452,10 @@ def _score_mode(
     deep_group: int | None,
     scorer_override: str | None,
     jobs_per_request: int | None,
+    paid_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
 ) -> None:
-    """The body of ``score``, run while holding the run lock."""
+    """The body of ``score``: under the run lock, or for --group and --rescore taking it
+    through ``paid_lock`` once the user has said yes."""
     from datetime import UTC, datetime
 
     import anthropic
@@ -452,7 +476,7 @@ def _score_mode(
         if scorer_override is not None or jobs_per_request is not None:
             typer.echo("--group scores with scoring.screen_scorer; no other options", err=True)
             raise typer.Exit(2)
-        _score_group(settings, profile, group, yes)
+        _score_group(settings, profile, group, yes, paid_lock)
         return
     rescoring = rescore_pending or rescore is not None
     if scorer_override is not None and not (submit or collect is not None or rescoring):
@@ -472,7 +496,7 @@ def _score_mode(
         typer.echo("--jobs-per-request is at most 16 for chat scorers", err=True)
         raise typer.Exit(2)
     if rescoring:
-        _score_rescore(settings, profile, rescore, scorer_override, yes)
+        _score_rescore(settings, profile, rescore, scorer_override, yes, paid_lock)
         return
     screening = submit or collect is not None
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
@@ -560,7 +584,13 @@ def _score_mode(
         conn.close()
 
 
-def _score_group(settings, profile, group_id: int, yes: bool) -> None:
+def _score_group(
+    settings,
+    profile,
+    group_id: int,
+    yes: bool,
+    paid_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+) -> None:
     """``score --group GID``: estimate, confirm, then score that one group (specs/017)."""
     from jobhunter.apply import score as group_score
     from jobhunter.scoring.scorers import privacy_notice
@@ -584,9 +614,11 @@ def _score_group(settings, profile, group_id: int, yes: bool) -> None:
             typer.echo("not run")
             raise typer.Exit(1)
         try:
-            out = group_score.score_now(
-                conn, profile, settings.scoring, group_id, token=est.token, now=now
-            )
+            # Locked only after the answer; score_now re-checks the confirmed estimate token.
+            with paid_lock():
+                out = group_score.score_now(
+                    conn, profile, settings.scoring, group_id, token=est.token, now=now
+                )
         except group_score.ScoreRefused as exc:
             typer.echo(f"not scored: {exc}", err=True)
             raise typer.Exit(1) from exc
@@ -595,7 +627,14 @@ def _score_group(settings, profile, group_id: int, yes: bool) -> None:
         conn.close()
 
 
-def _score_rescore(settings, profile, scope: str | None, scorer_override: str | None, yes: bool):
+def _score_rescore(
+    settings,
+    profile,
+    scope: str | None,
+    scorer_override: str | None,
+    yes: bool,
+    paid_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+):
     """``score --rescore SCOPE`` (estimate, confirm, run) or ``--rescore-pending`` (drain)."""
     from jobhunter.scoring import rescore as rs
     from jobhunter.scoring.scorers import ScorerError, privacy_notice
@@ -650,21 +689,36 @@ def _score_rescore(settings, profile, scope: str | None, scorer_override: str | 
         if not yes and not typer.confirm("Run it?", default=False):
             typer.echo("not run")
             raise typer.Exit(1)
-        rid = rs.create_request(conn, profile, plan, now)
-        try:
-            res = rs.run_request(
-                conn,
-                rid,
-                profile,
-                settings.scoring,
-                scorer=spec,
-                now=clock,
-                prefiltered=plan.prefilter,
-            )
-        except rs.RescoreError as exc:
-            rs.cancel_request(conn, rid, clock())
-            typer.echo(f"re-score: {exc}", err=True)
-            raise typer.Exit(1) from exc
+        # The run lock is taken only after the answer, so an open prompt blocks no other job;
+        # the plan is rebuilt under the lock and must still be the one confirmed.
+        with paid_lock():
+            try:
+                fresh = rs.make_plan(conn, profile, settings.scoring, scope, spec, clock())
+            except (rs.RescoreError, ScorerError) as exc:
+                typer.echo(f"re-score: {exc}", err=True)
+                raise typer.Exit(1) from exc
+            if fresh.token != plan.token or fresh.refusal:
+                typer.echo(
+                    "the plan changed while you were deciding (new jobs, profile or costs); "
+                    "nothing spent. Run it again to see the new estimate.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            rid = rs.create_request(conn, profile, fresh, now)
+            try:
+                res = rs.run_request(
+                    conn,
+                    rid,
+                    profile,
+                    settings.scoring,
+                    scorer=spec,
+                    now=clock,
+                    prefiltered=fresh.prefilter,
+                )
+            except rs.RescoreError as exc:
+                rs.cancel_request(conn, rid, clock())
+                typer.echo(f"re-score: {exc}", err=True)
+                raise typer.Exit(1) from exc
         row = rs.get_request(conn, rid)
         typer.echo(
             f"{row['status']}: scored {res.scored} of {res.total}, errors {res.errored}, "

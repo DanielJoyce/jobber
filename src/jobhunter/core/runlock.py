@@ -65,8 +65,22 @@ class Holder:
     host: str | None
     command: str | None
     started_at: datetime | None
+    boot_id: str | None = None
+    monotonic: float | None = None  # CLOCK_MONOTONIC at start: excludes suspend
 
-    def age(self, now: datetime) -> timedelta | None:
+    def age(
+        self, now: datetime, monotonic_now: float | None = None, boot_id: str | None = None
+    ) -> timedelta | None:
+        """How long the holder has run. On the same boot (same kernel, so host and its
+        containers) this uses CLOCK_MONOTONIC, which stops during suspend: a job frozen by a
+        suspend is not reported as hung on resume. Otherwise wall time."""
+        if (
+            self.monotonic is not None
+            and monotonic_now is not None
+            and self.boot_id is not None
+            and self.boot_id == boot_id
+        ):
+            return timedelta(seconds=monotonic_now - self.monotonic)
         return None if self.started_at is None else now - self.started_at
 
     def describe(self) -> str:
@@ -96,12 +110,23 @@ def read_holder(path: Path) -> Holder | None:
             if started.tzinfo is None:
                 started = started.replace(tzinfo=UTC)
     pid = data.get("pid")
+    mono = data.get("monotonic")
     return Holder(
         pid=pid if isinstance(pid, int) else None,
         host=data.get("host") if isinstance(data.get("host"), str) else None,
         command=data.get("command") if isinstance(data.get("command"), str) else None,
         started_at=started,
+        boot_id=data.get("boot_id") if isinstance(data.get("boot_id"), str) else None,
+        monotonic=float(mono) if isinstance(mono, int | float) else None,
     )
+
+
+def current_boot_id() -> str | None:
+    """This kernel's boot id (shared by the host and its containers), or None."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip() or None
+    except OSError:
+        return None
 
 
 class LockHeld(RuntimeError):
@@ -132,12 +157,14 @@ class RunLock:
         clock: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        boot_id: Callable[[], str | None] = current_boot_id,
     ) -> None:
         self.path = lock_path(db_path)
         self.command = command
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleep = sleep
         self._monotonic = monotonic
+        self._boot_id = boot_id
         self._fd: int | None = None
 
     @property
@@ -155,8 +182,15 @@ class RunLock:
             return False
         return True
 
-    def acquire(self, wait: float | None = None) -> None:
+    def acquire(
+        self,
+        wait: float | None = None,
+        on_wait: Callable[[Holder | None], object] | None = None,
+    ) -> None:
         """Take the lock, waiting up to ``wait`` seconds (None or 0: do not wait).
+
+        ``on_wait(holder)`` is called once, when the lock is found held and waiting begins,
+        so a caller can say what it is waiting for.
 
         Raises :class:`LockHeld` (no wait), :class:`LockTimeout` (waited ``wait``) or
         :class:`StaleHolder` (holder older than 6 h, checked on every attempt).
@@ -166,6 +200,8 @@ class RunLock:
         mkdir_private(self.path.parent)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
         deadline = None if not wait else self._monotonic() + wait
+        told = False
+        boot = self._boot_id()
         try:
             while True:
                 try:
@@ -174,7 +210,7 @@ class RunLock:
                 except BlockingIOError:
                     pass
                 holder = read_holder(self.path)
-                age = holder.age(self._clock()) if holder else None
+                age = holder.age(self._clock(), self._monotonic(), boot) if holder else None
                 if age is not None and age > STALE_AFTER:
                     hours = age.total_seconds() / 3600
                     raise StaleHolder(
@@ -193,6 +229,9 @@ class RunLock:
                         f"jobhunter job is running "
                         f"({holder.describe() if holder else 'details unknown'})",
                     )
+                if on_wait is not None and not told:
+                    told = True
+                    on_wait(holder)
                 self._sleep(min(POLL_S, remaining))
         except BaseException:
             os.close(fd)
@@ -207,6 +246,8 @@ class RunLock:
             "host": socket.gethostname(),
             "command": self.command,
             "started_at": self._clock().astimezone(UTC).isoformat(timespec="seconds"),
+            "boot_id": self._boot_id(),
+            "monotonic": self._monotonic(),
         }
         payload = json.dumps(data).encode()
         with contextlib.suppress(OSError):  # metadata is advisory; the flock is what counts

@@ -104,15 +104,58 @@ def test_wait_times_out(tmp_path, holder):
     assert clock[0] == pytest.approx(7200)
 
 
+SIX_H_5M = timedelta(hours=6, minutes=5).total_seconds()
+
+
 def test_holder_older_than_six_hours_is_reported_even_without_wait(tmp_path, holder):
     holder(tmp_path / "jh.db")
-    later = lambda: datetime.now(UTC) + timedelta(hours=6, minutes=5)  # noqa: E731
+    later = lambda: time.monotonic() + SIX_H_5M  # noqa: E731  (6 h of running, same boot)
     for wait in (None, 3600):
-        lock = runlock.RunLock(tmp_path / "jh.db", "run", clock=later, sleep=lambda s: None)
+        lock = runlock.RunLock(tmp_path / "jh.db", "run", monotonic=later, sleep=lambda s: None)
         with pytest.raises(runlock.StaleHolder, match=r"held the run lock for 6\.1 h"):
             lock.acquire(wait)
     with pytest.raises(runlock.StaleHolder):
-        runlock.RunLock(tmp_path / "jh.db", "run", clock=later).try_acquire()
+        runlock.RunLock(tmp_path / "jh.db", "run", monotonic=later).try_acquire()
+
+
+def test_a_suspend_does_not_make_a_frozen_holder_look_hung(tmp_path, holder):
+    # Wall time ran on through a 7 h suspend; CLOCK_MONOTONIC (the holder's run time) did not.
+    holder(tmp_path / "jh.db")
+    after_resume = lambda: datetime.now(UTC) + timedelta(hours=7)  # noqa: E731
+    lock = runlock.RunLock(tmp_path / "jh.db", "score --collect-pending", clock=after_resume)
+    with pytest.raises(runlock.LockHeld) as err:
+        lock.acquire(None)
+    assert not isinstance(err.value, runlock.StaleHolder)
+
+
+def test_another_boot_falls_back_to_wall_time(tmp_path, holder):
+    holder(tmp_path / "jh.db")
+    later = lambda: datetime.now(UTC) + timedelta(hours=7)  # noqa: E731
+    lock = runlock.RunLock(tmp_path / "jh.db", "run", clock=later, boot_id=lambda: "other-boot")
+    with pytest.raises(runlock.StaleHolder):
+        lock.acquire(None)
+
+
+def test_metadata_records_boot_and_monotonic_start(tmp_path):
+    lock = runlock.RunLock(tmp_path / "jh.db", "run", boot_id=lambda: "b1", monotonic=lambda: 42.0)
+    lock.acquire(None)
+    holder = runlock.read_holder(lock.path)
+    assert (holder.boot_id, holder.monotonic) == ("b1", 42.0)
+    lock.release()
+
+
+def test_on_wait_is_told_once_who_holds_it(tmp_path, holder):
+    holder(tmp_path / "jh.db")
+    clock = [0.0]
+    told = []
+
+    def sleep(s: float) -> None:
+        clock[0] += s
+
+    lock = runlock.RunLock(tmp_path / "jh.db", "run", sleep=sleep, monotonic=lambda: clock[0])
+    with pytest.raises(runlock.LockTimeout):
+        lock.acquire(60, on_wait=told.append)
+    assert len(told) == 1 and told[0].command == "run"
 
 
 def test_unreadable_metadata_is_not_treated_as_stale(tmp_path):

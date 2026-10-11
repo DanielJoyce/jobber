@@ -118,9 +118,9 @@ def test_collect_defaults_to_a_two_hour_wait_and_wait_overrides_it(env, monkeypa
     seen = []
     real = runlock.RunLock.acquire
 
-    def spy(self, wait=None):
+    def spy(self, wait=None, on_wait=None):
         seen.append((self.command, wait))
-        return real(self, wait)
+        return real(self, wait, on_wait)
 
     monkeypatch.setattr(runlock.RunLock, "acquire", spy)
     cli.invoke(app, ["score", "--collect-pending"])
@@ -146,7 +146,9 @@ def test_a_holder_older_than_six_hours_exits_75(env, hold):
     old = (datetime.now(UTC) - timedelta(hours=7)).isoformat()
     lock_file = runlock.lock_path(env.db_path)
     meta = json.loads(lock_file.read_text())
-    lock_file.write_text(json.dumps({**meta, "started_at": old}))
+    lock_file.write_text(
+        json.dumps({**meta, "started_at": old, "monotonic": meta["monotonic"] - 7 * 3600})
+    )
     for args in (["score", "--submit"], ["run", "--wait", "4h"]):
         result = cli.invoke(app, args)
         assert result.exit_code == 75, (args, result.output)
@@ -170,3 +172,107 @@ def test_dry_run_takes_no_lock(env, hold):
 def test_lock_is_released_after_the_job(env):
     assert cli.invoke(app, ["score", "--submit"]).exit_code == 0
     assert runlock.RunLock(env.db_path, "probe").try_acquire()
+
+
+def _lock_is_free(db_path) -> bool:
+    probe = runlock.RunLock(db_path, "probe")
+    if probe.try_acquire():
+        probe.release()
+        return True
+    return False
+
+
+def test_waiting_says_what_it_waits_for(env, hold):
+    h = hold(env.db_path)
+    threading.Timer(0.3, h.release).start()
+    result = cli.invoke(app, ["score", "--collect-pending"])
+    assert result.exit_code == 0, result.output
+    assert "waiting up to 2h for the run lock held by run, pid" in result.output
+
+
+def test_group_prompt_does_not_hold_the_lock(env, monkeypatch):
+    from jobhunter.apply import score as group_score
+    from jobhunter.scoring import scorers
+
+    states = []
+    est = SimpleNamespace(
+        scorer="test:model",
+        estimated_usd=0.01,
+        cost_source="default",
+        remaining_usd=5.0,
+        refusal=None,
+        token="tok",
+    )
+    monkeypatch.setattr(group_score, "estimate", lambda *a, **k: est)
+    monkeypatch.setattr(scorers, "privacy_notice", lambda *a, **k: None)
+
+    def confirm(*a, **k):
+        states.append(("prompt", _lock_is_free(env.db_path)))
+        return True
+
+    def score_now(*a, **k):
+        states.append(("spend", _lock_is_free(env.db_path)))
+        return SimpleNamespace(status="scored", detail="ok")
+
+    monkeypatch.setattr("typer.confirm", confirm)
+    monkeypatch.setattr(group_score, "score_now", score_now)
+    result = cli.invoke(app, ["score", "--group", "1"])
+    assert result.exit_code == 0, result.output
+    assert states == [("prompt", True), ("spend", False)]
+
+
+def _rescore_fakes(monkeypatch, env, tokens):
+    from jobhunter.scoring import rescore as rs
+    from jobhunter.scoring import scorers
+
+    plans = iter(tokens)
+    states = []
+
+    def make_plan(*a, **k):
+        return SimpleNamespace(
+            token=next(plans),
+            refusal=None,
+            total=2,
+            rescored=0,
+            waiting=2,
+            estimated_usd=0.02,
+            cost_per_job=0.01,
+            cost_source="default",
+            remaining_usd=5.0,
+            prefilter=None,
+        )
+
+    def confirm(*a, **k):
+        states.append(("prompt", _lock_is_free(env.db_path)))
+        return True
+
+    def create_request(*a, **k):
+        states.append(("spend", _lock_is_free(env.db_path)))
+        return 1
+
+    monkeypatch.setattr(rs, "make_plan", make_plan)
+    monkeypatch.setattr(rs, "create_request", create_request)
+    monkeypatch.setattr(
+        rs,
+        "run_request",
+        lambda *a, **k: SimpleNamespace(scored=2, total=2, errored=0, cost_usd=0.0, note=""),
+    )
+    monkeypatch.setattr(rs, "get_request", lambda *a, **k: {"status": "done", "error": None})
+    monkeypatch.setattr(scorers, "privacy_notice", lambda *a, **k: None)
+    monkeypatch.setattr("typer.confirm", confirm)
+    return states
+
+
+def test_rescore_prompt_does_not_hold_the_lock(env, monkeypatch):
+    states = _rescore_fakes(monkeypatch, env, ["a", "a"])
+    result = cli.invoke(app, ["score", "--rescore", "all"])
+    assert result.exit_code == 0, result.output
+    assert states == [("prompt", True), ("spend", False)]
+
+
+def test_rescore_plan_changed_while_deciding_spends_nothing(env, monkeypatch):
+    states = _rescore_fakes(monkeypatch, env, ["a", "b"])
+    result = cli.invoke(app, ["score", "--rescore", "all"])
+    assert result.exit_code == 1
+    assert "the plan changed while you were deciding" in result.output
+    assert states == [("prompt", True)]
