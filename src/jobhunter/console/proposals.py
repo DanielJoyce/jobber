@@ -11,6 +11,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from jobhunter.console import tracking as t
 from jobhunter.mail import match
@@ -133,6 +134,7 @@ def accept(
     now: datetime,
     employer: str | None = None,
     title: str | None = None,
+    data_dir: Path | str | None = None,
 ) -> int:
     """Apply a pending proposal; returns the application id. ``employer``/``title`` only
     matter for a create with no matched job."""
@@ -143,7 +145,9 @@ def accept(
     now_s = now.astimezone(UTC).isoformat()
     if row["proposed_action"] == "add_event":
         app_id = row["application_id"]
-        t.add_event(conn, app_id, row["proposed_status"], note, at, source="email")
+        t.add_event(
+            conn, app_id, row["proposed_status"], note, at, source="email", data_dir=data_dir
+        )
         if row["kind"] == "rejection":  # accepting it confirms the rejection row too
             conn.execute(
                 "UPDATE rejection SET state = 'confirmed' WHERE gmail_message_id = ?",
@@ -173,7 +177,7 @@ def accept(
             )
             app_id = int(cur.lastrowid or 0)
         conn.commit()
-        t.add_event(conn, app_id, "applied", note, at, source="email")
+        t.add_event(conn, app_id, "applied", note, at, source="email", data_dir=data_dir)
         # A rejection email stored before this application existed is proposed now.
         match.rematch_rejections(conn, int(app_id), now)
     _decide(conn, pid, "accepted", now)

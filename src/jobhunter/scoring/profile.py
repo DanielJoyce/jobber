@@ -35,8 +35,9 @@ from pydantic import (
 )
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
-from ruamel.yaml.error import YAMLError
+from ruamel.yaml.error import CommentMark, YAMLError
 from ruamel.yaml.scalarstring import LiteralScalarString
+from ruamel.yaml.tokens import CommentToken
 
 from jobhunter.config import Settings, resolve_path
 from jobhunter.core.geo import normalize_state
@@ -354,6 +355,27 @@ def _clean(value: Any) -> Any:
     return value
 
 
+_TOP_KEY = re.compile(r"^([A-Za-z_][\w-]*)\s*:")
+
+
+def without_separate_blocks(text: str) -> str:
+    """``text`` with its top-level ``SEPARATE_KEYS`` blocks (``answers:``) cut out, line by
+    line, before the profile parses it. Anything inside them, even YAML the parser rejects
+    (a duplicate key from a hand-added answer, a tab), can then never stop the profile load,
+    scoring or the nightly run; apply/answers.py reads that block on its own."""
+    out: list[str] = []
+    skipping = False
+    for line in text.splitlines(keepends=True):
+        top = _TOP_KEY.match(line)
+        if top:
+            skipping = top.group(1) in SEPARATE_KEYS
+        elif skipping and line.strip() and not line[0].isspace() and line[0] not in "#-":
+            skipping = False  # a top-level line that is not a key (a document marker, say)
+        if not skipping:
+            out.append(line)
+    return "".join(out)
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -362,7 +384,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     except OSError as exc:
         raise ProfileError(f"cannot read file: {exc.strerror}", path=path) from exc
     try:
-        data = YAML(typ="rt").load(text)
+        data = YAML(typ="rt").load(without_separate_blocks(text))
     except YAMLError as exc:
         raise ProfileError(f"invalid YAML: {exc}", path=path) from exc
     if data is None:
@@ -634,6 +656,82 @@ def _to_yaml(value: Any, old: Any = None) -> Any:
     return value
 
 
+def _update_seq_of_maps(old: CommentedSeq, value: list[Any]) -> None:
+    """Rewrite a block list of mappings in place, so comments between items survive (ruamel
+    keeps them on the items; a new list would drop them)."""
+    for i, item in enumerate(value):
+        if i >= len(old):
+            old.append(_to_yaml(item))
+            continue
+        cur = old[i]
+        if not isinstance(cur, CommentedMap) or not isinstance(item, Mapping):
+            if cur != item:
+                old[i] = _to_yaml(item, cur)
+            continue
+        for key in [k for k in cur if item.get(k) is None]:
+            del cur[key]
+        for key, val in item.items():
+            if val is not None and cur.get(key) != val:
+                cur[key] = _to_yaml(val, cur.get(key))
+    while len(old) > len(value):
+        del old[-1]
+
+
+# Where ruamel keeps the comment that follows a node: index 2 of a mapping key's entry,
+# index 0 of a sequence item's.
+_TAIL_SLOT = {CommentedMap: 2, CommentedSeq: 0}
+
+
+def _last_holder(node: Any) -> tuple[Any, Any] | None:
+    """The block container and key/index of the document's last scalar: the end-of-file
+    comments are attached there."""
+    holder = None
+    while isinstance(node, CommentedMap | CommentedSeq) and len(node):
+        if holder is not None and node.fa.flow_style():
+            break
+        key = list(node)[-1] if isinstance(node, CommentedMap) else len(node) - 1
+        holder = (node, key)
+        node = node[key]
+    return holder
+
+
+def _take_tail(doc: CommentedMap) -> str | None:
+    """Detach the comment lines after the document's last value (keeping its inline
+    comment where it is). Returns them, or None."""
+    holder = _last_holder(doc)
+    if holder is None:
+        return None
+    node, key = holder
+    slot = _TAIL_SLOT[type(node)]
+    entry = node.ca.items.get(key)
+    token = entry[slot] if entry and len(entry) > slot else None
+    if token is None or "\n" not in token.value:
+        return None
+    first, _, rest = token.value.partition("\n")
+    if not rest.strip():
+        return None
+    if first.strip():
+        token.value = first + "\n"
+    else:
+        entry[slot] = None
+    return rest
+
+
+def _put_tail(doc: CommentedMap, rest: str) -> None:
+    holder = _last_holder(doc)
+    if holder is None:
+        doc.yaml_set_start_comment(rest.strip("\n"))
+        return
+    node, key = holder
+    slot = _TAIL_SLOT[type(node)]
+    entry = node.ca.items.setdefault(key, [None, None, None, None])
+    token = entry[slot]
+    if token is not None:
+        token.value = token.value.rstrip("\n") + "\n" + rest
+    else:
+        entry[slot] = CommentToken("\n" + rest, CommentMark(0), None)
+
+
 def _set_path(doc: CommentedMap, path: str, value: Any) -> None:
     """Set (or, for None, delete) a dotted path in a round-trip document."""
     parts = path.split(".")
@@ -649,8 +747,17 @@ def _set_path(doc: CommentedMap, path: str, value: Any) -> None:
         parents.append((node, part))
         node = child
     leaf = parts[-1]
+    old = node.get(leaf)
+    if (
+        isinstance(old, CommentedSeq)
+        and not old.fa.flow_style()
+        and isinstance(value, list)
+        and value
+    ):
+        _update_seq_of_maps(old, value)
+        return
     if value is not None:
-        node[leaf] = _to_yaml(value, node.get(leaf))
+        node[leaf] = _to_yaml(value, old)
         return
     if leaf in node:
         del node[leaf]
@@ -697,8 +804,12 @@ def save_profile_changes(
         doc = CommentedMap()
     if not isinstance(doc, CommentedMap):
         raise ProfileError("top level must be a mapping", path=prefs_file)
+    # End-of-file comments ride on the last value; keep them at the end whatever changes.
+    tail = _take_tail(doc)
     for path, value in changes.items():
         _set_path(doc, path, value)
+    if tail is not None:
+        _put_tail(doc, tail)
     buf = io.StringIO()
     yaml.dump(doc, buf)
 
@@ -817,7 +928,7 @@ def salvage_preferences(text: str) -> tuple[Profile, dict[str, str]]:
     or whose top level is not a mapping.
     """
     try:
-        raw = YAML(typ="rt").load(text)
+        raw = YAML(typ="rt").load(without_separate_blocks(text))
     except YAMLError as exc:
         raise ProfileError(f"invalid YAML: {exc}") from exc
     if raw is None:

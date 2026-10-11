@@ -299,3 +299,90 @@ def test_the_fixed_answer_labels_are_not_on_the_never_store_list():
 
     for label in answers.FIELD_LABELS.values():
         assert labels.never_store(label) is None, label
+
+
+COMMENTED = """\
+answers:
+  custom:
+    - question: Why us?
+      answer: Template A.
+    # Template B: for startups
+    - question: What makes you a fit?
+      answer: Template B.  # keep short
+    # Template C: for agencies
+    - question: Why the public sector?
+      answer: Template C.
+# ---- notes to self ----
+# remember to update these each spring
+"""
+
+
+def test_editing_a_custom_answer_keeps_every_comment(client, pdir):
+    (pdir / "preferences.yaml").write_text(BASE + COMMENTED, encoding="utf-8")
+    form = page_form(
+        pdir,
+        custom=[
+            ("Why us?", "Template A, edited."),
+            ("What makes you a fit?", "Template B."),
+            ("Why the public sector?", "Template C."),
+            ("A fourth question", "Template D."),
+        ],
+    )
+    assert post(client, "/prefs/save", form).status_code == 303
+    text = text_of(pdir)
+    for comment in (
+        "# synthetic test profile",
+        "# Template B: for startups",
+        "# keep short",
+        "# Template C: for agencies",
+        "# ---- notes to self ----",
+        "# remember to update these each spring",
+    ):
+        assert comment in text, comment
+    assert text.rstrip().endswith("# remember to update these each spring")
+    assert "Template A, edited." in text and "Template D." in text
+
+
+def test_control_characters_in_a_pasted_answer_are_dropped_not_a_yaml_error(client, pdir):
+    form = page_form(pdir, custom=[("Why us?", "Line one\x0b\nLine two\x1b[0m")])
+    assert post(client, "/prefs/save", form).status_code == 303
+    (item,) = answers_in_file(pdir)["custom"]
+    assert item["answer"].strip() == "Line one\nLine two[0m"
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "answers:\n  custom: {question: Desired salary, answer: X}\n",
+        "answers:\n  custom:\n    - Question: Desired salary\n      answer: X\n",
+        "answers:\n  custom:\n    - 'Desired salary: X'\n",
+        "answers:\n  links: [Desired salary]\n",
+    ],
+)
+def test_raw_yaml_refuses_never_store_labels_in_any_shape(client, pdir, block):
+    (pdir / "preferences.yaml").write_text("hard: [broken\n", encoding="utf-8")
+    r = post(
+        client,
+        "/prefs/raw",
+        [("raw_yaml", BASE + block), ("mtime_ns", str(preferences_mtime_ns(pdir)))],
+    )
+    assert r.status_code == 422 and "never-store list" in r.text
+    assert text_of(pdir) == "hard: [broken\n"
+
+
+def test_a_duplicate_key_inside_answers_never_stops_the_profile(tmp_path):
+    d = tmp_path / "dup"
+    d.mkdir()
+    (d / "resume.md").write_text("Synthetic Person\n", encoding="utf-8")
+    block = (
+        "answers:\n  notice_period: one week\n  notice_period: two weeks\n"
+        "  custom:\n    - question: Why us?\n      answer: A\n      question: Why them?\n"
+    )
+    (d / "preferences.yaml").write_text(BASE + block, encoding="utf-8")
+    profile = load_profile(d)
+    assert profile.target_titles == ["Systems Engineer"]
+    nightly = runner.default_profile_loader(
+        Settings(paths=Paths(profile_dir=d, resume_path=d / "resume.md"))
+    )()
+    assert nightly is not None
+    assert answers.load_answers(d).answers.notice_period in ("one week", "two weeks")

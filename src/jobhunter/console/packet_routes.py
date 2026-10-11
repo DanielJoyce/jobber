@@ -333,6 +333,7 @@ def register(
                 reuse.append({"question": text, "earlier": earlier})
         return {
             "saved_answers": saved,
+            "hidden_answers": answers.hidden_answers(conn, p.id),
             "draft_saves": [(v, v.question_key in {k[2:] for k in mine}) for v in drafts],
             "reuse": reuse,
             "prefs_answers": loaded.answers,

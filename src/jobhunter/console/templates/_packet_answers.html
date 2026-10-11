@@ -48,6 +48,7 @@
         {% endfor %}
       </ul>
       {% else %}<p class="muted">None yet.</p>{% endif %}
+      {% if hidden_answers %}<p class="muted" id="hidden-answers">{{ hidden_answers }} saved answer{{ "s" if hidden_answers != 1 }} hidden: {{ "their labels are" if hidden_answers != 1 else "its label is" }} now on the never-store list, so {{ "they are" if hidden_answers != 1 else "it is" }} yours to answer by hand.</p>{% endif %}
 
       {% if draft_saves %}
       <h4>Save a draft as an answer</h4>

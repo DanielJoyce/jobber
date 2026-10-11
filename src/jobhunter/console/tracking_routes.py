@@ -4,6 +4,7 @@
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs
 
@@ -51,6 +52,9 @@ def register(
     def require_app(conn: sqlite3.Connection, app_id: int) -> None:
         if not t.application_exists(conn, app_id):
             raise HTTPException(404, "no such application")
+
+    def data_dir(request: Request) -> Path:
+        return Path(request.app.state.settings.paths.data_dir).expanduser()
 
     def is_htmx(request: Request) -> bool:
         return request.headers.get("hx-request") == "true"
@@ -147,7 +151,8 @@ def register(
         assert before is not None
         moved = before.status != to
         if moved:
-            t.add_event(conn, app_id, to, f"moved from {before.status}", now())
+            note = f"moved from {before.status}"
+            t.add_event(conn, app_id, to, note, now(), data_dir=data_dir(request))
         if not is_htmx(request):
             return RedirectResponse("/pipeline", status_code=303)
         if not moved:
@@ -173,7 +178,14 @@ def register(
             current = t.card(conn, app_id, now())
             assert current is not None
             status = f.get("status") or current.status
-            t.add_event(conn, app_id, status, f.get("note"), f.get("at") or now())
+            t.add_event(
+                conn,
+                app_id,
+                status,
+                f.get("note"),
+                f.get("at") or now(),
+                data_dir=data_dir(request),
+            )
         except t.TrackingError as exc:
             error = str(exc)
         return drawer_response(request, conn, app_id, error)
@@ -277,7 +289,17 @@ def register(
     @app.post("/followups/{app_id}/applied")
     def fu_applied(request: Request, conn: Conn, app_id: int) -> Response:
         """ "Ready, not applied?": you did apply. A manual 'applied' event, which attaches the
-        ready packet like every other applied path."""
+        ready packet like every other applied path. Never moves an application back: one
+        already at applied or later (or closed) is left as it is."""
         require_app(conn, app_id)
-        t.add_event(conn, app_id, "applied", "marked applied from follow-ups", now())
+        current = t.card(conn, app_id, now())
+        if current is not None and current.status in t.EARLY_STATUSES:
+            t.add_event(
+                conn,
+                app_id,
+                "applied",
+                "marked applied from follow-ups",
+                now(),
+                data_dir=data_dir(request),
+            )
         return followup_reply(request)

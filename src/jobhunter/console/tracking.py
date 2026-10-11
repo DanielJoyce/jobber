@@ -123,12 +123,13 @@ def add_event(
     note: str | None = None,
     at: datetime | str | None = None,
     source: str = "manual",
+    data_dir: Path | str | None = None,
 ) -> int:
     """Append an event and rebuild the status. Past events are never touched.
 
     An ``applied`` event also attaches the application's ready packet
     (``apply/packets.py::attach_sent_packet``, specs/017 "Closing the loop"), in the same
-    transaction as the event."""
+    transaction as the event; ``data_dir`` resolves the packet's exported files."""
     # Late import: apply.packets imports this module.
     from jobhunter.apply.packets import attach_sent_packet
 
@@ -153,7 +154,7 @@ def add_event(
         )
         rebuild_status(conn, app_id)
         if status == "applied":
-            attach_sent_packet(conn, app_id)
+            attach_sent_packet(conn, app_id, data_dir)
     except BaseException:
         if own:
             conn.execute("ROLLBACK")
@@ -312,14 +313,17 @@ def followups(conn: sqlite3.Connection, now: datetime) -> list[FollowUp]:
             continue
         text = f"applied {(now - since).days} days ago, no reply: follow up or mark no_response"
         items.append(_item("nudge", r["id"], text, since + timedelta(days=NUDGE_DAYS), now, conn))
-    closed = ",".join("?" * len(CLOSED_STATUSES))
+    # Only applications not yet sent: still interested/preparing, no applied date, no applied
+    # event. One that went straight to screening (a dragged card, an acknowledgement email) is
+    # past this question.
+    early = ",".join("?" * len(EARLY_STATUSES))
     for r in conn.execute(
         "SELECT p.id, p.application_id, p.ready_at FROM application_packet p "
         "JOIN application a ON a.id = p.application_id "
-        f"WHERE p.status = 'ready' AND p.ready_at IS NOT NULL AND a.status NOT IN ({closed}) "
-        "AND NOT EXISTS (SELECT 1 FROM application_event e WHERE e.application_id = a.id "
-        "AND e.status = 'applied')",
-        CLOSED_STATUSES,
+        f"WHERE p.status = 'ready' AND p.ready_at IS NOT NULL AND a.status IN ({early}) "
+        "AND a.applied_at IS NULL AND NOT EXISTS (SELECT 1 FROM application_event e "
+        "WHERE e.application_id = a.id AND e.status = 'applied')",
+        EARLY_STATUSES,
     ).fetchall():
         due = parse_ts(r["ready_at"]) + timedelta(days=PACKET_READY_DAYS)
         if due > now:

@@ -291,3 +291,41 @@ def test_save_packet_answer_is_refused_at_the_function_too(conn, client):  # noq
         else:
             raise AssertionError(f"{label} was stored")
     assert conn.execute("SELECT count(*) FROM packet_answer").fetchone()[0] == 0
+
+
+def test_promote_keeps_comments_and_entries_the_load_ignored(client, conn, pdir):  # noqa: F811
+    prefs = pdir / "preferences.yaml"
+    prefs.write_text(
+        prefs.read_text() + "answers:\n  custom:\n"
+        "    - question: How many days notice do you need\n      answer: 30\n"
+        "    # Template B\n"
+        "    - question: Why public sector?\n      answer: Service.\n"
+        "# trailing notes\n"
+    )
+    pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    client.post(f"/packet/{pid}/answers", data={"question": WHY, "value": "Words."})
+    (aid,) = [r[0] for r in conn.execute("SELECT id FROM packet_answer WHERE field_key LIKE 'q:%'")]
+    assert client.post(f"/packet/{pid}/answers/{aid}/promote").status_code == 303
+    text = prefs.read_text()
+    assert "# Template B" in text and text.rstrip().endswith("# trailing notes")
+    custom = YAML(typ="safe").load(text)["answers"]["custom"]
+    assert custom == [
+        {"question": "How many days notice do you need", "answer": 30},  # kept, not deleted
+        {"question": "Why public sector?", "answer": "Service."},
+        {"question": WHY, "answer": "Words."},
+    ]
+
+
+def test_answers_saved_before_a_label_joined_the_list_are_hidden(client, conn):  # noqa: F811
+    a = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    b = new_packet(client, text="Synthetic posting text.", employer="Beta", title="Analyst")
+    for pid in (a, b):  # as an older build, with a shorter table, would have stored them
+        conn.execute(
+            "INSERT INTO packet_answer (packet_id, field_key, label, value, source) "
+            "VALUES (?, 'q:what are your comp expectations', 'What are your comp "
+            "expectations?', 'SECRET-COMP', 'user')",
+            (pid,),
+        )
+    page = client.get(f"/packet/{b}").text
+    assert "SECRET-COMP" not in page
+    assert 'id="hidden-answers"' in page

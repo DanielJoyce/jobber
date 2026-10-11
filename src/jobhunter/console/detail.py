@@ -10,6 +10,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from markupsafe import Markup, escape
@@ -528,8 +529,15 @@ def paste_description(conn: sqlite3.Connection, group_id: int, text: str, now: d
     return job["id"]
 
 
-def answer_prompt(conn: sqlite3.Connection, group_id: int, choice: str, now: datetime) -> None:
-    """Handle the "Did you apply?" answer: yes | not_yet | not_interested."""
+def answer_prompt(
+    conn: sqlite3.Connection,
+    group_id: int,
+    choice: str,
+    now: datetime,
+    data_dir: Path | str | None = None,
+) -> None:
+    """Handle the "Did you apply?" answer: yes | not_yet | not_interested. ``data_dir``
+    resolves the exported files of the packet attached on Yes."""
     if choice not in ("yes", "not_yet", "not_interested"):
         raise ValueError(choice)
     if choice == "not_interested":
@@ -569,7 +577,7 @@ def answer_prompt(conn: sqlite3.Connection, group_id: int, choice: str, now: dat
         )
         if yes:
             # The packet that went out, in the same transaction (specs/017 "Closing the loop").
-            attach_sent_packet(conn, int(app_id))
+            attach_sent_packet(conn, int(app_id), data_dir)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

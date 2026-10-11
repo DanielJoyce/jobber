@@ -21,6 +21,7 @@ keys, never answer values.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -153,7 +154,7 @@ def save_question_answer(
     if not question:
         raise ValueError("Paste the question first.")
     refuse_never_store(question)
-    value = (value or "").replace("\r\n", "\n").strip()
+    value = clean_text(value or "").strip()
     if not value:
         raise ValueError("Write the answer (or draft it) first; an empty answer is not saved.")
     if len(value) > MAX_ANSWER_CHARS:
@@ -166,8 +167,24 @@ def save_question_answer(
     return _row(row)
 
 
+def is_never_store(row: SavedRow) -> bool:
+    """Re-checked on every read: the table grows, so an answer saved before its label joined
+    the never-store list is never shown, offered or promoted again."""
+    key = row.field_key.removeprefix(QUESTION_PREFIX)
+    return labels.never_store(row.question) is not None or labels.never_store(key) is not None
+
+
 def packet_answers(conn: sqlite3.Connection, packet_id: int) -> list[SavedRow]:
-    """This packet's saved ``q:`` answers, oldest first."""
+    """This packet's saved ``q:`` answers, oldest first, never-store ones left out."""
+    return [r for r in _all_packet_answers(conn, packet_id) if not is_never_store(r)]
+
+
+def hidden_answers(conn: sqlite3.Connection, packet_id: int) -> int:
+    """Saved answers on this packet whose label is now on the never-store list (hidden)."""
+    return sum(1 for r in _all_packet_answers(conn, packet_id) if is_never_store(r))
+
+
+def _all_packet_answers(conn: sqlite3.Connection, packet_id: int) -> list[SavedRow]:
     rows = conn.execute(
         "SELECT * FROM packet_answer WHERE packet_id = ? AND field_key LIKE 'q:%' ORDER BY id",
         (packet_id,),
@@ -195,6 +212,8 @@ def earlier_answers(
     seen: set[str] = set()
     for r in rows:
         row = _row(r)
+        if is_never_store(row):
+            continue
         if row.value.strip() and row.value not in seen:
             seen.add(row.value)
             out.append(row)
@@ -226,7 +245,19 @@ FIELD_LABELS: dict[str, str] = {
 }
 
 
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def clean_text(value: Any) -> Any:
+    """Drop control characters (other than tab and newline) from pasted text: a YAML block
+    cannot hold them, and they are never meant (Word and PDF copies carry \\x0b, \\x0c)."""
+    if isinstance(value, str):
+        return _CONTROL.sub("", value.replace("\r\n", "\n").replace("\r", "\n"))
+    return value
+
+
 def _blank_to_none(value: Any) -> Any:
+    value = clean_text(value)
     return None if isinstance(value, str) and not value.strip() else value
 
 
@@ -248,6 +279,8 @@ class SavedAnswer(_Strict):
 
     question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
     answer: str = Field(min_length=1, max_length=MAX_ANSWER_CHARS)
+
+    _clean = field_validator("question", "answer", mode="before")(clean_text)
 
     @field_validator("question")
     @classmethod
@@ -373,14 +406,57 @@ def _lenient_custom(value: Any, out: LoadedAnswers) -> list[SavedAnswer]:
     return items
 
 
+def _yaml(typ: str) -> YAML:
+    yaml = YAML(typ=typ, pure=True)
+    # A hand-added second answer that forgot its "- " repeats a key; read it (last one wins)
+    # rather than losing every answer.
+    yaml.allow_duplicate_keys = True
+    return yaml
+
+
 def answers_from_text(text: str) -> LoadedAnswers:
     try:
-        data = YAML(typ="safe", pure=True).load(text)
+        data = _yaml("safe").load(text)
     except YAMLError:
         out = LoadedAnswers()
         _warn(out, "preferences.yaml is not valid YAML, so no answers were loaded.")
         return out
     return answers_from_data(data.get("answers") if isinstance(data, Mapping) else None)
+
+
+def refused_in_text(text: str) -> list[str]:
+    """Every never-store label anywhere in the ``answers:`` block of ``text``, whatever its
+    shape: what the raw YAML editor refuses to write. Labels are mapping keys, ``question``
+    values (any case) and plain strings in lists; answer values are not labels."""
+    try:
+        data = _yaml("rt").load(text)
+    except YAMLError:
+        return []
+    raw = data.get("answers") if isinstance(data, Mapping) else None
+    found: list[str] = []
+
+    def check(label: str) -> None:
+        if (m := labels.never_store(label.replace("_", " "))) is not None:
+            message = never_store_message(label, m)
+            if message not in found:
+                found.append(message)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for key, value in node.items():
+                check(str(key))
+                if str(key).casefold() == "question" and isinstance(value, str):
+                    check(value)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                if isinstance(item, str):
+                    check(item)
+                else:
+                    walk(item)
+
+    walk(raw)
+    return found
 
 
 def load_answers(profile_dir: Path) -> LoadedAnswers:
@@ -460,20 +536,54 @@ def promote(conn: sqlite3.Connection, profile_dir: Path, answer_id: int) -> Save
     if row is None:
         raise KeyError(answer_id)
     refuse_never_store(row.question)
+    refuse_never_store(row.field_key.removeprefix(QUESTION_PREFIX))
     prefs = Path(profile_dir).expanduser() / PREFERENCES_FILE
     try:
         mtime = prefs.stat().st_mtime_ns
     except FileNotFoundError as exc:
         raise ValueError("There is no preferences file yet: create it on /prefs first.") from exc
-    loaded = load_answers(profile_dir)
+    new_item = (
+        validate_for_save({"custom": [{"question": row.question, "answer": row.value}]})
+        .custom[0]
+        .model_dump()
+    )
+    # Work on the list as it is in the file, not as the lenient load kept it, so a hand-edited
+    # entry the load ignored (say ``answer: 30``) is left where it is rather than deleted.
+    raw = _raw_answers(prefs).get("custom")
+    if raw is not None and not isinstance(raw, list):
+        raise ValueError(
+            "answers.custom in preferences.yaml is not a list, so nothing was written; "
+            "fix it on /prefs first."
+        )
+    items: list[Any] = list(raw or [])
     key = labels.question_key(row.question)
-    custom = [
-        c.model_dump() for c in loaded.answers.custom if labels.question_key(c.question) != key
-    ]
-    custom.append({"question": row.question, "answer": row.value})
-    new = validate_for_save({**loaded.answers.model_dump(mode="json"), "custom": custom})
-    write_answers(profile_dir, new, loaded.answers, expected_mtime_ns=mtime)
+    for i, item in enumerate(items):
+        q = item.get("question") if isinstance(item, Mapping) else None
+        if isinstance(q, str) and labels.question_key(q) == key:
+            items[i] = new_item
+            break
+    else:
+        items.append(new_item)
+    from jobhunter.scoring.profile import save_profile_changes
+
+    save_profile_changes(
+        profile_dir, {"answers.custom": items}, expected_mtime_ns=mtime, require_resume=False
+    )
     return row
+
+
+def _raw_answers(prefs: Path) -> dict[str, Any]:
+    try:
+        data = _yaml("safe").load(prefs.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, YAMLError):
+        return {}
+    raw = data.get("answers") if isinstance(data, Mapping) else None
+    if raw is not None and not isinstance(raw, Mapping):
+        raise ValueError(
+            "answers: in preferences.yaml is not a mapping, so nothing was written; "
+            "fix it on /prefs first."
+        )
+    return dict(raw or {})
 
 
 def prefs_offers(a: Answers, question_keys: set[str]) -> list[tuple[SavedAnswer, bool]]:

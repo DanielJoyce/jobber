@@ -353,7 +353,7 @@ def register(
             )
         if st.kind != "ok":
             return render_page(request, conn, st, mtime_ns=expected, status=422, raw_text=text)
-        refused = ans.answers_from_text(text).refused
+        refused = ans.refused_in_text(text)
         if refused:
             # The raw editor is a writer of answers: too: a never-store entry is refused here,
             # not just dropped on the next load (specs/017 "Never-store list").

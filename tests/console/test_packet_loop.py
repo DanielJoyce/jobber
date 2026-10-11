@@ -11,6 +11,8 @@ import json
 from datetime import timedelta
 
 import pytest
+from test_packet_documents import env  # noqa: F401
+from test_packet_export import FakeRenderer
 from test_packet_pages import (  # noqa: F401
     GH,
     ISO,
@@ -208,3 +210,67 @@ def test_an_applied_or_closed_application_is_not_nagged(client, conn):  # noqa: 
     tracking.add_event(conn, app_of(conn, b)["id"], "withdrawn", None, NOW)
     items = [i for i in tracking.followups(conn, NOW) if i.kind == "packet"]
     assert items == []
+
+
+def test_ready_not_applied_skips_applications_already_past_applied(client, conn):  # noqa: F811
+    pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    make_ready(conn, pid, None, ready_at=(NOW - timedelta(days=30)).isoformat())
+    app_id = app_of(conn, pid)["id"]
+    client.post(f"/pipeline/{app_id}/move?to=screening")  # dragged straight past applied
+    assert not [i for i in tracking.followups(conn, NOW) if i.kind == "packet"]
+    # and the button never moves it back
+    client.post(f"/followups/{app_id}/applied")
+    assert app_of(conn, pid)["status"] == "screening"
+
+
+def test_only_a_ready_packet_is_attached(client, conn, rendered):  # noqa: F811
+    pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    make_ready(conn, pid, rendered)
+    conn.execute("UPDATE application_packet SET status = 'draft' WHERE id = ?", (pid,))
+    client.post(f"/job/{packet_group(conn, pid)}/applied?choice=yes")
+    app = app_of(conn, pid)
+    assert app["resume_version"] is None and attachments(conn, app["id"]) == []
+
+
+def test_your_own_cover_letter_path_is_kept(client, conn, rendered):  # noqa: F811
+    pid = new_packet(client, url=GH, employer="Acme", title="Systems Engineer")
+    make_ready(conn, pid, rendered)
+    app = app_of(conn, pid)
+    conn.execute(
+        "UPDATE application SET cover_letter_path = '/elsewhere/mine.pdf' WHERE id = ?",
+        (app["id"],),
+    )
+    client.post(f"/job/{packet_group(conn, pid)}/applied?choice=yes")
+    after = app_of(conn, pid)
+    assert after["cover_letter_path"] == "/elsewhere/mine.pdf"
+    assert after["resume_version"] == f"packet:{pid}/resume/v2"
+
+
+# ─── with phase 1c's real export (rendered_path relative to the data dir) ───
+
+
+def test_did_you_apply_attaches_1c_export_resolved_against_the_data_dir(
+    env,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+):
+    env.app.state.packet_pdf_renderer = FakeRenderer()
+    monkeypatch.chdir(tmp_path.parent)  # the working directory is never the data dir
+    c = env.client
+    assert c.post(f"/packet/{env.pid}/base").status_code == 303
+    assert c.post(f"/packet/{env.pid}/ready").status_code == 303
+    assert c.post(f"/packet/{env.pid}/export", data={"kind": "resume"}).status_code == 303
+    stored = env.conn.execute(
+        "SELECT rendered_path FROM packet_document WHERE packet_id = ? AND kind = 'resume'",
+        (env.pid,),
+    ).fetchone()[0]
+    assert stored == f"packets/{env.pid}/resume-v1.pdf"  # what 1c writes: relative
+    gid, app_id = env.conn.execute(
+        "SELECT a.job_group_id, a.id FROM application a JOIN application_packet p "
+        "ON p.application_id = a.id WHERE p.id = ?",
+        (env.pid,),
+    ).fetchone()
+    assert c.post(f"/job/{gid}/applied?choice=yes").status_code == 200
+    want = str((env.settings.paths.data_dir / stored).resolve())
+    assert attachments(env.conn, app_id) == [("resume", want)]
+    assert app_of(env.conn, env.pid)["resume_version"] == f"packet:{env.pid}/resume/v1"

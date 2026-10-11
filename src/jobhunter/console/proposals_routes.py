@@ -40,7 +40,14 @@ def register(
     @app.post("/proposals/{pid}/accept")
     def accept(request: Request, conn: Conn, pid: int, f: Form) -> Response:
         try:
-            p.accept(conn, pid, now(), f.get("employer"), f.get("title"))
+            p.accept(
+                conn,
+                pid,
+                now(),
+                f.get("employer"),
+                f.get("title"),
+                data_dir=request.app.state.settings.paths.data_dir,
+            )
         except t.TrackingError as exc:
             raise HTTPException(409, str(exc)) from exc
         return reply(request)

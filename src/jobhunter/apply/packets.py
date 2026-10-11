@@ -19,6 +19,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from jobhunter.console.tracking import (
     PREPARE_NOTE,
@@ -181,15 +182,20 @@ def packet_ref(packet_id: int, version: int) -> str:
     return f"{PACKET_REF_PREFIX}{packet_id}/resume/v{version}"
 
 
-def attach_sent_packet(conn: sqlite3.Connection, app_id: int) -> bool:
+def attach_sent_packet(
+    conn: sqlite3.Connection, app_id: int, data_dir: Path | str | None = None
+) -> bool:
     """Record the application's ``ready`` packet as what was sent. True when one was attached.
 
     Called inside the transaction that writes an ``applied`` event, on every path. Sets
     ``application.resume_version`` to the packet's resume version (unless you typed your own),
     ``cover_letter_path`` to the rendered letter (when empty), and adds ``attachment`` rows for
     the rendered files, which must pass ``tracking.validate_attachment_path`` (outside the
-    tracked tree). Idempotent: an application already carrying a packet ref is left as it is,
-    so a later version of the packet can never replace what was sent. Commits nothing.
+    tracked tree). ``rendered_path`` is relative to the data dir (phase 1c writes
+    ``packets/<id>/resume-v<n>.pdf``, the versioned copy, which later exports never replace),
+    so ``data_dir`` resolves it; without one a relative path is skipped. Idempotent: an
+    application already carrying a packet ref is left as it is, so a later version of the
+    packet can never replace what was sent. Commits nothing.
     """
     app = conn.execute(
         "SELECT resume_version, cover_letter_path FROM application WHERE id = ?", (app_id,)
@@ -219,8 +225,14 @@ def attach_sent_packet(conn: sqlite3.Connection, app_id: int) -> bool:
     for kind, doc in docs.items():
         if doc is None or not doc["rendered_path"]:
             continue  # not exported yet (phase 1c renders the files)
+        stored = Path(doc["rendered_path"])
+        if not stored.is_absolute():
+            if data_dir is None:
+                logger.warning("packet %s: %s not attached: no data dir given", pk["id"], kind)
+                continue
+            stored = Path(data_dir).expanduser() / stored
         try:
-            path = str(validate_attachment_path(doc["rendered_path"]))
+            path = str(validate_attachment_path(str(stored)))
         except TrackingError as exc:
             logger.warning("packet %s: %s not attached: %s", pk["id"], kind, exc)
             continue
