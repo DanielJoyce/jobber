@@ -1,0 +1,1 @@
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":1,"timestamp":1791762533,"nonce":"kxPJjxMDuDfUVy5rqxsUDYaJGJE=","title":"020 M8: config watch on model layers","message":"models.toml fingerprint, layer diffs, shared settings_lock. Spec: specs/020-model-selection.md ticket M8. Depends on: M2, M4, S12a c3a6ef6.","files":null}]}
