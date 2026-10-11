@@ -134,3 +134,8 @@ label .hint { margin: 0; }
 .answer-row { border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 0 0 8px; min-width: 0; }
 .answer-row.new { border-style: dashed; }
 .prefs .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* Live preview pending: shown while a change waits for its idle pause (.is-pending, prefs.js)
+   and while the preview request runs (.htmx-request, added by hx-indicator). */
+.preview-pending { display: none; margin: 0 0 8px; color: var(--text-secondary); font-size: 0.8125rem; }
+.preview-pending.is-pending, .preview-pending.htmx-request { display: block; }

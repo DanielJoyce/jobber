@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -161,6 +162,28 @@ def test_page_renders_all_sections_in_order(client):
     assert "prefs.js" in r.text
 
 
+def test_live_preview_waits_for_a_pause_and_replaces_a_running_one(client):
+    """Rapid state clicks give one preview: the debounce restarts on each click, a newer
+    preview aborts a running one, and a note says one is pending (501fee8)."""
+    from selectolax.lexbor import LexborHTMLParser
+
+    page = LexborHTMLParser(client.get("/prefs").text)
+    form = page.css_first("form#prefs-form")
+    trigger = form.attributes["hx-trigger"]
+    assert "prefs-changed from:body delay:800ms" in trigger
+    assert "input delay:500ms" in trigger and "change delay:500ms" in trigger
+    assert form.attributes["hx-sync"] == "this:replace"
+    # The state tiles inside the form keep their own default sync: a quick second click must
+    # not abort the first one's request (that would lose its state change).
+    assert set(form.attributes["hx-disinherit"].split()) >= {"hx-sync", "hx-indicator"}
+    tile = form.css_first("button.tile[hx-post]")
+    assert tile is not None and tile.attributes.get("hx-sync") is None
+    indicator = form.attributes["hx-indicator"]
+    note = page.css_first(indicator)
+    assert note is not None and "preview-pending" in note.attributes["class"]
+    assert "Updating preview" in note.text()
+
+
 def test_page_without_profile_shows_banner(tmp_path, db_path):
     settings = Settings(paths=Paths(profile_dir=tmp_path / "nope", db_path=db_path))
     c = TestClient(create_app(settings, lambda: db.connect(db_path)))
@@ -240,6 +263,44 @@ def test_preview_bucket_deltas_when_floor_drops(client, pdir, conn):
     assert f"Filtered out by salary 1 → 0 ({MINUS}1)" in r.text
     assert 'href="/job/1"' in r.text
     assert "Save — free" in r.text
+
+
+def test_preview_does_not_block_other_requests(client, pdir, conn, monkeypatch):
+    """A running preview must not hold the event loop: a state click is answered meanwhile.
+
+    The preview's prefilter count is held open until the state click has come back. If the
+    preview ran on the event loop the click could not be served, the hold would time out, and
+    ``released`` would be False (501fee8).
+    """
+    add_job(conn, 1, salary_max=120000)
+    entered, release = threading.Event(), threading.Event()
+    released: list[bool] = []
+    real = pf.prefilter_delta
+
+    def held(*args, **kwargs):
+        entered.set()
+        released.append(release.wait(10))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pf, "prefilter_delta", held)
+    previews = []
+    with client:  # one event loop for both requests
+        worker = threading.Thread(
+            target=lambda: previews.append(
+                client.post(
+                    "/prefs/preview", data=form_for(pdir, hard__salary_floor__amount="100000")
+                )
+            )
+        )
+        worker.start()
+        assert entered.wait(10)
+        r = client.post("/prefs/state/CO", data={"state_ranking": "", "states_excluded": ""})
+        assert r.status_code == 200 and "state-picker" in r.text
+        release.set()
+        worker.join(10)
+    assert released == [True]
+    assert [p.status_code for p in previews] == [200]
+    assert "1 scored jobs" in previews[0].text
 
 
 def test_preview_names_buckets_not_letters_for_moved_jobs(client, pdir, conn):
