@@ -11,7 +11,9 @@ Type=oneshot
 # (the systemd user manager may not see XDG_* set in a login shell). Reinstall after changing
 # them.
 WorkingDirectory=@REPO@
-ExecStart=@EXEC@ run
+# --wait: queue behind another jobhunter job (the run lock, specs/018 C5) instead of being
+# skipped, e.g. when Persistent= fires several timers after downtime; exit 75 if it runs out.
+ExecStart=@EXEC@ run --wait 4h
 Nice=10
 Environment=PATH=@PATH@
 @XDG_ENV@

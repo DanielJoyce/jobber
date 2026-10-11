@@ -77,7 +77,10 @@ def test_services_use_absolute_exec_and_repo_paths(inst):
         assert exec_start is not None
         assert exec_start.group(1) == str(EXEC)
         assert Path(exec_start.group(1)).is_absolute()
-    assert "ExecStart=/opt/jobber/.venv/bin/jobhunter run\n" in units["jobhunter-run.service"]
+    assert (
+        "ExecStart=/opt/jobber/.venv/bin/jobhunter run --wait 4h\n"
+        in units["jobhunter-run.service"]
+    )
     assert (
         "ExecStart=/opt/jobber/.venv/bin/jobhunter score --collect-pending"
         in units["jobhunter-collect.service"]
