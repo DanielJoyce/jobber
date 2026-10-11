@@ -133,6 +133,20 @@ and appear in the jobhunter inbox as scored jobs.
 - `systemd` user timer with an `OnFailure=` notification
 - Backfill run
 
+## After Pass 2
+
+### Setup and readiness
+
+See [019](019-setup-and-readiness.md). A `/setup` page, a banner on Today and the inbox until
+the essentials are present, and `jobhunter doctor`, all from one set of local, free checks.
+First a fix so the run and the console resolve the resume the same way (S0), then the checks
+module (S1), then `doctor` and the page in parallel (S2, S3), then the container snapshot (S4),
+Gmail token age (S5), the free live checks (S6), a clear "no scorer credential" message in the
+run (S7), and docs (S8).
+
+**Done when** a fresh install with default config and no API key shows the banner naming the
+screen scorer, `jobhunter doctor` exits 1 saying the same, and neither made a network call.
+
 ## Dependency order
 
 ```
