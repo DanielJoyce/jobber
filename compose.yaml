@@ -32,7 +32,8 @@ services:
   console:
     <<: *jobhunter
     container_name: jobhunter-compose-console
-    command: ["console"]
+    command: ["console", "--host", "127.0.0.1", "--port", "8808"]
+    network_mode: "pasta:--host-lo-to-ns-lo"
     ports:
       - "127.0.0.1:8808:8808"
     restart: on-failure
@@ -41,7 +42,7 @@ services:
         target: anthropic_api_key
         uid: "1000"
         gid: "1000"
-        mode: 0400
+        mode: "0400"
       # Optional, same shape: jobhunter_openrouter, jobhunter_openai_compat, jobhunter_llama.
 
   run:
@@ -54,7 +55,7 @@ services:
         target: anthropic_api_key
         uid: "1000"
         gid: "1000"
-        mode: 0400
+        mode: "0400"
       # Optional: jobhunter_usajobs_key, jobhunter_usajobs_email, jobhunter_google_client and
       # jobhunter_gmail_token, each with its *_FILE variable in environment (see preflight).
 

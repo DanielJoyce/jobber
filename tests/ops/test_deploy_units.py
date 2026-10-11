@@ -115,7 +115,8 @@ def test_console_unit():
     c = u["Container"]
     assert c["PublishPort"] == ["127.0.0.1:8808:8808"]
     assert c["Network"] == ["pasta:--host-lo-to-ns-lo"]
-    assert c["Exec"] == ["console"]
+    assert c["Exec"] == ["console --host 127.0.0.1 --port 8808"]
+    assert c["HealthOnFailure"] == ["kill"]
     health = one(u, "Container", "HealthCmd")
     assert "/healthz" in health and "'Host': '127.0.0.1:8808'" in health
     assert u["Service"]["Restart"] == ["on-failure"]
@@ -211,6 +212,8 @@ def test_compose_properties(compose):
     assert set(compose["services"]) == {"console", "run"}
     console, run = compose["services"]["console"], compose["services"]["run"]
     assert console["ports"] == ["127.0.0.1:8808:8808"]
+    assert console["network_mode"] == "pasta:--host-lo-to-ns-lo"
+    assert console["command"][:5] == ["console", "--host", "127.0.0.1", "--port", "8808"]
     assert "ports" not in run and run["profiles"] == ["manual"]
     for svc in (console, run):
         assert svc["image"] == "localhost/jobhunter:current"
@@ -306,3 +309,11 @@ def test_timers_pass_systemd_analyze_verify(tmp_path):
         assert not problems, problems
     finally:
         shutil.rmtree(rt, ignore_errors=True)
+
+
+def test_compose_secret_modes_are_strings_under_yaml_1_1():
+    import yaml  # PyYAML (YAML 1.1) reads an unquoted 0400 as decimal 256
+
+    doc = yaml.safe_load((ROOT / "compose.yaml").read_text())
+    modes = [s["mode"] for svc in doc["services"].values() for s in svc["secrets"]]
+    assert modes and all(m == "0400" for m in modes)

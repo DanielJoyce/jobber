@@ -19,12 +19,13 @@ Environment=JOBHUNTER_RESUME_PATH=/data/resume
 Environment=JOBHUNTER_CACHE_DIR=/cache
 Network=pasta:--host-lo-to-ns-lo
 PublishPort=127.0.0.1:8808:8808
-Exec=console
+Exec=console --host 127.0.0.1 --port 8808
 # /healthz needs a loopback Host header (C1); the image has no curl, so use python.
 HealthCmd=python -c "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8808/healthz', headers={'Host': '127.0.0.1:8808'}), timeout=3)"
 HealthInterval=30s
 HealthRetries=3
 HealthStartPeriod=20s
+HealthOnFailure=kill
 
 [Service]
 Restart=on-failure
