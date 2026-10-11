@@ -296,6 +296,11 @@ C15. Preflight writes `~/.local/bin/jobhunter-ctr`, a short script that runs `po
 -it` on `localhost/jobhunter:current` with the run unit's mounts, user namespace and the
 secrets in the `jobhunter-ctr` column. Use it for `mail status|match|setup|sample`,
 `secrets status`, `sources list`, and anything else interactive after the switch.
+The script is rendered by `jobhunter.ops.ctr` (shared with `upgrade`), finds podman at run time
+through the host-escape chain, labels its containers `io.jobhunter.oneoff=1` (no name), and
+mounts each secret of its column only when `podman secret exists` finds it at run time (so
+it never goes stale after a secret change). `jobhunter ctr-script [--write]` prints or installs
+it (C15 decision); preflight `--leave` should remove it.
 
 ### Compose (convenience, podman-compose only)
 
@@ -375,6 +380,17 @@ C12, C15, D15. The host checkout moves forward on every merge; the image moves w
   `jobhunter-ctr db migrate`, restart the console, re-enable timers, print `jobhunter version`
   on both sides. A failure stops and prints how to restore the pre-migrate backup and retag the
   previous image. `--dry-run` prints the steps.
+  As built (C15 decisions): the image is built **before** anything stops, so a failed build
+  changes nothing; timers stop first, then it waits for running `jobhunter-ctr-*` services
+  (`--wait`, default 30m), takes the run lock, stops the console, takes the C6 console lock
+  exclusive and checks no console process or one-off is left; a timeout, a held lock, a busy
+  database or Ctrl-C there starts again what it stopped and changes nothing. A later failure
+  writes `<data dir>/upgrade-pending.json` so a rerun restarts the original units and keeps
+  the first rollback point. The backup is
+  `backups/jobhunter-<stamp>-pre-upgrade.db` (manual, never pruned). Only units that were active
+  are started again. "Clean" means no changes in the image's inputs (`Containerfile`,
+  `.containerignore`, `pyproject.toml`, `uv.lock`, `README.md`, `src/`); `--allow-dirty` builds
+  them anyway as `<commit>-dirty`. Without the deployment marker it says it is not needed.
 - **Rollback**: restore a pre-migrate backup and retag the previous image. Because nothing
   migrates on its own, the next host command refuses instead of re-migrating; check out the
   matching commit or run `upgrade` again when ready.
