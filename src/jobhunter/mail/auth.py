@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import webbrowser
@@ -358,6 +359,146 @@ def authenticate(
     else:
         token = run_oauth_flow(settings, port=port or 0, open_browser=open_browser)
     return store_token(token)
+
+
+# --- podman secret (host only, specs/018 C7) ------------------------------------------------
+
+SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+PODMAN_PROBE_TIMEOUT_SECONDS = 20
+PODMAN_WRITE_TIMEOUT_SECONDS = 30
+# Tried in order; the first whose `podman secret ls` succeeds wins. The last three are the
+# host-escape chain for toolbox and distrobox (flatpak-spawn, host-spawn, distrobox-host-exec).
+PODMAN_CHAINS: tuple[tuple[str, ...], ...] = (
+    ("podman",),
+    ("flatpak-spawn", "--host", "podman"),
+    ("host-spawn", "podman"),
+    ("distrobox-host-exec", "podman"),
+)
+
+
+def _secret_names(prefix: list[str]) -> list[str] | None:
+    """Names from `podman secret ls`, or None when that command does not work."""
+    try:
+        done = subprocess.run(
+            [*prefix, "secret", "ls", "--format", "{{.Name}}"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+            timeout=PODMAN_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def find_podman() -> tuple[list[str], list[str]]:
+    """The working podman command prefix and the existing secret names; raise if none works.
+
+    Run before the consent flow so a host without podman is refused up front.
+    """
+    for chain in PODMAN_CHAINS:
+        if shutil.which(chain[0]) is None:
+            continue
+        if chain[0] == "distrobox-host-exec" and shutil.which("host-spawn") is None:
+            # Without host-spawn it would download one from GitHub and sudo-install it, with
+            # no prompt, when stdout is captured. Never trigger that from a probe.
+            continue
+        names = _secret_names(list(chain))
+        if names is not None:
+            return list(chain), names
+    raise MailAuthError(
+        "podman is not reachable (tried podman, flatpak-spawn --host podman, host-spawn "
+        "podman, distrobox-host-exec podman), so no consent flow was started. Install podman "
+        "on the host or run this from a shell that can reach it."
+    )
+
+
+def check_secret_name(name: str) -> None:
+    if not SECRET_NAME_RE.fullmatch(name):
+        raise MailAuthError(
+            f"invalid podman secret name {name!r}: use letters, digits, '_', '.', '-' "
+            "and start with a letter or digit."
+        )
+
+
+def write_podman_secret(prefix: list[str], name: str, token: str) -> None:
+    """`podman secret create --replace NAME -` with the token on stdin only.
+
+    The token is never in argv or the child's added environment, and nothing is written to disk.
+    """
+    try:
+        done = subprocess.run(
+            [*prefix, "secret", "create", "--replace", name, "-"],
+            input=token,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=PODMAN_WRITE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MailAuthError(f"podman secret create failed ({type(exc).__name__})") from exc
+    if done.returncode != 0:
+        detail = (done.stderr or "").replace(token, "[redacted]").strip().splitlines()
+        tail = f": {detail[-1][:200]}" if detail else ""
+        raise MailAuthError(f"podman secret create exited {done.returncode}{tail}")
+
+
+def authenticate_to_podman_secret(
+    settings: Settings,
+    name: str,
+    *,
+    manual: bool = False,
+    port: int | None = None,
+    open_browser: bool = True,
+    keep_local: bool = False,
+    from_local: bool = False,
+    echo: Callable[[str], None] = print,
+) -> str:
+    """Host only: store the refresh token as a podman secret.
+
+    Normally runs the OAuth flow first; with `from_local` it moves the locally stored token
+    instead (no consent). podman is checked before consent. If the write fails after consent
+    the token is stored locally (keyring or 0600 file) so the consent is not lost, whatever
+    the failure was. Returns "new", "replaced" or "local" (write failed, kept locally).
+    """
+    if container.is_container():
+        raise MailAuthError(container.refusal("mail auth"))
+    check_secret_name(name)
+    if from_local:
+        token = load_token()
+        if not token:
+            raise MailAuthError("No locally stored Gmail token to move. Run without --from-local.")
+        prefix, existing = find_podman()
+        write_podman_secret(prefix, name, token)
+        return "replaced" if name in existing else "new"
+    # The client JSON stays on the host for the weekly re-auth (specs/018 Gmail).
+    require_client_secrets(settings)
+    prefix, existing = find_podman()
+    if manual:
+        token = run_manual_flow(settings, port=port or DEFAULT_PORT)
+    else:
+        token = run_oauth_flow(settings, port=port or 0, open_browser=open_browser)
+    try:
+        write_podman_secret(prefix, name, token)
+    except BaseException as exc:
+        where = store_token(token, echo)
+        reason = str(exc) if isinstance(exc, MailAuthError) else type(exc).__name__
+        echo(
+            f"warning: could not write podman secret {name} ({reason}). The token was kept in "
+            f"the {where} so the consent is not lost. Fix podman, then move it without a new "
+            f"consent: jobhunter mail auth --podman-secret {name} --from-local"
+        )
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return "local"
+    if keep_local:
+        store_token(token, echo)
+    return "replaced" if name in existing else "new"
 
 
 def build_service(settings: Settings):

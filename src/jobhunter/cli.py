@@ -1271,13 +1271,72 @@ def mail_auth(
     no_browser: Annotated[
         bool, typer.Option("--no-browser", help="Do not try to open a browser; print the URL.")
     ] = False,
+    podman_secret: Annotated[
+        str | None,
+        typer.Option(
+            "--podman-secret",
+            metavar="NAME",
+            help="Store the token as podman secret NAME (stdin only) instead of locally.",
+        ),
+    ] = None,
+    keep_local: Annotated[
+        bool,
+        typer.Option("--keep-local", help="With --podman-secret, also keep a local copy."),
+    ] = False,
+    from_local: Annotated[
+        bool,
+        typer.Option(
+            "--from-local",
+            help="With --podman-secret: move the locally stored token, no new consent.",
+        ),
+    ] = False,
 ) -> None:
-    """Run the Gmail OAuth flow and store the refresh token (OS keyring, else a 0600 file)."""
+    """Run the Gmail OAuth flow and store the refresh token (OS keyring, else a 0600 file).
+
+    For the container deployment, run on the host: `jobhunter mail auth --podman-secret
+    jobhunter_gmail_token`. While the Google app is in Testing mode the refresh token
+    expires after 7 days, so repeat that one command weekly; it checks podman first, then
+    replaces the secret. If podman fails after consent, the token is kept locally.
+    """
     from jobhunter.config import load_settings
     from jobhunter.mail import auth
 
     _host_only("mail auth", "jobhunter mail auth --podman-secret jobhunter_gmail_token")
     settings = load_settings()
+    if (keep_local or from_local) and podman_secret is None:
+        typer.echo("error: --keep-local and --from-local need --podman-secret.", err=True)
+        raise typer.Exit(2)
+    if podman_secret is not None:
+        try:
+            outcome = auth.authenticate_to_podman_secret(
+                settings,
+                podman_secret,
+                manual=manual,
+                port=port,
+                open_browser=not no_browser,
+                keep_local=keep_local,
+                from_local=from_local,
+                echo=lambda line: typer.echo(line, err=True),
+            )
+        except auth.MailAuthError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+        if outcome == "local":
+            raise typer.Exit(1)
+        if outcome == "new":
+            typer.echo(
+                f"Gmail authorised; created podman secret {podman_secret}. Next: rerun "
+                "`jobhunter container preflight`, then `systemctl --user daemon-reload` and "
+                "`systemctl --user restart jobhunter-console`. The scheduled runs pick the "
+                "secret up at their next run; nothing here starts a run."
+            )
+        else:
+            typer.echo(
+                f"Gmail authorised; replaced podman secret {podman_secret}. Nothing else to "
+                "do; the next run picks up the new token. Repeat weekly while the app is in "
+                "Testing mode."
+            )
+        return
     try:
         where = auth.authenticate(settings, manual=manual, port=port, open_browser=not no_browser)
     except auth.MailAuthError as exc:

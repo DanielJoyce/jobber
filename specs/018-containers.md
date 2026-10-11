@@ -247,8 +247,12 @@ allowlisted environment that drops `ANTHROPIC_*` and every known secret name.
 - **Other mail commands** (`mail status`, `match`, `setup`, `sample`) run in a one-off
   container through `jobhunter-ctr mail ...` ([one-off commands](#one-off-commands));
   `mail sync` is part of the nightly run.
-- Preflight warns while `~/.config/jobhunter/gmail_token.json` or `google_client_secret.json`
-  still exist on the host and prints the `rm` line; it never deletes them.
+- Preflight warns while `~/.config/jobhunter/gmail_token.json` still exists on the host and
+  prints the `rm` line; it never deletes it. The client JSON `google_client_secret.json` **stays
+  on the host**: the weekly `mail auth --podman-secret` runs there and needs it, so preflight
+  does not ask for its removal.
+- `mail auth --podman-secret NAME --from-local` moves a locally stored token (for example
+  after a failed secret write) into the secret without a new consent.
 
 ### At rest
 
