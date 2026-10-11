@@ -17,7 +17,6 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 
 from jobhunter.config import Settings
@@ -39,16 +38,8 @@ DEFAULT_POLL_SECONDS = 60.0
 DEFAULT_MAX_WAIT_SECONDS = 4 * 3600
 # Used only when a scorer has no price of its own (no measured history, no price table).
 FALLBACK_COST_PER_JOB_USD = screen.ESTIMATED_COST_PER_REQUEST_USD  # Haiku, batched
-# A typical screen call (specs/006 "Cost"), in the newer tokenizer's counts (Haiku 5.5 and
-# Opus 4.7 onward count the same text as about 30% more tokens): 2,600 uncached input, 3,900
-# cached, 455 output. For an older-tokenizer model this overestimates by about 30%, the safe
-# direction for a budget that bypasses the daily cap.
-TYPICAL_USAGE = SimpleNamespace(
-    input_tokens=2600,
-    cache_creation_input_tokens=0,
-    cache_read_input_tokens=3900,
-    output_tokens=455,
-)
+# A typical screen call; the spend cap prices reservations at the same counts.
+TYPICAL_USAGE = screen.TYPICAL_USAGE
 
 # Same conditions as screen._ELIGIBLE, counted rather than loaded.
 _COUNT_ELIGIBLE = """
