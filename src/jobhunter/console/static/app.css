@@ -10,6 +10,11 @@
   --link: #1c5cab;
   --link-visited: #6a3d9a;
 
+  /* Primary button: white text must hold >= 4.5:1 on the base and hover fills (tests/e2e/test_buttons.py). */
+  --btn-primary-bg: #1c5cab;
+  --btn-primary-hover: #184f95;
+  --btn-primary-text: #ffffff;
+
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
@@ -67,6 +72,9 @@
     --link: #90bbef;
     --link-visited: #c4abe8;
 
+    --btn-primary-bg: #256abf;
+    --btn-primary-hover: #1f5fb3;
+
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
@@ -117,6 +125,9 @@
   --border: rgba(255, 255, 255, 0.1);
   --link: #90bbef;
   --link-visited: #c4abe8;
+
+  --btn-primary-bg: #256abf;
+  --btn-primary-hover: #1f5fb3;
 
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -274,6 +285,7 @@ h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .map-svg .labels { pointer-events: none; }
 .map-svg .lbl { font-size: 11px; font-weight: 600; }
 .map-svg .lbl-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.map-svg .halo { stroke-width: 3px; paint-order: stroke; stroke-linejoin: round; }  /* no-data labels over the hatch */
 .map-svg .status { font-size: 11px; stroke-width: 2px; paint-order: stroke; }  /* ink and halo set per fill in JS */
 .map-svg.no-status .status { display: none; }
 .map-svg .leader { stroke: var(--text-muted); stroke-width: 0.75; }
@@ -294,8 +306,8 @@ h1 { font-size: 1.5rem; margin: 0 0 8px; }
 .legend-title { color: var(--text-primary); }
 .legend-item { display: inline-flex; align-items: center; gap: 4px; }
 .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; border: 1px solid var(--border); }
-/* Same direction and density as the map pattern: '/' hatch (a 6px tile rotated 45deg with a 1px line per tile). */
-.swatch.nodata { background: repeating-linear-gradient(-45deg, var(--surface-1) 0 5px, var(--text-muted) 5px 6px); }
+/* Same direction and density as the map pattern: '/' hatch (a 6px tile rotated 45deg with a 1.25px line per tile). */
+.swatch.nodata { background: repeating-linear-gradient(-45deg, var(--surface-1) 0 4.75px, var(--text-muted) 4.75px 6px); }
 .map-svg .nodata-hatch { stroke: var(--text-muted); stroke-width: 1.25; }
 .map-svg .nodata-bg { fill: var(--surface-1); }
 .badge-html { display: inline-block; min-width: 16px; height: 16px; line-height: 14px; text-align: center; font-size: 10px; font-weight: 600; border: 1px solid var(--text-secondary); border-radius: 8px; color: var(--text-primary); }

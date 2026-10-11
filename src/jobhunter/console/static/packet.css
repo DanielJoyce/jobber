@@ -8,7 +8,9 @@
   border: 1px solid var(--axis); background: var(--surface-1); color: var(--text-primary);
   text-decoration: none; cursor: pointer;
 }
-.packet-btn.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+.packet-btn.primary { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--btn-primary-text); }
+.packet-btn.primary:hover:not(:disabled) { background: var(--btn-primary-hover); border-color: var(--btn-primary-hover); }
+.packet-btn.primary:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; background: var(--btn-primary-hover); }
 .packet-btn:disabled, .packet-btn[disabled] {
   background: var(--surface-1); border-color: var(--border); color: var(--text-muted);
   cursor: not-allowed; opacity: 0.6;

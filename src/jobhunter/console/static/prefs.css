@@ -68,7 +68,9 @@ label .hint { margin: 0; }
   font: inherit; font-size: 0.875rem; display: inline-block; padding: 4px 12px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); text-decoration: none; cursor: pointer;
 }
-.button.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+.button.primary { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--btn-primary-text); }
+.button.primary:hover:not(:disabled) { background: var(--btn-primary-hover); border-color: var(--btn-primary-hover); }
+.button.primary:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; background: var(--btn-primary-hover); }
 .button.small { padding: 1px 8px; font-size: 0.75rem; }
 /* A disabled button must look it: the author styles above override the UA's greyed look. */
 .button:disabled, .button[disabled] {

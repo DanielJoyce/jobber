@@ -572,3 +572,56 @@ def test_no_data_hatch_line_is_inside_its_tile_and_has_ink(dash):
     half = geo["sw"] / 2
     assert geo["sw"] >= 1 and geo["x"] == geo["x2"]
     assert half <= geo["x"] <= geo["w"] - half, "line must not be clipped by the tile edge"
+
+
+def test_no_data_hatch_line_spans_the_full_tile_height(dash):
+    geo = dash.evaluate(
+        "() => { const p = document.querySelector('#map-nodata');"
+        " const l = p.querySelector('line');"
+        " return {h: +p.getAttribute('height'),"
+        " y1: +l.getAttribute('y1'), y2: +l.getAttribute('y2')}; }"
+    )
+    assert geo["y1"] == 0 and geo["y2"] == geo["h"], "line must run edge to edge so tiles join"
+
+
+def test_legend_hatch_matches_the_map_pattern_direction_spacing_and_line_width(dash):
+    pat = dash.evaluate(
+        "() => { const p = document.querySelector('#map-nodata');"
+        " const l = p.querySelector('line');"
+        " return {w: +p.getAttribute('width'), t: p.getAttribute('patternTransform'),"
+        " sw: parseFloat(getComputedStyle(l).strokeWidth)}; }"
+    )
+    img = dash.eval_on_selector(
+        "#map-legend .swatch.nodata", "n => getComputedStyle(n).backgroundImage"
+    )
+    assert img.startswith("repeating-linear-gradient(")
+    # Map: vertical line in a tile rotated +45deg = '/' strokes. A CSS gradient at -45deg paints
+    # stripes perpendicular to its axis, which are also '/' strokes.
+    assert pat["t"] == "rotate(45)"
+    angle = float(re.search(r"\(\s*(-?[\d.]+)deg", img).group(1))
+    assert angle == -45
+    stops = [float(x) for x in re.findall(r"([\d.]+)px", img)]
+    assert max(stops) == pat["w"], "legend stripe period must equal the map tile size"
+    line = max(stops) - min(s for s in stops if s > 0)
+    assert line == pytest.approx(pat["sw"]), "legend line width must equal the map stroke width"
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_no_data_labels_stay_readable_over_the_hatch_lines(page, server, scheme):
+    _load_synthetic(page, server, scheme)
+    surface = _rgb(page, page.evaluate(_TOKEN_JS, "--surface-1"))
+    hatch = _rgb(page, page.eval_on_selector("#map-nodata line", "n => getComputedStyle(n).stroke"))
+    t = page.evaluate(
+        "s => { const t = Array.from(document.querySelectorAll('#map g.labels text.lbl'))"
+        ".find(t => t.textContent.trim() === s); const c = getComputedStyle(t);"
+        " return {fill: c.fill, stroke: c.stroke, sw: parseFloat(c.strokeWidth),"
+        " po: c.paintOrder}; }",
+        _NODATA_STATE,
+    )
+    ink = _rgb(page, t["fill"])
+    over_surface = _contrast(ink, surface)
+    over_line = _contrast(ink, hatch)
+    if over_line < 4.5:  # the ink cannot beat the lines alone, so a halo must separate them
+        assert _rgb(page, t["stroke"]) == surface and t["sw"] >= 2
+        assert t["po"].startswith("stroke")
+    assert over_surface >= 4.5
