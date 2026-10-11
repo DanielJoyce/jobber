@@ -614,6 +614,19 @@ def run_request(
     return st
 
 
+def _priced_on_flat_default(plan: Plan) -> bool:
+    """True when ``plan`` was priced at the old flat default rather than measured history.
+
+    A stored plan does not record where its price came from, so the flat
+    ``screen.ESTIMATED_COST_PER_REQUEST_USD`` itself is the marker; a measured mean is
+    never exactly that. A default priced since per-model pricing is already at least the
+    table price, so treating it the same changes nothing.
+    """
+    if plan.cost_source == "fit_score":
+        return False
+    return math.isclose(plan.cost_per_job, screen.ESTIMATED_COST_PER_REQUEST_USD, rel_tol=1e-9)
+
+
 def _execute(
     conn: sqlite3.Connection,
     st: RunState,
@@ -640,10 +653,14 @@ def _execute(
 
             client_factory = anthropic.Anthropic
         # The confirmed ceiling: the batch is billed only when collected, so cut it now to
-        # what max_usd covers at the planned cost per job, or the model's table price at
-        # typical tokens when that is higher (a plan priced on the old flat default). The
-        # daily and weekly caps are applied inside submit_batch as usual.
-        per_job = max(plan.cost_per_job, screen.table_price_per_request_usd(spec))
+        # what max_usd covers at the planned cost per job. The daily and weekly caps are
+        # applied inside submit_batch as usual.
+        per_job = plan.cost_per_job
+        if _priced_on_flat_default(plan):
+            # Confirmed before per-model pricing, at the flat $0.002: price it at the model's
+            # table price when that is higher (Sonnet 5.5). A plan priced on measured history
+            # keeps its measured price, so it sends every group the user confirmed.
+            per_job = max(per_job, screen.table_price_per_request_usd(spec))
         fits = len(ids) if per_job <= 0 else math.floor(plan.max_usd / per_job + 1e-9)
         if fits <= 0:
             st.notes.append(f"nothing submitted: ${plan.max_usd:.2f} confirmed covers no job")

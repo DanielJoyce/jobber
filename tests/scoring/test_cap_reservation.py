@@ -191,3 +191,15 @@ def test_rescore_batch_as_confirmed_sends_every_group(conn, profile):
         rid = _queue(conn, profile, spec)
         st = _run(conn, profile, spec, rid, client)
         assert len(client.messages.batches.created[-1]) == 30 and st.attempted == 30
+
+
+def test_rescore_batch_priced_on_measured_history_below_table_sends_every_group(conn, profile):
+    add_measured(conn, profile, SONNET, 0.003)  # measured, below the 0.00507 table price
+    add_groups(conn, profile, 50)
+    rid = _queue(conn, profile, SONNET)
+    r = rescore.get_request(conn, rid)
+    assert r["cost_per_job_usd"] == pytest.approx(0.003)
+    assert r["max_usd"] < 50 * SONNET_TABLE  # the table price would cut this plan
+    client = FakeClient()
+    st = _run(conn, profile, SONNET, rid, client)
+    assert sent(client) == 50 and st.attempted == 50
