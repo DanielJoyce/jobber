@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import sys
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from typer.core import TyperGroup
 
 from jobhunter import container, secrets
 from jobhunter.config import load_env_files, load_settings, resolve_path
@@ -16,8 +20,47 @@ from jobhunter.core import db
 from jobhunter.pipeline import runner
 from jobhunter.sources.registry import enabled_sources, load_registry, sync_sources_table
 
+
+class _JobhunterGroup(TyperGroup):
+    """Turns a schema refusal (newer database, or pending migrations in a container
+    deployment) into a one-line error and exit 1 from any command, instead of a traceback."""
+
+    def invoke(self, ctx: typer.Context) -> object:
+        token = _CURRENT_COMMAND.set(self._command_path(ctx))
+        try:
+            return super().invoke(ctx)
+        except db.SchemaError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        finally:
+            _CURRENT_COMMAND.reset(token)
+
+    def _command_path(self, ctx: typer.Context) -> str | None:
+        """``"db migrate"`` for ``jobhunter db migrate --x``: the subcommand names only."""
+        # Click 8.2 keeps the not-yet-dispatched subcommand names in _protected_args.
+        pending = getattr(ctx, "_protected_args", None) or getattr(ctx, "protected_args", [])
+        tokens = [*pending, *ctx.args]
+        names: list[str] = []
+        group: object = self
+        # Duck-typed: typer ships its own vendored click, so click.Group is the wrong class.
+        while hasattr(group, "get_command") and tokens:
+            sub = group.get_command(ctx, tokens[0])
+            if sub is None:
+                break
+            names.append(tokens.pop(0))
+            group = sub
+        return " ".join(names) or None
+
+
+_CURRENT_COMMAND: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "jobhunter_command", default=None
+)
+
+
 app = typer.Typer(
-    help="jobhunter: sweep job banks, score fit, track applications.", no_args_is_help=True
+    cls=_JobhunterGroup,
+    help="jobhunter: sweep job banks, score fit, track applications.",
+    no_args_is_help=True,
 )
 sources_app = typer.Typer(help="Inspect and verify configured sources.", no_args_is_help=True)
 mail_app = typer.Typer(help="Email alert ingest.", no_args_is_help=True)
@@ -35,6 +78,8 @@ ext_app = typer.Typer(help="The jobhunter browser extension: pairing.", no_args_
 app.add_typer(ext_app, name="ext")
 secrets_app = typer.Typer(help="API keys and other secrets (never prints values).")
 app.add_typer(secrets_app, name="secrets")
+db_app = typer.Typer(help="Database schema and backups.", no_args_is_help=True)
+app.add_typer(db_app, name="db")
 
 NOT_IMPLEMENTED = "not implemented yet"
 
@@ -50,14 +95,64 @@ def _host_only(command: str, host_command: str | None = None) -> None:
 
 
 # Commands that run while old-layout data is unmigrated: they report on it, move it, or do
-# not touch user data at all (schedule only writes systemd units).
-UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets"}
+# not touch user data at all (schedule only writes systemd units, version only reads).
+UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets", "version"}
+
+# specs/018-containers.md#version-skew: commands that neither migrate on their own nor refuse
+# because migrations are pending; they still refuse a newer database where they would write.
+# Every other command that opens the database goes through _migrate. Some of these land in
+# later tickets (secrets status C2, container preflight C13, db backup and restore C6,
+# upgrade C15); each must open the database without _migrate.
+MIGRATION_EXEMPT_COMMANDS = frozenset(
+    {
+        "version",
+        "paths",
+        "secrets status",
+        "container preflight",
+        "db backup",
+        "db restore",
+        "upgrade",
+        "db migrate",
+    }
+)
+
+
+def _migrate(conn) -> list[int]:
+    """Bring the schema up to date the automatic way (specs/018 Version skew).
+
+    Without the deployment marker this migrates, after a pre-migrate backup into
+    ``<data dir>/backups/auto``; with it, pending migrations raise ``MigrationsPending``
+    ("run `jobhunter upgrade`"), which _JobhunterGroup prints as an error.
+
+    Called from a command in MIGRATION_EXEMPT_COMMANDS it neither migrates nor refuses on
+    pending migrations; it still refuses a database newer than this code.
+    """
+    if _invoked_command() in MIGRATION_EXEMPT_COMMANDS:
+        db.check_not_newer(conn)
+        return []
+    path = db.database_file(conn)
+    data_dir = None
+    if path is not None:
+        data_dir = db.owning_data_dir(path, resolve_path(load_settings().paths.data_dir))
+    return db.migrate(conn, data_dir=data_dir, on_backup=_say_backed_up)
+
+
+def _invoked_command() -> str | None:
+    """The running subcommand path without the program name, e.g. ``"db migrate"``."""
+    return _CURRENT_COMMAND.get()
+
+
+def _say_backed_up(path: Path) -> None:
+    typer.echo(f"pre-migrate backup: {path}", err=True)
 
 
 @app.callback()
 def _load_env(ctx: typer.Context) -> None:
     """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
     against a new database while the real one is still in the old layout."""
+    # Snapshot the migrations this code ships now, at start: a job that waits hours for the
+    # run lock across a fast-forward must treat migrations merged meanwhile as unknown.
+    db.prime_migrations()
     global _SECRETS_REPORT
     _SECRETS_REPORT = secrets.startup(
         load_settings, load_env_files, lambda line: typer.echo(line, err=True)
@@ -88,6 +183,64 @@ def _stub() -> None:
     typer.echo(NOT_IMPLEMENTED)
 
 
+WAIT_HELP = (
+    "Wait up to DURATION (e.g. 30m, 2h) for another jobhunter job to finish, then run; "
+    "exit 75 if it does not. Timers pass this. Without it, a running job means: report and "
+    "exit 0, nothing done."
+)
+WaitOption = Annotated[str | None, typer.Option("--wait", metavar="DURATION", help=WAIT_HELP)]
+
+
+def _parse_wait(wait: str | None) -> float | None:
+    from jobhunter.core.runlock import parse_duration
+
+    if wait is None:
+        return None
+    try:
+        return parse_duration(wait)
+    except ValueError as exc:
+        typer.echo(f"--wait: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+
+def _human(seconds: float) -> str:
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds / 3600:g}h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds / 60:g}m"
+    return f"{seconds:g}s"
+
+
+@contextmanager
+def _job_lock(settings, command: str, wait: float | None) -> Iterator[None]:
+    """Hold the run lock (specs/018 Run lock, C5) for the whole job.
+
+    Held by another job: without ``wait``, say so and exit 0 (nothing spent); with ``wait``,
+    retry until it runs out, then exit 75. A holder older than 6 h exits 75 either way, so
+    systemd's OnFailure= reports a hung job.
+    """
+    from jobhunter.core import runlock
+
+    lock = runlock.RunLock(resolve_path(settings.paths.db_path), command)
+
+    def waiting(holder: runlock.Holder | None) -> None:
+        who = holder.describe() if holder else "details unknown"
+        typer.echo(f"waiting up to {_human(wait or 0)} for the run lock held by {who}", err=True)
+
+    try:
+        lock.acquire(wait, on_wait=waiting)
+    except (runlock.StaleHolder, runlock.LockTimeout) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(runlock.EXIT_STALE) from exc
+    except runlock.LockHeld as exc:
+        typer.echo(f"{exc}; not started, nothing spent. Try again when it finishes.", err=True)
+        raise typer.Exit(0) from exc
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 @app.command()
 def run(
     stage: Annotated[
@@ -103,6 +256,7 @@ def run(
     max_resolve: Annotated[
         int, typer.Option(help="Cap on detail-page fetches per run.")
     ] = runner.DEFAULT_MAX_RESOLVE,
+    wait: WaitOption = None,
 ) -> None:
     """Run the ingest pipeline."""
     try:
@@ -111,6 +265,7 @@ def run(
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
+    wait_s = _parse_wait(wait)
     states = runner.parse_states(state)
     settings = load_settings()
     rows = load_registry()
@@ -121,7 +276,7 @@ def run(
         conn = db.connect(db_path if db_path.is_file() else ":memory:")
         try:
             if not db_path.is_file():
-                db.migrate(conn)
+                _migrate(conn)
             text = runner.dry_run_plan(
                 conn,
                 rows,
@@ -137,22 +292,23 @@ def run(
         return
 
     db_path = resolve_path(settings.paths.db_path)
-    conn = db.connect(db_path)
-    try:
-        db.migrate(conn)
-        report = runner.run_pipeline(
-            conn,
-            settings,
-            rows,
-            profile_loader=loader,
-            stages=stages,
-            states=states,
-            since=since_dt,
-            full=full,
-            max_resolve=max_resolve,
-        )
-    finally:
-        conn.close()
+    with _job_lock(settings, "run", wait_s):
+        conn = db.connect(db_path)
+        try:
+            _migrate(conn)
+            report = runner.run_pipeline(
+                conn,
+                settings,
+                rows,
+                profile_loader=loader,
+                stages=stages,
+                states=states,
+                since=since_dt,
+                full=full,
+                max_resolve=max_resolve,
+            )
+        finally:
+            conn.close()
     summary = runner.format_summary(report)
     if summary:
         typer.echo(summary)
@@ -232,6 +388,14 @@ def score(
             "(jev:/decisions:) default to 8, at most 25. specs/016 Packed requests.",
         ),
     ] = None,
+    wait: Annotated[
+        str | None,
+        typer.Option(
+            "--wait",
+            metavar="DURATION",
+            help=WAIT_HELP + " --collect-pending waits 2h unless given.",
+        ),
+    ] = None,
 ) -> None:
     """Screen batches (specs/006 Stage 2) or the Opus deep pass (Stage 3)."""
     modes = [
@@ -257,7 +421,60 @@ def score(
     if yes and rescore is None and group is None:
         typer.echo("--yes applies to --rescore and --group only", err=True)
         raise typer.Exit(2)
+    wait_s = _parse_wait(wait)
+    if wait_s is None and collect_pending:
+        # Collecting spends nothing new (the batches are paid for), so waiting is always safe.
+        wait_s = COLLECT_PENDING_WAIT_S
+    names = ["submit", "collect", "collect-pending", "deep", "deep-group", "rescore-pending"]
+    names += ["rescore", "group"]
+    mode = next(name for name, on in zip(names, modes, strict=True) if on)
+    settings = load_settings()
 
+    def lock() -> AbstractContextManager[None]:
+        return _job_lock(settings, f"score --{mode}", wait_s)
+
+    # --group and --rescore ask y/N first: they take the lock only after the answer (and
+    # re-check what was confirmed), so an open prompt never blocks the timers.
+    prompts = mode in ("group", "rescore")
+    with nullcontext() if prompts else lock():
+        _score_mode(
+            paid_lock=lock if prompts else nullcontext,
+            submit=submit,
+            collect=collect,
+            collect_pending=collect_pending,
+            rescore_pending=rescore_pending,
+            rescore=rescore,
+            group=group,
+            yes=yes,
+            limit=limit,
+            deep=deep,
+            deep_group=deep_group,
+            scorer_override=scorer_override,
+            jobs_per_request=jobs_per_request,
+        )
+
+
+COLLECT_PENDING_WAIT_S = 2 * 3600.0
+
+
+def _score_mode(
+    *,
+    submit: bool,
+    collect: str | None,
+    collect_pending: bool,
+    rescore_pending: bool,
+    rescore: str | None,
+    group: int | None,
+    yes: bool,
+    limit: int,
+    deep: int | None,
+    deep_group: int | None,
+    scorer_override: str | None,
+    jobs_per_request: int | None,
+    paid_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+) -> None:
+    """The body of ``score``: under the run lock, or for --group and --rescore taking it
+    through ``paid_lock`` once the user has said yes."""
     from datetime import UTC, datetime
 
     import anthropic
@@ -278,7 +495,7 @@ def score(
         if scorer_override is not None or jobs_per_request is not None:
             typer.echo("--group scores with scoring.screen_scorer; no other options", err=True)
             raise typer.Exit(2)
-        _score_group(settings, profile, group, yes)
+        _score_group(settings, profile, group, yes, paid_lock)
         return
     rescoring = rescore_pending or rescore is not None
     if scorer_override is not None and not (submit or collect is not None or rescoring):
@@ -298,13 +515,13 @@ def score(
         typer.echo("--jobs-per-request is at most 16 for chat scorers", err=True)
         raise typer.Exit(2)
     if rescoring:
-        _score_rescore(settings, profile, rescore, scorer_override, yes)
+        _score_rescore(settings, profile, rescore, scorer_override, yes, paid_lock)
         return
     screening = submit or collect is not None
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
         typer.echo(notice, err=True)
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     # The screen scorer may not be Anthropic; only build its client where it is needed.
     client = None if screening and not scorer.startswith("anthropic:") else anthropic.Anthropic()
     now = datetime.now(UTC)
@@ -386,13 +603,19 @@ def score(
         conn.close()
 
 
-def _score_group(settings, profile, group_id: int, yes: bool) -> None:
+def _score_group(
+    settings,
+    profile,
+    group_id: int,
+    yes: bool,
+    paid_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+) -> None:
     """``score --group GID``: estimate, confirm, then score that one group (specs/017)."""
     from jobhunter.apply import score as group_score
     from jobhunter.scoring.scorers import privacy_notice
 
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     now = datetime.now(UTC)
     try:
         est = group_score.estimate(conn, profile, settings.scoring, group_id, now)
@@ -410,11 +633,19 @@ def _score_group(settings, profile, group_id: int, yes: bool) -> None:
             typer.echo("not run")
             raise typer.Exit(1)
         try:
-            # The claim's clock starts now, not when the estimate was shown: a long wait at the
-            # prompt must not shorten the claim window (or score against a stale day's cap).
-            out = group_score.score_now(
-                conn, profile, settings.scoring, group_id, token=est.token, now=datetime.now(UTC)
-            )
+            # Locked only after the answer; score_now re-checks the confirmed estimate token.
+            # The claim's clock starts once the lock is held, not when the estimate was shown:
+            # a long wait at the prompt must not shorten the claim window (or score against a
+            # stale day's cap).
+            with paid_lock():
+                out = group_score.score_now(
+                    conn,
+                    profile,
+                    settings.scoring,
+                    group_id,
+                    token=est.token,
+                    now=datetime.now(UTC),
+                )
         except group_score.ScoreRefused as exc:
             typer.echo(f"not scored: {exc}", err=True)
             raise typer.Exit(1) from exc
@@ -423,13 +654,20 @@ def _score_group(settings, profile, group_id: int, yes: bool) -> None:
         conn.close()
 
 
-def _score_rescore(settings, profile, scope: str | None, scorer_override: str | None, yes: bool):
+def _score_rescore(
+    settings,
+    profile,
+    scope: str | None,
+    scorer_override: str | None,
+    yes: bool,
+    paid_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+):
     """``score --rescore SCOPE`` (estimate, confirm, run) or ``--rescore-pending`` (drain)."""
     from jobhunter.scoring import rescore as rs
     from jobhunter.scoring.scorers import ScorerError, privacy_notice
 
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     clock = lambda: datetime.now(UTC)  # noqa: E731
     spec = scorer_override or settings.scoring.screen_scorer
     try:
@@ -478,21 +716,36 @@ def _score_rescore(settings, profile, scope: str | None, scorer_override: str | 
         if not yes and not typer.confirm("Run it?", default=False):
             typer.echo("not run")
             raise typer.Exit(1)
-        rid = rs.create_request(conn, profile, plan, now)
-        try:
-            res = rs.run_request(
-                conn,
-                rid,
-                profile,
-                settings.scoring,
-                scorer=spec,
-                now=clock,
-                prefiltered=plan.prefilter,
-            )
-        except rs.RescoreError as exc:
-            rs.cancel_request(conn, rid, clock())
-            typer.echo(f"re-score: {exc}", err=True)
-            raise typer.Exit(1) from exc
+        # The run lock is taken only after the answer, so an open prompt blocks no other job;
+        # the plan is rebuilt under the lock and must still be the one confirmed.
+        with paid_lock():
+            try:
+                fresh = rs.make_plan(conn, profile, settings.scoring, scope, spec, clock())
+            except (rs.RescoreError, ScorerError) as exc:
+                typer.echo(f"re-score: {exc}", err=True)
+                raise typer.Exit(1) from exc
+            if fresh.token != plan.token or fresh.refusal:
+                typer.echo(
+                    "the plan changed while you were deciding (new jobs, profile or costs); "
+                    "nothing spent. Run it again to see the new estimate.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            rid = rs.create_request(conn, profile, fresh, now)
+            try:
+                res = rs.run_request(
+                    conn,
+                    rid,
+                    profile,
+                    settings.scoring,
+                    scorer=spec,
+                    now=clock,
+                    prefiltered=plan.prefilter,  # the first plan ran the prefilter (rescore.py)
+                )
+            except rs.RescoreError as exc:
+                rs.cancel_request(conn, rid, clock())
+                typer.echo(f"re-score: {exc}", err=True)
+                raise typer.Exit(1) from exc
         row = rs.get_request(conn, rid)
         typer.echo(
             f"{row['status']}: scored {res.scored} of {res.total}, errors {res.errored}, "
@@ -569,28 +822,31 @@ def backfill(
         )
 
     db_path = resolve_path(settings.paths.db_path)
-    conn = db.connect(db_path)
-    try:
-        db.migrate(conn)
-        result = bf.run_backfill(
-            conn,
-            settings,
-            rows,
-            scorer=scorer,
-            client=client,
-            days=days,
-            states=runner.parse_states(state),
-            budget_usd=budget,
-            chunk_size=chunk_size,
-            max_resolve=max_resolve,
-            dry_run=dry_run,
-            confirm=confirm,
-            wait=wait,
-            max_wait_s=max_wait_minutes * 60.0,
-            out=typer.echo,
-        )
-    finally:
-        conn.close()
+    # Interactive and paid: a running job means report and exit 0 (its own --wait polls
+    # batches, not the lock).
+    with _job_lock(settings, "backfill", None):
+        conn = db.connect(db_path)
+        try:
+            _migrate(conn)
+            result = bf.run_backfill(
+                conn,
+                settings,
+                rows,
+                scorer=scorer,
+                client=client,
+                days=days,
+                states=runner.parse_states(state),
+                budget_usd=budget,
+                chunk_size=chunk_size,
+                max_resolve=max_resolve,
+                dry_run=dry_run,
+                confirm=confirm,
+                wait=wait,
+                max_wait_s=max_wait_minutes * 60.0,
+                out=typer.echo,
+            )
+        finally:
+            conn.close()
     if result.status == "declined" and not sys.stdin.isatty():
         typer.echo("no terminal to confirm on; re-run with --yes to submit", err=True)
     raise typer.Exit(result.exit_code)
@@ -629,7 +885,7 @@ def dedupe(
     conn = db.connect(db_path)
     try:
         if not dry_run:
-            db.migrate(conn)
+            _migrate(conn)
         now = datetime.now(UTC)
         if apply_url:
             res = merge_by_apply_url(conn, now=now)
@@ -658,7 +914,7 @@ def backfill_salary_cmd() -> None:
     db_path = resolve_path(settings.paths.db_path)
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         before, after = backfill_salary(conn)
     finally:
         conn.close()
@@ -785,7 +1041,7 @@ def init() -> None:
     mkdir_private(resolve_path(settings.paths.data_dir))
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
     finally:
         conn.close()
     secure_data(settings)
@@ -919,7 +1175,7 @@ def eval_(
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     try:
         if compare is not None:
             try:
@@ -965,6 +1221,7 @@ def sources_verify(
         str | None, typer.Option(help="Comma list of state codes; US includes national rows.")
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
+    wait: WaitOption = None,
 ) -> None:
     """Probe every registry entry and diff against recorded values (specs/003 breakage detection).
 
@@ -975,22 +1232,24 @@ def sources_verify(
     """
     from jobhunter.sources import verify as vf
 
+    wait_s = _parse_wait(wait)
     settings = load_settings()
-    conn = db.connect(resolve_path(settings.paths.db_path))
-    db.migrate(conn)
-    rows = load_registry()
-    try:
-        sync_sources_table(conn, rows)
-        report = vf.verify_all(
-            conn,
-            rows,
-            now=datetime.now(UTC),
-            states=runner.parse_states(state),
-            settings=settings,
-            on_result=None if as_json else lambda r: typer.echo(vf.format_row(r)),
-        )
-    finally:
-        conn.close()
+    with _job_lock(settings, "sources verify", wait_s):
+        conn = db.connect(resolve_path(settings.paths.db_path))
+        _migrate(conn)
+        rows = load_registry()
+        try:
+            sync_sources_table(conn, rows)
+            report = vf.verify_all(
+                conn,
+                rows,
+                now=datetime.now(UTC),
+                states=runner.parse_states(state),
+                settings=settings,
+                on_result=None if as_json else lambda r: typer.echo(vf.format_row(r)),
+            )
+        finally:
+            conn.close()
     if as_json:
         typer.echo(report.to_json())
     else:
@@ -1108,7 +1367,7 @@ def mail_match(
         return
     conn = db.connect(resolve_path(settings.paths.db_path))
     try:
-        db.migrate(conn)
+        _migrate(conn)
         result = match.scan(
             conn, auth.build_service(settings), settings, days=days, dry_run=dry_run
         )
@@ -1166,7 +1425,7 @@ def mail_sync(
     db_path = resolve_path(settings.paths.db_path)
     conn = db.connect(db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         report = runner.run_pipeline(
             conn,
             settings,
@@ -1237,7 +1496,7 @@ def applylinks_unknown(
         return
     conn = db.connect(path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         rows = unknown_hosts(conn, top=top)
     finally:
         conn.close()
@@ -1379,7 +1638,7 @@ def llm_bench(
         typer.echo("--jobs-per-request is at most 16 for chat scorers", err=True)
         raise typer.Exit(2)
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     try:
         if isinstance(scorer, decisions.DecisionsScorer):  # decisions.py: packed questions
             if jobs_per_request is not None:
@@ -1453,7 +1712,7 @@ def apply_draft(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     conn = db.connect(settings.paths.db_path)
-    db.migrate(conn)
+    _migrate(conn)
     now = datetime.now(UTC)
     try:
         if question is not None:
@@ -1547,10 +1806,56 @@ def apply_stats(
     settings = load_settings()
     conn = db.connect(settings.paths.db_path)
     try:
-        db.migrate(conn)
+        _migrate(conn)
         typer.echo(stats.compute(conn, datetime.now(UTC), days).format())
     finally:
         conn.close()
+
+
+@app.command(name="version")
+def version_cmd(
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Package version, git commit, highest migration, and the database's schema (read-only).
+
+    Never migrates and never writes; a database newer than this code is reported, not refused.
+    """
+    from jobhunter.ops import version as ver
+
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    info = ver.collect(db_path, db.owning_data_dir(db_path, resolve_path(settings.paths.data_dir)))
+    if as_json:
+        typer.echo(json.dumps(info.as_dict(), indent=2))
+        return
+    for line in info.lines():
+        typer.echo(line)
+
+
+@db_app.command("migrate")
+def db_migrate_cmd() -> None:
+    """Apply pending migrations now, after a pre-migrate backup (backups/auto, newest 3 kept).
+
+    The one way to migrate a container deployment (``jobhunter upgrade`` runs it); on a
+    host-only install every command already does this on its own. Refuses a database newer
+    than this code.
+    """
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    data_dir = db.owning_data_dir(db_path, resolve_path(settings.paths.data_dir))
+    conn = db.connect(db_path)
+    try:
+        before = db.current_version(conn)
+        applied = db.migrate(conn, data_dir=data_dir, explicit=True, on_backup=_say_backed_up)
+        after = db.current_version(conn)
+    finally:
+        conn.close()
+    if not applied:
+        typer.echo(f"schema up to date at {after} ({db_path})")
+        return
+    typer.echo(
+        f"migrated {db_path} from {before} to {after}: applied {', '.join(map(str, applied))}"
+    )
 
 
 def _api_hint(packet_id: int, letter: bool, question: str | None) -> str:

@@ -276,3 +276,51 @@ def test_stale_filter_version_is_reprefiltered_by_the_run(pdir, db_path, conn, c
     finish(client)
     row = conn.execute("SELECT * FROM rescore_request").fetchone()
     assert row["status"] == "done" and row["scored"] == 3
+
+
+# --- run lock (specs/018 Run lock, C5) --------------------------------------------------
+
+
+def test_rescore_now_refused_while_another_job_holds_the_run_lock(
+    client, conn, db_path, run_lock_holder
+):
+    from jobhunter.core import runlock
+
+    holder = run_lock_holder(db_path)  # e.g. the nightly run in a timer or a container
+    called: list[str] = []
+
+    def factory(spec):
+        called.append(spec)
+        return FakeScorer()
+
+    client.app.state.rescore_scorer_factory = factory
+    r = confirm_and_run(client)
+    assert r.status_code == 200
+    assert "another jobhunter job is running (run, pid" in r.text
+    assert "nothing spent" in r.text and "Try again" in r.text
+    assert 'name="plan"' in r.text  # the form is back, so the user can retry
+    assert conn.execute("SELECT count(*) FROM rescore_request").fetchone()[0] == 0
+    assert called == []
+    holder.release()
+    holder.wait()
+    confirm_and_run(client)
+    finish(client)
+    assert conn.execute("SELECT status FROM rescore_request").fetchone()[0] == "done"
+    assert called
+    # the console's thread released it when the run ended
+    assert runlock.RunLock(db_path, "probe").try_acquire()
+
+
+def test_rescore_now_holds_the_run_lock_while_it_spends(client, db_path):
+    from jobhunter.core import runlock
+
+    gate = threading.Event()
+    scorer = FakeScorer(gate=gate)
+    client.app.state.rescore_scorer_factory = lambda spec: scorer
+    confirm_and_run(client)
+    assert scorer.entered.wait(10)
+    with pytest.raises(runlock.LockHeld, match="console re-score"):
+        runlock.RunLock(db_path, "score --submit").acquire(None)
+    gate.set()
+    finish(client)
+    assert runlock.RunLock(db_path, "probe").try_acquire()
