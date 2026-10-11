@@ -805,7 +805,8 @@ def console(
         # JOBHUNTER_PUBLISHED_LOOPBACK_ONLY=1 (container mode) lets the bind be 0.0.0.0 because
         # the unit publishes the port on host loopback only. The Host/Origin check still sees
         # allow_remote=False, so a non-loopback Host is refused either way.
-        check_host(bind_host, allow_remote or container.published_loopback_only())
+        interlock = container.published_loopback_only() and bind_host == "0.0.0.0"
+        check_host(bind_host, allow_remote or interlock)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc

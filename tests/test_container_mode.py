@@ -172,3 +172,28 @@ def test_host_check_still_refuses_foreign_host_in_container_mode(ctr):
     assert "loopback" in (cross_site_reason("GET", {"host": "evil.example:8808"}) or "")
     assert cross_site_reason("GET", {"host": "127.0.0.1:8808"}) is None
     assert cross_site_reason("GET", {"host": "localhost:8808"}) is None  # HealthCmd style
+
+
+def test_interlock_allows_only_0_0_0_0(ctr, monkeypatch, tmp_path):
+    import uvicorn
+
+    monkeypatch.setenv("JOBHUNTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JOBHUNTER_PUBLISHED_LOOPBACK_ONLY", "1")
+    ran: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app_, host, port: ran.update(host=host))
+    for bad in ("::", "192.0.2.7", "example.com"):
+        assert runner.invoke(app, ["console", "--host", bad]).exit_code == 2
+    assert not ran
+
+
+@pytest.mark.parametrize("container_mode", [False, True])
+def test_non_utf8_token_file_reads_as_no_token(monkeypatch, tmp_path, container_mode):
+    tok = tmp_path / "tok"
+    tok.write_bytes(b"\xff\xfe\x00bad")
+    if container_mode:
+        monkeypatch.setenv("JOBHUNTER_CONTAINER", "1")
+        monkeypatch.setenv("JOBHUNTER_GMAIL_TOKEN_FILE", str(tok))
+    else:
+        monkeypatch.setattr(auth, "token_file_path", lambda: tok)
+    monkeypatch.setattr(auth, "_keyring_usable", lambda: False)
+    assert auth.load_token() is None and auth.token_location() is None

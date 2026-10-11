@@ -297,7 +297,7 @@ def _read_token_file() -> str | None:
         return None
     try:
         text = token_file_path().read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     try:
         token = json.loads(text).get("refresh_token")
