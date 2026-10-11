@@ -2336,20 +2336,23 @@ def secrets_status() -> None:
         typer.echo(note)
 
 
-def _absolute_path_count(db_path: Path, data_dir: Path) -> int | None:
-    """Stored paths that are absolute or escape the data dir (C14), read-only; None when
-    there is no database yet."""
+def _absolute_path_count(db_path: Path, data_dir: Path) -> tuple[int | None, str]:
+    """Stored paths that are absolute or escape the data dir (C14), read-only: ``(count,
+    "")``, ``(None, "")`` when there is no database yet, ``(None, why)`` when unreadable."""
     import sqlite3
 
     from jobhunter.core import dbpaths
 
     if not db_path.is_file():
-        return None
-    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        return None, ""
     try:
-        return dbpaths.count_absolute_paths(conn, data_dir)
-    finally:
-        conn.close()
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            return dbpaths.count_absolute_paths(conn, data_dir), ""
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 @container_app.command("preflight")
@@ -2410,7 +2413,15 @@ def container_preflight_cmd(
                 err=True,
             )
             raise typer.Exit(1)
-        if active is None and not yes:
+        enabled = preflight.enabled_timers()
+        if enabled:
+            typer.echo(
+                "error: container timers are still enabled and would start again at the next "
+                f"login: systemctl --user disable --now {' '.join(enabled)}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        if (active is None or enabled is None) and not yes:
             typer.echo(
                 "error: systemctl cannot tell whether the container units are stopped. Stop "
                 "them (systemctl --user stop jobhunter-console 'jobhunter-ctr-*'), then rerun "
@@ -2420,11 +2431,25 @@ def container_preflight_cmd(
             raise typer.Exit(1)
         for line in preflight.leave(units, data_dir, dry_run=dry_run):
             typer.echo(line)
-        typer.echo("next: systemctl --user daemon-reload && jobhunter schedule install")
+        typer.echo(
+            f"next: rm {units}/jobhunter-*.container (the console unit starts at login "
+            "otherwise), then systemctl --user daemon-reload && jobhunter schedule install"
+        )
         return
 
     db_path = resolve_path(paths.db_path)
     report = _SECRETS_REPORT
+    abs_count, abs_error = _absolute_path_count(db_path, data_dir)
+    # The drop-in variable names must match the config file the units mount.
+    mounted_path = Path.home() / preflight.CONFIG_SOURCE
+    mounted, mounted_error = None, ""
+    if mounted_path.is_file():
+        try:
+            mounted = load_settings(mounted_path)
+        except Exception as exc:  # a broken file: reported as a FAIL line
+            mounted_error = f"{mounted_path}: {type(exc).__name__}"
+    else:
+        mounted = load_settings(mounted_path)  # preflight creates it empty: code defaults
     ctx = preflight.Context(
         home=Path.home(),
         unit_dir=units,
@@ -2438,7 +2463,11 @@ def container_preflight_cmd(
         gmail_token_file=config_home() / "gmail_token.json",
         env_files=list(report.env_files) if report else [],
         host_version=ver.collect(db_path, db.owning_data_dir(db_path, data_dir)),
-        absolute_paths=_absolute_path_count(db_path, data_dir),
+        absolute_paths=abs_count,
+        absolute_paths_error=abs_error,
+        container_settings=mounted,
+        container_settings_error=mounted_error,
+        quadlet=preflight.QUADLET,
     )
 
     def confirm(marker: Path) -> bool:
@@ -2448,7 +2477,8 @@ def container_preflight_cmd(
             return False
         return typer.confirm(
             f"Write {marker}? From then on no jobhunter command (host or container) migrates "
-            "the database on its own; `jobhunter upgrade` does",
+            "the database on its own: run `jobhunter db migrate` after each update, or "
+            "`jobhunter container preflight --leave` to go back",
             default=False,
         )
 

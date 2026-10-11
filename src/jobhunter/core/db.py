@@ -84,7 +84,8 @@ class MigrationsPending(SchemaError):
         super().__init__(
             f"database schema is behind this jobhunter (database has {db_version}, code has "
             f"{code_version()}); {marker} marks a container deployment, where nothing migrates "
-            "on its own: run `jobhunter upgrade`"
+            "on its own: run `jobhunter db migrate` (it backs up first), or `jobhunter container "
+            "preflight --leave` to go back to the host install"
         )
 
 

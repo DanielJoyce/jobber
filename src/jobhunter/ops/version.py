@@ -26,6 +26,7 @@ class VersionInfo:
     commit: str | None
     commit_source: str
     code_schema: int
+    code_migrations: list[int]  # every migration this code ships (sets matter)
     db_path: str
     db_schema: int | None
     db_state: str  # missing, new, current, pending, newer, unreadable
@@ -124,6 +125,7 @@ def collect(db_path: Path, data_dir: Path) -> VersionInfo:
         commit=commit,
         commit_source=source,
         code_schema=db.code_version(),
+        code_migrations=[v for v, _, _ in db._load_migrations()],
         db_path=str(db_path),
         db_schema=schema,
         db_state=state,

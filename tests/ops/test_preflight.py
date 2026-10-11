@@ -43,16 +43,23 @@ if argv[:1] == ["run"]:
         "package": "0.1.0",
         "commit": os.environ.get("FAKE_IMAGE_COMMIT", "abc123"),
         "code_schema": int(os.environ["FAKE_IMAGE_SCHEMA"]),
+        **({{"code_migrations": json.loads(os.environ["FAKE_IMAGE_MIGRATIONS"])}}
+           if os.environ.get("FAKE_IMAGE_MIGRATIONS") else {{}}),
     }}))
     sys.exit(0)
 sys.exit(2)
 """
 
 FAKE_SYSTEMCTL = """#!/bin/sh
-# is-active NAME...: one state per name, from $FAKE_ACTIVE (names that are active)
+# is-active / is-enabled NAME...: one state per name, from $FAKE_ACTIVE / $FAKE_ENABLED
+verb=$2
 shift 2
 for n in "$@"; do
-  case " $FAKE_ACTIVE " in *" $n "*) echo active ;; *) echo inactive ;; esac
+  if [ "$verb" = is-enabled ]; then
+    case " $FAKE_ENABLED " in *" $n "*) echo enabled ;; *) echo disabled ;; esac
+  else
+    case " $FAKE_ACTIVE " in *" $n "*) echo active ;; *) echo inactive ;; esac
+  fi
 done
 """
 
@@ -429,11 +436,100 @@ def test_env_file_mode_warned(host, monkeypatch):
     assert f"chmod 600 {env}" in r.output
 
 
-def test_missing_base_units_warned(host):
+def test_missing_base_units_refused_no_marker(host):
     (host.units / "jobhunter-ctr-verify.container").unlink()
     r = preflight("--yes")
+    assert r.exit_code == 1
+    assert "FAIL  base units not installed" in r.output and "jobhunter-ctr-verify" in r.output
+    assert not (host.data / "deployment.toml").exists()
+    assert list(host.units.rglob("*.conf")) == []
+
+
+def test_trailing_newline_env_name_rejected(host):
+    cfg = host.home / ".config" / "jobhunter" / "config.toml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text('[scoring.openrouter]\napi_key_env = """OPENROUTER_API_KEY\n"""\n')
+    r = preflight("--yes")
     assert r.exit_code == 0, r.output
-    assert "base units not installed" in r.output and "jobhunter-ctr-verify" in r.output
+    assert "not a valid environment variable name" in r.output
+    for f in host.units.rglob("*.conf"):
+        assert "\n_FILE=" not in f.read_text()
+        for line in f.read_text().splitlines()[1:]:
+            assert line.startswith(("[Container]", "Secret=", "Environment=")), line
+    assert not list(host.units.rglob("50-jobhunter_openrouter.conf"))
+    assert pf._api_env("FOO\n", "x")[0] is None
+
+
+def test_mounted_config_names_win_over_host_config(host, monkeypatch, tmp_path):
+    elsewhere = tmp_path / "host-config.toml"
+    elsewhere.write_text('[scoring.openrouter]\napi_key_env = "OR_KEY"\n')
+    monkeypatch.setenv("JOBHUNTER_CONFIG", str(elsewhere))
+    r = preflight("--yes")
+    assert r.exit_code == 0, r.output
+    text = (
+        host.units / "jobhunter-console.container.d" / "50-jobhunter_openrouter.conf"
+    ).read_text()
+    assert "Environment=OPENROUTER_API_KEY_FILE=" in text
+    assert "host config names OR_KEY_FILE" in r.output
+
+
+def test_set_skew_with_same_highest_migration(host, monkeypatch):
+    known = [v for v, _, _ in db._load_migrations()]
+    monkeypatch.setenv("FAKE_IMAGE_MIGRATIONS", json.dumps(known[1:]))  # same max, one fewer
+    r = preflight("--yes")
+    assert r.exit_code == 1
+    assert f"migrations only in the host code [{known[0]}]" in r.output
+    monkeypatch.setenv("FAKE_IMAGE_MIGRATIONS", json.dumps(known))
+    r = preflight("--yes")
+    assert r.exit_code == 0, r.output
+    assert "does not list its migrations" not in r.output
+
+
+def test_missing_database_refused(host):
+    for f in host.data.glob("jobhunter.db*"):
+        f.unlink()
+    r = preflight("--yes")
+    assert r.exit_code == 1
+    assert "jobhunter init" in r.output
+    assert not (host.data / "deployment.toml").exists()
+
+
+def test_corrupt_database_is_a_fail_line(host):
+    for f in host.data.glob("jobhunter.db*"):
+        f.unlink()
+    (host.data / "jobhunter.db").write_bytes(b"not a database at all, just bytes" * 100)
+    r = preflight("--dry-run")
+    assert r.exit_code == 1
+    assert "cannot read the paths stored in the database" in r.output
+    assert "podman reachable" in r.output  # the other checks still ran
+
+
+def test_no_start_steps_without_marker(host):
+    r = preflight()
+    assert r.exit_code == 0, r.output
+    assert "enable --now" not in r.output and "start jobhunter-console" not in r.output
+    assert "rerun with --yes" in r.output
+
+
+def test_quadlet_failure_refuses(host, monkeypatch, tmp_path):
+    fake = tmp_path / "quadlet"
+    fake.write_text("#!/bin/sh\necho 'jobhunter-console.container: unsupported key' >&2\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(pf, "QUADLET", fake)
+    r = preflight("--yes")
+    assert r.exit_code == 1
+    assert "quadlet -dryrun -user rejects the result" in r.output
+    assert list(host.units.rglob("*.conf")) == []
+    assert not (host.data / "deployment.toml").exists()
+
+
+def test_leave_refuses_enabled_timers(host, monkeypatch):
+    assert preflight("--yes").exit_code == 0
+    monkeypatch.setenv("FAKE_ENABLED", "jobhunter-ctr-run.timer")
+    r = preflight("--leave")
+    assert r.exit_code == 1
+    assert "systemctl --user disable --now jobhunter-ctr-run.timer" in r.output
+    assert (host.data / "deployment.toml").exists()
 
 
 def test_container_mode_refused(host, monkeypatch):
@@ -452,6 +548,7 @@ def test_leave_removes_ours_and_marker(host):
     assert [p.name for p in host.units.rglob("*.conf")] == ["10-mine.conf"]
     assert not (host.data / "deployment.toml").exists()
     assert "jobhunter schedule install" in r.output
+    assert "jobhunter-*.container" in r.output
 
 
 def test_leave_refuses_while_units_active(host, monkeypatch):
@@ -487,7 +584,20 @@ def test_wrapper_column_limited_to_existing():
     assert names == {"jobhunter_llama"}
 
 
-QUADLET = Path("/usr/libexec/podman/quadlet")
+QUADLET = pf.QUADLET
+
+
+@pytest.mark.skipif(not QUADLET.exists(), reason="quadlet generator not installed")
+def test_quadlet_check_catches_a_split_environment_line(host):
+    spec = pf.SecretSpec(
+        "jobhunter_openrouter", "/run/secrets/k", "FOO\n_FILE", frozenset({pf.CONSOLE})
+    )
+    bad = pf.DropinPlan(
+        write={pf.dropin_path(host.units, pf.CONSOLE, spec.secret): pf.dropin_text(spec)}
+    )
+    ok, why = pf.quadlet_check(QUADLET, host.units, bad)
+    assert not ok and "jobhunter-console" in why
+    assert pf.quadlet_check(QUADLET, host.units, pf.DropinPlan()) == (True, "")
 
 
 @pytest.mark.skipif(not QUADLET.exists(), reason="quadlet generator not installed")

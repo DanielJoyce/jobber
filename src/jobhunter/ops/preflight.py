@@ -38,6 +38,8 @@ DROPIN_PREFIX = "50-"
 DROPIN_SUFFIX = ".conf"
 IMAGE = "localhost/jobhunter:current"
 IMAGE_TIMEOUT_SECONDS = 120
+QUADLET = Path("/usr/libexec/podman/quadlet")
+QUADLET_TIMEOUT_SECONDS = 60
 SECRETS_DIR = "/run/secrets"
 CONTAINER_UID = 1000
 CONTAINER_FILE_T = "container_file_t"
@@ -69,8 +71,9 @@ CONTAINER_PATHS = {
     "resume_path": "resume",
 }
 
-ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+# fullmatch only: with .match, `$` also accepts a trailing newline ("FOO\n"), which would
+# split the Environment= line of a drop-in in two.
+ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 OK = "ok"
 WARN = "warn"
@@ -111,7 +114,7 @@ def _api_env(name: str | None, what: str) -> tuple[str | None, str]:
     """``<name>_FILE`` for a configured key variable, or ``(None, why)``."""
     if not name:
         return None, f"{what} is empty in config, so this secret is not used"
-    if not ENV_NAME_RE.match(name):
+    if not isinstance(name, str) or not ENV_NAME_RE.fullmatch(name):
         return None, f"{what} {name!r} is not a valid environment variable name"
     return f"{name}_FILE", ""
 
@@ -393,6 +396,13 @@ class Context:
     env_files: list[Path]
     host_version: Any  # jobhunter.ops.version.VersionInfo
     absolute_paths: int | None  # None: no database yet
+    absolute_paths_error: str = ""  # the database could not be read
+    # Settings from the config file the units mount (%h/.config/jobhunter/config.toml): the
+    # drop-in variable names must be the ones the containers' C2 resolver knows. None: use
+    # ``settings``.
+    container_settings: Any = None
+    container_settings_error: str = ""
+    quadlet: Path | None = None  # the generator, for a dry run of the result; None: skip
     registry_rows: list[Any] | None = None
     systemd_user_dir: Path | None = None
     label_of: Callable[[Path], str | None] = selinux_type
@@ -536,7 +546,9 @@ def _timers(ctx: Context, res: Result) -> None:
 
 
 def _paths_in_db(ctx: Context, res: Result) -> None:
-    if ctx.absolute_paths is None:
+    if ctx.absolute_paths_error:
+        res.add(FAIL, f"cannot read the paths stored in the database: {ctx.absolute_paths_error}")
+    elif ctx.absolute_paths is None:
         res.add(OK, "no database yet, so no stored paths to check")
     elif ctx.absolute_paths:
         res.add(
@@ -562,7 +574,21 @@ def _versions(ctx: Context, prefix: list[str], res: Result) -> None:
         )
         return
     image_schema = info["code_schema"]
-    if image_schema != host.code_schema:
+    image_set = info.get("code_migrations")
+    host_set = getattr(host, "code_migrations", None)
+    if (
+        isinstance(image_set, list)
+        and host_set is not None
+        and sorted(image_set) != sorted(host_set)
+    ):
+        only_host = sorted(set(host_set) - set(image_set))
+        only_image = sorted(set(image_set) - set(host_set))
+        res.add(
+            FAIL,
+            f"schema skew: migrations only in the host code {only_host or 'none'}, only in "
+            f"the image {only_image or 'none'}. Rebuild the image from this checkout",
+        )
+    elif image_schema != host.code_schema:
         res.add(
             FAIL,
             f"schema skew: host code has migration {host.code_schema}, image {IMAGE} has "
@@ -581,7 +607,11 @@ def _versions(ctx: Context, prefix: list[str], res: Result) -> None:
     elif host.db_state == "newer":
         res.add(FAIL, f"database {host.db_path} is newer than this code ({host.code_schema})")
     elif host.db_state in ("missing", "new"):
-        res.add(WARN, f"database {host.db_path} has no schema yet; run on the host: jobhunter init")
+        res.add(
+            FAIL,
+            f"database {host.db_path} has no schema yet; after the switch nothing migrates "
+            "on its own, so create it first: jobhunter init",
+        )
     elif host.db_state == "unreadable":
         res.add(FAIL, f"database {host.db_path} could not be read")
     elif host.db_state == "current":
@@ -591,9 +621,15 @@ def _versions(ctx: Context, prefix: list[str], res: Result) -> None:
         res.add(
             WARN,
             f"host checkout is at {host.commit[:12]}, image built from {str(image_commit)[:12]}; "
-            "same schema, so it runs, but rebuild to pick up code changes",
+            "rebuild the image to pick up code changes",
         )
-    elif not image_commit:
+    if not isinstance(image_set, list):
+        res.add(
+            WARN,
+            "image does not list its migrations (built before this check); only the highest "
+            "migration number was compared",
+        )
+    if not image_commit:
         res.add(WARN, "image does not record its build commit (built without BUILD_COMMIT)")
 
 
@@ -629,11 +665,86 @@ def _secrets(ctx: Context, specs: list[SecretSpec], existing: list[str], res: Re
         )
 
 
+def _matrix(ctx: Context, res: Result) -> list[SecretSpec]:
+    """The matrix with variable names from the mounted config; a name that differs from the
+    host's config is reported, since the drop-ins follow what the containers read."""
+    if ctx.container_settings_error:
+        res.add(
+            FAIL, f"the config the units mount cannot be loaded: {ctx.container_settings_error}"
+        )
+    mounted = ctx.container_settings if ctx.container_settings is not None else ctx.settings
+    specs = secret_matrix(mounted, ctx.registry_rows)
+    if mounted is not ctx.settings:
+        host = {s.secret: s.env for s in secret_matrix(ctx.settings, ctx.registry_rows)}
+        for spec in specs:
+            if host.get(spec.secret) != spec.env:
+                res.add(
+                    WARN,
+                    f"{spec.secret}: the host config names {host.get(spec.secret)} but the "
+                    f"mounted config ({ctx.home / CONFIG_SOURCE}) names {spec.env}; the "
+                    "drop-ins follow the mounted one",
+                )
+    return specs
+
+
+def quadlet_check(quadlet: Path, unit_dir: Path, plan: DropinPlan) -> tuple[bool, str]:
+    """Dry-run the Quadlet generator on a copy of the jobhunter units with ``plan`` applied.
+    ``(True, "")`` when every unit generates a service."""
+    import shutil
+    import tempfile
+
+    # A short path: XDG_RUNTIME_DIR below it must fit a unix socket name.
+    scratch = Path(tempfile.mkdtemp(prefix="jh-quadlet-", dir="/tmp"))
+    try:
+        units = scratch / "units"
+        units.mkdir()
+        for unit in UNITS:
+            base = unit_dir / f"{unit}.container"
+            if base.is_file():
+                shutil.copyfile(base, units / base.name)
+            src = dropin_dir(unit_dir, unit)
+            if src.is_dir():
+                shutil.copytree(src, units / src.name, symlinks=False)
+        mapped = DropinPlan(
+            write={units / p.relative_to(unit_dir): t for p, t in plan.write.items()},
+            remove=[units / p.relative_to(unit_dir) for p in plan.remove],
+        )
+        apply_dropins(mapped)
+        runtime = scratch / "run"
+        runtime.mkdir(mode=0o700)
+        try:
+            done = subprocess.run(
+                [str(quadlet), "-dryrun", "-user"],
+                env={
+                    "QUADLET_UNIT_DIRS": str(units),
+                    "HOME": str(Path.home()),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                    "PATH": "/usr/bin:/bin",
+                },
+                capture_output=True,
+                text=True,
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+                timeout=QUADLET_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"quadlet did not run ({type(exc).__name__})"
+        missing = [u for u in UNITS if f"---{u}.service---" not in done.stdout]
+        if done.returncode != 0 or missing:
+            errors = [ln for ln in done.stderr.splitlines() if "jobhunter" in ln][:3]
+            detail = "; ".join(errors) or done.stderr.strip()[-300:]
+            return False, f"units that fail to generate: {', '.join(missing) or '?'} ({detail})"
+        return True, ""
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def _base_units(ctx: Context, res: Result) -> None:
     missing = [u for u in UNITS if not (ctx.unit_dir / f"{u}.container").is_file()]
     if missing:
         res.add(
-            WARN,
+            FAIL,
             f"base units not installed in {ctx.unit_dir}: {', '.join(missing)}. "
             f"Copy them: cp deploy/quadlet/*.container {ctx.unit_dir}/",
         )
@@ -670,7 +781,7 @@ def run(
     if prefix is not None:
         _versions(ctx, prefix, res)
     _env_files(ctx, res)
-    specs = secret_matrix(ctx.settings, ctx.registry_rows)
+    specs = _matrix(ctx, res)
     _base_units(ctx, res)
     if prefix is not None:
         _secrets(ctx, specs, res.existing, res)
@@ -682,6 +793,14 @@ def run(
     res.marker_present = db.deployment_marker(ctx.data_dir) is not None
     if res.failed or res.plan is None:
         return res
+    if ctx.quadlet is not None and ctx.quadlet.exists():
+        ok, why = quadlet_check(ctx.quadlet, ctx.unit_dir, res.plan)
+        if not ok:
+            res.add(FAIL, f"quadlet -dryrun -user rejects the result: {why}")
+            return res
+        res.add(OK, "quadlet -dryrun -user generates every jobhunter unit with these drop-ins")
+    else:
+        res.add(OK, "quadlet generator not found here; generator dry run skipped")
 
     verb = "would " if dry_run else ""
     for path in res.plan.write:
@@ -714,7 +833,7 @@ def write_marker(path: Path) -> None:
     text = (
         "# written by jobhunter container preflight (specs/018 C12, C13). While this file\n"
         "# exists no jobhunter command migrates the database on its own: run\n"
-        "# `jobhunter upgrade` (or `jobhunter db migrate`). Remove it with\n"
+        "# `jobhunter db migrate` (it backs up first). Remove it with\n"
         "# `jobhunter container preflight --leave` to go back to the host install.\n"
         'mode = "container"\n'
     )
@@ -726,6 +845,11 @@ def write_marker(path: Path) -> None:
 def next_steps(res: Result) -> list[str]:
     if res.failed:
         return ["refused: fix the FAIL lines above and rerun; no drop-in or marker was written."]
+    if not res.marker_present:
+        return [
+            "next: rerun with --yes to write the deployment marker. Do not start the container "
+            "units before it exists: host and containers would both migrate on their own."
+        ]
     steps = ["next:"]
     if res.plan is not None and res.plan.changes:
         steps.append("  systemctl --user daemon-reload")
@@ -741,13 +865,15 @@ def next_steps(res: Result) -> list[str]:
 # --- going back to the host install --------------------------------------------------------
 
 
-def active_units(
+def _systemctl_states(
+    verb: str,
+    names: list[str],
+    hits: tuple[str, ...],
     run_cmd: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
 ) -> list[str] | None:
-    """Services and timers of the container deployment that are active, or None when
-    systemctl cannot be asked."""
-    names = [*SERVICES, *CTR_TIMERS]
-    argv = ["systemctl", "--user", "is-active", *names]
+    """Names whose ``systemctl --user <verb>`` state is in ``hits``; None when systemctl
+    cannot be asked."""
+    argv = ["systemctl", "--user", verb, *names]
     try:
         if run_cmd is not None:
             done = run_cmd(argv)
@@ -758,9 +884,25 @@ def active_units(
     states = done.stdout.split()
     if len(states) != len(names):
         return None
-    return [
-        n for n, s in zip(names, states, strict=True) if s in ("active", "activating", "reloading")
-    ]
+    return [n for n, s in zip(names, states, strict=True) if s in hits]
+
+
+def active_units(
+    run_cmd: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
+) -> list[str] | None:
+    """Services and timers of the container deployment that are active."""
+    return _systemctl_states(
+        "is-active", [*SERVICES, *CTR_TIMERS], ("active", "activating", "reloading"), run_cmd
+    )
+
+
+def enabled_timers(
+    run_cmd: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
+) -> list[str] | None:
+    """Container timers still enabled: stopped but enabled, they return at the next login."""
+    return _systemctl_states(
+        "is-enabled", list(CTR_TIMERS), ("enabled", "enabled-runtime", "linked"), run_cmd
+    )
 
 
 def leave(unit_dir: Path, data_dir: Path, *, dry_run: bool = False) -> list[str]:
