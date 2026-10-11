@@ -203,9 +203,12 @@ def create_app(
     # deployment, raise db.SchemaError here and the console does not start.
     boot = factory()
     try:
+        boot_file = db.database_file(boot)
         db.migrate(
             boot,
-            data_dir=resolve_path(settings.paths.data_dir),
+            data_dir=None
+            if boot_file is None
+            else db.owning_data_dir(boot_file, resolve_path(settings.paths.data_dir)),
             on_backup=lambda p: logger.warning("console: backed up %s before migrating", p),
         )
     finally:

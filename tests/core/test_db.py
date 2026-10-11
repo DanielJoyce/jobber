@@ -207,7 +207,7 @@ def test_duplicate_migration_versions_name_the_colliding_files(monkeypatch, tmp_
         (tmp_path / name).write_text("SELECT 1;\n")
     monkeypatch.setattr(db.resources, "files", lambda _pkg: tmp_path)
     with pytest.raises(RuntimeError) as err:
-        db._load_migrations()
+        db._scan_migrations()
     msg = str(err.value)
     assert "0002_rejection_state.sql" in msg and "0002_rescore_plan.sql" in msg
     assert "0001_base.sql" not in msg

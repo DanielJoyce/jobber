@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-import click
 import typer
 from typer.core import TyperGroup
 
@@ -22,12 +22,36 @@ class _JobhunterGroup(TyperGroup):
     """Turns a schema refusal (newer database, or pending migrations in a container
     deployment) into a one-line error and exit 1 from any command, instead of a traceback."""
 
-    def invoke(self, ctx: click.Context) -> object:
+    def invoke(self, ctx: typer.Context) -> object:
+        token = _CURRENT_COMMAND.set(self._command_path(ctx))
         try:
             return super().invoke(ctx)
         except db.SchemaError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
+        finally:
+            _CURRENT_COMMAND.reset(token)
+
+    def _command_path(self, ctx: typer.Context) -> str | None:
+        """``"db migrate"`` for ``jobhunter db migrate --x``: the subcommand names only."""
+        # Click 8.2 keeps the not-yet-dispatched subcommand names in _protected_args.
+        pending = getattr(ctx, "_protected_args", None) or getattr(ctx, "protected_args", [])
+        tokens = [*pending, *ctx.args]
+        names: list[str] = []
+        group: object = self
+        # Duck-typed: typer ships its own vendored click, so click.Group is the wrong class.
+        while hasattr(group, "get_command") and tokens:
+            sub = group.get_command(ctx, tokens[0])
+            if sub is None:
+                break
+            names.append(tokens.pop(0))
+            group = sub
+        return " ".join(names) or None
+
+
+_CURRENT_COMMAND: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "jobhunter_command", default=None
+)
 
 
 app = typer.Typer(
@@ -84,13 +108,27 @@ def _migrate(conn) -> list[int]:
     Without the deployment marker this migrates, after a pre-migrate backup into
     ``<data dir>/backups/auto``; with it, pending migrations raise ``MigrationsPending``
     ("run `jobhunter upgrade`"), which _JobhunterGroup prints as an error.
+
+    Called from a command in MIGRATION_EXEMPT_COMMANDS it neither migrates nor refuses on
+    pending migrations; it still refuses a database newer than this code.
     """
-    data_dir = resolve_path(load_settings().paths.data_dir)
+    if _invoked_command() in MIGRATION_EXEMPT_COMMANDS:
+        db.check_not_newer(conn)
+        return []
+    path = db.database_file(conn)
+    data_dir = None
+    if path is not None:
+        data_dir = db.owning_data_dir(path, resolve_path(load_settings().paths.data_dir))
     return db.migrate(conn, data_dir=data_dir, on_backup=_say_backed_up)
 
 
+def _invoked_command() -> str | None:
+    """The running subcommand path without the program name, e.g. ``"db migrate"``."""
+    return _CURRENT_COMMAND.get()
+
+
 def _say_backed_up(path: Path) -> None:
-    typer.echo(f"backed up the database to {path} before migrating", err=True)
+    typer.echo(f"pre-migrate backup: {path}", err=True)
 
 
 @app.callback()
@@ -1572,7 +1610,8 @@ def version_cmd(
     from jobhunter.ops import version as ver
 
     settings = load_settings()
-    info = ver.collect(resolve_path(settings.paths.db_path), resolve_path(settings.paths.data_dir))
+    db_path = resolve_path(settings.paths.db_path)
+    info = ver.collect(db_path, db.owning_data_dir(db_path, resolve_path(settings.paths.data_dir)))
     if as_json:
         typer.echo(json.dumps(info.as_dict(), indent=2))
         return
@@ -1590,7 +1629,7 @@ def db_migrate_cmd() -> None:
     """
     settings = load_settings()
     db_path = resolve_path(settings.paths.db_path)
-    data_dir = resolve_path(settings.paths.data_dir)
+    data_dir = db.owning_data_dir(db_path, resolve_path(settings.paths.data_dir))
     conn = db.connect(db_path)
     try:
         before = db.current_version(conn)
