@@ -60,10 +60,10 @@ def available_scorers(scoring: Any, env: Mapping[str, str] | None = None) -> lis
     return [(s, label) for s, label in out if not (s in seen or seen.add(s))]
 
 
-def _spec_problem(spec: str) -> str | None:
+def _spec_problem(spec: str, field: str = "scorer") -> str | None:
     """The one-line reason a scorer spec is malformed, or None."""
     try:
-        check_scorer_spec(spec, "scorer")
+        check_scorer_spec(spec, field)
     except ValueError as exc:
         return str(exc)
     return None
@@ -267,7 +267,9 @@ def register(
             scope = queued["scope"]  # running a queued request plans its own scope
         running = rs.running_request(conn, now())
         plan = notice = None
-        problem = _spec_problem(spec)
+        problem = _spec_problem(
+            spec, "screen_scorer" if spec == settings.scoring.screen_scorer else "scorer"
+        )
         if problem:
             message = message or problem
         if st.kind == "ok" and running is None and not problem:
@@ -287,6 +289,7 @@ def register(
             "notice": notice,
             "scope": scope,
             "scorer": spec,
+            "problem": problem,
             "scorers": scorers,
             "scope_labels": SCOPE_LABELS,
             "running": running,

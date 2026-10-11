@@ -160,10 +160,10 @@ def test_documented_scorer_examples_parse():
     root = Path(__file__).resolve().parent.parent
     for name in ("config.example.toml", "README.md"):
         text = (root / name).read_text()
-        specs = re.findall(r'(?:screen|deep)_scorer\s*=\s*"([^"]+)"', text)
+        specs = re.findall(r'(screen|deep)_scorer\s*=\s*"([^"]+)"', text)
         assert specs, name
-        for spec in specs:
-            check_scorer_spec(spec, name, anthropic_only=spec.startswith("deep"))
+        for key, spec in specs:
+            check_scorer_spec(spec, name, anthropic_only=key == "deep")
         if name == "README.md":
             table = text.split("## Choosing a scorer")[1].split("\n## ")[0]
             tokens = re.findall(r"`([a-z-]+):<", table)
@@ -197,3 +197,19 @@ def test_cli_bad_configured_scorer_is_one_line(tmp_path, monkeypatch):
     assert 'use "jev:typesafe/jev-1.13"' in res.output
     assert "Traceback" not in res.output
     assert len(res.output.strip().splitlines()) == 1
+
+
+def test_cli_collect_pending_ignores_a_bad_screen_scorer(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from jobhunter import cli
+
+    cfg = _write(tmp_path / "c.toml", '[scoring]\nscreen_scorer = "openroute:x"\n')
+    monkeypatch.setenv(CONFIG_ENV_VAR, str(cfg))
+    # past the scorer check, the next thing --collect-pending does is read the profile
+    res = CliRunner().invoke(cli.app, ["score", "--collect-pending"])
+    assert "scorer error" not in res.output
+    res = CliRunner().invoke(cli.app, ["score", "--rescore-pending"])
+    assert "scorer error" not in res.output
+    res = CliRunner().invoke(cli.app, ["score", "--rescore-pending", "--scorer", "jev:"])
+    assert res.exit_code == 2 and "scorer error" in res.output

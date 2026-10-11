@@ -326,11 +326,14 @@ def test_rescore_now_holds_the_run_lock_while_it_spends(client, db_path):
     assert runlock.RunLock(db_path, "probe").try_acquire()
 
 
-def test_invalid_configured_scorer_is_marked_and_explained():
-    from jobhunter.console.rescore_routes import _spec_problem, available_scorers
-
-    scoring = Scoring(screen_scorer="openroute:jev:typesafe/jev-1.13")
-    (spec, label), *_ = available_scorers(scoring, env={})
-    assert spec == scoring.screen_scorer and "INVALID" in label
-    assert 'use "jev:typesafe/jev-1.13"' in _spec_problem(spec)
-    assert _spec_problem("jev:typesafe/jev-1.13") is None
+def test_invalid_configured_scorer_still_shows_picker(pdir, db_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    c = make_client(pdir, db_path, screen_scorer="openroute:jev:typesafe/jev-1.13")
+    html = c.get("/prefs/rescore/panel").text
+    assert "INVALID" in html and 'name="scorer"' in html
+    assert "jev:typesafe/jev-1.13 (Jev, synchronous)" in html
+    assert "screen_scorer &#34;openroute:jev:typesafe/jev-1.13&#34;" in html
+    assert 'id="rescore-run"' not in html  # nothing can be run on the invalid spec
+    ok = c.get("/prefs/rescore/panel", params={"scorer": "jev:typesafe/jev-1.13"}).text
+    assert 'id="rescore-run"' in ok

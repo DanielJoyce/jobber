@@ -476,3 +476,10 @@ def test_an_answered_claim_is_not_re_evaluated(conn, profile):  # noqa: F811
     prefilter.run_prefilter(conn, profile, now=NOW + timedelta(hours=1))
     row = conn.execute("SELECT reasons FROM prefilter_result WHERE job_id = ?", (jid,)).fetchone()
     assert json.loads(row[0]) == ["user-requested"]
+
+
+@pytest.mark.parametrize("bad", ["claude-haiku-4-5", "jev:", "openroute:x"])
+def test_estimate_refuses_a_malformed_scorer_spec(conn, profile, bad):  # noqa: F811
+    add_group(conn, 1, profile)
+    est = group_score.estimate(conn, profile, Scoring(screen_scorer=bad), 1, NOW)
+    assert est.refusal and f'screen_scorer "{bad}"' in est.refusal

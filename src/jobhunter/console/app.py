@@ -197,9 +197,7 @@ def create_app(
     loopback ``Host`` on it, even with ``allow_remote``.
     """
     for problem in settings.scoring.scorer_problems().values():
-        logger.warning(
-            "console: %s (scoring is unavailable until fixed and the console restarted)", problem
-        )
+        logger.warning("console: %s (fix config.toml and restart the console)", problem)
     db.prime_migrations()  # this process's known migrations: the code it started with
     factory: ConnFactory = conn_factory or (lambda: db.connect(settings.paths.db_path))
     get_profile: ProfileLoader = profile_loader or default_profile_loader(settings)

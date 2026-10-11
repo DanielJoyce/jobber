@@ -431,6 +431,10 @@ def _score_stage(
     # as a re-score the user confirmed on /prefs (specs/006, specs/014). Groups a pending or
     # running re-score plan lists are left to that plan.
     spec = settings.scoring.screen_scorer
+    if problem := settings.scoring.scorer_problems().get("screen_scorer"):
+        report.messages.append(f"score: skipped ({problem}); survivors stay queued")
+        logger.warning("score skipped: %s", problem)
+        return
     if notice := privacy_notice(spec, settings.scoring):
         report.messages.append(notice)
     # A re-score that died without finishing must not hold its groups back forever: this marks

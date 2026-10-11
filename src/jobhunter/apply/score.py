@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from jobhunter.config import Scoring
+from jobhunter.config import Scoring, check_scorer_spec
 from jobhunter.core import db
 from jobhunter.pipeline.listing import from_iso, to_iso
 from jobhunter.scoring import rescore, screen
@@ -126,7 +126,12 @@ def estimate(
 ) -> Estimate:
     """What scoring this one group would cost, and why it would be refused. Read-only."""
     spec = spec or scoring.screen_scorer
-    per_job, source = rescore.cost_per_job(conn, spec)
+    try:
+        check_scorer_spec(spec, "screen_scorer")
+        bad_spec = None
+    except ValueError as exc:
+        bad_spec = str(exc)
+    per_job, source = (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec)
     est = Estimate(
         group_id=group_id,
         scorer=spec,
@@ -138,7 +143,9 @@ def estimate(
         scoring_version=profile.scoring_version,
     )
     job = _canonical(conn, group_id)
-    if job is None:
+    if bad_spec:
+        est.refusal = bad_spec
+    elif job is None:
         est.refusal = "no such job group"
     elif not (job["description_text"] or "").strip():
         est.refusal = "this posting has no description text yet; paste it first"
