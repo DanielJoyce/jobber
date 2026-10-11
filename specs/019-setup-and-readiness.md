@@ -1,6 +1,6 @@
 # 019 — First-run setup and readiness
 
-Status: **draft for review, revision 3** (bug `ba4d25f`). Written 2026-10-11; revised twice the
+Status: **draft for review, revision 3a** (bug `ba4d25f`). Written 2026-10-11; revised three times the
 same day after adversarial reviews and your answers ([History](#history)).
 
 You asked that on first launch jobhunter guide you through supplying your resume,
@@ -233,9 +233,12 @@ can read a developer's real keyring.
 
 Each check costs a `stat`, an environment lookup or one small indexed query, once the slow
 inputs are cached per process: the registry's secret names and `secret_matrix` (parsing
-`registry.yaml` takes about 0.5 s; take the USAJOBS names from the startup `secrets.Report` or
-`functools.cache` `usajobs_auth`), and `lenient_state` (about 50-60 ms; cache it keyed on the
-`preferences.yaml` and resume mtimes). With those warm, `run_checks` must finish in under 50 ms on
+`registry.yaml` takes about 0.5 s; take the USAJOBS names from the startup `secrets.Report`, or
+pass `registry_rows` loaded once at console start; `functools.cache` helps only the
+no-argument path, `usajobs_auth()` with `rows=None`, since `secret_matrix` takes an unhashable
+settings object), and `lenient_state` (about 50-60 ms; cache it keyed on the mtimes of
+`preferences.yaml`, the resume file, and the resume folder, so a file added to or removed from
+the folder invalidates it). With those warm, `run_checks` must finish in under 50 ms on
 your real data; a timing test uses a realistic-size `preferences.yaml`. `cheap_only=True` (the banner) runs the essentials plus
 the recommended rows marked cheap: everything in the table except the alert-subscription counts
 and the backup listing.
@@ -303,12 +306,23 @@ what it sees:
   the mode, and the trigger. No values, no free-form text.
 - **Run outcome.** At the end the run writes `run_outcome`: the score stage's result as a fixed
   code (`scored`, `skipped_no_credential` from S7, `cap_reached`, `failed:<exception type>`,
-  `no_profile`) and each failed source's mapped reason. Only `run` writes it. The `run` table
-  stores only counts, so this is how the console learns that the last run did not score.
-- **Trigger.** Timer runs are marked explicitly: `Environment=JOBHUNTER_TRIGGER=timer` in the host
-  `jobhunter-run.service` and in the Quadlet run, collect and rescore units (systemd's
+  `no_profile`, or `not_run` when the run's stages did not include scoring) and each failed
+  source's mapped reason. Only `run` writes it. A `not_run` outcome never replaces an earlier
+  score outcome: a partial manual run (`--stage resolve`) leaves the last real score result in
+  place. The `run` table stores only counts, so this is how the console learns that the last run
+  did not score.
+- **Trigger.** Timer runs are marked explicitly with `JOBHUNTER_TRIGGER=timer` (systemd's
   `INVOCATION_ID` does not reach a container). The value goes into the snapshot and into a new
-  `run.trigger` column (a migration in S4; `manual` when unset).
+  `run.trigger` column (a migration in S4). Existing rows migrate to `NULL` (unknown), not
+  `manual`, so the upgrade itself raises no alarm. Units installed before S4 lack the marker, and
+  nothing copies units on upgrade, so S4 delivers it to them:
+  - **Containers:** `jobhunter container preflight` writes the marker as its own drop-in,
+    `<unit>.container.d/40-jobhunter-trigger.conf` with the preflight header, for the run,
+    collect and rescore units, alongside the secret drop-ins. The base units in
+    `deploy/quadlet/` gain the line too.
+  - **Host:** `ops/units/jobhunter-run.service` (and collect) gain
+    `Environment=JOBHUNTER_TRIGGER=timer`; `jobhunter schedule install` writes it, and `schedule
+    status` flags an installed unit without it with "rerun `jobhunter schedule install`".
 - **Manual inputs.** `jobhunter doctor --snapshot`, or `jobhunter-ctr doctor --snapshot` inside a
   one-off container (which sees every secret the wrapper gets), writes `manual_inputs`. It fills
   rows the console cannot see and is labelled "as seen from your shell at HH:MM" (or "from
@@ -326,13 +340,21 @@ worse of the console's view and a fresh `run_inputs`**, and a disagreement is sh
 sees ANTHROPIC_API_KEY; the run at 02:00 (timer) did not". A fresh `run_outcome` of
 `skipped_no_credential` or `no_profile` makes the scorer or profile row broken whatever the
 console sees, **until a newer `run_inputs` shows that row ok**, so fixing the cause and running
-again clears it. The scorer and profile fixes therefore end with "then run `jobhunter run --stage
-prefilter,score` (or `jobhunter-ctr run --stage prefilter,score`) to confirm". `essentials_ok`, the
-banner and dismissals all use the effective status.
+again clears it. The scorer and profile fixes therefore end with "or confirm now with `jobhunter
+run --stage prefilter,score` (`jobhunter-ctr run ...` for containers). **This scores waiting jobs
+and spends credits, up to the daily cap**" (the label is required; the page offers no button for
+it). `essentials_ok`, the banner and dismissals all use the effective status.
 
 **Timers not running** is judged from the newest `run` row with `trigger = 'timer'` (none in the
-last 36 hours), so a manual run does not hide dead timers. Wording that says "nightly" is used only
-for timer-triggered data; manual runs are labelled "manual run at HH:MM".
+last 36 hours), so a manual run does not hide dead timers, **provided the installed run unit
+carries the marker**. The check reads the installed unit (a small file read: the host
+`~/.config/systemd/user/jobhunter-run.service`, or the run unit's trigger drop-in in
+host-managing mode). When the marker is missing there, or the console cannot see the unit
+(container mode) and no timer-triggered row exists yet, it falls back to the newest run of any
+trigger and says "timer runs are not marked yet: rerun `jobhunter schedule install` (host) or
+`jobhunter container preflight` (containers)", rather than reporting dead timers. Wording that
+says "nightly" is used only for timer-triggered data; manual runs are labelled "manual run at
+HH:MM".
 
 ## `/setup`
 
@@ -377,7 +399,7 @@ None takes a secret.
 | `POST /setup/starter-prefs` | Writes `SKELETON` (`prefs_graceful.py`) through `write_preferences_data` (atomic, 0600), then 303 to `/prefs?created=1` | Refuses with 409 if the file exists. Not `/prefs/save`: that route builds the file from form fields, and a bare POST gets weights of 0 (422) and loses the skeleton's exclusions. Test: the written YAML loads to the same data as `SKELETON` |
 | `POST /setup/resume` | The `/prefs` upload's checks (`check_upload`: `.md`/`.txt`, 1 MB, UTF-8) and write helper, writing a path relative to the profile folder; answers with the refreshed resume row (htmx) or 303 to `/setup` | Not `/prefs/resume`, which renders the whole prefs page |
 | `POST /setup/dismiss` | Body: one or more `check_id`, each validated against the fixed id list, recommended or due rows only; writes `<data dir>/setup-dismissed.json` atomically at 0600 (id plus the effective status dismissed at) | 422 for an essential or unknown id |
-| `POST /setup/live/{check_id}` | One [live check](#live-checks); `check_id` from the fixed list | Requires the **peer address** (`request.client.host`) to be loopback, since `Host` is client-supplied. Under `--allow-remote` it always answers 403 and the buttons are hidden; use `doctor --live` then |
+| `POST /setup/live/{check_id}` | One [live check](#live-checks); `check_id` from the fixed list | Requires the **peer address** (`request.client.host`) to be loopback, since `Host` is client-supplied. Under `--allow-remote` it always answers 403. The page shows the buttons only when the request's own peer is loopback; otherwise each row says "run `jobhunter doctor --live`" (or `jobhunter-ctr doctor --live`). This covers the 018 D11 fallback, where pasta makes the host browser's peer non-loopback. Route tests pass `client=("127.0.0.1", ...)` to `TestClient` |
 | `GET /setup/gmail` | The Google Cloud how-to, rendered from a packaged template built from `mail/auth.py` `CLOUD_STEPS` (the single source), with the target path and variable for the mode | Served by the console, so it works in containers, where `docs/` is not in the image. `/alerts`' `SETUP_DOC` (today a dead relative link to `specs/012`) points here too |
 | `POST /prefs/ext/pair` (reused) | The one-time pairing code panel; it already answers with the `_ext_pair.html` fragment | |
 
@@ -422,7 +444,7 @@ needs the client JSON.
 | 3 | Gmail token (13) | [Gmail token](#gmail-token) rules | `jobhunter mail auth`, or `--podman-secret jobhunter_gmail_token` |
 | 4 | Label and filter (14) | an alert arrived under the label in the last 14 days (`mail_message`); otherwise `unknown` until the live check | `jobhunter mail setup` (or `jobhunter-ctr mail setup`); it prints filter XML for manual import if you skip the settings scope |
 | 5 | Board subscriptions (15) | `/alerts` counts: subscribed, receiving, stale | Link to `/alerts`, the existing checklist, which gives each board's sign-up link, criteria and the address to use |
-| 6 | LinkedIn job alerts (16) | alerts from LinkedIn's job-alert sender arrived under the label | Create alerts in LinkedIn (Jobs, search, "Set alert"). Do **not** make the `+jobs` address your LinkedIn primary email: every LinkedIn notification would follow it. Route only the alerts: S9 adds `mail.fallback_senders`, a list of **exact sender addresses** (LinkedIn's job-alert sender, confirmed from a real alert with `mail sample` before it ships as a suggested value), which `mail setup` turns into `from:<address>` filters. Never put `linkedin.com` in `fallback_sender_domains`: that becomes `from:@linkedin.com`, which takes InMail, recruiter and connection messages out of your inbox and stores their subjects as alerts. `/setup` and `/alerts` warn when a domain entry matches a site that also sends personal mail |
+| 6 | LinkedIn job alerts (16) | alerts from LinkedIn's job-alert sender arrived under the label | Create alerts in LinkedIn (Jobs, search, "Set alert"). Do **not** make the `+jobs` address your LinkedIn primary email: every LinkedIn notification would follow it. Route only the alerts: S9 adds `mail.fallback_senders`, a list of **exact sender addresses** (LinkedIn's job-alert sender, read from the From line of a real alert in your inbox before you route it, and before S9 ships it as a suggested value; `mail sample` cannot see an alert that is not yet under the label), which `mail setup` turns into `from:<address>` filters. Never put `linkedin.com` in `fallback_sender_domains`: that becomes `from:@linkedin.com`, which takes InMail, recruiter and connection messages out of your inbox and stores their subjects as alerts. `/setup` and `/alerts` warn when a domain entry matches a site that also sends personal mail |
 | 7 | Craigslist saved searches (16), optional | as 6 | A Craigslist account and a saved search with email alerts, routed by the exact alert sender in `mail.fallback_senders`, not the domain. Low priority |
 
 Steps 6 and 7 also become rows on `/alerts` (S9), since they are not registry sources and the
@@ -580,7 +602,10 @@ both are recommended. Without `--containers`, host-managing mode shows the Conta
   `/` shows the banner instead of redirecting.
 - Snapshot writers: the run's write keeps `host` and `manual_inputs`; a manual
   `doctor --snapshot` never changes `run_inputs`; after the fix and a newer `run_inputs`, the
-  scorer row clears. A manual run does not reset "timers not running".
+  scorer row clears. A manual run does not reset "timers not running". An installed unit
+  without the trigger marker, or migrated `NULL` rows only, gives the fallback hint, never
+  "timers not running". A `--stage resolve` run writes `not_run` and keeps the earlier score
+  outcome.
 - `/setup/live/*` with `Host: 127.0.0.1` from a non-loopback peer is 403; under
   `--allow-remote` every request is 403.
 - Banner: Hide dismisses a recommended row; a status change brings it back; essentials have no
@@ -599,7 +624,7 @@ worker and reviewer per the CLAUDE.md table (the reviewer is always stronger).
 | S2 | `jobhunter doctor`: output, `-v`, `--json`, `--group`, exit codes, guard exemptions, read-only DB, `--containers` with `build_preflight_context()` and fixed ids; console refusal messages point at `doctor` | normal | sonnet / opus | S1 |
 | S3a | `/setup` page and its routes (`starter-prefs`, `resume`, `dismiss`), `GET /setup/gmail` from `CLOUD_STEPS` with `/alerts`' `SETUP_DOC` pointed at it, the email-alerts guide, mode-aware fixes (`--replace` when the secret exists) and host paths, restart notes; dark mode and 375 px | normal | sonnet / opus | S1 |
 | S3b | Banner on `/` and `/inbox` replacing the profile banner, Hide, first-run redirect (and the `GET /` test updates), `init` and `console` hints | normal | sonnet / opus | S3a |
-| S4 | Snapshot: sectioned `readiness.json` with a lock and per-section writes; `doctor --snapshot`; `run` writes inputs after the lock and the outcome at the end; `JOBHUNTER_TRIGGER=timer` in the run, collect and rescore units and a `run.trigger` column; host section; console effective status (worse of two, newer inputs clear an outcome, unknown rules) | hard (several processes, freshness rules, a migration) | opus / opus at higher effort | S2, S3a, S7 |
+| S4 | Snapshot: sectioned `readiness.json` with a lock and per-section writes; `doctor --snapshot`; `run` writes inputs after the lock and the outcome at the end; `JOBHUNTER_TRIGGER=timer` in the base units, a preflight-written trigger drop-in for installed Quadlet units, `schedule install`/`status` for the host unit, a `run.trigger` column with old rows `NULL`, the unmarked-unit fallback; `not_run` outcome; host section; console effective status (worse of two, newer inputs clear an outcome, unknown rules) | hard (several processes, freshness rules, a migration) | opus / opus at higher effort | S2, S3a, S7 |
 | S5 | `mail auth` writes `gmail-auth.json` (issued_at, storage kind; `--from-local` keeps the old date); the token-age rules and `RefreshError` mapping in the Gmail row | normal | sonnet / opus | S1 |
 | S6 | Live checks: route gated on a loopback peer address (403 under `--allow-remote`), buttons, `jobhunter-ctr doctor --live` hand-off in host-managing mode, `doctor --live`; booleans only; uncached `auth_status()`; OpenRouter only on `openrouter.ai`; tests prove no model call and no leak | hard (credit paths, credentials) | opus / opus at higher effort | S2, S3a |
 | S7 | Score stage asks `credential_for` first and prints the skip line on `missing`; exit code unchanged | normal | sonnet / opus | S1 |
@@ -628,6 +653,17 @@ find you never hand-edit the YAML (it would reverse 014's file-as-source-of-trut
 None. S10 was approved on 2026-10-11.
 
 ## History
+
+### Revision 3a: final check
+
+One blocking problem: units installed before S4 never get the timer marker (Quadlet units are
+copied by hand and `upgrade` copies none), so "timers not running" would have been a permanent
+false alarm. Preflight now writes the marker as a drop-in, `schedule install`/`status` handle the
+host unit, an unmarked unit falls back to the any-run rule with a re-run hint, and old rows
+migrate to `NULL`. Also: live buttons shown only to a loopback peer (pasta, D11);
+`run --stage prefilter,score` labelled as spending credits; a `not_run` outcome; the LinkedIn
+sender read from an alert's From line; the resume folder's mtime in the cache key; the
+`functools.cache` limit stated.
 
 ### Revision 3: second review and your S10 answer
 
