@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from jobhunter.apply import ext_pairing
-from jobhunter.config import Settings
+from jobhunter.config import Settings, resolve_path
 from jobhunter.console import (
     alerts_routes,
     capture_routes,
@@ -199,13 +199,27 @@ def create_app(
     get_profile: ProfileLoader = profile_loader or default_profile_loader(settings)
     now: Clock = clock or (lambda: datetime.now(UTC))
 
+    # specs/018 Version skew: a newer database, or pending migrations in a container
+    # deployment, raise db.SchemaError here and the console does not start.
     boot = factory()
     try:
-        db.migrate(boot)
+        db.migrate(
+            boot,
+            data_dir=resolve_path(settings.paths.data_dir),
+            on_backup=lambda p: logger.warning("console: backed up %s before migrating", p),
+        )
     finally:
         boot.close()
 
     app = FastAPI(title="jobhunter console", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.exception_handler(db.SchemaError)
+    async def schema_refused(request: Request, exc: db.SchemaError) -> PlainTextResponse:
+        # Every request opens its own connection, and each one checks the schema: once a
+        # newer jobhunter migrates the database, this console stops reading and writing it.
+        logger.error("console: %s", exc)
+        return PlainTextResponse(f"jobhunter console stopped: {exc}", status_code=503)
+
     app.state.settings = settings
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["sparkline"] = sparkline
