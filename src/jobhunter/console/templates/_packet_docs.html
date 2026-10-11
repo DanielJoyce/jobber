@@ -55,7 +55,14 @@
 
 {% macro run_buttons(kind, label, extra_class="") -%}
   {% set est = r.estimates[kind] %}
-  {% if r.default == "cli" and r.cli_ok %}
+  {% if r.container %}
+  {% set cmd = host_commands[kind] %}
+  <span class="host-draft" data-host-draft="{{ kind }}">
+    <code>{{ cmd }}</code>
+    <button type="button" class="act copy-btn" data-copy="{{ cmd }}">Copy command</button>
+    <span class="muted">Drafting runs on your host with your Claude subscription; the console picks up the result on reload.</span>
+  </span>
+  {% elif r.default == "cli" and r.cli_ok %}
     {% if r.overage %}
     <button type="submit" class="packet-btn primary {{ extra_class }}" name="runner" value="cli" data-runner="cli"
             data-paid="1" data-confirm="Your subscription is on paid extra usage, so this run is charged (about ${{ '%.2f' | format(est.usd) }}, against the [apply] daily cap). Run it?">{{ label }} (subscription, paid extra usage)</button>
@@ -63,7 +70,7 @@
     <button type="submit" class="packet-btn primary {{ extra_class }}" name="runner" value="cli" data-runner="cli">{{ label }} (subscription)</button>
     {% endif %}
   {% endif %}
-  {% if r.default == "api" or not r.cli_ok %}
+  {% if not r.container and (r.default == "api" or not r.cli_ok) %}
     <button type="submit" class="packet-btn {{ extra_class }}{% if r.default == 'api' %} primary{% endif %}" name="runner" value="api" data-runner="api"
             {% if not r.api_ok %}disabled title="{{ r.api_reason }}"{% endif %}
             data-confirm="Run on the API? About ${{ '%.2f' | format(est.usd) }} from your API credit ({{ est.source }}), against the ${{ '%.2f' | format(r.cap_usd) }} daily apply cap.">{{ label }} (API, &asymp; ${{ "%.2f" | format(est.usd) }})</button>
@@ -140,12 +147,16 @@
       <form method="post" action="/apply/runner/clear-overage" class="inline"><input type="hidden" name="next" value="/packet/{{ p.id }}#documents">
         <button type="submit" class="act" id="clear-overage" data-confirm="Clear only if your Claude subscription is back within its plan. The next run that reports paid extra usage is charged (under the apply cap) and sets this hold again. Clear it?">My plan has reset: clear</button></form></div>
     {% endif %}
+    {% if r.container %}
+    <p class="muted" id="runner-container">Drafting runs on your host with your Claude subscription, not in this container. Run the command beside each button there; reload this page when it finishes.</p>
+    {% else %}
     <p class="muted">
       {% if r.default == "cli" %}Runs on your Claude subscription (the <code>claude</code> CLI, no API credit){% if not r.cli_ok and not r.off %}: {{ r.cli_reason }}{% endif %}.
       The API is only used when you click a button that shows its cost.
       {% else %}Runs on the API (<code>[apply] runner = "api"</code>).{% endif %}
       API today: ${{ "%.2f" | format(r.spent_today_usd) }} of ${{ "%.2f" | format(r.cap_usd) }} apply cap.
     </p>
+    {% endif %}
   </div>
 
   {% if doc_message %}<div class="banner banner-error" role="alert" id="doc-message">{{ doc_message }}</div>{% endif %}

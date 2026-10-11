@@ -630,3 +630,59 @@ def test_an_edit_never_confirms_a_line_nobody_confirmed(env, fake_claude, claude
     assert report["confirmed"] == []
     # The unchanged line keeps its advisory verdict across the edit.
     assert items["s0.e0.b1"]["entail"] == "partly"
+
+
+# ─── container mode: drafting runs on the host (specs/018 D16, C9) ──────────
+
+
+@pytest.fixture
+def ctr_env(env, monkeypatch):
+    """The same app, in container mode, with every probe and runner trapped."""
+    import subprocess
+
+    from jobhunter.apply import cli_runner
+
+    monkeypatch.setenv("JOBHUNTER_CONTAINER", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    monkeypatch.setattr(cli_runner, "find_binary", lambda: pytest.fail("PATH probe in container"))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("subprocess in container"))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("subprocess in container"))
+    return env
+
+
+def test_container_page_shows_host_commands_and_no_generate_buttons(ctr_env):
+    assert (
+        ctr_env.client.post(f"/packet/{ctr_env.pid}/base").status_code == 303
+    )  # free, no drafting
+    page = ctr_env.client.get(f"/packet/{ctr_env.pid}")
+    assert page.status_code == 200
+    pid = ctr_env.pid
+    assert f"jobhunter apply draft {pid}" in page.text
+    assert f"jobhunter apply draft {pid} --letter" in page.text
+    assert f"jobhunter apply draft {pid} --question" in page.text
+    assert "Drafting runs on your host with your Claude subscription" in page.text
+    assert not [b for b in parse(page.text).buttons if b.get("data-runner")]
+    assert "Generate resume" not in page.text and "Draft an answer" not in page.text
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"kind": "resume", "runner": "cli"},
+        {"kind": "resume", "runner": "api", "confirm_paid": "1"},
+        {"kind": "cover_letter", "runner": "cli", "notes": "x"},
+        {"kind": "question_draft", "runner": "api", "question": "Why us?"},
+    ],
+)
+def test_container_generate_routes_refuse_and_call_nothing(ctr_env, data):
+    ctr_env.app.state.packet_api_client_factory = lambda: pytest.fail("SDK factory called")
+    r = ctr_env.client.post(f"/packet/{ctr_env.pid}/generate", data=data)
+    assert r.status_code == 409
+    assert "runs on your host" in r.text
+    assert docs(ctr_env, "resume") == [] and docs(ctr_env, "cover_letter") == []
+
+
+def test_host_mode_still_shows_the_generate_buttons(env, fake_claude):
+    page = env.client.get(f"/packet/{env.pid}")
+    assert "Generate resume (subscription)" in page.text
+    assert "jobhunter apply draft" not in page.text
