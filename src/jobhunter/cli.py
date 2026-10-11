@@ -1923,6 +1923,134 @@ def db_migrate_cmd() -> None:
     )
 
 
+def _ctr_layout(settings):
+    """Host side of the container mounts, from the host's own resolved paths (spec 018 D3)."""
+    from jobhunter.config import config_file
+    from jobhunter.ops import ctr
+
+    return ctr.Layout(
+        data_dir=resolve_path(settings.paths.data_dir),
+        cache_dir=resolve_path(settings.paths.cache_dir),
+        config_file=config_file(None),
+    )
+
+
+def _source_checkout() -> Path:
+    """The checkout this jobhunter runs from (src/jobhunter -> repo root)."""
+    import jobhunter
+
+    root = Path(jobhunter.__file__).resolve().parents[2]
+    if not (root / "pyproject.toml").is_file() or not (root / "Containerfile").is_file():
+        typer.echo(
+            f"error: jobhunter is not running from a source checkout ({root}); "
+            "jobhunter upgrade builds the image from the checkout the host CLI runs from",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return root
+
+
+@app.command()
+def upgrade(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print every step and command; run nothing.")
+    ] = False,
+    allow_dirty: Annotated[
+        bool,
+        typer.Option(
+            "--allow-dirty",
+            help="Build even with uncommitted changes in the image's inputs (tag <commit>-dirty).",
+        ),
+    ] = False,
+    wait: Annotated[
+        str,
+        typer.Option(
+            "--wait",
+            metavar="DURATION",
+            help="How long to wait for running jobhunter-ctr-* jobs before giving up "
+            "(nothing changed).",
+        ),
+    ] = "30m",
+) -> None:
+    """Bring a container deployment up to this checkout (specs/018 Version skew, C15).
+
+    Builds localhost/jobhunter:<commit>, stops the timers, waits for running jobs, takes the
+    run lock, stops the console, backs up the database, retags :current, runs `jobhunter db
+    migrate` in a one-off container, checks host and image versions match, then starts what
+    was running. Any failure leaves the console and timers stopped and prints the rollback.
+    Host only; on a host-only install (no deployment.toml) it is not needed.
+    """
+    from jobhunter.core.runlock import RunLock
+    from jobhunter.ops import upgrade as up
+    from jobhunter.ops.proc import SubprocessRunner
+
+    _host_only("upgrade")
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    data_dir = db.owning_data_dir(db_path, resolve_path(settings.paths.data_dir))
+    if db.deployment_marker(data_dir) is None:
+        typer.echo(
+            f"not needed: no {data_dir / db.DEPLOYMENT_MARKER}, so this is a host-only install, "
+            "where every command migrates on its own after a pre-migrate backup. jobhunter "
+            "upgrade is for container deployments (after `jobhunter container preflight`)."
+        )
+        return
+    ctx = up.Context(
+        repo=_source_checkout(),
+        db_path=db_path,
+        data_dir=data_dir,
+        layout=_ctr_layout(settings),
+        runner=SubprocessRunner(),
+        echo=typer.echo,
+        lock=lambda: RunLock(db_path, "upgrade"),
+        wait_s=_parse_wait(wait) or 0.0,
+    )
+    try:
+        code = up.run(ctx, allow_dirty=allow_dirty, dry_run=dry_run)
+    except up.UpgradeError as exc:
+        typer.echo(f"error: {exc}; nothing was changed.", err=True)
+        raise typer.Exit(1) from exc
+    raise typer.Exit(code)
+
+
+@app.command("ctr-script")
+def ctr_script_cmd(
+    write: Annotated[
+        bool, typer.Option("--write", help="Install it (0755) instead of printing it.")
+    ] = False,
+    path: Annotated[
+        Path | None,
+        typer.Option(
+            "--path", help="Where --write installs it. Default ~/.local/bin/jobhunter-ctr."
+        ),
+    ] = None,
+) -> None:
+    """Print or install the jobhunter-ctr wrapper (specs/018 One-off commands, C15).
+
+    It runs one jobhunter command in a one-off container on localhost/jobhunter:current with
+    the run unit's mounts and the podman secrets that exist (names from `podman secret ls`;
+    values are never read). Rerun after creating or removing a secret. Host only.
+    """
+    from jobhunter.ops import ctr
+    from jobhunter.ops.proc import SubprocessRunner
+
+    _host_only("ctr-script")
+    settings = load_settings()
+    runner = SubprocessRunner()
+    try:
+        podman = ctr.find_podman(runner)
+        mounts = ctr.present(ctr.ctr_secret_mounts(settings), ctr.secret_names(runner, podman))
+        text = ctr.render_script(_ctr_layout(settings), mounts)
+        if not write:
+            typer.echo(text, nl=False)
+            return
+        dest = ctr.write_script(path or ctr.default_script_path(), text)
+    except ctr.CtrError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"wrote {dest} (secrets: {', '.join(m.secret for m in mounts) or 'none'})")
+
+
 @db_app.command("relativize-paths")
 def db_relativize_paths_cmd(
     apply: Annotated[

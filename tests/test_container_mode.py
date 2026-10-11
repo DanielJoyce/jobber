@@ -109,6 +109,9 @@ def test_env_files_only_from_explicit_file(ctr, monkeypatch, tmp_path):
         ["mail", "auth"],
         ["mail", "auth", "--manual"],
         ["apply", "draft", "1"],
+        ["upgrade"],
+        ["upgrade", "--dry-run"],
+        ["ctr-script"],
     ],
 )
 def test_host_only_commands_refuse_with_host_command(ctr, args):

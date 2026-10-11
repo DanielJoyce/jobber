@@ -296,6 +296,10 @@ C15. Preflight writes `~/.local/bin/jobhunter-ctr`, a short script that runs `po
 -it` on `localhost/jobhunter:current` with the run unit's mounts, user namespace and the
 secrets in the `jobhunter-ctr` column. Use it for `mail status|match|setup|sample`,
 `secrets status`, `sources list`, and anything else interactive after the switch.
+The script is rendered by `jobhunter.ops.ctr` (shared with `upgrade`), finds podman at run time
+through the host-escape chain, labels its containers `io.jobhunter.oneoff=1` (no name), and
+mounts only secrets that exist. `jobhunter ctr-script [--write]` prints or installs it from
+`podman secret ls`; rerun after a secret change (C15 decision, until C13 preflight writes it).
 
 ### Compose (convenience, podman-compose only)
 
@@ -375,6 +379,14 @@ C12, C15, D15. The host checkout moves forward on every merge; the image moves w
   `jobhunter-ctr db migrate`, restart the console, re-enable timers, print `jobhunter version`
   on both sides. A failure stops and prints how to restore the pre-migrate backup and retag the
   previous image. `--dry-run` prints the steps.
+  As built (C15 decisions): the image is built **before** anything stops, so a failed build
+  changes nothing; timers stop first, then it waits for running `jobhunter-ctr-*` services
+  (`--wait`, default 30m) and takes the run lock, and only then stops the console; a timeout or
+  a held lock starts the timers again and changes nothing. The backup is
+  `backups/jobhunter-<stamp>-pre-upgrade.db` (manual, never pruned). Only units that were active
+  are started again. "Clean" means no changes in the image's inputs (`Containerfile`,
+  `.containerignore`, `pyproject.toml`, `uv.lock`, `README.md`, `src/`); `--allow-dirty` builds
+  them anyway as `<commit>-dirty`. Without the deployment marker it says it is not needed.
 - **Rollback**: restore a pre-migrate backup and retag the previous image. Because nothing
   migrates on its own, the next host command refuses instead of re-migrating; check out the
   matching commit or run `upgrade` again when ready.
