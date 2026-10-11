@@ -127,6 +127,36 @@ def read_holder(path: Path) -> Holder | None:
     )
 
 
+def probe(db_path: Path | str) -> tuple[bool, Holder | None]:
+    """Read-only: is the run lock for this database held right now, and by whom (advisory).
+
+    Never creates the file and never takes the lock for good. An idle database costs one
+    ``read`` of an empty file: release truncates the metadata, so empty means free and no
+    flock is attempted (a probe must not make a real acquirer's non-blocking attempt fail).
+    Only when metadata is present is a shared non-blocking flock tried, to tell a live holder
+    from metadata left by a killed one.
+    """
+    path = lock_path(db_path)
+    holder = read_holder(path)
+    if holder is None:
+        return False, None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+    except OSError:
+        return False, None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True, holder
+        except OSError:
+            return False, None
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False, None
+    finally:
+        os.close(fd)
+
+
 def current_boot_id() -> str | None:
     """This kernel's boot id (shared by the host and its containers), or None."""
     try:

@@ -225,7 +225,7 @@ def test_button_live(client, conn):
     assert "verified 3h ago" in t
     chain = "nlx.example → appcast.example (unwrapped) → Workday · "
     assert chain + "acme.wd5.myworkdayjobs.com" in t
-    assert "hx-get" not in t
+    assert "apply-button" not in t
 
 
 def test_button_expired(client, conn):
@@ -239,7 +239,7 @@ def test_button_expired(client, conn):
 def test_button_open_posting(client, conn, status):
     add_link(conn, 4, status, ats=None)
     t = client.get("/job/4").text
-    assert "Open posting" in t and "Apply on" not in t and "hx-get" not in t
+    assert "Open posting" in t and "Apply on" not in t and "apply-button" not in t
 
 
 def test_apply_redirects_live_and_logs(client, conn, pages):
