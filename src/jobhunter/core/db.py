@@ -10,6 +10,7 @@ anything (skipped for a new, version-0 database) and, while the deployment marke
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import sqlite3
@@ -63,6 +64,19 @@ class MigrationsPending(SchemaError):
         )
 
 
+class MigrationFailed(SchemaError):
+    """A pre-migrate backup or a migration failed; nothing after it was applied."""
+
+
+def owning_data_dir(db_path: Path, data_dir: Path) -> Path:
+    """Where ``db_path``'s marker and ``backups/auto`` live: ``data_dir`` when the database is
+    inside it (the default layout, and ``/data`` in a container), else the database's own
+    directory, so migrating a copy elsewhere never writes or prunes the real backups."""
+    db_dir = Path(db_path).resolve().parent
+    owner = Path(data_dir).resolve()
+    return owner if db_dir.is_relative_to(owner) else db_dir
+
+
 def connect(path: Path | str, *, check_schema: bool = True) -> sqlite3.Connection:
     """Open a connection with the project's PRAGMAs. Accepts ``":memory:"``.
 
@@ -111,6 +125,23 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 
 def _load_migrations() -> list[tuple[int, str, str]]:
+    """The migrations this process ships, read from disk once per process.
+
+    Why once: the host install is editable, so the migrations folder is the live checkout. A
+    long-running console must judge "known" by the code it loaded, not by files a later
+    fast-forward put on disk; otherwise it keeps writing after another process applies
+    them, and a bad file on disk would break it mid-run.
+    """
+    return list(_migrations_snapshot())
+
+
+@functools.cache
+def _migrations_snapshot() -> tuple[tuple[int, str, str], ...]:
+    return tuple(_scan_migrations())
+
+
+def _scan_migrations() -> list[tuple[int, str, str]]:
+    """Read the migrations folder now (uncached)."""
     found: list[tuple[int, str, str]] = []
     for entry in resources.files(MIGRATIONS_PACKAGE).iterdir():
         m = _MIGRATION_RE.match(entry.name)
@@ -236,9 +267,14 @@ def migrate(
         if not explicit and (marker := deployment_marker(data_dir)):
             raise MigrationsPending(from_version, pending, marker)
         if from_version > 0:
-            from jobhunter.core.backup import pre_migrate_backup
+            from jobhunter.core import backup
 
-            saved = pre_migrate_backup(conn, data_dir, from_version, code_version(), now)
+            try:
+                saved = backup.pre_migrate_backup(conn, data_dir, from_version, code_version(), now)
+            except backup.BackupError as exc:
+                raise MigrationFailed(
+                    f"pre-migrate backup failed, so nothing was migrated: {exc}"
+                ) from exc
             if on_backup is not None:
                 on_backup(saved)
     conn.execute(
@@ -263,13 +299,19 @@ def migrate(
                 for stmt in _split_statements(script):
                     conn.execute(stmt)
                 if fk_off and (bad := conn.execute("PRAGMA foreign_key_check").fetchall()):
-                    raise RuntimeError(
+                    raise MigrationFailed(
                         f"migration {version}_{name} left {len(bad)} foreign key violation(s)"
                     )
                 conn.execute(
                     "INSERT INTO schema_version(version, name, applied_at) VALUES (?, ?, ?)",
                     (version, name, datetime.now(UTC).isoformat()),
                 )
+        except sqlite3.Error as exc:
+            raise MigrationFailed(
+                f"migration {version:04d}_{name} failed: {exc}; the database stays at version "
+                f"{current_version(conn)} (earlier migrations in this run are kept); restore "
+                "the pre-migrate backup in backups/auto or fix the migration"
+            ) from exc
         finally:
             if fk_off:
                 conn.execute("PRAGMA foreign_keys=ON")

@@ -65,7 +65,7 @@ def test_host_install_keeps_migrating_automatically_after_a_backup(env, monkeypa
     assert version_of(path) == NEWEST
     [saved] = (env / "backups" / "auto").glob(f"pre-migrate-{OLDER}-{NEWEST}-*Z.db")
     assert version_of(saved) == OLDER
-    assert "backed up the database to" in result.output
+    assert "pre-migrate backup:" in result.output
 
 
 def test_restored_older_database_is_not_remigrated_in_a_container_deployment(env, monkeypatch):
@@ -214,3 +214,92 @@ def test_console_backs_up_before_migrating_on_a_host_install(tmp_path, monkeypat
     create_app(settings)
     assert version_of(settings.paths.db_path) == NEWEST
     assert len(list((tmp_path / "backups" / "auto").glob("pre-migrate-*.db"))) == 1
+
+
+# --- review fixes -----------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_db_backup_command():
+    """A stand-in for C6's `db backup` that opens the database through _migrate."""
+    seen: list[int] = []
+
+    @cli.db_app.command("backup")
+    def fake_backup() -> None:
+        settings = cli.load_settings()
+        conn = db.connect(cli.resolve_path(settings.paths.db_path))
+        try:
+            seen.append(len(cli._migrate(conn)))
+        finally:
+            conn.close()
+
+    yield seen
+    cli.db_app.registered_commands.pop()
+
+
+def test_exempt_command_neither_migrates_nor_refuses_on_pending(
+    env, monkeypatch, fake_db_backup_command
+):
+    path = env / "jobhunter.db"
+    make_db(path, monkeypatch, OLDER)
+    (env / "deployment.toml").write_text('mode = "container"\n')
+    result = runner.invoke(app, ["db", "backup"])
+    assert result.exit_code == 0, result.output
+    assert fake_db_backup_command == [0]
+    assert version_of(path) == OLDER
+    (env / "deployment.toml").unlink()  # on a host install it does not migrate either
+    assert runner.invoke(app, ["db", "backup"]).exit_code == 0
+    assert version_of(path) == OLDER
+    assert not (env / "backups").exists()
+
+
+def test_exempt_command_still_refuses_a_newer_database(env, monkeypatch, fake_db_backup_command):
+    path = env / "jobhunter.db"
+    make_db(path, monkeypatch, NEWEST)
+    add_fake_version(path, NEWEST + 1)
+    result = runner.invoke(app, ["db", "backup"])
+    assert result.exit_code == 1
+    assert "database is newer than this jobhunter" in result.output
+
+
+def test_migrating_a_copy_elsewhere_leaves_the_real_backups_alone(env, tmp_path, monkeypatch):
+    real_auto = env / "backups" / "auto"
+    real_auto.mkdir(parents=True)
+    keep = [real_auto / f"pre-migrate-27-28-2026100{d}T000000Z.db" for d in (1, 2, 3)]
+    for p in keep:
+        p.write_text("x")
+    (env / "deployment.toml").write_text('mode = "container"\n')  # the real deployment's
+    copy = tmp_path / "scratch" / "copy.db"
+    make_db(copy, monkeypatch, OLDER)
+    monkeypatch.setenv("JOBHUNTER_DB_PATH", str(copy))
+    result = runner.invoke(app, ["apply", "stats"])
+    assert result.exit_code == 0, result.output
+    assert version_of(copy) == NEWEST
+    assert all(p.exists() for p in keep) and len(list(real_auto.iterdir())) == 3
+    assert len(list((copy.parent / "backups" / "auto").glob("pre-migrate-*.db"))) == 1
+
+
+def test_a_failed_migration_is_one_error_line(env, monkeypatch):
+    path = env / "jobhunter.db"
+    make_db(path, monkeypatch, NEWEST)
+    bad = (NEWEST + 1, "fails", "INSERT INTO source(key) VALUES (NULL);\n")
+    monkeypatch.setattr(db, "_load_migrations", lambda: [*REAL, bad])
+    result = runner.invoke(app, ["apply", "stats"])
+    assert result.exit_code == 1
+    assert f"error: migration {NEWEST + 1:04d}_fails failed: NOT NULL constraint" in result.output
+    assert isinstance(result.exception, SystemExit)  # handled, not a traceback
+
+
+def test_a_failed_backup_is_one_error_line(env, monkeypatch):
+    from jobhunter.core import backup
+
+    make_db(env / "jobhunter.db", monkeypatch, OLDER)
+
+    def full(*_a, **_k):
+        raise backup.BackupError("database or disk is full")
+
+    monkeypatch.setattr(backup, "pre_migrate_backup", full)
+    result = runner.invoke(app, ["apply", "stats"])
+    assert result.exit_code == 1
+    assert "error: pre-migrate backup failed, so nothing was migrated" in result.output
+    assert version_of(env / "jobhunter.db") == OLDER

@@ -80,12 +80,20 @@ def pre_migrate_name(from_version: int, to_version: int, now: datetime | None = 
     return f"pre-migrate-{from_version}-{to_version}-{utc_stamp(now)}Z.db"
 
 
-def prune_pre_migrate(directory: Path, keep: int = PRE_MIGRATE_KEEP) -> list[Path]:
+def prune_pre_migrate(
+    directory: Path, keep: int = PRE_MIGRATE_KEEP, protect_to: int | None = None
+) -> list[Path]:
     """Delete all but the newest ``keep`` pre-migrate backups in ``directory``.
 
     Only files whose entire name matches :data:`PRE_MIGRATE_RE` are candidates; anything
     else in the directory (C6's daily backups, manual files) is never touched. Newest is by
     the UTC stamp in the name, not mtime (a copied file keeps neither). Returns what was deleted.
+
+    ``protect_to``: also keep the backup with the lowest ``<from>`` among those migrating to
+    that version. Why: migrations commit one by one, so a run that fails partway leaves the
+    database between versions, and every automatic retry (each command, each timer) backs up
+    the half-migrated state. Without this, a few retries would prune the only copy from before
+    the upgrade, the one an older checkout can still open.
     """
     directory = Path(directory)
     if not directory.is_dir():
@@ -94,10 +102,17 @@ def prune_pre_migrate(directory: Path, keep: int = PRE_MIGRATE_KEEP) -> list[Pat
     for entry in directory.iterdir():
         m = PRE_MIGRATE_RE.match(entry.name)
         if m and entry.is_file() and not entry.is_symlink():
-            found.append((m.group(3), entry.name, entry))
+            found.append((m.group(3), entry.name, entry, int(m.group(1)), int(m.group(2))))
     found.sort(reverse=True)
+    protected = None
+    if protect_to is not None:
+        same_target = [f for f in found if f[4] == protect_to]
+        if same_target:
+            protected = min(same_target, key=lambda f: (f[3], f[0]))[2]
     removed = []
-    for _, _, path in found[keep:]:
+    for _, _, path, _, _ in found[keep:]:
+        if path == protected:
+            continue
         with contextlib.suppress(FileNotFoundError):
             path.unlink()
             removed.append(path)
@@ -114,5 +129,5 @@ def pre_migrate_backup(
     """Back up before migrating ``from_version`` to ``to_version``, then prune to the newest 3."""
     directory = auto_dir(data_dir)
     dest = online_backup(conn, directory / pre_migrate_name(from_version, to_version, now))
-    prune_pre_migrate(directory)
+    prune_pre_migrate(directory, protect_to=to_version)
     return dest
