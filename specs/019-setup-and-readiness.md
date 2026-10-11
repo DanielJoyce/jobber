@@ -1,9 +1,10 @@
 # 019 — First-run setup and readiness
 
-Status: **draft for review, revision 4** (bug `ba4d25f`; addenda for bugs `e2f8c10` and
+Status: **draft for review, revision 4a** (bug `ba4d25f`; addenda for bugs `e2f8c10` and
 `ccb3b21`). Written 2026-10-11; revised three times the same day after adversarial reviews and
 your answers, then extended with [help by topic](#addendum-a-help-by-topic) and
-[config watch](#addendum-b-config-watch) ([History](#history)).
+[config watch](#addendum-b-config-watch), and revised once more after their review
+([History](#history)).
 
 You asked that on first launch jobhunter guide you through supplying your resume,
 preferences, alert-email setup and the rest, and say what is missing and which features will not
@@ -404,7 +405,7 @@ None takes a secret.
 | `POST /setup/resume` | The `/prefs` upload's checks (`check_upload`: `.md`/`.txt`, 1 MB, UTF-8) and write helper, writing a path relative to the profile folder; answers with the refreshed resume row (htmx) or 303 to `/setup` | Not `/prefs/resume`, which renders the whole prefs page |
 | `POST /setup/dismiss` | Body: one or more `check_id`, each validated against the fixed id list, recommended or due rows only; writes `<data dir>/setup-dismissed.json` atomically at 0600 (id plus the effective status dismissed at) | 422 for an essential or unknown id |
 | `POST /setup/live/{check_id}` | One [live check](#live-checks); `check_id` from the fixed list | Requires the **peer address** (`request.client.host`) to be loopback, since `Host` is client-supplied. Under `--allow-remote` it always answers 403. The page shows the buttons only when the request's own peer is loopback; otherwise each row says "run `jobhunter doctor --live`" (or `jobhunter-ctr doctor --live`). This covers the 018 D11 fallback, where pasta makes the host browser's peer non-loopback. Route tests pass `client=("127.0.0.1", ...)` to `TestClient` |
-| `GET /setup/gmail` | The Google Cloud how-to, rendered from a packaged template built from `mail/auth.py` `CLOUD_STEPS` (the single source), with the target path and variable for the mode | Served by the console, so it works in containers, where `docs/` is not in the image. `/alerts`' `SETUP_DOC` (today a dead relative link to `specs/012`) points here too |
+| `GET /setup/gmail` | 303 to `/help/email-alerts#step-1-google-client-json`, the one Gmail how-to ([Addendum A](#addendum-a-help-by-topic)), which carries `mail/auth.py` `CLOUD_STEPS` as a generated block | Kept as a stable short link. `/alerts`' `SETUP_DOC` (today a dead relative link to `specs/012`) points at the help page. The `/setup` row shows the mode's target path and command inline |
 | `POST /prefs/ext/pair` (reused) | The one-time pairing code panel; it already answers with the `_ext_pair.html` fragment | |
 
 Everything else is a link (`/prefs#sec-pay` and the other sections, `/alerts`, `/sources`,
@@ -418,7 +419,7 @@ The page shows where each key goes, per mode:
 - **host**: create the file private first, then edit it:
   `[ -e ~/.env ] || install -m 600 /dev/null ~/.env`, then add `ANTHROPIC_API_KEY=...` with an
   editor, then restart the console.
-- **container / host managing containers**: the form in `docs/containers.md`, which keeps the
+- **container / host managing containers**: the form in `/help/containers#secrets`, which keeps the
   key off the command line and out of history, then the full [018](018-containers.md#mechanism)
   sequence. When the row is broken or the secret already exists, the line uses
   `podman secret create --replace` (018), since plain `create` refuses a name in use:
@@ -443,7 +444,7 @@ needs the client JSON.
 
 | Step | Row | Done when (local) | Fix |
 |---|---|---|---|
-| 1 | Google client JSON (12) | the file exists (container: the snapshot says so) | The ten-minute Cloud console procedure, shown inline and at `GET /setup/gmail` (from `CLOUD_STEPS`), with the file's target path for the mode (`podman secret create jobhunter_google_client <file>` for containers). `help/email-alerts.md` (S11c) is the repository copy |
+| 1 | Google client JSON (12) | the file exists (container: the snapshot says so) | The ten-minute Cloud console procedure, linked to `/help/email-alerts` (from `CLOUD_STEPS`), with the file's target path for the mode shown inline (`podman secret create jobhunter_google_client <file>` for containers). `help/email-alerts.md` (S11c) is the repository copy |
 | 2 | Alerts address (11) | not the placeholder | The `[mail] alerts_address` line, your `+jobs` address, and the restart note |
 | 3 | Gmail token (13) | [Gmail token](#gmail-token) rules | `jobhunter mail auth`, or `--podman-secret jobhunter_gmail_token` |
 | 4 | Label and filter (14) | an alert arrived under the label in the last 14 days (`mail_message`); otherwise `unknown` until the live check | `jobhunter mail setup` (or `jobhunter-ctr mail setup`); it prints filter XML for manual import if you skip the settings scope |
@@ -576,7 +577,7 @@ both are recommended. Without `--containers`, host-managing mode shows the Conta
   credentials. `Cache-Control: no-store` like every page.
 - Light and dark through the existing `app.css` tokens; checked at 375 px wide, where each row
   stacks (status and title, then detail, then the fix) with no horizontal scroll.
-- A test requests every internal link `/setup` renders (including `/setup/gmail`) and expects
+- A test requests every internal link `/setup` renders (including the `/help/...` links) and expects
   200; external links (Google Cloud console, LinkedIn) are not fetched.
 
 ## Testing
@@ -623,45 +624,67 @@ jobhunter running. It has to work in containers and must not drift from the READ
 
 ### Where the help lives (single source)
 
-**Every help page is a Markdown file in the package: `src/jobhunter/console/help/<topic>.md`.**
-The console renders those files. The README links to the same files, so GitHub shows the same
-text. Nothing is written twice:
+**Every help page is a plain Markdown file in the package: `src/jobhunter/console/help/<topic>.md`**
+(your decision, 2026-10-11). The console renders those files. `README.md` and `CLAUDE.md` both
+link to them, so you, GitHub and the agents all read the same text. Nothing is written twice:
 
 - **Why the package.** The image copies only `src/` (`Containerfile`: `COPY src/ src/`; 018 keeps
   `docs/` and `specs/` out of it), so a page under `docs/` cannot be served in a container. The
   `static/` and `templates/` folders next to `console/app.py` already ship this way.
-- **README.** The user-facing sections move into help files: "Running nightly" goes to
-  `nightly-runs.md`, "Browser extension" to `browser-extension.md`, "Running in containers" to
-  `containers.md`, and "Choosing a scorer" (on bug `75dacda`'s branch, not yet merged) to
-  `scorers.md`. The README keeps Layout, Setup (developer install), the old-layout migration and
-  Work tracking. It gains a **Help** table that links each topic file and says the same pages
-  are at `http://127.0.0.1:8808/help` in the console.
-- **`docs/containers.md`** moves to `help/containers.md` with `git mv`. `docs/containers.md`
-  stays as a three-line pointer, so links in 002, 018, 019 and `specs/README.md` keep working
-  ([question 1](#open-questions)). `tests/test_docs_containers.py` moves its checks to every
+- **README.** The user-facing sections move into help files (your decision): "Running nightly"
+  goes to `nightly-runs.md`, "Browser extension" to `browser-extension.md`, "Running in
+  containers" to `containers.md`, and "Choosing a scorer" (`README.md:65`, merged with
+  `75dacda`) to `scorers.md`. The README keeps Layout, Setup (developer install), the
+  old-layout migration and Work tracking. It gains a **Help** table that links each topic file
+  and says the same pages are at `http://127.0.0.1:8808/help` in the console.
+- **CLAUDE.md** gains a short "User help" line that points at `src/jobhunter/console/help/`.
+  It says to read the help topic for the area being changed, and to update it in the same
+  change when behaviour that it describes changes (S11a).
+- **`docs/containers.md`** moves to `help/containers.md` with `git mv` (your decision).
+  `docs/containers.md` stays as a three-line pointer, so links in 002, 018, 019 and
+  `specs/README.md` keep working. `tests/test_docs_containers.py` moves its checks to every
   help file (below).
-- **`docs/gmail.md` (S8) is not written.** `help/email-alerts.md` is the repository copy of the
-  Gmail guide.
+- **One Gmail how-to.** `help/email-alerts.md` is the only Gmail guide. `docs/gmail.md` (S8)
+  is not written. `GET /setup/gmail` (S3a) answers 303 to `/help/email-alerts#step-1-google-client-json`,
+  and `/alerts`' `SETUP_DOC` links the help page. The `/setup` row itself still shows the
+  mode-specific target path and command inline.
 - **Text built from code is a generated block, checked by a test.** Some content must match
   the code exactly: the Google Cloud steps (`mail/auth.py` `CLOUD_STEPS`), the scorer provider
-  table (`config.SCORER_PROVIDERS` from `75dacda`), the environment-variable table, and which
-  settings reload without a restart ([Addendum B](#addendum-b-config-watch)). Each sits between
-  `<!-- jh:begin NAME -->` and `<!-- jh:end NAME -->` in the Markdown and is committed, so
-  GitHub shows it too. `jobhunter.console.help.regenerate()` rewrites the blocks. A test fails,
-  naming the command to run, when a committed block differs from what the code generates now.
-  Nothing is filled in at request time, so the page and the file are the same text.
+  table (`config.SCORER_PROVIDERS`), the environment-variable table, and which settings reload
+  without a restart ([Addendum B](#addendum-b-config-watch)). Each sits between a
+  `<!-- jh:begin NAME -->` line and a `<!-- jh:end NAME -->` line, and is committed, so GitHub
+  shows it too. `jobhunter.console.help.regenerate()` rewrites the blocks and always writes a
+  blank line before and after each marker, so a table ends before the end marker on GitHub and
+  in the console. A test fails, naming the command to run, when a committed block differs from
+  what the code generates now. Nothing is filled in at request time, so the page and the file
+  are the same text.
 
-Rendering uses `markdown-it-py` (CommonMark plus tables) with **raw HTML off**, so the
-`jh:` markers and any stray HTML are dropped. It is already installed, since `rich` (through
-`typer`) depends on it; S11a adds it to `pyproject.toml` as a direct dependency, with no new
-download. The renderer:
+### Rendering
 
-- gives headings GitHub-compatible ids (lowercase, spaces to `-`, punctuation dropped), so
-  `topic.md#anchor` works on GitHub and as `/help/topic#anchor` in the console;
-- rewrites relative links to another topic (`email-alerts.md#step-3`) to `/help/email-alerts#step-3`,
-  and leaves console routes (`/setup`, `/prefs#sec-pay`) and external links alone. On GitHub a
-  console route shows as a dead link; each one sits in a sentence that says "in the console";
-- caches the rendered HTML per file mtime, as `static_url` does for CSS (`app.py:51`).
+`markdown-it-py`, built as `MarkdownIt("commonmark", {"html": False}).enable("table")`. Pass
+`html` explicitly, because the `commonmark` preset defaults to `html: True`. It is already
+installed (`rich`, through `typer`, depends on it; `uv.lock` has 4.2.0), and S11a adds it to
+`pyproject.toml` as a direct dependency with no new download.
+
+- **Markers.** With HTML off, markdown-it **escapes** HTML, it does not drop it: a marker line
+  renders as visible `&lt;!-- jh:begin ... --&gt;`, and one directly under a table becomes an
+  extra row (checked against 4.2.0). So the renderer deletes whole lines matching
+  `^<!-- jh:(begin|end) [a-z0-9-]+ -->$` **before** parsing. Any other stray HTML is shown escaped,
+  and the drift test forbids it.
+- **Links.** `validateLink` is never overridden: it is what refuses `javascript:`, `vbscript:`
+  and `file:` links. Link rewriting:
+  - a relative link to another topic (`email-alerts.md#step-3-gmail-token`) becomes
+    `/help/email-alerts#step-3-gmail-token`;
+  - a relative link to any other repository file (`../../../../specs/018-containers.md`) becomes
+    `https://github.com/DanielJoyce/jobber/blob/main/<path>`, because `specs/`, `deploy/` and
+    `extension/` are not in the image;
+  - console routes (`/setup`, `/prefs#sec-pay`) and absolute URLs are left alone. On GitHub a
+    console route is a dead link, so each one sits in a sentence that says "in the console".
+- **Heading ids.** One function, `help.slug()`, used by the renderer, the drift tests and S11e,
+  does what GitHub does (github-slugger): lowercase; drop punctuation except `-` and `_`; each
+  space to `-`; `-1`, `-2` on repeats within a page. `topic.md#anchor` then works on GitHub and as
+  `/help/topic#anchor`.
+- Rendered HTML is cached per file mtime, as `static_url` does for CSS (`app.py:52`).
 
 ### Routes and reachability
 
@@ -670,7 +693,7 @@ download. The renderer:
 | `GET /help` | The index: each topic's title, one line, and its section headings as links. "Start here" points at Getting started |
 | `GET /help/{topic}` | One topic. `topic` must be in the fixed list (404 otherwise, never a file path built from input). A left column lists all topics; on a phone it is a `<details>` above the page |
 
-- **Nav.** A **Help** entry, last in `PAGES` (`app.py:73`).
+- **Nav.** A **Help** entry, last in `PAGES` (`app.py:74`).
 - **From `/setup`.** Every row's fix ends with a "Help" link to its topic and section
   (`Fix.help`, e.g. `email-alerts#step-3-gmail-token`). A test walks the fixed check-id list and
   requires a help link on each, pointing at a heading that exists.
@@ -680,24 +703,34 @@ download. The renderer:
   each row's help topic.
 - **Works before anything is set up.** The help routes take no `Conn` and load no profile,
   settings values or secrets. They render with no `preferences.yaml`, no resume, and while the
-  database answers 503 (`app.py:248`): a test covers each case.
+  database answers 503 (`app.py:251`): a test covers each case.
 
 Rules:
 
-- **No personal data.** The pages are static files from the repository. The only
-  runtime context is the mode (host, container, host managing containers), which puts the
-  matching section first and labels it "you are running: container". Your settings are never
-  interpolated: the alerts address is always written `<you>+jobs@gmail.com`, the contact
-  `<you>@example.com`. One test renders every page with `user_agent_contact`, `alerts_address` and
-  every secret set to a sentinel and asserts the sentinel never appears. Another, carried over
-  from `test_docs_containers.py`, rejects any email address in the files except `example.com`
-  ones and an allowlist of public no-reply senders (LinkedIn's job-alert sender), each with a comment.
-- **Drift tests over every help file** (generalised from `test_docs_containers.py`): every
-  `jobhunter ...` or `jobhunter-ctr ...` line in a fenced block names a real subcommand and real
-  options; every `[section] key` written in backticks is a real `Settings` field; every
-  internal link (`/help/...`, console routes) answers 200 from `TestClient`, and every `#anchor`
-  matches a heading; repository files and units named in the text exist; the generated
-  blocks are current.
+- **No personal data.** The pages are static files from the repository. The only runtime
+  context is the mode (host, container, host managing containers), which puts the matching
+  section first and labels it "you are running: container". Your settings are never
+  interpolated. The alerts address is always written `<you>+jobs@gmail.com`, and the contact
+  `<you>@example.com`.
+  - One test renders every page with `user_agent_contact`, `alerts_address` and every secret
+    set to a sentinel, and asserts the sentinel never appears.
+  - The email-address check from `test_docs_containers.py` is widened to every help file. It
+    allows `example.com` addresses, `<you>`-prefixed placeholders (the same rule as
+    `.gitleaks.toml`), and a commented allowlist of public no-reply senders (LinkedIn's
+    job-alert sender). Anything else fails.
+- **Drift tests over every help file** (generalised from `test_docs_containers.py`):
+  - every `jobhunter ...` or `jobhunter-ctr ...` line in a fenced block names a real subcommand
+    and real options;
+  - every `[section] key` written in backticks is a real `Settings` field;
+  - every `/help/...` link and its `#anchor` match a topic and a `slug()` heading;
+  - every console-route link answers 200 from `TestClient`, and its `#anchor` is an `id` in that
+    response;
+  - every rewritten repository link names a file that exists, and any other relative link
+    fails;
+  - host unit names are checked against `src/jobhunter/ops/units/` and container unit names
+    against `deploy/quadlet/`;
+  - generated blocks are current;
+  - the rendered HTML of every topic contains neither `jh:` nor `&lt;!--`.
 - Light and dark through the `app.css` tokens. At 375 px wide there is no page-level
   horizontal scroll: wide tables and code blocks scroll inside their own box.
 - **No search.** Why: there are about a dozen pages, the index lists every section heading, and
@@ -713,30 +746,39 @@ Commands and setting names are shown, never values.
 |---|---|
 | Getting started (`getting-started.md`) | The order a fresh install meets things, mirroring `/setup`'s groups: contact for the User-Agent, preferences and resume, a scorer and its key, the first run, scheduled runs, then the optional parts (email alerts, USAJOBS, extension, drafting). What `/setup` and `jobhunter doctor` are. Host and container start commands |
 | Profile and resume (`profile-and-resume.md`) | `preferences.yaml` as the source of truth ([014](014-preferences-console.md)), the `/prefs` form and the starter file from `/setup`; one `.md` resume, upload on `/setup` or `/prefs`; `resume_path` relative to the profile folder (the container rule above); which edits are free and which re-score (014) |
-| Choosing a scorer (`scorers.md`) | The generated provider table (`<provider>:<model>`, endpoint, key variable); no bare names; `deep_scorer` must be `anthropic:`; **`jev:<slug>`, never `openrouter:jev:...`** (OpenRouter's chat endpoint rejects it; bug `75dacda`); a malformed scorer skips scoring and does not stop fetch or mail; the Anthropic key; local models (016); how to compare with `llm bench` |
-| OpenRouter and Jev (`openrouter.md`) | Creating an account and an API key, buying credits; `OPENROUTER_API_KEY` (or the name in `[scoring.openrouter] api_key_env`); the default `provider` settings `data_collection = "deny"` and `require_parameters = true`, and why (your resume goes in every request, `config.py:137`); `jev:<slug>` and `decisions:<slug>` use the decisions endpoint with the same key, `openrouter:<slug>` the chat endpoint; how cost is shown (from the response when OpenRouter reports it, else the cached model catalog; `est_cost_per_request_usd` for the cap estimate); the free key check on `/setup` (S6) |
-| Costs and credits (`costs-and-credits.md`) | `[scoring] daily_cap_usd` / `weekly_cap_usd` and what happens at the cap; `[apply] daily_cap_usd` (separate, 0 refuses paid drafting); `/costs`; which actions spend (the nightly score, a confirmed re-score, Generate with the `api` runner, `score --deep`) and which never do (`/setup`, `doctor`, live checks, help); the `cli` runner uses your claude.ai subscription, not API credits |
-| Email alerts (`email-alerts.md`) | Gmail end to end, as the seven [steps](#email-alerts-step-by-step): a Google Cloud project and a Desktop OAuth client (the generated `CLOUD_STEPS` block; the same text as `/setup/gmail`), where the client JSON goes per mode (`mail.client_secrets_path`, `$JOBHUNTER_GOOGLE_CLIENT_SECRETS`, podman secret `jobhunter_google_client`); `[mail] alerts_address`; `jobhunter mail auth`, and for containers `--podman-secret jobhunter_gmail_token` and `--from-local`; re-auth every 7 days while the app is in Testing; `jobhunter mail setup` (label and filter, or filter XML to import); `mail.fallback_senders` for LinkedIn (its job-alert sender, normally the `jobalerts-noreply` address at `linkedin.com`: confirm it on a real alert's From line) and never a `linkedin.com` domain entry; how to tell it works (`jobhunter mail status`, alerts arriving under the label, the `/setup` rows, `/alerts`) |
+| Choosing a scorer (`scorers.md`) | README's "Choosing a scorer", moved; the generated provider table (`<provider>:<model>`, endpoint, key variable); no bare names; `deep_scorer` must be `anthropic:`; **`jev:<slug>`, never `openrouter:jev:...`**; a malformed scorer skips scoring and does not stop fetch or mail; local models (016); `llm bench`. **The Anthropic key:** create one in the Anthropic Console; API credits are prepaid and separate from a claude.ai subscription; keys start `sk-ant-` (019's format note); `ANTHROPIC_AUTH_TOKEN` as the alternative; host `~/.env` versus podman secret `jobhunter_anthropic` (`ops/preflight.py:89`) |
+| OpenRouter and Jev (`openrouter.md`) | Creating an account and an API key, buying credits; `OPENROUTER_API_KEY` (or the name in `[scoring.openrouter] api_key_env`); the default `provider` settings `data_collection = "deny"` and `require_parameters = true`, and why (your resume goes in every request); `jev:<slug>` and `decisions:<slug>` use the decisions endpoint with the same key, `openrouter:<slug>` the chat endpoint; how cost is shown (from the response when OpenRouter reports it, else the cached model catalog; `est_cost_per_request_usd` for the cap estimate); the free key check on `/setup` (S6) |
+| Costs and credits (`costs-and-credits.md`) | `[scoring] daily_cap_usd` / `weekly_cap_usd` and what happens at the cap; `[apply] daily_cap_usd` (separate, 0 refuses paid drafting); `/costs`; which actions spend (the nightly score, a confirmed re-score, Score now, Generate with the `api` runner, `score --deep`) and which never do (`/setup`, `doctor`, live checks, help); the `cli` runner uses your claude.ai subscription, not API credits |
+| Email alerts (`email-alerts.md`) | Gmail end to end, as the seven [steps](#email-alerts-step-by-step), each step a heading so `/setup` can link it: a Google Cloud project and a Desktop OAuth client (the generated `CLOUD_STEPS` block), where the client JSON goes per mode (`mail.client_secrets_path`, `$JOBHUNTER_GOOGLE_CLIENT_SECRETS`, podman secret `jobhunter_google_client`); `[mail] alerts_address`; `jobhunter mail auth`, and for containers `--podman-secret jobhunter_gmail_token` and `--from-local`; re-auth every 7 days while the app is in Testing; `jobhunter mail setup` (label and filter, or filter XML to import); `mail.fallback_senders` for LinkedIn (its job-alert sender, normally the `jobalerts-noreply` address at `linkedin.com`: confirm it on a real alert's From line) and never a `linkedin.com` domain entry; how to tell it works (`jobhunter mail status`, alerts arriving under the label, the `/setup` rows, `/alerts`) |
 | Browser extension (`browser-extension.md`) | The README section as it stands: load unpacked, pairing, options page, `public_port` in containers, `ext status` / `ext unpair` |
-| Drafting (`drafting.md`) | The `cli` runner (Claude Code on your claude.ai login: `claude auth status`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, as passed through by `cli_runner.py:63`) versus the `api` runner (`ANTHROPIC_API_KEY`); runner off and back on; in containers drafting runs on the host (`apply draft`, 018 C9) |
-| Settings and secrets (`settings-and-secrets.md`) | `config.toml`: where it is (`jobhunter paths`), that it is never edited from the console. The generated **environment-variable table** (below). Host: `.env` lookup order from `config.env_files` (`$JOBHUNTER_ENV_FILE`, then `./.env` in the console's working directory, then `~/.env`; real environment variables win; an earlier file wins); create it private (`install -m 600 /dev/null ~/.env`); never commit it (gitignored, and the gitleaks hook). Containers: podman secrets mounted as `*_FILE`, `jobhunter container preflight`, `--replace`. How to check where a value came from without printing it: `jobhunter secrets status`, `jobhunter paths`, `jobhunter doctor`. The generated table of what reloads and what needs a restart (B) |
+| Drafting (`drafting.md`) | The `cli` runner: install Claude Code, run `claude` and log in with your claude.ai subscription. Any other login (an API key, Bedrock, Vertex) fails `claude auth status`'s first-party claude.ai check and turns the runner off (`cli_runner.py:329`). `CLAUDE_CONFIG_DIR`; `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` goes in `~/.env` (it has no `*_FILE` form); both are passed through by `cli_runner.py:63`. The `api` runner (`ANTHROPIC_API_KEY`). Turning the runner back on. In containers drafting runs on the host (`apply draft`, 018 C9) |
+| Settings and secrets (`settings-and-secrets.md`) | `config.toml`: where it is (`jobhunter paths`), that it is never edited from the console. The generated **environment-variable table** (below). Host: `.env` lookup order from `config.env_files` (`$JOBHUNTER_ENV_FILE`, then `./.env` in the console's working directory, then `~/.env`; real environment variables win; an earlier file wins); create it private (`install -m 600 /dev/null ~/.env`); one `NAME=value` per line (a bare value is not read as a key); never commit it (gitignored, and the gitleaks hook). Containers: podman secrets mounted as `*_FILE`, `jobhunter container preflight`, `--replace`. How to check where a value came from without printing it: `jobhunter secrets status`, `jobhunter paths`, `jobhunter doctor`. The USAJOBS key and email. The generated table of what reloads and what needs a restart (B) |
 | Nightly runs (`nightly-runs.md`) | The README "Running nightly" section, plus the containers' Quadlet timers (`jobhunter-ctr-*`), how to read the logs, `Persistent=true`, the trigger marker (S4), and why host timers and container timers must not both be on |
-| Containers (`containers.md`) | `docs/containers.md`, moved unchanged apart from link fixes |
-| Troubleshooting (`troubleshooting.md`) | Common errors, each with what it means and the fix: unknown key in `config.toml`; "your data is still in ..." (`migrate-paths`); `MigrationsPending` / `SchemaTooNew` (`upgrade`, version skew); `score: submit failed (Could not resolve authentication method)`; `skipped: no Anthropic credential` (S7); a malformed scorer; `spend cap reached`; `UsajobsAuthMissing`; Gmail `RefreshError` (re-auth); `Google client secrets file missing`; `PdfUnavailable`; 403 "host ... is not a loopback address" (the URL, `--allow-remote`); the extension's 401 (pair again); the console's 503; "config.toml changed" ([B](#addendum-b-config-watch)). Every entry links `/setup` and `jobhunter doctor` |
+| Containers (`containers.md`) | `docs/containers.md`, moved; repository links rewritten per the rule above |
+| Troubleshooting (`troubleshooting.md`) | Common errors, each with what it means and the fix: unknown key in `config.toml`; "your data is still in ..." (`migrate-paths`); `MigrationsPending` / `SchemaTooNew` (`upgrade`, version skew); `score: submit failed (Could not resolve authentication method)`; `skipped: no Anthropic credential` (S7); a malformed scorer; `spend cap reached`; `UsajobsAuthMissing`; Gmail `RefreshError` (re-auth); `Google client secrets file missing`; `PdfUnavailable`; the drafting runner's "claude is not installed" and "not a claude.ai subscription login" (runner turned off); 403 "host ... is not a loopback address" (the URL, `--allow-remote`); the extension's 401 (pair again); the console's 503; "config.toml changed" ([B](#addendum-b-config-watch)). Every entry links `/setup` and `jobhunter doctor` |
 
-**The environment-variable table** is generated from the code. It covers the secrets in
-`secrets.DEFAULT_NAMES` plus `ANTHROPIC_AUTH_TOKEN` (S1), each with its `*_FILE` form; the
-variables named by `api_key_env` in each scorer section; the registry's USAJOBS
-`key_env` and `email_env`; `config.PATH_ENV_VARS`; `JOBHUNTER_CONFIG` and `JOBHUNTER_ENV_FILE`;
-`JOBHUNTER_GOOGLE_CLIENT_SECRETS` and `JOBHUNTER_GMAIL_TOKEN_FILE` (`mail/auth.py`); and, marked
-"set by the units, do not set by hand", `JOBHUNTER_CONTAINER`,
-`JOBHUNTER_PUBLISHED_LOOPBACK_ONLY`, `JOBHUNTER_BUILD_COMMIT`, `JOBHUNTER_TRIGGER` (S4) and
-`JOBHUNTER_RESTART_EXIT` (S12b). Columns: name, what reads it, secret or not, host place,
-container place, and whether a change needs a restart. A test finds every string literal in `src/`
-shaped like `(JOBHUNTER|ANTHROPIC|USAJOBS|OPENROUTER|OPENAI_COMPAT|LLAMA)_[A-Z0-9_]+` and
-requires each one in the table or on a short, commented list of names that are not
-environment variables (`ANTHROPIC_HAIKU`, `USAJOBS_MAX_DAYS`, ...). A new variable cannot ship
-undocumented.
+**The environment-variable table** is generated from the code. It lists:
+
+- the secrets in `secrets.DEFAULT_NAMES` plus `ANTHROPIC_AUTH_TOKEN` (S1), each with its `*_FILE`
+  form;
+- the variables named by `api_key_env` in each scorer section, and the registry's USAJOBS
+  `key_env` and `email_env`;
+- `config.PATH_ENV_VARS`, `JOBHUNTER_CONFIG` and `JOBHUNTER_ENV_FILE`;
+- `JOBHUNTER_GOOGLE_CLIENT_SECRETS` and `JOBHUNTER_GMAIL_TOKEN_FILE` (`mail/auth.py`);
+- `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` (`xdg.py`);
+- the Claude Code variables `cli_runner` passes through (`CLAUDE_CONFIG_DIR`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, a secret with no `*_FILE` form), with `ANTHROPIC_BASE_URL` marked
+  "never passed to the CLI child";
+- marked "set by the units, do not set by hand": `JOBHUNTER_CONTAINER`,
+  `JOBHUNTER_PUBLISHED_LOOPBACK_ONLY`, `JOBHUNTER_BUILD_COMMIT`, `JOBHUNTER_TRIGGER` (S4) and
+  `JOBHUNTER_RESTART_EXIT` (S12b).
+
+Columns: name, what reads it, secret or not, host place, container place, and whether a change
+needs a restart. A test finds every string literal in `src/` shaped like
+`(JOBHUNTER|ANTHROPIC|USAJOBS|OPENROUTER|OPENAI_COMPAT|LLAMA|CLAUDE|XDG)_[A-Z0-9_]+`. Each one
+must be in the table or on a short, commented list of names that are not environment variables
+(`ANTHROPIC_HAIKU`, `USAJOBS_MAX_DAYS`, ...). A new variable with one of these prefixes cannot
+ship undocumented.
 
 ## Addendum B: config watch
 
@@ -746,23 +788,23 @@ file is wrong. Today rule 6 tells you to restart by hand.
 
 ### What the console captures at start (checked in code)
 
-`jobhunter console` loads settings once (`cli.py:1091`) and passes them to `create_app`.
-Most routes read `request.app.state.settings` on every request (`app.py:255`; e.g.
+`jobhunter console` loads settings once (`cli.py:1121`) and passes them to `create_app`.
+Most routes read `request.app.state.settings` on every request (`app.py:258`; e.g.
 `alerts_routes.py:35`, `packet_routes.py:187`, `pages_routes.py:113`, `ext_routes.py:157`),
 so swapping that one attribute changes what they see. These do not:
 
 | Captured at start | Where | Effect |
 |---|---|---|
-| The connection factory, from `paths.db_path` | `app.py:200` | Restart |
-| The shared console lock, and the boot migration's data dir | `app.py:213`, `app.py:219` | Restart |
-| The dashboard's profile loader, closed over `settings` (profile and resume paths) | `app.py:201`, `app.py:155` | Restart (paths) |
-| `settings.scoring.weekly_cap_usd` in the dashboard KPIs, closed over | `app.py:351`, `app.py:397` | **S12a changes both to read `app.state.settings`**, so the weekly cap reloads |
-| The extension pairing file, from `paths.data_dir` | `app.py:270` | Restart |
-| The extension port, from `console.public_port` / the bind port | `app.py:269`, `cli.py:1109` | Restart |
-| Bind host and port | `cli.py:1092`, `uvicorn.run` at `cli.py:1114` | Restart |
+| The connection factory, from `paths.db_path` | `app.py:203` | Restart |
+| The shared console lock, and the boot migration's data dir | `app.py:216`, `app.py:222` | Restart |
+| The dashboard's profile loader, closed over `settings` (profile and resume paths) | `app.py:204`, `app.py:156` | Restart (paths) |
+| `settings.scoring.weekly_cap_usd` in the dashboard KPIs, closed over | `app.py:354`, `app.py:400` | **S12a changes both to read `app.state.settings`**, so the weekly cap reloads |
+| The extension pairing file, from `paths.data_dir` | `app.py:273` | Restart |
+| The extension port, from `console.public_port` / the bind port | `app.py:272`, `cli.py:1139` | Restart |
+| Bind host and port; `--host` / `--port` on the command line win over config | `cli.py:1122`, `uvicorn.run` at `cli.py:1144` | Restart, or no effect when given on the command line (below) |
 | The process-wide fetch semaphore, sized by the first caller | `core/fetch/ratelimit.py:66` | `fetch.global_concurrency`: restart |
 | Secrets: `.env` files loaded into `os.environ` with `override=False`, `*_FILE` read, names validated for the `api_key_env` names in config | `config.py:342`, `secrets.py:250` | Every secret, every `.env` change, and any `api_key_env` change: restart. Re-reading `.env` in place cannot work: `override=False` keeps the old value |
-| A running console re-score keeps the settings object it started with | `rescore_routes.py:155` | Safe: a swap does not touch it |
+| A running console re-score keeps the settings object it started with | `rescore_routes.py:170` | Safe: a swap does not touch it |
 
 ### Which settings reload
 
@@ -772,12 +814,18 @@ so a new field defaults to restart until someone looks at it.
 
 | Reload in place | Restart |
 |---|---|
-| `fetch.respect_robots`, `default_rps`, `user_agent_contact`, `timeout_s`, `max_retries` (read per `FetchContext`: `context.py:140`, `165`, `168`, `382`, `484`) | `paths.*` (all five) |
+| `fetch.respect_robots`, `default_rps`, `user_agent_contact`, `timeout_s`, `max_retries` (read per `FetchContext`: `core/fetch/context.py:140`, `165`, `168`, `382`, `484`) | `paths.*` (all five) |
 | `scoring.screen_scorer`, `deep_scorer`, `daily_cap_usd`, `weekly_cap_usd`, `deep_shortlist`, `employer_rejection_days` | `console.host`, `port`, `public_port` |
 | `scoring.openrouter.*`, `openai_compat.*`, `local.*` except `api_key_env` and `catalog_cache` (scorers are built per run) | `fetch.global_concurrency` |
 | `mail.alerts_address`, `label`, `fallback_sender_domains`, `fallback_senders` (S9), `client_secrets_path` (read on use; the console only stats it) | `scoring.*.api_key_env`, `scoring.openrouter.catalog_cache` |
 | `apply.*` (read per call: `packet_docs.py:255`) | Anything from the environment: `.env` files, `*_FILE`, `JOBHUNTER_*` paths, `JOBHUNTER_CONFIG` |
 | `capture.disabled_hosts` (read per request: `ext_routes.py:238`) | Container mode, `--allow-remote` (command-line and unit settings, not config) |
+
+**`console.host` and `console.port` given on the command line.** `--host` and `--port` win over
+config (`cli.py:1122`), and the container unit always passes both (`Exec=console --host
+127.0.0.1 --port 8808`). The console knows its own arguments. When a flag overrides a field,
+a change to that field is listed as "no effect: set on the command line" and offers no Restart.
+`console.public_port` has no flag and is a normal restart field.
 
 The help page "Settings and secrets" carries this table as a generated block (A).
 
@@ -788,31 +836,44 @@ asserts the swapped object's restart fields equal the old ones.
 
 ### Detecting a change
 
-- **No new timer, no inotify.** The check runs inside `GET /activity`, the nav poll from bug
-  `edb9ba6` (every 60 s when idle, 3 s while work runs, and on `visibilitychange`, so switching
-  back to the browser after saving in an editor checks at once). inotify is out: it does not
-  see a bind mount's source being replaced, and the poll already exists.
+- **No new timer, no inotify.** The check runs inside `GET /activity`, the nav poll merged with
+  `edb9ba6` (`console/activity_routes.py`). It polls every 60 s when idle, every 3 s while work
+  runs, and on `visibilitychange`, so switching back to the browser after saving in an editor
+  checks at once. inotify is out: it does not see a bind mount's source being replaced, and the
+  poll already exists.
 - **Cheap.** At most once every 2 s per process (a lock and a monotonic timestamp, since several
   tabs poll), it `stat`s the config file (`config.config_file(None)`) and every candidate from
   `config.env_files()`, including ones that do not exist yet (a new `~/.env`). The fingerprint is
-  `(exists, st_dev, st_ino, st_size, st_mtime_ns, st_nlink)`. Unchanged: done. Changed: read and
-  hash the file. Same hash as before (a `touch`): adopt the new fingerprint, nothing shown.
+  `(exists, st_dev, st_ino, st_size, st_mtime_ns, st_ctime_ns, st_nlink)`. Unchanged: done.
+  Changed: read and hash the file. Same hash, same inode, and outside container mode (a
+  `touch`): adopt the new fingerprint and show nothing.
+- **Baseline.** The watcher starts with **no** baseline, so the first check always loads the
+  file and diffs it against the running settings: a save made between start-up and the first
+  poll (perhaps hours later, for a console started at boot) is not missed. The `.env` digests
+  are taken at start-up, in the CLI callback, while the files are loaded (`cli.py:187`).
 - **Compare settings, not bytes.** A changed `config.toml` is loaded with `load_settings()`,
   the loader the CLI uses, and diffed field by field against the **running** settings
-  (`app.state.settings`), not against the old file. A comment-only edit shows nothing, and a save
-  that happened while the console was starting is still caught at the next real change.
+  (`app.state.settings`), not against the old file. A comment-only edit shows nothing.
 - **`.env` files** are parsed with `dotenv_values` (which does not touch `os.environ`) and
-  compared by key name. Changed values are detected through a salted digest held only in
-  memory (a random salt per process; never written or logged). Any `.env` change is restart-class.
+  compared by key. Changed values are detected through a salted digest held only in memory
+  (a random salt per process, never written or logged). Any `.env` change is restart-class.
+  Key names are shown only when they look like a name (rules [below](#the-notice)).
 - **Containers.** The single-file read-only mount pins the inode
-  ([018](018-containers.md) D3). An editor that saves **in place** changes the content under
-  the mount: the poll sees it, as on the host. An editor that saves **by rename** leaves the
-  console on the old inode, now unlinked on the host, so its `st_nlink` drops to 0. The
-  console cannot read the new file. It shows "config.toml was replaced on the host; this console
-  cannot see the new file until it restarts", with Restart only (below), and suggests checking it
-  first with `jobhunter-ctr doctor`, which runs in a fresh container that mounts the new file.
-  S12b confirms `st_nlink == 0` on your real deployment and records the result in the PR. The
-  unit test injects the stat function.
+  ([018](018-containers.md) D3). Three cases:
+  - **An editor that saves in place** changes the content under the mount. The poll sees it, as
+    on the host.
+  - **An editor that saves by rename** leaves the console on the old inode. That inode is now
+    unlinked on the host, so its `st_nlink` drops to 0.
+  - **An editor that keeps a backup** (Emacs by default, or vim with `backup` set) renames the
+    old file to `config.toml~` first. The pinned inode keeps `st_nlink` 1, with the same size,
+    mtime and content, but its `st_ctime` changes.
+
+  In container mode, `st_nlink == 0`, or a `st_ctime_ns` change with unchanged content on the
+  same inode, means "config.toml may have been replaced on the host; this console cannot see
+  the new file until it restarts". That notice offers Restart only (below) and suggests checking
+  the file first with `jobhunter-ctr doctor`, which runs in a fresh container that mounts the
+  new file. S12b checks all three editor behaviours on your real deployment and records the
+  results in the PR. The unit tests inject the stat function.
 
 ### Validating
 
@@ -822,20 +883,28 @@ settings and the notice says so:
 ```
 config.toml has errors; the console keeps the settings from 09:12.
   scoring.daily_cap_usd: Input should be a valid number
-  line 14: Invalid value (TOML)
+  config.toml line 14, column 9: not valid TOML
   [Details] [Dismiss]
 ```
 
-Errors are built from `ValidationError.errors()` as **location and message only**. Pydantic's
-`str(exc)` includes `input_value=...`, which could carry the contact address or a pasted key,
-so it is never shown or logged. TOML errors give the line and column from `TOMLDecodeError`
-and no content. At most three lines in the bar; all of them on the details page. While the file
-is invalid, `/setup` shows inventory row 1 as broken. That row was doctor-only, because the
-console could not start with a broken file, but a console that is already running can now see
-one.
+**Error text never carries a value:**
 
-Scorer specs that `Scoring.scorer_problems()` (`75dacda`) flags do not block Apply: scoring
-fails soft. They appear as warnings on the details page and on the scorer row.
+- Pydantic errors are built from `ValidationError.errors()`, never `str(exc)`, which includes
+  `input_value=...`. Each line is the location plus the message.
+- A `value_error` message comes from a custom validator and may quote the input. It is shown
+  only when its location is on `SHOWN_VALUES`; otherwise the line is the location plus "invalid
+  value". The same rule applies to any message that contains `str(err["input"])`.
+- TOML errors: on Python 3.13 `TOMLDecodeError` has no `lineno` or `colno`, and `str(exc)` can
+  quote keys. Line and column are taken with the regex `\(at line (\d+), column (\d+)\)`, and
+  the text is fixed: "not valid TOML".
+
+The bar shows at most three lines; the details page shows them all. While the file is invalid,
+`/setup` shows inventory row 1 as broken. That row was doctor-only, because the console could
+not start with a broken file, but a console that is already running can now see one.
+
+Scorer specs that `Scoring.scorer_problems()` flags do not block Apply: scoring fails soft.
+They appear as warnings on the details page and on the scorer row. Their messages quote the
+spec, which is on `SHOWN_VALUES`.
 
 ### The notice
 
@@ -846,19 +915,29 @@ config.toml changed: 3 settings   [Apply now] [Restart console] [Details] [Dismi
 ```
 
 - **Apply now** is shown when at least one reloadable setting changed. **Restart console** is
-  shown when a restart-class one changed, or `.env` changed, or the container cannot see the
-  new file. Both buttons appear when both kinds changed.
-- **Details** opens `GET /config/changes`: each changed setting by name, with its class
-  (reloads / needs restart), and old and new values **only for fields on an allowlist**
-  (`config.SHOWN_VALUES`: caps, scorer specs, `deep_shortlist`, `employer_rejection_days`,
-  rps, timeouts, retries, `respect_robots`, `global_concurrency`, ports, the `apply` runner,
-  models, effort and booleans, `label`, `api_key_env` names). Every other field shows
-  "changed", never its value. That includes `fetch.user_agent_contact` and `mail.alerts_address`
-  (personal), `fallback_sender_domains` and `fallback_senders`, `capture.disabled_hosts`
-  (shown as a count), the OpenRouter `provider`, `title` and `referer`, and all paths.
-  Default is hidden: a field not on the list shows no value. `.env` changes show the file
-  (with `$HOME` as `~`) and the key names added, removed or changed, never values. Logs carry
-  names only.
+  shown when a restart-class one changed (and is not overridden on the command line), when
+  `.env` changed, or when the container cannot see the new file. Both buttons appear when both
+  kinds changed.
+- **Details** opens `GET /config/changes`. It lists each changed setting by name, with its
+  class (reloads, needs restart, or no effect). Old and new values appear **only for fields on
+  an allowlist** (`config.SHOWN_VALUES`).
+  - **On the allowlist:** the caps, scorer specs, `deep_shortlist`, `employer_rejection_days`,
+    rps, timeouts, retries, `respect_robots`, `global_concurrency`, ports, the `apply` runner,
+    models, effort and booleans, and `label`.
+  - **Everything else shows "changed", never its value.** That includes
+    `fetch.user_agent_contact` and `mail.alerts_address` (personal), `fallback_sender_domains`
+    and `fallback_senders`, `capture.disabled_hosts` (shown as a count), the OpenRouter
+    `provider`, `title` and `referer`, and all paths. Default is hidden: a field not on the
+    list shows no value.
+  - **`api_key_env` names** are shown only when both old and new match `^[A-Z][A-Z0-9_]{0,63}$`.
+    Otherwise the line says "changed (not shown)". A key pasted into that field by mistake is
+    never echoed.
+  - **`.env` changes** show the file (with `$HOME` as `~`) and the key names added, removed or
+    changed. A name is shown only when it matches `^[A-Z][A-Z0-9_]{0,63}$` **and** is a known
+    secret name (`secrets.known_names`) or starts with `JOBHUNTER_`. `dotenv_values` reads a
+    bare line (a key pasted without `NAME=`) as a key with no value, so such a line shows only
+    as a count: "1 line that is not NAME=value". The same rule applies to the logs, the notice,
+    the page and `/activity`.
 - **Dismiss** hides this change. It is remembered in memory by the new file's hash, so a
   further edit shows again.
 - After Apply: "Applied 3 settings at 14:05". Rule 6's restart notes on `/setup` then say
@@ -870,47 +949,78 @@ config.toml changed: 3 settings   [Apply now] [Restart console] [Details] [Dismi
 page showed (if the file changed again it answers with the new notice). Then it assigns
 `app.state.settings` once. One attribute assignment is atomic in CPython. A request already
 running keeps the object it read, and the next request sees the new one. Apply is allowed while
-a re-score runs: the running re-score keeps its own settings, and the notice says so. A pending
-re-score confirmed after a scorer change gets `PlanChanged` from the existing plan-token check
-(`rescore_routes.py:137`) and shows the new plan.
+work runs: a running re-score or extension score keeps its own settings, and the notice says so.
+A pending re-score confirmed after a scorer change gets `PlanChanged` from the existing
+plan-token check (`rescore_routes.py:152`) and shows the new plan.
 
-### Restart
+### In-process work registry
 
-`POST /config/restart` answers 202 with a small page that polls `/healthz` and reloads when the
-new process answers. Then, after the response is sent (a background task), it asks uvicorn to
-shut down gracefully: in-flight requests finish (`timeout_graceful_shutdown` 200 s, longer than
-the drafting timeout `cli_runner.TIMEOUT_S` 180 s), and the lifespan releases the console lock
-and kills stray `claude` children (`app.py:231`). S12b replaces `uvicorn.run` (`cli.py:1114`)
-with `uvicorn.Server`, so the console command keeps a handle to the server and decides what
-to do after it returns. In container mode the drain is capped at 60 s instead: the unit's
-health check (`HealthInterval=30s`, `HealthRetries=3`, `HealthOnFailure=kill`) would kill a
-console that stops answering `/healthz` for about 90 s, which counts as a failure and sends the
-notification.
+A restart must not cut off paid or long work. The console runs such work in several places:
 
-| Situation | Restart does |
-|---|---|
-| Container, unit opted in (`JOBHUNTER_RESTART_EXIT` set) | Exits with that code (`EXIT_RESTART = 3`). The console unit gains `SuccessExitStatus=3` and `RestartForceExitStatus=3`: systemd restarts it although the base unit has `Restart=on-failure`, and `OnFailure=` (the failure notification) does not fire. A fresh container gets a fresh mount, so a file saved by rename is picked up. The base unit in `deploy/quadlet/` gains the three lines. Units already installed get them from `jobhunter container preflight` as a drop-in (`45-jobhunter-restart.conf`, the pattern S4 uses for the trigger marker) ([question 2](#open-questions)) |
-| Container, not opted in | No button. The notice shows `systemctl --user restart jobhunter-console`, to run on the host. Exiting 0 would leave the console down (`Restart=on-failure`), and a non-zero exit would send a failure notification |
-| Host (run by hand, or under any supervisor) | **Re-exec**: `os.execve(sys.executable, [sys.executable, *sys.orig_argv[1:]], pristine_env)`. `pristine_env` is a copy of `os.environ` taken at the very top of the CLI callback (`cli.py:161`), before `.env` files and `*_FILE` were loaded into the environment, so the new process reads `.env` afresh. Re-exec without it would keep the old values, because `load_dotenv(override=False)` does not replace them. The PID stays the same, so a supervisor sees no exit |
+- the re-score thread (`RescoreManager`, `rescore_routes.py:156`);
+- the extension's Score now threads (`ext-score-{gid}`, `ext_routes.py:484`). They make paid
+  scorer calls, and the local scorer can take 900 s;
+- in-request Score now (`capture_routes.py:141`, `packet_routes.py:731`);
+- drafting through `generator.generate` (`packet_routes.py:455`), whose CLI runner leaves
+  `_LIVE` (`cli_runner.py:246`) empty for a moment between the draft child and the
+  entailment child.
 
-Before shutting down, the restart validates the file again. If the file is invalid, it refuses
-(409, with the errors): a restart onto a broken file would leave the console stopped. A re-exec
-runs the code that is on disk now, exactly as a manual restart would: after a `git pull` with new
-migrations, boot migrates after a backup (host, no marker) or refuses with `MigrationsPending`
-(marker). The notice warns when the code on disk differs from the running one (version and
-commit from `ops/version`).
-
-**Refused while work would be cut off** (409, "restart when it finishes"; the notice keeps
-offering the button):
-
-- a console re-score is running (`RescoreManager.busy()`). Its thread is a daemon and would die
-  mid-batch. It is the only time this process holds the run lock (`take_run_lock`,
-  `rescore_routes.py:70`), so this also covers "holds the run lock";
-- a drafting `claude` child is live. S12b adds a `cli_runner.live_count()`, read from `_LIVE`
-  (`cli_runner.py:246`).
+So S12b adds **one registry**, `app.state.work`: a set of named entries under a lock.
+`RescoreManager.start`, each ext-score thread, `score_now` and `generate` enter it on start and
+leave it in a `finally`. `POST /config/restart` takes the same lock. It sets
+`app.state.restarting = True` **only if the registry is empty**, otherwise it answers 409 ("a
+re-score / score / draft is running; restart when it finishes"), and the notice keeps offering
+the button. While `restarting` is set, every one of those entry points refuses with 503
+("console restarting"). That closes the window between the check and the shutdown, and covers
+requests still in flight during the drain. After `server.serve()` returns, the console checks
+the registry again and joins anything left (a bounded join) before it re-execs or exits.
 
 A timer run in **another** process holding the run lock does not block a console restart: the
 two are independent, and a restarted console does not take the run lock.
+
+### Restart
+
+`POST /config/restart`:
+
+1. **Preflight in a child process.** Validating the file in the running process is not enough:
+   that process holds the old `.env` values (which may set `JOBHUNTER_CONFIG` or a path
+   variable) and the old code. So it runs
+   `subprocess.run([sys.executable, "-c", <import jobhunter.console.app; secrets.startup(...); load_settings()>], env=pristine_env, cwd=<same>, timeout=60)`.
+   If the child fails (a bad file, a missing dependency after a pull, an import error), it
+   answers 409 with a fixed summary: the location and message for settings errors, otherwise
+   the exception type. The old console keeps running. In container mode with the can't-see-file
+   notice, the child cannot see the new file either, so this step is skipped and the notice
+   points at `jobhunter-ctr doctor`.
+2. **The registry check** (above).
+3. **Shutdown.** It answers 202 with a small page that polls `/healthz` and reloads when the new
+   process answers. After 90 s without an answer, the page stops and says "the console did not
+   come back; check the terminal (or `journalctl --user -u jobhunter-console`)". When the
+   restart changes the bind host or port, the page shows the new URL and polls that one instead.
+   After the response is sent (a background task), the console asks uvicorn to shut down
+   gracefully. In-flight requests finish, and the lifespan releases the console lock and kills
+   stray `claude` children (`app.py:234`).
+4. **Then, by mode.** S12b replaces `uvicorn.run` (`cli.py:1144`) with `uvicorn.Server`, so the
+   console command keeps a handle to the server and decides what to do after it returns:
+
+| Situation | Restart does |
+|---|---|
+| Container, unit opted in (`JOBHUNTER_RESTART_EXIT` set) | Calls `logging.shutdown()`, flushes stdio, then `os._exit(EXIT_RESTART)`. `EXIT_RESTART = 42`, a code nothing else uses: uvicorn exits 3 on a startup failure (`uvicorn/config.py` `STARTUP_FAILURE`, also from `uvicorn.Server`), click uses 1 and 2, and `--wait` uses 75. `os._exit`, not `sys.exit`, so interpreter shutdown does not wait on non-daemon AnyIO workers or a pool left running (`ext_routes.py:329`). The unit gains `[Container] Environment=JOBHUNTER_RESTART_EXIT=42`, and `[Service] SuccessExitStatus=42` and `RestartForceExitStatus=42`. systemd restarts it although the base unit has `Restart=on-failure`, and `OnFailure=` (the failure notification) does not fire. A fresh container gets a fresh mount, so a file saved by rename is picked up. The base unit in `deploy/quadlet/` gains the three lines. Units already installed get them from `jobhunter container preflight` as a drop-in (`45-jobhunter-restart.conf`, the pattern S4 uses for the trigger marker). You approved this (2026-10-11); it needs one preflight run and `systemctl --user daemon-reload` |
+| Container, not opted in | No button. The notice shows `systemctl --user restart jobhunter-console`, to run on the host. Exiting 0 would leave the console down (`Restart=on-failure`), and a non-zero exit would send a failure notification |
+| Host (run by hand, or under any supervisor) | Calls `logging.shutdown()`, flushes stdio, then **re-execs**: `os.execve(sys.executable, [sys.executable, *sys.orig_argv[1:]], pristine_env)`. `pristine_env` is a copy of `os.environ` taken at the very top of the CLI callback (`cli.py:180`), before `.env` files and `*_FILE` were loaded, so the new process reads `.env` afresh. Without it the old values would stay, because `load_dotenv(override=False)` does not replace them. The PID stays the same, so a supervisor sees no exit. A re-exec runs the code on disk but does **not** run `uv sync`, which `uv run` would; the child preflight catches a missing dependency, and the help page says to run `uv sync` after a pull that changes dependencies |
+
+**Drain time.** On the host, the drain (`timeout_graceful_shutdown`) is 200 s, longer than the
+drafting timeout `cli_runner.TIMEOUT_S` (180 s). The registry already refuses a restart while a
+draft runs, so this is a backstop. In a container, uvicorn closes the listener at once, so
+`/healthz` fails from the start. The unit's health check (`HealthInterval=30s`,
+`HealthRetries=3`, `HealthOnFailure=kill`) kills the container on the third consecutive failure,
+which can come as early as (HealthRetries − 1) × HealthInterval = 60 s after the listener
+closes. The container drain is therefore capped at 30 s, which leaves room for the lifespan and
+the exit. A kill would count as a failure and send the notification.
+
+A re-exec runs the code that is on disk now, as a manual restart would: after a `git pull` with
+new migrations, boot migrates after a backup (host, no marker) or refuses with
+`MigrationsPending` (marker). The notice warns when the code on disk differs from the running
+one (version and commit from `ops/version`).
 
 ### Who may press the buttons
 
@@ -918,46 +1028,60 @@ two are independent, and a restarted console does not take the run lock.
 (loopback `Host` on every request, same-origin `Origin` on writes:
 [017](017-assisted-apply.md#local-api-security)). Apply and Restart also require the **peer
 address** (`request.client.host`) to be loopback, the check `/setup/live` uses. Under
-`--allow-remote` they still work from a loopback peer, and a LAN client gets 403. Why the rule
-differs from `/setup/live`, which refuses everything under `--allow-remote`: Apply and Restart
-spend nothing and use no credential. They only act on a file you wrote, so the risk is a LAN
-client restarting your console, which the peer check prevents. When the browser's own peer is
-not loopback (the pasta fallback, 018 D11), the buttons are hidden and the notice gives the
-command instead. Dismiss needs only the middleware. `GET /config/changes` is readable wherever
-`/setup` is, and shows names and allowlisted values only.
+`--allow-remote` they still work from a loopback peer, and a LAN client gets 403. This differs
+from `/setup/live`, which refuses everything under `--allow-remote`. Why: Apply and Restart spend
+nothing and use no credential. They only act on a file you wrote, so the risk is a LAN client
+restarting your console, and the peer check prevents that. When the browser's own peer is not
+loopback (the pasta fallback, 018 D11), the buttons are hidden and the notice gives the command
+instead. Dismiss needs only the middleware. `GET /config/changes` is readable wherever `/setup`
+is, and shows names and allowlisted values only, under the rules above.
 
 ### What it does not change
 
 - **Only the console watches.** Every other command loads settings when its process starts:
-  `jobhunter run` calls `load_settings()` (`cli.py:281`) and loads `.env` in the CLI callback
-  (`cli.py:168`), each time a timer starts it. In containers each timer starts a new container
-  with a new mount. One detail the help page states: a run started with `--wait` reads the config
-  **before** it waits for the run lock (`cli.py:281`, lock at `cli.py:306`), so a run already waiting
-  uses the file as it was when it started.
+  `jobhunter run` calls `load_settings()` (`cli.py:300`) and loads `.env` in the CLI callback
+  (`cli.py:187`), each time a timer starts it. In containers each timer starts a new container
+  with a new mount. The help page states one detail: a run started with `--wait` reads the
+  config **before** it waits for the run lock (`cli.py:300`, lock at `cli.py:325`), so a run
+  already waiting uses the file as it was when it started.
 - `config.toml` is still never written by the console.
-- Secrets are still never typed into the console. A secret change still means editing `.env` or the
-  podman secret, then Restart (host) or the 018 sequence (containers).
+- Secrets are still never typed into the console. A secret change still means editing `.env`
+  or the podman secret, then Restart (host) or the 018 sequence (containers).
 
 ### Testing (B)
 
 - Classification: every `Settings` leaf is in `RELOADABLE` or restart, exactly once.
 - Swap: build the app with settings A, apply B with every reloadable field changed, and assert
   that pages show B: the dashboard weekly cap (fails on today's closure), `/costs`' packet cap,
-  the re-score panel's scorer, `/alerts`' placeholder warning, the extension's `disabled_hosts`.
-  Restart fields keep A after a partial apply.
-- Detection with an injected stat and clock: a touch shows nothing; a comment edit shows
-  nothing; a rename-save on the host is seen; `st_nlink == 0` in container mode gives the
-  can't-see notice; a new `~/.env` is seen; the 2 s throttle holds with three pollers.
-- Invalid file: the old settings stay; errors come from `errors()` with loc and msg; a
-  sentinel put in a bad value never appears in the page, the fragment or captured logs.
-- No value leaks: set the contact, alerts address, `disabled_hosts`, OpenRouter `referer` and a
-  `.env` key to a sentinel, change each, and assert the sentinel never appears in
-  `/activity`, `/config/changes` or logs.
-- Restart: `os.execve` patched. Assert the argv, and that the env lacks a key that only a
-  `.env` file set. Under `JOBHUNTER_RESTART_EXIT` the command exits with 3. Refused (409) while
-  `busy()`, while a fake claude child is live, and while the file is invalid. A non-loopback
-  peer gets 403, with and without `--allow-remote`.
-- Unit file test: the base console unit has the three lines, and preflight writes the drop-in.
+  the re-score panel's scorer, `/alerts`' placeholder warning, and the extension's
+  `disabled_hosts`. Restart fields keep A after a partial apply. A `--port` override makes a
+  `console.port` change "no effect".
+- Detection, with an injected stat and clock:
+  - a touch or a comment edit shows nothing;
+  - a rename-save on the host is seen;
+  - in container mode, `st_nlink == 0` and a backup-keeping save (ctime changed, content not)
+    both give the can't-see notice;
+  - a new `~/.env` is seen;
+  - an edit made before the first poll is seen;
+  - the 2 s throttle holds with three pollers.
+- Invalid file: the old settings stay. A sentinel placed in a bad value of every type never
+  appears in the page, the fragment or captured logs. The test is parametrised over every custom
+  validator found by introspecting `Settings`. A TOML error shows line and column only.
+- No value leaks: set the contact, alerts address, `disabled_hosts`, OpenRouter `referer`, an
+  `api_key_env` value and a `.env` key to a sentinel, plus a bare `.env` line holding the
+  sentinel. Change each, and assert the sentinel never appears in `/activity`,
+  `/config/changes` or the logs.
+- Registry: 409 while a re-score, an ext-score thread, an in-flight `score_now` or a `generate`
+  runs; after Restart is accepted, a re-score POST, Score now and Generate get 503.
+- Restart, with `os.execve`, `os._exit` and the preflight child patched:
+  - assert the argv, and that the env lacks a key only a `.env` file set;
+  - under `JOBHUNTER_RESTART_EXIT` the console exits with 42;
+  - a server that never started exits with something other than 42;
+  - a failing preflight child gives 409 with no value in the body;
+  - a non-loopback peer gets 403, with and without `--allow-remote`.
+- Unit files: the base console unit has `Environment=JOBHUNTER_RESTART_EXIT=42` under
+  `[Container]` and both exit-status lines under `[Service]`; preflight writes the drop-in with
+  the same sections.
 
 ## Proposed tickets
 
@@ -969,28 +1093,28 @@ worker and reviewer per the CLAUDE.md table (the reviewer is always stronger).
 | S0 | Every profile load through `load_profile_for` (runner, `_score_mode`, `eval`, `llm bench`, backfill); test that only `scoring/profile.py` passes `paths.resume_path`. PR note: if the YAML names a different resume, `scoring_version` changes for the run, `--rescore-pending` and `--deep`; existing jobs re-score only when you ask | normal | sonnet / opus | |
 | S1 | `readiness.py`: `Check`, modes, every local check, `credential_for`, `ANTHROPIC_AUTH_TOKEN` as a known secret, `_absolute_path_count` moved to `core/dbpaths.py`, the keyring-raises fixture, no-leak and no-subprocess tests. Resume row compares both resolutions until S0 | normal | sonnet / opus | |
 | S2 | `jobhunter doctor`: output, `-v`, `--json`, `--group`, exit codes, guard exemptions, read-only DB, `--containers` with `build_preflight_context()` and fixed ids; console refusal messages point at `doctor` | normal | sonnet / opus | S1 |
-| S3a | `/setup` page and its routes (`starter-prefs`, `resume`, `dismiss`), `GET /setup/gmail` from `CLOUD_STEPS` with `/alerts`' `SETUP_DOC` pointed at it, the email-alerts guide, mode-aware fixes (`--replace` when the secret exists) and host paths, restart notes; dark mode and 375 px | normal | sonnet / opus | S1 |
+| S3a | `/setup` page and its routes (`starter-prefs`, `resume`, `dismiss`), `GET /setup/gmail` as a 303 to the help page and `/alerts`' `SETUP_DOC` pointed there, the email-alerts guide rows, mode-aware fixes (`--replace` when the secret exists) and host paths, restart notes; dark mode and 375 px | normal | sonnet / opus | S1 |
 | S3b | Banner on `/` and `/inbox` replacing the profile banner, Hide, first-run redirect (and the `GET /` test updates), `init` and `console` hints | normal | sonnet / opus | S3a |
 | S4 | Snapshot: sectioned `readiness.json` with a lock and per-section writes; `doctor --snapshot`; `run` writes inputs after the lock and the outcome at the end; `JOBHUNTER_TRIGGER=timer` in the base units, a preflight-written trigger drop-in for installed Quadlet units, `schedule install`/`status` for the host unit, a `run.trigger` column with old rows `NULL`, the unmarked-unit fallback; `not_run` outcome; host section; console effective status (worse of two, newer inputs clear an outcome, unknown rules) | hard (several processes, freshness rules, a migration) | opus / opus at higher effort | S2, S3a, S7 |
 | S5 | `mail auth` writes `gmail-auth.json` (issued_at, storage kind; `--from-local` keeps the old date); the token-age rules and `RefreshError` mapping in the Gmail row | normal | sonnet / opus | S1 |
 | S6 | Live checks: route gated on a loopback peer address (403 under `--allow-remote`), buttons, `jobhunter-ctr doctor --live` hand-off in host-managing mode, `doctor --live`; booleans only; uncached `auth_status()`; OpenRouter only on `openrouter.ai`; tests prove no model call and no leak | hard (credit paths, credentials) | opus / opus at higher effort | S2, S3a |
 | S7 | Score stage asks `credential_for` first and prints the skip line on `missing`; exit code unchanged | normal | sonnet / opus | S1 |
-| S8 | Docs: first-run pointers to `/setup`, `doctor` and `/help/getting-started` in `README.md` and the containers help page. (`docs/gmail.md` is dropped: `help/email-alerts.md`, S11c, is the repository copy) | mechanical | haiku / sonnet | S2, S3a, S11a |
+| S8 | Docs: first-run pointers to `/setup`, `doctor` and `/help/getting-started` in `README.md` and the containers help page. (`docs/gmail.md` is dropped: `help/email-alerts.md`, S11c, is the repository copy) | mechanical | haiku / sonnet | S2, S3a, S11a, S11d |
 | S9 | `mail.fallback_senders` (exact sender addresses, `from:<address>` filters in `mail setup`); `/alerts` rows for LinkedIn and Craigslist (sign-up steps, address rule, "read when the parser lands" with the count); the domain-wide fallback warning; the re-read requirement added to `430a0e7` and `b0ac328` | normal | sonnet / opus | |
 | S10 | USAJOBS with no credentials configured is a skip (`unavailable()`, like the mail source), not a failure; a rejected key still fails (approved 2026-10-11) | normal | sonnet / opus | |
-| S11a | Help mechanism: `console/help/` package folder, `markdown-it-py` as a direct dependency, renderer (raw HTML off, GitHub heading ids, topic-link rewriting, mtime cache), `GET /help` and `/help/{topic}` with a fixed topic list, Help in the nav, generated-block mechanism and `regenerate()`, the drift tests over every help file (commands, `[section] key`, internal links and anchors, files named, no personal data, sentinel render, works with no profile and during a 503). Moves README's "Running nightly" and "Browser extension" into `nightly-runs.md` and `browser-extension.md`; README gets the Help table. Dark mode, 375 px | normal | sonnet / opus | |
-| S11b | Help content: `getting-started`, `profile-and-resume`, `scorers` (moves README "Choosing a scorer"; generated provider table), `openrouter`, `costs-and-credits`, `drafting`. Every claim checked against the code by the reviewer | normal | sonnet / opus | S11a, `75dacda` |
-| S11c | Help content: `email-alerts` (Gmail end to end; generated `CLOUD_STEPS` block; LinkedIn sender allowlisted in the personal-data test), `settings-and-secrets` (generated environment-variable table and its source-scan test), `troubleshooting` | normal | sonnet / opus | S11a |
-| S11d | Move `docs/containers.md` to `help/containers.md` (keeping history), leave a pointer, fix relative links, retarget `test_docs_containers.py` | mechanical | haiku / sonnet | S11a |
-| S11e | Help links from `/setup`: `Fix.help` on every check id, with a test that each one resolves to an existing heading; the "New here?" link on `/setup`; `init`, `console` and `doctor -v` name the help topic | mechanical | haiku / sonnet | S3a, S11b, S11c |
-| S12a | Config watch: the fingerprint poll inside `/activity` (2 s throttle, `.env` candidates), load and diff against the running settings, `RELOADABLE` and `SHOWN_VALUES` with the classify-every-field test, loc-and-msg-only errors, the notice line, `GET /config/changes`, `POST /config/apply` (partial apply keeps restart fields), `/config/dismiss`, the weekly-cap closures at `app.py:351` and `app.py:397` moved to `app.state.settings`, the loopback-peer gate, row 1 shown on `/setup` when the file on disk is invalid, the generated reload table in `settings-and-secrets.md` | hard (live settings swap under concurrent requests, privacy of values) | opus / opus at higher effort | `edb9ba6`, S11c (for the table only) |
-| S12b | Restart: `uvicorn.Server` in `console`, graceful shutdown then re-exec with the pristine environment (host) or `EXIT_RESTART` under `JOBHUNTER_RESTART_EXIT` (containers); the base console unit's three lines and preflight's `45-jobhunter-restart.conf` drop-in; refusals while a re-score runs, a `claude` child is live, or the file is invalid; container `st_nlink == 0` detection, checked on the real deployment; the 202 page that waits on `/healthz` | hard (process lifecycle, systemd, containers) | opus / opus at higher effort | S12a |
+| S11a | Help mechanism: `console/help/` package folder, `markdown-it-py` as a direct dependency, renderer (`html: False` explicit, marker lines stripped before parsing, `slug()` matching GitHub, topic and repository link rewriting, mtime cache), `GET /help` and `/help/{topic}` with a fixed topic list, Help in the nav, generated-block mechanism and `regenerate()` (blank lines around markers), the drift tests over every help file (commands, `[section] key`, links and anchors, repository files, unit names, `<you>` placeholders and the sender allowlist, no `jh:` in rendered output, sentinel render, works with no profile and during a 503). Moves README's "Running nightly" and "Browser extension" into `nightly-runs.md` and `browser-extension.md`; README gets the Help table; `CLAUDE.md` gets the help link. Dark mode, 375 px | normal | sonnet / opus | |
+| S11b | Help content: `getting-started`, `profile-and-resume`, `scorers` (moves README "Choosing a scorer"; generated provider table; the Anthropic key), `openrouter`, `costs-and-credits`, `drafting` (Claude Code login). Every claim checked against the code by the reviewer | normal | sonnet / opus | S11a, S2, S3a |
+| S11c | Help content: `email-alerts` (Gmail end to end, one heading per step; generated `CLOUD_STEPS` block), `settings-and-secrets` (generated environment-variable table with `CLAUDE_*` and `XDG_*`, and its source-scan test), `troubleshooting` (incl. the drafting runner's errors). `doctor --live` appears only in prose until S6 | normal | sonnet / opus | S11a, S2, S3a |
+| S11d | Move `docs/containers.md` to `help/containers.md` (keeping history), leave a pointer, rewrite its repository links per the renderer rule, retarget `test_docs_containers.py` | mechanical | haiku / sonnet | S11a |
+| S11e | Help links from `/setup`: `Fix.help` on every check id, built with `slug()`, with a test that each one resolves to an existing heading; the "New here?" link on `/setup`; `init`, `console` and `doctor -v` name the help topic (after S3b, which edits the same hint lines) | mechanical | haiku / sonnet | S2, S3a, S3b, S11b, S11c, S11d |
+| S12a | Config watch: the fingerprint poll inside `/activity` (2 s throttle, ctime and nlink, no initial baseline, `.env` digests at start-up), load and diff against the running settings, `RELOADABLE` and `SHOWN_VALUES` with the classify-every-field test, the command-line override rule for host and port, value-free errors (custom-validator and TOML rules), name-shaped-only `.env` keys and `api_key_env` values, the notice line, `GET /config/changes`, `POST /config/apply` (partial apply keeps restart fields), `/config/dismiss`, the weekly-cap closures at `app.py:354` and `app.py:400` moved to `app.state.settings`, the loopback-peer gate, row 1 and the rule 6 note on `/setup`, the generated reload table in `settings-and-secrets.md` (it creates the file with just that block if S11c has not landed; whichever lands second rebases) | hard (live settings swap under concurrent requests, privacy of values) | opus / opus at higher effort | S1, S3a, S11a |
+| S12b | Restart: the in-process work registry (re-score, ext-score threads, `score_now`, `generate`) and the `restarting` flag with 409/503; the preflight child under the pristine environment; `uvicorn.Server` in `console`, drain 200 s host / 30 s container, then `logging.shutdown()` and re-exec (host) or `os._exit(42)` under `JOBHUNTER_RESTART_EXIT` (containers); the base console unit's three lines in the right sections and preflight's `45-jobhunter-restart.conf` drop-in; container replaced-file detection (nlink 0, ctime with a backup), checked with three editor behaviours on the real deployment; the 202 page with its 90 s timeout and new-URL case | hard (process lifecycle, money paths, systemd, containers) | opus / opus at higher effort | S12a |
 
 Order: S0, S1, S9, S10 and S11a can start together; then S2, S3a, S5 and S7 after S1; S3b after
-S3a; S4 after S2, S3a and S7; S6 after S2 and S3a. S11b (once `75dacda` has merged), S11c and
-S11d after S11a; S8 after S2, S3a and S11a; S11e after S3a, S11b and S11c. S12a once `edb9ba6`
-has merged, then S12b. S12a's generated table needs S11c's page; if S12a lands first, it adds
-the block and S11c writes around it.
+S3a; S4 after S2, S3a and S7; S6 after S2 and S3a. S11d after S11a; S11b and S11c after S11a, S2
+and S3a; S8 after S2, S3a, S11a and S11d; S11e after S2, S3a, S3b, S11b, S11c and S11d. S12a after
+S1, S3a and S11a, then S12b. (`75dacda` and `edb9ba6`, which S11b and S12a used to wait on, are
+merged.)
 
 **Estimate**, by the calibrated rule (ticket wall-clock: mechanical 0.75 h, normal 1.4 h, hard
 2.1 h; schedule = sum / 3, plus 30%, range 0.7x to 1.6x; floor = the longest dependency chain):
@@ -998,34 +1122,54 @@ the block and S11c writes around it.
 - Sum: 12 normal (16.8 h) + 4 hard (8.4 h) + 3 mechanical (2.25 h) = 27.45 h.
 - Schedule: 27.45 / 3 = 9.15 h, plus 30% = **about 11.9 h** of continuous run, range about 8.3
   to 19 h.
-- Floor: the longest chain, S1 then S3a then S4 (or S1, S2, S6), is 4.9 h; S12a then S12b is
-  4.2 h. Both are below the range, so neither binds.
-- About 17M subagent tokens (11M for twelve tickets, scaled to nineteen).
-- The addenda alone (S11a to S12b, seven tickets): 9.9 h of ticket time, 9.9 / 3 plus 30% =
-  about 4.3 h, with the S12a and S12b chain (4.2 h) as the floor: about 4.3 h, range 4.2 to
-  6.9 h, about 6M tokens.
+- Floor: the longest chain is S1, S3a, S12a, S12b: 1.4 + 1.4 + 2.1 + 2.1 = 7.0 h. The next are
+  S1, S2, S11c, S11e and S1, S3a, S3b, S11e (4.95 h each). 7.0 h is below the range's low end
+  (8.3 h), so it does not bind.
+- Tokens, per ticket (normal 0.6M, mechanical 0.5M, hard 2.0M): 12 x 0.6 + 3 x 0.5 + 4 x 2.0 =
+  **about 17M**.
+- The addenda (S11a to S12b, seven tickets) cannot run as a separate set: S11b, S11c, S11e and
+  S12a wait on S1, S2, S3a and S3b. Their share is 9.9 h of ticket time and about 6.8M tokens.
+- Not included: waiting for PRs to merge between phases, and your review time.
 
 **Later, not proposed now:** preferences in the database instead of `preferences.yaml`, if you
 find you never hand-edit the YAML (it would reverse 014's file-as-source-of-truth decision).
 
 ## Open questions
 
-S10 was approved on 2026-10-11. Two new ones from the addenda, each with the default the
-tickets assume:
+None. Answered 2026-10-11:
 
-1. **Move the user docs into the package?** `docs/containers.md` and README's "Running nightly",
-   "Browser extension" and "Choosing a scorer" become help pages under
-   `src/jobhunter/console/help/`, and the README links to them. `docs/containers.md` stays as a
-   pointer. **Default: yes.** It is the only way the container console can serve them, and the
-   only way the README and the console cannot disagree. The cost: the README gets shorter, and
-   the full text on GitHub sits one click deeper, under `src/`.
-2. **A Restart button for the container console?** It needs three lines in the console unit and
-   one `jobhunter container preflight` plus `systemctl --user daemon-reload` from you, after which
-   the console can restart itself without sending a failure notification. **Default: yes.** Without
-   it, the container notice shows the `systemctl --user restart jobhunter-console` command and
-   Apply still works for in-place edits.
+- S10 (USAJOBS with no credentials is a skip): approved.
+- Help stays plain Markdown files under `src/jobhunter/console/help/`, the single source,
+  rendered by the console. `README.md` **and** `CLAUDE.md` link to them, so you and the agents
+  share the same text.
+- Move README's user sections and `docs/containers.md` into help: yes.
+- A Restart button for the container console, with the unit lines: yes.
 
 ## History
+
+### Revision 4a: review of the addenda
+
+A review found 15 issues (4 blocking), all addressed:
+
+- **Restart refusal.** It now uses an in-process work registry. The registry covers the
+  re-score, the extension's Score now threads, in-request Score now and drafting, and a
+  `restarting` flag refuses new paid work, so nothing paid is cut off and the check cannot race.
+- **Secret-shaped names.** `.env` key names and `api_key_env` values are shown only when they
+  look like a variable name. A key pasted without `NAME=` is counted, never shown.
+- **Markers.** Raw HTML off escapes the `jh:` markers instead of dropping them, so the renderer
+  strips marker lines before parsing and a test checks the output.
+- **Dependencies.** S11b, S11c, S11e, S8 and S12a gained the dependencies their content and tests
+  need. The floor is now 7.0 h, and the standalone addenda estimate is dropped.
+- **Smaller:** restart preflight in a child under the new environment; exit code 42, not 3
+  (uvicorn's startup failure); a 30 s container drain with the health-check arithmetic, and
+  `os._exit`; ctime for editors that keep a backup; value-free errors for custom validators and
+  TOML; host and port set on the command line count as "no effect"; no startup baseline gap;
+  repository links in moved pages go to GitHub; one Gmail how-to (`/setup/gmail` redirects);
+  `CLAUDE_*` and `XDG_*` in the environment table; the Anthropic key and Claude Code login
+  covered; `<you>` placeholders, GitHub slugs and unit locations in the drift tests.
+
+Your answers (2026-10-11): help is plain Markdown in the package, linked from `README.md` and
+`CLAUDE.md`; the move into help, yes; the container Restart button, yes.
 
 ### Revision 4: help and config watch
 

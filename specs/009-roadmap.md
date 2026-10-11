@@ -145,7 +145,7 @@ line (S7); then the banner and first-run redirect (S3b); last the nightly-run sn
 the free live checks (S6). Docs (S8) once the page and `doctor` exist. Two addenda: in-app help
 by topic, packaged with the console so it works in containers and shared with the README (S11a
 to S11e), and a config watch that offers Apply or Restart when `config.toml` or a `.env` file
-changes (S12a, S12b, after the activity indicator `edb9ba6`). About 11.9 h of continuous run
+changes (S12a, S12b, on the merged activity indicator; after S1, S3a and S11a). About 11.9 h of continuous run
 (range 8.3 to 19 h, 19 tickets by the calibrated per-ticket rule in 019), about 17M subagent
 tokens.
 
