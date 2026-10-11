@@ -1,0 +1,68 @@
+name: image
+
+# Spec 018 C8: build the container image with podman, check its size and smoke-test it.
+# Local build only, nothing is pushed to a registry. The browser target is not built yet
+# (it is added with 017 phase 2).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Containerfile
+      - .containerignore
+      - pyproject.toml
+      - uv.lock
+      - README.md
+      - src/**
+      - scripts/ci-image-smoke.sh
+      - scripts/pin-image-digests.sh
+      - .github/workflows/image.yml
+  pull_request:
+    paths:
+      - Containerfile
+      - .containerignore
+      - pyproject.toml
+      - uv.lock
+      - README.md
+      - src/**
+      - scripts/ci-image-smoke.sh
+      - scripts/pin-image-digests.sh
+      - .github/workflows/image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: Containerfile
+          failure-threshold: warning
+      - name: shellcheck the image scripts
+        run: shellcheck scripts/ci-image-smoke.sh scripts/pin-image-digests.sh
+
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Base images are pinned by real digests
+        # Fails while a placeholder digest remains. To bump pins: scripts/pin-image-digests.sh.
+        shell: bash
+        run: ./scripts/pin-image-digests.sh --check
+
+      - name: Build
+        run: |
+          podman --version
+          commit="${GITHUB_SHA::7}"
+          podman build --build-arg "BUILD_COMMIT=${commit}" \
+            -t "localhost/jobhunter:${commit}" -t localhost/jobhunter:current .
+          podman images localhost/jobhunter
+
+      - name: Smoke test (size, no-network checks, secret handling, /healthz)
+        run: ./scripts/ci-image-smoke.sh localhost/jobhunter:current "${GITHUB_SHA::7}"

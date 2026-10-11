@@ -1,0 +1,44 @@
+# Build-context exclusions (spec 018, C3). Patterns anchor at the context root, so every one
+# carries a **/ prefix to also match nested files. The Containerfile copies only
+# pyproject.toml, uv.lock, README.md and src/; this is the second line of defence.
+
+# Personal data and secrets
+**/resume
+**/profile
+**/data
+**/config.toml
+**/*.local.toml
+**/.env
+**/.env.*
+**/*.migrated-*
+**/*token*.json
+**/*client_secret*.json
+**/*.pem
+**/*.key
+
+# VCS, agent and editor state
+**/.git
+**/.claude
+**/.idea
+**/.vscode
+
+# Not part of the image
+**/tests
+**/specs
+**/.github
+**/scripts
+**/examples
+**/extension
+
+# Caches and build output
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+**/dist
+**/build
+**/*.egg-info
