@@ -156,6 +156,18 @@ cross-site or under a non-loopback `Host` (DNS rebinding), with 403; `--allow-re
 the loopback requirement but not same-origin. Requests without `Origin` or `Sec-Fetch-Site`
 (curl, the CLI, tests) are not from a web page and pass.
 
+## Per-section Save
+
+Each editable section (pay, where, what, weights, buckets, queries, recency, narrative,
+application answers) has its own Save button, disabled until a field in that section differs from
+the value the page loaded with (reverting re-disables it). A section Save posts the form but the
+server applies only that section's paths (`SECTION_FIELDS` / `SECTION_PATHS` in `prefs.py`) onto
+the file as it is now, validates the whole result, and writes with the same atomic write, mtime
+conflict check and history snapshot as the full Save. Other sections' unsaved edits stay in the
+page and stay pending. A paid section (recency, narrative) first shows the cost and re-score
+choice, then writes on confirm. A sticky bar counts the sections with unsaved changes and offers
+Save all (the full Save); leaving with unsaved edits triggers the browser's beforeunload warning.
+
 ## History and undo
 
 Every save appends to a `profile_change` table: timestamp, field path, old value, new value, and

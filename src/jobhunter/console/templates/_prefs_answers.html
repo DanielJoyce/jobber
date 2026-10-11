@@ -1,5 +1,6 @@
 {# Application answers (specs/017): part of the main /prefs form, saved with it under answers:.
    Never read by scoring and never sent to a model. Uses the page's err/inv/help macros. #}
+{% from "_prefs_macros.html" import err, inv, help_btn, help_body, section_save with context %}
 {% macro ahelp(id, label) %}{{ help_btn('ans-' ~ id, label) }}{% endmacro %}
 <section class="panel" id="sec-answers">
   <input type="hidden" name="ans.present" value="1">
@@ -69,4 +70,5 @@
       {{ err('ans.custom.' ~ n ~ '.answer') }}
     </fieldset>
   </div>
+  {{ section_save('answers', 'Application answers') }}
 </section>

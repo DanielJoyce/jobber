@@ -346,6 +346,140 @@ def diff(before: Any, after: Any, prefix: str = "") -> dict[str, Change]:
     return {prefix: (before, after)}
 
 
+# ─── per-section save (b25ec96) ─────────────────────────────────────────────
+# Which form fields and which profile paths each editable section owns. A section Save applies
+# only its own paths on top of the file as it is now; tests prove every field of the form
+# belongs to exactly one section and that the sections together reproduce ``form_to_data``.
+
+SECTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "pay": (
+        "hard.salary_floor.amount",
+        "hard.salary_target.amount",
+        "salary_period",
+        "hard.hide_unstated_salary",
+    ),
+    "where": (
+        "state_ranking",
+        "states_excluded",
+        "hard.remote_ok",
+        "soft.remote_bonus",
+        "hard.relocation_ok",
+    ),
+    "what": (
+        "target_titles",
+        "hard.title_exclusions",
+        "hard.employment_types_excluded",
+        "hard.requires_i_lack",
+    ),
+    "weights": tuple(f"w.{k}" for k in WEIGHT_KEYS),
+    "buckets": tuple(f"buckets.{k}" for k in bk.DEFAULT_THRESHOLDS),
+    "queries": ("queries",),
+    "recency": (
+        "current_focus.since",
+        "current_focus.doing",
+        "current_focus.want_more_of",
+        "current_focus.done_with",
+    ),
+    "narrative": tuple(f"narrative.{k}" for k in ("want", "avoid", "dealbreakers_soft", "context")),
+}
+# The Application answers section owns every ``ans.*`` field; it writes ``answers.*``, not
+# profile paths, through its own parser.
+ANSWERS_SECTION = "answers"
+ANSWERS_PREFIX = "ans."
+SECTION_PATHS: dict[str, tuple[str, ...]] = {
+    "pay": ("hard.salary_floor", "hard.salary_target", "hard.hide_unstated_salary"),
+    "where": (
+        "soft.state_ranking",
+        "hard.states_excluded",
+        "hard.remote_ok",
+        "hard.relocation_ok",
+        "soft.remote_bonus",
+    ),
+    "what": (
+        "target_titles",
+        "hard.title_exclusions",
+        "hard.employment_types_excluded",
+        "hard.requires_i_lack",
+    ),
+    "weights": ("soft.weights",),
+    "buckets": ("buckets",),
+    "queries": ("queries",),
+    "recency": ("current_focus",),
+    "narrative": ("narrative",),
+}
+SAVEABLE_SECTIONS = (*SECTION_FIELDS, ANSWERS_SECTION)
+# Form controls that belong to no section (page plumbing).
+PLUMBING_FIELDS = frozenset({"mtime_ns", "rescore", "confirm", "ans.present"})
+ERROR_SECTION = {"weights": "weights"}
+
+
+def section_of_field(name: str) -> str | None:
+    """The section a form field (or an error key) belongs to; None for plumbing and unknowns."""
+    if name.startswith(ANSWERS_PREFIX):
+        return ANSWERS_SECTION
+    if name in ERROR_SECTION:
+        return ERROR_SECTION[name]
+    for section, fields in SECTION_FIELDS.items():
+        if name in fields:
+            return section
+    return None
+
+
+def section_of_path(path: str) -> str | None:
+    for section, paths in SECTION_PATHS.items():
+        if any(path == p or path.startswith(p + ".") for p in paths):
+            return section
+    return None
+
+
+def set_path(data: dict[str, Any], path: str, value: Any) -> None:
+    parts = path.split(".")
+    node = data
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+    node[parts[-1]] = copy.deepcopy(value)
+
+
+def section_to_data(
+    section: str, form: Form, base: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """``base`` with only ``section``'s paths taken from the form. Errors of other sections'
+    fields (which a full post carries, or a partial post leaves empty) are dropped."""
+    after, all_errors = form_to_data(form, base)
+    errors = {k: m for k, m in all_errors.items() if section_of_field(k) == section}
+    data: dict[str, Any] = copy.deepcopy(dict(base))
+    for path in SECTION_PATHS[section]:
+        set_path(data, path, get_path(after, path))
+    return data, errors
+
+
+def _norm(value: Any) -> Any:
+    """A form value as the save would read it: browsers post textareas with CRLF, and the save
+    trims lines; checkbox lists have no order. Both sides go through this before comparing."""
+    if isinstance(value, str):
+        lines = [line.strip() for line in value.replace("\r\n", "\n").split("\n")]
+        return "\n".join(lines).strip("\n")
+    if isinstance(value, list):
+        return sorted(value)
+    return value
+
+
+def dirty_sections(
+    view: Mapping[str, Any], fallback: Mapping[str, Any], ans_dirty: bool
+) -> list[str]:
+    """Sections whose values in ``view`` differ from the file's ``fallback`` (for a page
+    re-rendered after a failed save, where the browser cannot tell from the page which values
+    are unsaved)."""
+    out = {
+        s
+        for key in fallback
+        if _norm(view[key]) != _norm(fallback[key]) and (s := section_of_field(key)) is not None
+    }
+    if ans_dirty:
+        out.add(ANSWERS_SECTION)
+    return [s for s in SAVEABLE_SECTIONS if s in out]
+
+
 def is_paid(path: str) -> bool:
     return path.split(".")[0] in PAID_ROOTS
 
