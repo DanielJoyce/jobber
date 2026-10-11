@@ -4,6 +4,8 @@ resume/
 profile/
 config.toml
 *.local.toml
+# The owner's local bug screenshots; they may show personal data.
+bug_images/
 
 # Runtime data: SQLite DB, raw HTTP cache, inbox drops
 data/

@@ -58,7 +58,13 @@ def test_forbid_personal_paths_hook_blocks_migration_archives(tmp_path):
 
 def test_forbid_personal_paths_hook_still_scoped():
     pattern = _forbid_regex()
-    for path in ("data/jobhunter.db", "profile/preferences.yaml", "resume/me.md", "config.toml"):
+    for path in (
+        "data/jobhunter.db",
+        "profile/preferences.yaml",
+        "resume/me.md",
+        "config.toml",
+        "bug_images/login-error.png",
+    ):
         assert pattern.search(path), path
     for path in (
         "src/jobhunter/ops/migrate_paths.py",
