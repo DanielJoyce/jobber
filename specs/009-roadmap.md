@@ -133,6 +133,24 @@ and appear in the jobhunter inbox as scored jobs.
 - `systemd` user timer with an `OnFailure=` notification
 - Backfill run
 
+## After Pass 2
+
+### Setup and readiness
+
+See [019](019-setup-and-readiness.md). A `/setup` page, a banner on Today and the inbox until
+the essentials are present, and `jobhunter doctor`, all from one set of local, free checks.
+S0 (every command resolves the resume the same way), S1 (the checks module), S9 and S10 first;
+then `doctor` (S2), the page (S3a), Gmail token age (S5) and the run's "no scorer credential"
+line (S7); then the banner and first-run redirect (S3b); last the nightly-run snapshot (S4) and
+the free live checks (S6). Docs (S8) once the page and `doctor` exist. About 7.5 h of continuous
+run (range 5.3 to 12 h, 12 tickets by the calibrated per-ticket rule in 019), about 11M subagent
+tokens.
+
+**Done when** a fresh install with default config, no Anthropic credential and no jobs
+redirects `/` to `/setup` naming the screen scorer, `/inbox` shows the banner, `jobhunter
+doctor` exits 1 saying the same, the nightly run's summary says why it did not score, and none
+of it made a network call.
+
 ## Dependency order
 
 ```
