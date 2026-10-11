@@ -117,6 +117,9 @@ MIGRATION_EXEMPT_COMMANDS = frozenset(
 )
 
 
+RESTORE_MIGRATE_WAIT_S = 120.0
+
+
 def _migrate(conn) -> list[int]:
     """Bring the schema up to date the automatic way (specs/018 Version skew).
 
@@ -2145,7 +2148,14 @@ def db_restore_cmd(
             typer.echo(f"saved the current database to {p}")
 
         try:
-            result = rst.restore(path, db_path, data_dir, on_safety=said_safety)
+            # Innermost lock (order: run, console, migrate; dd65f64): never write the live
+            # database under another process's migration. Its holder waits on no lock, so this
+            # bounded wait cannot deadlock.
+            with db.migrate_lock(db_path, timeout=RESTORE_MIGRATE_WAIT_S, on_wait=_say_waiting):
+                result = rst.restore(path, db_path, data_dir, on_safety=said_safety)
+        except db.MigrationLockTimeout as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
         except rst.RestoreError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc

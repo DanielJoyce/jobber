@@ -224,3 +224,130 @@ def test_enable_wal_does_not_swallow_other_errors():
 
     with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
         db._enable_wal(Conn(), timeout_s=5)
+
+
+MIGRATOR = textwrap.dedent(
+    """
+    import sys
+    from pathlib import Path
+    from jobhunter.core import db
+
+    path = Path(sys.argv[1])
+    conn = db.connect(path)
+    with db.migrate_lock(path):
+        print("LOCKED", flush=True)
+        sys.stdin.readline()  # the parent says when to go on
+        db._apply_pending(conn)
+    conn.close()
+    """
+)
+
+
+@pytest.fixture
+def migrator(tmp_path, monkeypatch):
+    """Another process that holds the migrate lock on an older database until told to migrate."""
+    path = tmp_path / "jobhunter.db"
+    _make_db(path, monkeypatch, OLDER)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", MIGRATOR, str(path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout.readline().strip() == "LOCKED"
+    yield path, proc
+    if proc.poll() is None:
+        proc.kill()
+        proc.wait(10)
+
+
+def _finish(proc: subprocess.Popen[str]) -> None:
+    proc.stdin.write("go\n")
+    proc.stdin.flush()
+    _, err = proc.communicate(timeout=120)
+    assert proc.returncode == 0, err
+
+
+def test_a_console_starting_during_another_migration_waits_then_serves(tmp_path, migrator):
+    import logging
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from jobhunter.config import Paths, Settings
+    from jobhunter.console import app as console_app
+
+    path, proc = migrator
+    settings = Settings(paths=Paths(data_dir=tmp_path, db_path=path, profile_dir=tmp_path / "p"))
+    waiting = threading.Event()
+
+    class Seen(logging.Handler):
+        def emit(self, record):
+            if "waiting for another migration" in record.getMessage():
+                waiting.set()
+
+    handler = Seen()
+    console_app.logger.addHandler(handler)
+    built: list = []
+    errors: list[BaseException] = []
+
+    def start():
+        try:
+            built.append(console_app.create_app(settings))
+        except BaseException as exc:  # surfaced below
+            errors.append(exc)
+
+    thread = threading.Thread(target=start)
+    thread.start()
+    try:
+        assert waiting.wait(30), errors  # blocked on the other process's migrate lock
+        assert thread.is_alive()
+        _finish(proc)
+        thread.join(60)
+    finally:
+        console_app.logger.removeHandler(handler)
+    assert not thread.is_alive() and not errors, errors
+    console = built[0]
+    with TestClient(console) as client:
+        assert client.get("/healthz").status_code == 200
+    assert _versions(path) == [v for v, _, _ in REAL]
+    assert not backup.auto_dir(tmp_path).exists()  # the console found nothing to migrate
+
+
+def test_restore_waits_for_another_migration_before_writing(tmp_path, monkeypatch, migrator):
+    """db restore (holding run + console exclusive) takes the migrate lock innermost; with a
+    migration in progress elsewhere it waits, bounded, and writes nothing on timeout."""
+    from typer.testing import CliRunner
+
+    from jobhunter import cli
+    from jobhunter.ops import restore as rst
+
+    path, proc = migrator
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[paths]\ndata_dir = "{tmp_path}"\nprofile_dir = "{tmp_path / "profile"}"\n'
+        f'cache_dir = "{tmp_path / "cache"}"\n'
+    )
+    monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
+    monkeypatch.setattr(rst, "busy_report", lambda db_path: [])
+    raw = sqlite3.connect(path)
+    saved = tmp_path / "saved.db"
+    raw.execute(f"VACUUM INTO '{saved}'")
+    raw.close()
+    called: list = []
+    monkeypatch.setattr(rst, "restore", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(cli, "RESTORE_MIGRATE_WAIT_S", 0.3)
+
+    result = CliRunner().invoke(cli.app, ["db", "restore", str(saved)])
+    assert result.exit_code == 1, result.output
+    assert "waiting for another jobhunter process to finish migrating" in result.output
+    assert "another jobhunter process" in result.output
+    assert called == []  # nothing written under the other process's migration
+    # The run and console locks were released on the way out.
+    from jobhunter.core import runlock
+
+    probe = runlock.ConsoleLock(path, exclusive=True)
+    probe.acquire()
+    probe.release()
+    _finish(proc)

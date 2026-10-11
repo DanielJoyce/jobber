@@ -12,9 +12,18 @@ Concurrency (bug dd65f64): ``migrate`` serializes across processes with an exclu
 record. A process that waited finds nothing pending and takes no backup. ``flock`` is on the
 shared inode, so it works across containers (PID namespaces) that bind-mount the data dir.
 
-Lock order, outermost first: run lock (``<db>.run.lock``, C5), console lock (C6), migrate
-lock. The migrate lock is innermost and held only inside ``migrate``, which never takes
-another lock, so no process can hold it while waiting for one of the others: no deadlock.
+Lock order, outermost first (all keyed on the resolved database path):
+
+1. run lock ``<db>.run.lock`` (C5, exclusive): ``run`` and timer jobs, ``db restore``;
+2. console lock ``<db>.console.lock`` (C6): shared by every console for its life, exclusive
+   by ``db restore``; both take it non-blocking, so nobody ever waits for it;
+3. migrate lock ``<db>.migrate.lock`` (exclusive): ``migrate`` (console start migrates while
+   holding its shared console lock) and ``db restore`` around its write of the live database.
+
+The migrate lock is innermost: a holder never waits for another lock, so its wait is bounded
+by the migration itself and no cycle can form. ``db restore`` does its own schema guard on the
+staged copy and never calls ``migrate``; it only takes the migrate lock so it cannot write
+under someone else's migration.
 """
 
 from __future__ import annotations
