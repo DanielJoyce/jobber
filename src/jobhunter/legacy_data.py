@@ -19,6 +19,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from jobhunter import container
 from jobhunter.config import Settings, resolve_path
 
 LEGACY_DB = Path("data") / "jobhunter.db"
@@ -126,6 +127,8 @@ def check(settings: Settings) -> Status:
       is allowed, with a note.
     """
     db_path = resolve_path(settings.paths.db_path).absolute()
+    if container.is_container():
+        return Status(OK, db_path)  # the image has no checkout (specs/018 C1)
     found = [p for p in legacy_dbs() if p.resolve() != db_path.resolve()]
     unmigrated = [p for p in found if not is_marked_moved(p)]
     stale = [p for p in found if is_marked_moved(p)]

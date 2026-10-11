@@ -202,6 +202,9 @@ def _isolate_user_files(
         "JOBHUNTER_DB_PATH",
         "JOBHUNTER_PROFILE_DIR",
         "JOBHUNTER_RESUME_PATH",
+        "JOBHUNTER_CONTAINER",
+        "JOBHUNTER_PUBLISHED_LOOPBACK_ONLY",
+        "JOBHUNTER_GMAIL_TOKEN_FILE",
     ):
         monkeypatch.delenv(var, raising=False)
     # Path.open, read_text and read_bytes all reach io.open; builtins.open is a separate
