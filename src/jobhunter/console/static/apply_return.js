@@ -1,10 +1,14 @@
-// After an Apply link opens the employer's page in a new tab, the job or packet tab still shows
-// the old "Did you apply?" state. When the user comes back to this tab, reload it once so the
-// server renders the banner again. The flag lives only in this page, so the reload clears it.
+// After an Apply link opens the employer's page in a new tab, the "Did you apply?" banner in
+// this tab is stale: it was rendered at page load. When the user comes back, fetch only the
+// banner and swap it into its slot. The rest of the page is left alone, so typed text survives.
 (function () {
   "use strict";
 
+  var slot = document.getElementById("did-apply-slot");
+  if (!slot) return;
+  var gid = slot.dataset.gid;
   var opened = false;
+  var busy = false;
 
   document.addEventListener("click", function (ev) {
     var a = ev.target.closest && ev.target.closest('a[href^="/apply/"]');
@@ -12,11 +16,22 @@
   }, true);
   document.addEventListener("jh:apply-opened", function () { opened = true; });
 
-  function back() {
-    if (!opened || document.visibilityState === "hidden") return;
-    opened = false;
-    window.location.reload();
+  function refresh() {
+    if (!opened || busy || document.visibilityState === "hidden") return;
+    busy = true;
+    fetch("/job/" + gid + "/did-apply", { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("status " + r.status);
+        return r.text();
+      })
+      .then(function (html) {
+        slot.innerHTML = html;
+        if (window.htmx) window.htmx.process(slot);
+        opened = false;
+      })
+      .catch(function () { /* keep the flag: the next return tries again */ })
+      .finally(function () { busy = false; });
   }
-  document.addEventListener("visibilitychange", back);
-  window.addEventListener("focus", back);
+  document.addEventListener("visibilitychange", refresh);
+  window.addEventListener("focus", refresh);
 })();

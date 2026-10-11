@@ -50,11 +50,16 @@ def test_open_application_opens_a_new_tab_and_keeps_the_packet(page, server):
     link = page.locator("#open-application")
     expect(link).to_have_attribute("target", "_blank")
     expect(link).to_have_attribute("rel", "noopener")
+    # Type into a packet textarea: the return must not reload the page and lose it.
+    answer = page.locator("#ans-value")
+    answer.fill("half-written answer")
     with page.context.expect_page() as popup_info:
         link.click()
     popup_info.value.wait_for_url(f"{server.url}/__employer")
     assert page.url == packet_url
-    expect(page.locator("#open-application")).to_be_visible()
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(page.locator("#did-apply")).to_contain_text("Did you apply?")
+    expect(answer).to_have_value("half-written answer")
     clicks = server.rows("SELECT outcome FROM apply_click WHERE job_group_id = ?", (gid,))
     assert [c[0] for c in clicks] == ["redirected"]
 

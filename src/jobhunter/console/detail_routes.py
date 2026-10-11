@@ -73,6 +73,16 @@ def register(
         btn.pending = False
         return templates.TemplateResponse(request, "_apply_button.html", {"b": btn})
 
+    @app.get("/job/{group_id}/did-apply", response_class=HTMLResponse)
+    def did_apply_banner(request: Request, conn: Conn, group_id: int) -> HTMLResponse:
+        require_job(conn, group_id)
+        prompt = detail.did_you_apply(conn, group_id)
+        return templates.TemplateResponse(
+            request,
+            "_did_apply.html",
+            {"prompt": prompt, "group_id": group_id},
+        )
+
     @app.get("/apply/{group_id}")
     def apply(request: Request, conn: Conn, group_id: int) -> Response:
         job = require_job(conn, group_id)
