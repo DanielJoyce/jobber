@@ -525,7 +525,7 @@ def scored_partial_group(conn, profile) -> int:
     conn.execute(
         "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
         "verdict, overall, dimensions, evidence, blockers, created_at) "
-        "VALUES (?, 'screen', 'test:model', ?, ?, 'strong', 0, ?, '[]', '[]', 'x')",
+        "VALUES (?, 'screen', 'openrouter:test/model', ?, ?, 'strong', 0, ?, '[]', '[]', 'x')",
         (gid, screen.PROMPT_VERSION, profile.scoring_version, json.dumps(DIMS_A)),
     )
     return gid
@@ -557,7 +557,7 @@ def test_partial_posting_text_says_so(conn, profile):
 
 def test_paste_description_makes_group_eligible_again(conn, profile):
     gid = scored_partial_group(conn, profile)
-    assert screen.eligible_groups(conn, profile, scorer="test:model", limit=10) == []
+    assert screen.eligible_groups(conn, profile, scorer="openrouter:test/model", limit=10) == []
     detail.paste_description(
         conn, gid, "Run Linux servers.\n\nRequires\nKubernetes & Terraform <3 years>", NOW
     )
@@ -565,14 +565,14 @@ def test_paste_description_makes_group_eligible_again(conn, profile):
     assert job["description_completeness"] == "pasted"
     assert "Kubernetes & Terraform <3 years>" in job["description_text"]
     assert "&lt;3 years&gt;" in job["description_raw"]  # stored escaped
-    eligible = screen.eligible_groups(conn, profile, scorer="test:model", limit=10)
+    eligible = screen.eligible_groups(conn, profile, scorer="openrouter:test/model", limit=10)
     assert [g["group_id"] for g in eligible] == [gid] and eligible[0]["input_rev"] == 1
     assert fit_for(conn, profile, gid).bucket is Bucket.A  # the cap is lifted
     # nothing deleted: the partial-era score is still there
     assert conn.execute("SELECT COUNT(*) FROM fit_score").fetchone()[0] == 1
 
     class Scorer:
-        name = "test:model"
+        name = "openrouter:test/model"
 
         def submit(self, requests):
             from jobhunter.scoring.scorers import ScoreResult
@@ -605,7 +605,7 @@ def test_paste_description_makes_group_eligible_again(conn, profile):
     assert out.written == 1
     revs = [r[0] for r in conn.execute("SELECT input_rev FROM fit_score ORDER BY id")]
     assert revs == [0, 1]
-    assert screen.eligible_groups(conn, profile, scorer="test:model", limit=10) == []
+    assert screen.eligible_groups(conn, profile, scorer="openrouter:test/model", limit=10) == []
 
 
 def test_paste_rejects_empty(conn, profile):

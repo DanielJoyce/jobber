@@ -88,10 +88,10 @@ PROFILE = Profile.model_validate({"hard": {"states_allowed": ["CO"]}})
 ADAPTERS = {"fake": FakeAdapter}
 
 
-def go(conn, rows, *, profile=PROFILE, **kw):
+def go(conn, rows, *, profile=PROFILE, settings=None, **kw):
     return runner.run_pipeline(
         conn,
-        Settings(),
+        settings or Settings(),
         rows,
         adapters=kw.pop("adapters", ADAPTERS),
         ctx_factory=lambda src: nullcontext(),
@@ -277,6 +277,23 @@ def test_score_skipped_when_screen_missing(conn, monkeypatch):
     report = go(conn, [row("a")], stages=["score"])
     assert "screen stage not installed" in "\n".join(report.messages)
     assert report.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "spec", ["openroute:jev:typesafe/jev-1.13", "jev:", "anthropic:", "claude-haiku-4-5"]
+)
+def test_bad_scorer_spec_still_fetches_and_ingests(conn, spec):
+    from jobhunter.config import Scoring
+
+    FakeAdapter.stubs = {"a": [stub("a", 1), stub("a", 2)]}
+    settings = Settings(scoring=Scoring(screen_scorer=spec))
+    report = go(conn, [row("a")], settings=settings)
+    assert report.exit_code == 0
+    assert report.counts["list"] == {"stubs": 2}
+    assert conn.execute("SELECT COUNT(*) FROM job").fetchone()[0] == 2
+    text = "\n".join(report.messages)
+    assert "score: skipped" in text and "notice:" not in text
+    assert conn.execute("SELECT ended_at FROM run").fetchone()[0]
 
 
 def test_default_profile_loader_missing_dir(tmp_path):

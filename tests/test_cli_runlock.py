@@ -212,7 +212,7 @@ def test_group_prompt_does_not_hold_the_lock(env, monkeypatch):
 
     states = []
     est = SimpleNamespace(
-        scorer="test:model",
+        scorer="openrouter:test/model",
         estimated_usd=0.01,
         cost_source="default",
         remaining_usd=5.0,

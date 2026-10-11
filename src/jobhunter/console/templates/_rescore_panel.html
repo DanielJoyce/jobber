@@ -35,6 +35,14 @@
   {% if p.refusal %}<p class="field-error" role="alert">{{ p.refusal }}</p>{% endif %}
   <div class="actions"><button type="submit" class="button primary" id="rescore-run"{% if p.total == 0 or p.refusal %} disabled{% endif %}>{% if rs.queued %}Run queued re-score{% else %}Re-score now{% endif %}</button></div>
 </form>
+{% elif rs.problem %}
+<form id="rescore-form" class="rescore-form">
+  <label>Scorer
+    <select name="scorer" hx-get="/prefs/rescore/panel" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
+      {% for spec, label in rs.scorers %}<option value="{{ spec }}"{% if spec == rs.scorer %} selected{% endif %}>{{ spec }} ({{ label }})</option>{% endfor %}
+    </select>
+  </label>
+</form>
 {% endif %}
 {% if rs.pending %}
 <div id="rescore-queued">

@@ -78,7 +78,7 @@ def html(name: str, **subs: str) -> str:
 
 
 class BlockingScorer:
-    name = "test:model"
+    name = "openrouter:test/model"
 
     def __init__(self) -> None:
         self.release = threading.Event()
@@ -186,7 +186,7 @@ def h(tmp_path_factory, pw):
                 "cache_dir": str(tmp / "cache"),
                 "data_dir": str(tmp / "data"),
             },
-            "scoring": {"screen_scorer": "test:model"},
+            "scoring": {"screen_scorer": "openrouter:test/model"},
             "console": {"port": port},
             "capture": {"disabled_hosts": ["blocked.example-employer.test"]},
         }

@@ -40,7 +40,7 @@ from typing import Any
 
 import httpx
 
-from jobhunter.config import OpenRouter
+from jobhunter.config import DECISIONS_PROVIDERS, OpenRouter
 from jobhunter.core import rejections
 from jobhunter.core.models import LocationScope, Verdict
 from jobhunter.pipeline.listing import _txn, to_iso
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 TIER = "screen"
 DECISIONS_PROMPT_VERSION = "decisions-v1"
-PROVIDERS = ("jev", "decisions")
+PROVIDERS = DECISIONS_PROVIDERS
 JEV_DEFAULT_MODEL = "typesafe/jev-1.13"
 DEFAULT_JOBS_PER_REQUEST = 8
 MAX_JOBS_PER_REQUEST = 25

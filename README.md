@@ -62,6 +62,28 @@ uv sync
 scripts/setup-hooks.sh     # secret-scanning git hooks; asks before downloading Go
 ```
 
+## Choosing a scorer
+
+`scoring.screen_scorer` in `config.toml` is `<provider>:<model>` (no bare model names).
+`deep_scorer` must be `anthropic:<model>`. A malformed value does not stop fetch or mail: the
+run skips scoring and logs why, `score` exits with a one-line error, and the console's re-score
+panel shows it.
+
+| Spec | Endpoint | Key |
+|---|---|---|
+| `anthropic:<model>` | Anthropic batch API | `ANTHROPIC_API_KEY` |
+| `openrouter:<slug>` | OpenRouter chat completions (`[scoring.openrouter]`) | `OPENROUTER_API_KEY` |
+| `jev:<slug>`, `decisions:<slug>` | OpenRouter decisions endpoint (same section) | `OPENROUTER_API_KEY` |
+| `local:<model>` | model on this machine (`[scoring.local]`) | optional |
+| `openai-compat:<model>` | any OpenAI-compatible endpoint (`[scoring.openai_compat]`) | per config |
+
+```toml
+screen_scorer = "jev:typesafe/jev-1.13"
+```
+
+Jev is its own provider: do not write `openrouter:jev:...` (OpenRouter's chat endpoint
+rejects it). Config changes need a console restart.
+
 ## Running in containers
 
 Optional: run the console and the nightly jobs as rootless podman containers on Fedora atomic.

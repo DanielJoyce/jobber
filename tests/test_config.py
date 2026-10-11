@@ -97,3 +97,127 @@ def test_resolve_path_relative_to_cwd(tmp_path, monkeypatch):
     assert resolve_path("data/x.db") == tmp_path / "data" / "x.db"
     assert resolve_path("/abs/path") == Path("/abs/path")
     assert resolve_path("sub", base=Path("/base")) == Path("/base/sub")
+
+
+GOOD_SCORERS = [
+    "anthropic:claude-haiku-4-5",
+    "openrouter:openai/gpt-oss-120b",
+    "jev:typesafe/jev-1.13",
+    "decisions:typesafe/jev-1.13",
+    "local:qwen3-8b",
+    "local:jev:latest",
+    "openai-compat:llama-3.1-70b",
+]
+
+
+def _screen(tmp_path, spec, deep="anthropic:claude-opus-5"):
+    cfg = _write(
+        tmp_path / "c.toml", f'[scoring]\nscreen_scorer = "{spec}"\ndeep_scorer = "{deep}"\n'
+    )
+    return load_settings(config_path=cfg).scoring
+
+
+@pytest.mark.parametrize("spec", GOOD_SCORERS)
+def test_scorer_spec_accepted(tmp_path, spec):
+    scoring = _screen(tmp_path, spec)
+    assert scoring.screen_scorer == spec
+    assert scoring.scorer_problems() == {}
+
+
+@pytest.mark.parametrize(
+    ("spec", "needle"),
+    [
+        ("openrouter:jev:typesafe/jev-1.13", 'use "jev:typesafe/jev-1.13"'),
+        ("openroute:jev:typesafe/jev-1.13", 'use "jev:typesafe/jev-1.13"'),
+        ("openroute:openai/gpt-oss-120b", "did you mean 'openrouter'"),
+        ("jev:", "no model"),
+        ("claude-haiku-4-5", 'write "anthropic:claude-haiku-4-5"'),
+    ],
+)
+def test_scorer_spec_reported_not_fatal(tmp_path, spec, needle):
+    scoring = _screen(tmp_path, spec)  # load_settings must not raise
+    msg = scoring.scorer_problems()["screen_scorer"]
+    assert needle in msg
+    assert f'screen_scorer "{spec}"' in msg
+
+
+def test_scorer_error_for_user_value_mentions_key(tmp_path):
+    msg = _screen(tmp_path, "openrouter:jev:typesafe/jev-1.13").scorer_problems()["screen_scorer"]
+    assert "OPENROUTER_API_KEY" in msg
+
+
+def test_deep_scorer_must_be_anthropic(tmp_path):
+    problems = _screen(tmp_path, "local:x", deep="jev:typesafe/jev-1.13").scorer_problems()
+    assert "screen_scorer" not in problems
+    assert "anthropic:<model>" in problems["deep_scorer"]
+
+
+def test_documented_scorer_examples_parse():
+    import re
+
+    from jobhunter.config import SCORER_PROVIDERS, check_scorer_spec
+
+    root = Path(__file__).resolve().parent.parent
+    for name in ("config.example.toml", "README.md"):
+        text = (root / name).read_text()
+        specs = re.findall(r'(screen|deep)_scorer\s*=\s*"([^"]+)"', text)
+        assert specs, name
+        for key, spec in specs:
+            check_scorer_spec(spec, name, anthropic_only=key == "deep")
+        if name == "README.md":
+            table = text.split("## Choosing a scorer")[1].split("\n## ")[0]
+            tokens = re.findall(r"`([a-z-]+):<", table)
+        else:
+            tokens = re.findall(r"^#\s+([a-z-]+):<", text, re.M)
+        assert set(tokens) == set(SCORER_PROVIDERS), name
+
+
+def test_cli_scorer_override_rejected(tmp_path):
+    from typer.testing import CliRunner
+
+    from jobhunter.cli import app
+
+    res = CliRunner().invoke(app, ["score", "--submit", "--scorer", "openrouter:jev:x"])
+    assert res.exit_code == 2
+    assert 'use "jev:x"' in res.output
+    assert "Traceback" not in res.output
+
+
+def test_cli_bad_configured_scorer_is_one_line(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from jobhunter.cli import app
+
+    cfg = _write(
+        tmp_path / "c.toml", '[scoring]\nscreen_scorer = "openroute:jev:typesafe/jev-1.13"\n'
+    )
+    monkeypatch.setenv(CONFIG_ENV_VAR, str(cfg))
+    res = CliRunner().invoke(app, ["score", "--submit"])
+    assert res.exit_code == 2
+    assert 'use "jev:typesafe/jev-1.13"' in res.output
+    assert "Traceback" not in res.output
+    assert len(res.output.strip().splitlines()) == 1
+
+
+def test_cli_pending_modes_ignore_a_bad_screen_scorer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from jobhunter import cli
+    from jobhunter.scoring import rescore, screen
+
+    cfg = _write(tmp_path / "c.toml", '[scoring]\nscreen_scorer = "openroute:x"\n')
+    monkeypatch.setenv(CONFIG_ENV_VAR, str(cfg))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unused-test-key")
+    monkeypatch.setattr("jobhunter.scoring.profile.load_profile", lambda *a, **k: SimpleNamespace())
+    calls = []
+    monkeypatch.setattr(screen, "collect_pending", lambda *a, **k: calls.append("collect") or {})
+    monkeypatch.setattr(rescore, "drain_pending", lambda *a, **k: calls.append("drain") or {})
+    for flag in ("--collect-pending", "--rescore-pending"):
+        res = CliRunner().invoke(cli.app, ["score", flag])
+        assert "scorer error" not in res.output, res.output
+        assert res.exit_code == 0, res.output
+    assert calls == ["collect", "drain"]
+    res = CliRunner().invoke(cli.app, ["score", "--rescore-pending", "--scorer", "jev:"])
+    assert res.exit_code == 2 and "scorer error" in res.output

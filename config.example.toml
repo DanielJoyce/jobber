@@ -24,6 +24,18 @@
 # max_retries = 5
 
 [scoring]
+# Scorer specs are "<provider>:<model>" (a bare model name is not accepted). A malformed
+# screen_scorer is reported by the run, score and console and scoring is skipped; fetch and
+# mail still run. deep_scorer must be anthropic:<model>. Changing them needs a console restart.
+#   anthropic:<model>       Anthropic batch API; ANTHROPIC_API_KEY
+#   openrouter:<slug>       OpenRouter chat completions; OPENROUTER_API_KEY, [scoring.openrouter]
+#   jev:<slug>              OpenRouter decisions endpoint; same key and section as openrouter,
+#   decisions:<slug>          but its own provider: write jev:typesafe/jev-1.13, never
+#                             openrouter:jev:...
+#   local:<model>           a model on this machine; [scoring.local]
+#   openai-compat:<model>   any OpenAI-compatible endpoint; [scoring.openai_compat]
+# screen_scorer = "jev:typesafe/jev-1.13"
+# screen_scorer = "openrouter:openai/gpt-oss-120b"
 # screen_scorer = "anthropic:claude-haiku-4-5"
 # deep_scorer = "anthropic:claude-opus-5"
 # daily_cap_usd = 2.0

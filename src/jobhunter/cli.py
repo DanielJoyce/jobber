@@ -124,6 +124,25 @@ MIGRATION_EXEMPT_COMMANDS = frozenset(
 RESTORE_MIGRATE_WAIT_S = 120.0
 
 
+def _check_scorer_override(
+    settings, spec: str | None, *, screen: bool = True, deep: bool = False
+) -> None:
+    """Fail fast (one line, exit 2) on a malformed scorer, checking only what the mode uses:
+    the ``--scorer`` override (else screen_scorer) when ``screen``, deep_scorer when ``deep``."""
+    from jobhunter.config import check_scorer_spec
+
+    try:
+        if spec is not None:
+            check_scorer_spec(spec, "--scorer")
+        elif screen:
+            check_scorer_spec(settings.scoring.screen_scorer, "screen_scorer")
+        if deep:
+            check_scorer_spec(settings.scoring.deep_scorer, "deep_scorer", anthropic_only=True)
+    except ValueError as exc:
+        typer.echo(f"scorer error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+
 def _migrate(conn) -> list[int]:
     """Bring the schema up to date the automatic way (specs/018 Version skew).
 
@@ -497,6 +516,15 @@ def _score_mode(
     from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
 
     settings = load_settings()
+    is_deep = deep is not None or deep_group is not None
+    # Check only the spec this mode uses: --collect-pending reads stored batch models and
+    # --rescore-pending reads each request's own spec, so a bad config must not block them.
+    _check_scorer_override(
+        settings,
+        scorer_override,
+        screen=not (is_deep or collect_pending or rescore_pending),
+        deep=is_deep,
+    )
     try:
         profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
     except ProfileError as exc:
@@ -681,6 +709,8 @@ def _score_rescore(
     _migrate(conn)
     clock = lambda: datetime.now(UTC)  # noqa: E731
     spec = scorer_override or settings.scoring.screen_scorer
+    # --rescore-pending reads each request's own spec; only an explicit --scorer is checked
+    _check_scorer_override(settings, scorer_override, screen=scope is not None)
     try:
         if scope is None:
             results = rs.drain_pending(

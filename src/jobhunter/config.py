@@ -15,6 +15,7 @@ while an unmigrated old database exists, and ``jobhunter migrate-paths`` moves i
 
 from __future__ import annotations
 
+import difflib
 import os
 import tomllib
 from collections.abc import Mapping
@@ -184,6 +185,48 @@ class Local(BaseModel):
     max_input_tokens_per_request: int = Field(default=40_000, ge=1000)
 
 
+# Scorer spec providers, the one canonical list (scoring.scorers and scoring.decisions use it).
+DECISIONS_PROVIDERS = ("jev", "decisions")
+CHAT_PROVIDERS = ("openrouter", "openai-compat", "local")
+SCORER_PROVIDERS = ("anthropic", *CHAT_PROVIDERS, *DECISIONS_PROVIDERS)
+
+
+def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool = False) -> None:
+    """Raise ValueError with an actionable message when ``spec`` is not a usable scorer spec.
+
+    Bare names are rejected: downstream code keys on the ``anthropic:`` prefix, so a bare
+    model name used to slip through and break the batch path.
+    """
+    provider, sep, model = spec.partition(":")
+    known = ", ".join(SCORER_PROVIDERS)
+    inner, inner_sep, rest = model.partition(":")
+    if not sep:
+        raise ValueError(
+            f'{field} "{spec}": no provider; write "anthropic:{spec}" (known: {known})'
+        )
+    if provider not in SCORER_PROVIDERS:
+        if inner_sep and inner in DECISIONS_PROVIDERS and rest:
+            hint = f'; use "{inner}:{rest}"'
+        elif near := difflib.get_close_matches(provider, SCORER_PROVIDERS, n=1):
+            hint = f"; did you mean {near[0]!r}?"
+        else:
+            hint = ""
+        raise ValueError(f'{field} "{spec}": unknown provider {provider!r}{hint} (known: {known})')
+    if not model.strip():
+        raise ValueError(f'{field} "{spec}": no model after "{provider}:"')
+    if anthropic_only and provider != "anthropic":
+        raise ValueError(f'{field} "{spec}": the deep pass needs "anthropic:<model>"')
+    # OpenRouter slugs are author/model, so a leading provider name is a mistake. Local and
+    # openai-compat model names are free-form ("jev:latest" can be legitimate).
+    if provider == "openrouter" and inner_sep and inner in SCORER_PROVIDERS:
+        if inner in DECISIONS_PROVIDERS and rest:
+            raise ValueError(
+                f'{field} "{spec}": {inner.capitalize()} is its own provider; use '
+                f'"{inner}:{rest}" (it still uses OPENROUTER_API_KEY)'
+            )
+        raise ValueError(f'{field} "{spec}": the model name starts with the provider {inner!r}')
+
+
 class Scoring(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -198,6 +241,17 @@ class Scoring(BaseModel):
     openai_compat: OpenAICompat = Field(default_factory=OpenAICompat)
     openrouter: OpenRouter = Field(default_factory=OpenRouter)
     local: Local = Field(default_factory=Local)
+
+    def scorer_problems(self) -> dict[str, str]:
+        """{field: message} for each malformed scorer spec. Loading never fails on these: the
+        run stage, console and CLI report them where they matter (scoring fails soft)."""
+        out: dict[str, str] = {}
+        for name, only in (("screen_scorer", False), ("deep_scorer", True)):
+            try:
+                check_scorer_spec(getattr(self, name), name, anthropic_only=only)
+            except ValueError as exc:
+                out[name] = str(exc)
+        return out
 
 
 class Mail(BaseModel):

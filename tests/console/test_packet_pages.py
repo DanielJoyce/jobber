@@ -25,7 +25,7 @@ from jobhunter.scoring.scorers import ScoreResult
 
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
 ISO = NOW.isoformat()
-SPEC = "test:model"
+SPEC = "openrouter:test/model"
 QUOTE = "Write Terraform modules and Go tooling."
 TEXT = f"Own the Linux fleet for a synthetic company.\n\n{QUOTE}\n\nBenefits include dental."
 GH = "https://boards.greenhouse.io/acme/jobs/4012345"

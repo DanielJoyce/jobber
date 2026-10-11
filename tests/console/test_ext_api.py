@@ -28,7 +28,7 @@ from jobhunter.scoring.scorers import ScorerError, ScoreResult
 
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
 ISO = NOW.isoformat()
-SPEC = "test:model"
+SPEC = "openrouter:test/model"
 ORIGIN = ext_pairing.EXTENSION_ORIGIN
 BASE = "http://127.0.0.1:8808"
 LONG = " ".join(["Operate the synthetic Linux fleet and write Terraform modules."] * 6)
@@ -641,6 +641,7 @@ def test_estimate_has_the_notice_and_the_prefilter_line(client, token, captured)
     est = post(client, token, f"groups/{captured}/estimate").json()
     assert est["refusal"] is None and est["token"]
     assert est["notice"] and "sends your resume-derived profile" in est["notice"]
+    assert "openrouter.ai" in est["notice"]
     assert est["prefilter_line"] == ext_routes.PREFILTER_LINE
     assert est["confirm_label"].startswith("Confirm, spend")
 
