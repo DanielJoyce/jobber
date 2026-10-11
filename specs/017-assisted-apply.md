@@ -353,6 +353,13 @@ Files go to `<data dir>/packets/<packet_id>/`, named for employers as
 `settings.paths.data_dir`, which since `e7da19f` (#81) defaults to `$XDG_DATA_HOME/jobhunter`;
 code resolves it through settings, never a repo-relative path.
 
+Review follow-ups (019561b): a versioned file (`resume-v3.md`) is trusted as v3's export only
+when its Markdown and HTML match the current v3 (after a database restore a new v3 can reuse an
+old v3's number); otherwise nothing is offered or attached until you press Export again. A
+question draft's **Copy** is gated like Export: hidden while a sentence is unsupported. A packet
+a merge abandons (nightly dedupe, cross-state, **Link them**) loses its employer-named copies
+right after the merge, not when its page is next opened.
+
 ### Checklists
 
 The packet page shows the exported files, the drafts and saved answers with a copy button

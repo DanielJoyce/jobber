@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from jobhunter.apply import capture, ext_pairing
+from jobhunter.apply import capture, export, ext_pairing
 from jobhunter.apply import score as group_score
 from jobhunter.console import detail
 from jobhunter.console.inbox_routes import load_console_profile
@@ -171,6 +171,8 @@ def register(
                 kept = capture.link_same_job(conn, group_id, other, now())
         except capture.Conflict as exc:
             raise HTTPException(409, str(exc)) from exc
+        # A link can abandon a packet: its named copies go now (019561b (3)).
+        export.sync_abandoned(conn, request.app.state.settings.paths.data_dir)
         return RedirectResponse(f"/job/{kept}", status_code=303)
 
     @app.post("/prefs/ext/pair", response_class=HTMLResponse)

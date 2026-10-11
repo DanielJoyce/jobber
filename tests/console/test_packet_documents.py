@@ -504,6 +504,18 @@ def test_behavioral_draft_saves_story_facts_and_is_checked(env, fake_claude, cla
     page = env.client.get(f"/packet/{env.pid}").text
     assert "Tell us about a time you fixed a failed deploy." in page
     assert "S1</b> A 2am upgrade failed and I rolled it back." in page
+    # 019561b (2): an unsupported sentence gates Copy, as Export is gated.
+    draft = page.split(f'id="draft-{d["id"]}"', 1)[1].split('class="editor"', 1)[0]
+    assert "copy-btn" not in draft and "1 unsupported sentence" in draft
+    (btn,) = [
+        b
+        for b in parse(page).buttons
+        if b.get("name") == "ckey" and f"/doc/{d['id']}/" in target(page, b)
+    ]
+    env.client.post(f"/packet/{env.pid}/doc/{d['id']}/confirm", data={"ckey": btn["value"]})
+    page = env.client.get(f"/packet/{env.pid}").text
+    draft = page.split(f'id="draft-{d["id"]}"', 1)[1].split('class="editor"', 1)[0]
+    assert 'class="act copy-btn"' in draft and "copy-gate" not in draft
 
 
 # ─── page hygiene ───────────────────────────────────────────────────────────

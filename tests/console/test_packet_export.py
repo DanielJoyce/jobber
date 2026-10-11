@@ -650,6 +650,49 @@ def test_a_markdown_name_heading_still_gives_a_name():
     assert export.person_name("## Jane Doe") == "Jane-Doe"
 
 
+def test_an_old_versions_files_are_not_reused_after_a_database_restore(env, renderer):
+    """019561b (1): restoring the database from a backup can give a new v1 the number of an
+    old v1 whose files are still on disk. They must not be attached or downloaded as it."""
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+    assert named(env) == [f"Synthetic-Person-Resume.{f}" for f in ("html", "md", "pdf", "txt")]
+    # The restored database's v1 is another document; the files on disk are the old v1's.
+    env.conn.execute(
+        "UPDATE packet_document SET body_md = ? WHERE kind = 'resume'",
+        ("Synthetic Person\n<you>@example.com\n- A different resume\n",),
+    )
+    env.conn.commit()
+    page = env.client.get(f"/packet/{env.pid}").text
+    assert named(env) == []
+    assert "/export/resume/" not in page
+    assert env.client.get(f"/packet/{env.pid}/export/resume/md").status_code == 404
+    # Export writes the new v1 over the old files, and then they are its own.
+    export_kind(env)
+    md = (pdir(env) / "Synthetic-Person-Resume.md").read_text(encoding="utf-8")
+    assert "A different resume" in md
+    assert env.client.get(f"/packet/{env.pid}/export/resume/md").status_code == 200
+
+
+def test_the_nightly_dedupe_stage_removes_named_copies_of_a_packet_a_merge_abandoned(env, renderer):
+    """019561b (3): a merge abandons a packet without its page being opened; the dedupe stage
+    removes its employer-named copies at once. A live packet's copies are left alone."""
+    from jobhunter.pipeline import runner
+
+    env.client.post(f"/packet/{env.pid}/base")
+    export_kind(env)
+
+    def dedupe_stage():
+        runner.run_pipeline(env.conn, env.settings, [], stages=["dedupe"], now=base.NOW)
+
+    dedupe_stage()
+    assert len(named(env)) == 4  # live: untouched
+    env.conn.execute("UPDATE application_packet SET status = 'abandoned'")  # as _merge_packets
+    env.conn.commit()
+    dedupe_stage()
+    assert named(env) == []
+    assert export.sync_abandoned(env.conn, env.settings.paths.data_dir) == 0  # nothing left
+
+
 def test_an_abandoned_packet_page_has_no_download_links(env, renderer):
     env.client.post(f"/packet/{env.pid}/base")
     export_kind(env)
