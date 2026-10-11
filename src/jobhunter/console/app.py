@@ -114,21 +114,22 @@ def cross_site_reason(
 
     The console has no auth, so any page the user visits could otherwise POST to it (a form
     auto-submit or a no-cors fetch can start a paid re-score), and a DNS-rebinding page (a
-    hostile name that resolves to 127.0.0.1) could reach it under its own host name. Browsers
-    send ``Sec-Fetch-Site`` on every request and ``Origin`` on every POST. Such a request, of
-    **any method**, must name a loopback ``Host`` (any host with ``--allow-remote``), so a
-    rebinding page cannot read packets, letters or answers with a GET (specs/017, phase 1d;
-    the all-routes check 018 lists as C1). A state-changing one must also come from this same
-    origin; a GET may arrive from another site (a link you followed). A request with neither
-    header is not from a browser page (curl, the CLI, tests) and is let through.
+    hostile name that resolves to 127.0.0.1) could read it under its own host name. So
+    **every** request, whatever headers it carries, must name a loopback ``Host`` (any host
+    with ``--allow-remote``): a rebinding page's GET carries no ``Origin`` and, because its
+    URL is not potentially trustworthy, no ``Sec-Fetch-*`` either, so only ``Host`` gives it
+    away (specs/017 phase 1d; 018 C1). curl, the CLI and health checks connecting to a
+    loopback bind send a loopback ``Host`` too. A state-changing request from a browser
+    (``Origin`` or ``Sec-Fetch-Site`` present) must also come from this same origin; a GET may
+    arrive from another site (a link you followed).
     """
     origin = headers.get("origin")
     site = headers.get("sec-fetch-site")
-    if origin is None and site is None:
-        return None
     host = headers.get("host", "")
     if not allow_remote and not is_loopback(urlsplit(f"//{host}").hostname or ""):
         return f"host {host!r} is not a loopback address"
+    if origin is None and site is None:
+        return None
     if method.upper() not in STATE_CHANGING:
         return None
     if site is not None and site not in ("same-origin", "none"):
