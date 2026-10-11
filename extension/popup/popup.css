@@ -27,7 +27,6 @@
 body {
   margin: 0;
   width: 380px;
-  max-width: 100vw;
   font: 13px/1.4 system-ui, sans-serif;
   background: var(--bg);
   color: var(--fg);

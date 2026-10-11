@@ -313,6 +313,19 @@ def test_unpaired_extension_injects_nothing(h):
     p.close()
 
 
+def test_popup_body_is_380px_even_in_a_narrow_action_viewport(h):
+    # Chrome sizes an action popup's viewport from its content, so it can be far narrower than
+    # 380px (the bug was 100vw capping the body near 130px). A narrow tab viewport stands in for
+    # that; the popup must still lay out at its fixed 380px width.
+    url, body = jsonld_page(902)
+    h.open(url, body)
+    p = h.popup(url)
+    p.set_viewport_size({"width": 130, "height": 400})
+    width = p.evaluate("() => document.body.getBoundingClientRect().width")
+    assert width == 380
+    p.close()
+
+
 def test_capture_added_then_already_in_jobhunter_on_the_same_document(paired):
     h = paired
     url, body = jsonld_page(1001)
