@@ -21,6 +21,7 @@ from keyring.backends import null
 
 from jobhunter import container
 from jobhunter.config import Settings, resolve_path
+from jobhunter.ops import podman
 from jobhunter.xdg import config_home
 
 SCOPES = [
@@ -364,35 +365,8 @@ def authenticate(
 # --- podman secret (host only, specs/018 C7) ------------------------------------------------
 
 SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-PODMAN_PROBE_TIMEOUT_SECONDS = 20
 PODMAN_WRITE_TIMEOUT_SECONDS = 30
-# Tried in order; the first whose `podman secret ls` succeeds wins. The last three are the
-# host-escape chain for toolbox and distrobox (flatpak-spawn, host-spawn, distrobox-host-exec).
-PODMAN_CHAINS: tuple[tuple[str, ...], ...] = (
-    ("podman",),
-    ("flatpak-spawn", "--host", "podman"),
-    ("host-spawn", "podman"),
-    ("distrobox-host-exec", "podman"),
-)
-
-
-def _secret_names(prefix: list[str]) -> list[str] | None:
-    """Names from `podman secret ls`, or None when that command does not work."""
-    try:
-        done = subprocess.run(
-            [*prefix, "secret", "ls", "--format", "{{.Name}}"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            stdin=subprocess.DEVNULL,
-            timeout=PODMAN_PROBE_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
-        return None
-    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+PODMAN_CHAINS = podman.PODMAN_CHAINS  # shared with `container preflight` (C13)
 
 
 def find_podman() -> tuple[list[str], list[str]]:
@@ -400,20 +374,12 @@ def find_podman() -> tuple[list[str], list[str]]:
 
     Run before the consent flow so a host without podman is refused up front.
     """
-    for chain in PODMAN_CHAINS:
-        if shutil.which(chain[0]) is None:
-            continue
-        if chain[0] == "distrobox-host-exec" and shutil.which("host-spawn") is None:
-            # Without host-spawn it would download one from GitHub and sudo-install it, with
-            # no prompt, when stdout is captured. Never trigger that from a probe.
-            continue
-        names = _secret_names(list(chain))
-        if names is not None:
-            return list(chain), names
+    found = podman.probe()
+    if found is not None:
+        return found
     raise MailAuthError(
-        "podman is not reachable (tried podman, flatpak-spawn --host podman, host-spawn "
-        "podman, distrobox-host-exec podman), so no consent flow was started. Install podman "
-        "on the host or run this from a shell that can reach it."
+        f"podman is not reachable (tried {podman.TRIED}), so no consent flow was started. "
+        "Install podman on the host or run this from a shell that can reach it."
     )
 
 
