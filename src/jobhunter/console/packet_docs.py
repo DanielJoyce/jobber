@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from jobhunter import container
 from jobhunter.apply import cli_runner, generator, runner_state
 from jobhunter.apply.review import Version
 from jobhunter.config import Settings
@@ -215,6 +216,8 @@ class RunnerStatus:
     cap_usd: float
     spent_today_usd: float
     estimates: dict[str, generator.Estimate]
+    # Container mode (specs/018 D16, C9): the console never drafts; the page shows the host command.
+    container: bool = False
 
     @property
     def cap_left_usd(self) -> float:
@@ -223,6 +226,21 @@ class RunnerStatus:
 
 # Request sizes for the estimate before a request is built (resume + posting + prompt).
 _TYPICAL_CHARS = {"resume": 32_000, "cover_letter": 36_000, "question_draft": 20_000}
+
+
+CONTAINER_DRAFT_MESSAGE = (
+    "Drafting runs on your host with your Claude subscription, not in the container. "
+    "Run the command shown on the packet page there; the console picks up the result on reload."
+)
+
+
+def host_draft_command(packet_id: int, kind: str) -> str:
+    base = f"jobhunter apply draft {packet_id}"
+    if kind == "cover_letter":
+        return base + " --letter"
+    if kind == "question_draft":
+        return base + " --question -"
+    return base
 
 
 def runner_status(
@@ -235,6 +253,24 @@ def runner_status(
 ) -> RunnerStatus:
     env = os.environ if environ is None else environ
     state = runner_state.load(settings.paths.data_dir)
+    if container.is_container():
+        # No availability probe here: no PATH lookup for claude, no auth status, no key check.
+        sizes = dict(_TYPICAL_CHARS, **(request_chars or {}))
+        return RunnerStatus(
+            default=settings.apply.runner,
+            cli_ok=False,
+            cli_reason=CONTAINER_DRAFT_MESSAGE,
+            off=False,
+            off_reason=None,
+            off_at=None,
+            overage=False,
+            api_ok=False,
+            api_reason=CONTAINER_DRAFT_MESSAGE,
+            cap_usd=settings.apply.daily_cap_usd,
+            spent_today_usd=generator.packet_spent_today(conn, now),
+            estimates={k: generator.estimate(conn, settings, k, sizes[k]) for k in _TYPICAL_CHARS},
+            container=True,
+        )
     installed = cli_runner.find_binary() is not None
     cli_reason = None
     if not installed:

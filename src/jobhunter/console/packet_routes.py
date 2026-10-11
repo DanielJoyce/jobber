@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from jobhunter import container
 from jobhunter.apply import (
     answers,
     checklists,
@@ -223,6 +224,10 @@ def register(
             "runner": packet_docs.runner_status(
                 conn, settings, now(), request_chars=request_sizes(conn, p)
             ),
+            "host_commands": {
+                k: packet_docs.host_draft_command(p.id, k)
+                for k in ("resume", "cover_letter", "question_draft")
+            },
             "gen": gen,
             "doc_message": doc_message,
             "numeric": numeric,
@@ -396,6 +401,20 @@ def register(
         re-renders the page with that button and never calls the API by itself."""
         p = require_packet(conn, packet_id)
         kind = form.get("kind", "resume")
+        if container.is_container():
+            # Drafting never runs in the container (specs/018 D16): no claude, no SDK.
+            msg = packet_docs.CONTAINER_DRAFT_MESSAGE
+            gen = {
+                "kind": kind,
+                "runner": "",
+                "question": form.get("question", ""),
+                "facts": "",
+                "instruction": "",
+                "message": msg,
+                "offer_api": False,
+                "paid": False,
+            }
+            return render_packet(request, conn, p, status=409, gen=gen, doc_message=msg)
         runner = form.get("runner", "")
         question = form.get("question", "")
         anchor = {"resume": "resume", "cover_letter": "letter"}.get(kind, "drafts")
@@ -575,6 +594,25 @@ def register(
         except (answers.NeverStore, ValueError) as exc:
             return render_packet(request, conn, p, status=409, doc_message=str(exc))
         return back(request, conn, packet_id, "letter")
+
+    @app.post("/packet/{packet_id}/story")
+    def packet_story(request: Request, conn: Conn, form: Form, packet_id: int) -> Response:
+        """Save a question's story facts (S1-S3) without drafting. Container mode: the host
+        ``apply draft`` reads them from the database."""
+        p = require_packet(conn, packet_id)
+        question = form.get("question", "")
+        try:
+            if labels.never_store(question) is not None:
+                raise generator.ApplyRefused(labels.YOURS)
+            lines = answers.clean_lines(form.get("facts", ""))
+            answers.save_packet_answer(
+                conn, p.id, answers.story_key(question), question, "\n".join(lines)
+            )
+        except generator.ApplyRefused as exc:
+            return render_packet(request, conn, p, status=409, doc_message=exc.message)
+        except (answers.NeverStore, ValueError) as exc:
+            return render_packet(request, conn, p, status=409, doc_message=str(exc))
+        return back(request, conn, packet_id, "drafts")
 
     @app.post("/packet/{packet_id}/answers")
     def packet_save_answer(request: Request, conn: Conn, form: Form, packet_id: int) -> Response:
