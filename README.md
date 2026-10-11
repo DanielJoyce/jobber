@@ -102,9 +102,9 @@ units point at the new paths.
 
 ## Browser extension
 
-"Send to jobhunter" captures the job posting you are viewing into your local console and scores
-it. It reads a page only when you click (activeTab), never on page load, and it never fills or
-submits forms.
+"Send to jobhunter" captures the job posting you are viewing into your local console, where you
+confirm before it is scored. It reads a page only when you click (activeTab), never on page load,
+and it never fills or submits forms.
 
 1. Chrome 120 or newer. Open `chrome://extensions`, turn on **Developer mode**, click **Load
    unpacked**, and choose the `extension/` folder of this checkout. There is no build step.
@@ -125,8 +125,10 @@ To send a page, use the toolbar icon, the right-click menu **Send to jobhunter**
 Alt+Shift+J (change the shortcut at `chrome://extensions/shortcuts`). On LinkedIn and Indeed
 pages, a one-time notice comes first, and nothing is read until you accept it.
 
-Containers: if the console publishes a different host port, set `public_port` under `[console]`
-so the extension connects to that port. See [docs/containers.md](docs/containers.md).
+Containers: if the console runs in a container that publishes a different host port, set
+`public_port` under `[console]` to that host port, the one the browser connects to. The extension
+API accepts only a loopback Host on that port; unset, it uses `console.port`. For general container
+setup, see [docs/containers.md](docs/containers.md).
 
 ## Work tracking
 
