@@ -680,7 +680,11 @@ def map_payload(
     picked = list(buckets)
     # Every metric covers only the selected buckets, so the label says which.
     label = f"{'New' if metric == 'new_ab' else label}: {group_name(picked)}"
-    breaks = class_breaks((r["value"] for r in rows if r["state"] != REMOTE), kind)
+    # Excluded states are painted hatched, so their values must not shape the colour classes.
+    hidden = set(excluded)
+    breaks = class_breaks(
+        (r["value"] for r in rows if r["state"] != REMOTE and r["state"] not in hidden), kind
+    )
     return {
         "metric": metric,
         "label": label,

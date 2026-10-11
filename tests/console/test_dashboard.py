@@ -1117,3 +1117,11 @@ def test_api_map_without_exclusions_lists_none(client):
 
 def test_map_payload_defaults_to_no_exclusions():
     assert dash.map_payload([], "new_ab", 7)["excluded"] == []
+
+
+def test_map_payload_breaks_ignore_excluded_states():
+    rows = [{"state": s, "value": v} for s, v in (("CO", 1), ("WA", 2), ("TX", 100))]
+    plain = dash.map_payload(rows, "new_ab", 7)
+    assert max(plain["breaks"]) >= 100
+    body = dash.map_payload(rows, "new_ab", 7, excluded=["TX"])
+    assert max(body["breaks"]) <= 2
