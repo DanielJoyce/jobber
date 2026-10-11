@@ -10,7 +10,7 @@ from typing import Annotated
 
 import typer
 
-from jobhunter import container
+from jobhunter import container, secrets
 from jobhunter.config import load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
@@ -33,8 +33,13 @@ apply_app = typer.Typer(help="Assisted apply: packet drafts (specs/017).", no_ar
 app.add_typer(apply_app, name="apply")
 ext_app = typer.Typer(help="The jobhunter browser extension: pairing.", no_args_is_help=True)
 app.add_typer(ext_app, name="ext")
+secrets_app = typer.Typer(help="API keys and other secrets (never prints values).")
+app.add_typer(secrets_app, name="secrets")
 
 NOT_IMPLEMENTED = "not implemented yet"
+
+# What the last CLI start found for each known secret (specs/018 C2); `secrets status` prints it.
+_SECRETS_REPORT: secrets.Report | None = None
 
 
 def _host_only(command: str, host_command: str | None = None) -> None:
@@ -46,14 +51,17 @@ def _host_only(command: str, host_command: str | None = None) -> None:
 
 # Commands that run while old-layout data is unmigrated: they report on it, move it, or do
 # not touch user data at all (schedule only writes systemd units).
-UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule"}
+UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets"}
 
 
 @app.callback()
 def _load_env(ctx: typer.Context) -> None:
     """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
     against a new database while the real one is still in the old layout."""
-    load_env_files()
+    global _SECRETS_REPORT
+    _SECRETS_REPORT = secrets.startup(
+        load_settings, load_env_files, lambda line: typer.echo(line, err=True)
+    )
     if ctx.resilient_parsing or ctx.invoked_subcommand in UNGUARDED_COMMANDS:
         return
     if "--help" in sys.argv[1:]:
@@ -1534,3 +1542,21 @@ def _api_hint(packet_id: int, letter: bool, question: str | None) -> str:
     extra = " --letter" if letter else f" --question {json.dumps(question)}" if question else ""
     command = f"jobhunter apply draft {packet_id}{extra} --runner api"
     return f"To run it on the API instead (shows the cost first): {command}"
+
+
+@secrets_app.command("status")
+def secrets_status() -> None:
+    """List each known secret as set (env), set (file PATH), set (.env PATH), invalid or unset.
+
+    Never prints a value or a length, and always runs to the end.
+    """
+    report = _SECRETS_REPORT
+    if report is None:  # invoked without the CLI callback
+        report = secrets.startup(
+            load_settings, load_env_files, lambda line: typer.echo(line, err=True)
+        )
+    width = max((len(s.name) for s in report.states), default=0)
+    for state in report.states:
+        typer.echo(f"{state.name:<{width}}  {state.describe()}")
+    for note in secrets.env_file_warnings(report.env_files):
+        typer.echo(note)

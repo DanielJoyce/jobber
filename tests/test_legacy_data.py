@@ -140,7 +140,7 @@ def test_realistic_invocations_stop_before_touching_anything(argv, old_layout, m
     assert not data_home().exists()
 
 
-@pytest.mark.parametrize("command", sorted(UNGUARDED_COMMANDS - {"init", "schedule"}))
+@pytest.mark.parametrize("command", sorted(UNGUARDED_COMMANDS - {"init", "schedule", "secrets"}))
 def test_paths_and_migrate_paths_still_work(command, old_layout, monkeypatch):
     root = old_layout()
     monkeypatch.chdir(root)
