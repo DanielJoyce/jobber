@@ -59,4 +59,18 @@
       applyTheme(cur === "dark" ? "light" : "dark");
     });
   });
+
+  // Activity indicator (/activity): remember a dismissed done/failed line for this tab, and
+  // tell the server which one so a later page does not show it again.
+  document.addEventListener("htmx:configRequest", function (e) {
+    if (e.detail.path !== "/activity") return;
+    try { e.detail.parameters.dismissed = sessionStorage.getItem("jh-activity-dismissed") || ""; } catch (x) {}
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest(".activity-dismiss");
+    if (!b) return;
+    try { sessionStorage.setItem("jh-activity-dismissed", b.getAttribute("data-dismiss")); } catch (x) {}
+    var box = document.getElementById("activity");
+    if (box) box.replaceChildren();
+  });
 })();

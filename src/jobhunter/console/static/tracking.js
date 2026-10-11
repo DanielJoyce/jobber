@@ -80,7 +80,9 @@
     if (current) current.focus({ preventScroll: true });
   }
 
-  document.addEventListener("htmx:afterSettle", function () {
+  document.addEventListener("htmx:afterSettle", function (ev) {
+    // The nav activity poll (/activity) swaps every few seconds: not our request.
+    if (ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path === "/activity") return;
     if (!pendingId) return;
     var el = document.getElementById(pendingId);
     pendingId = null;

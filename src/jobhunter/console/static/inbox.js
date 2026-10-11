@@ -152,7 +152,9 @@
     if (first) select(first, false);
   }
 
-  document.addEventListener("htmx:afterSwap", function () {
+  document.addEventListener("htmx:afterSwap", function (ev) {
+    // The nav activity poll (/activity) swaps every few seconds: not our request.
+    if (ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path === "/activity") return;
     updateBar();
     if (!pendingSelect) return;
     var el = document.getElementById("row-" + pendingSelect);
@@ -162,7 +164,9 @@
 
   // A bulk request swaps only out-of-band, so htmx:afterSwap is not the hook; wait for the
   // request to finish, then move focus to the row that followed the selection.
-  document.addEventListener("htmx:afterRequest", function () {
+  document.addEventListener("htmx:afterRequest", function (ev) {
+    // The nav activity poll (/activity) swaps every few seconds: not our request.
+    if (ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path === "/activity") return;
     updateBar();
     if (!nextAfterBulk) return;
     var n = document.getElementById("row-" + nextAfterBulk.dataset.gid);

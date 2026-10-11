@@ -1,0 +1,16 @@
+{#- Always rendered as the same element so htmx's outerHTML swap keeps polling. Empty when idle (no whitespace) so CSS :empty hides it. -#}
+<div id="activity" class="activity" hx-get="/activity" hx-trigger="every {{ every }}s [!document.hidden], visibilitychange from:document" hx-swap="outerHTML" role="status" aria-live="polite">
+{%- if running -%}
+<a class="activity-item" href="/prefs#sec-rescore"><span class="activity-dot" aria-hidden="true"></span>Re-scoring {{ running.scored }}/{{ running.total }}{% if running.scorer %} with {{ short(running.scorer, 40) }}{% endif %}</a>
+{%- elif pending -%}
+<a class="activity-item" href="/prefs#sec-rescore"><span class="activity-dot" aria-hidden="true"></span>Re-score queued</a>
+{%- endif -%}
+{%- if run_held -%}
+<span class="activity-item"><span class="activity-dot" aria-hidden="true"></span>Run in progress{% if run_label %} ({{ run_label }}){% endif %}</span>
+{%- endif -%}
+{%- if finished and finished.status == 'done' -%}
+<span class="activity-item activity-done">Re-score done: {{ finished.scored }} scored, ${{ "%.2f" | format(finished.cost_usd) }} &mdash; dashboard updated <a href="/">Dashboard</a><button type="button" class="activity-dismiss" data-dismiss="{{ finished.id }}" aria-label="Dismiss">&times;</button></span>
+{%- elif finished -%}
+<span class="activity-item activity-failed">Re-score failed: {{ short(finished.error or 'unknown error') }} <a href="/prefs#sec-rescore">Details</a><button type="button" class="activity-dismiss" data-dismiss="{{ finished.id }}" aria-label="Dismiss">&times;</button></span>
+{%- endif -%}
+</div>

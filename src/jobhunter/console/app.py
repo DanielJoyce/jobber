@@ -22,6 +22,7 @@ from fastapi.templating import Jinja2Templates
 from jobhunter.apply import cli_runner, ext_pairing
 from jobhunter.config import Settings, resolve_path
 from jobhunter.console import (
+    activity_routes,
     alerts_routes,
     capture_routes,
     detail_routes,
@@ -471,6 +472,7 @@ def create_app(
     capture_routes.register(app, templates, get_conn, NAV, get_profile, now)
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     rescore_routes.register(app, templates, get_conn, now)
+    activity_routes.register(app, templates, get_conn, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
     proposals_routes.register(app, templates, get_conn, NAV, now)
     rejections_routes.register(app, templates, get_conn, NAV, now)
