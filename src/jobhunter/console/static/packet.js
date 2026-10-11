@@ -50,13 +50,31 @@
     }
     form.dataset.busy = "1";
     window.setTimeout(function () {
-      form.querySelectorAll("button[type=submit]").forEach(function (b) { b.disabled = true; });
+      form.querySelectorAll("button[type=submit]").forEach(function (b) {
+        if (b.disabled) return;
+        b.disabled = true;
+        b.dataset.busyDisabled = "1";
+      });
       var note = document.createElement("p");
       note.className = "muted busy-note";
       note.setAttribute("role", "status");
       note.textContent = "Running. This can take up to three minutes; keep this tab open.";
       form.appendChild(note);
     }, 0);
+  });
+
+  // Back/forward restores the page from the bfcache with the buttons still disabled and the
+  // "Running" note shown, though that run has finished. Undo only what the submit did.
+  window.addEventListener("pageshow", function (ev) {
+    if (!ev.persisted) return;
+    root.querySelectorAll("form[data-busy]").forEach(function (form) {
+      delete form.dataset.busy;
+      form.querySelectorAll("button[data-busy-disabled]").forEach(function (b) {
+        b.disabled = false;
+        delete b.dataset.busyDisabled;
+      });
+      form.querySelectorAll(".busy-note").forEach(function (n) { n.remove(); });
+    });
   });
 
   root.addEventListener("click", function (ev) {

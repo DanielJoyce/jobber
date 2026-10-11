@@ -193,6 +193,14 @@ def test_skill_not_in_resume_fails_and_synonyms_pass():
     assert by["Rust"] == ["'Rust' is not anywhere in your resume"]
 
 
+@pytest.mark.parametrize("tool", ["istio", "kubectl", "pandas"])
+def test_lowercase_tool_names_not_in_the_resume_fail(tool):
+    """a7a1b40 (6): tools written in lower case are invisible to the capitals-based name
+    check; the technology list catches them."""
+    reasons = bullet_reasons(f"Moved 40 services to Kubernetes with {tool}", ["L6"])
+    assert f"'{tool}' is not anywhere in your resume" in reasons
+
+
 def test_resume_may_not_cite_notes_and_header_must_exist():
     doc = resume_doc(header=("L1", "L77"), bullets=[("Wrote Terraform modules", ["L7", "N1"])])
     doc["context"]["lines"] = {**LINES, "N1": "I like their docs"}

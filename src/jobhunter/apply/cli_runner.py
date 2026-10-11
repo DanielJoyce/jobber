@@ -35,6 +35,7 @@ test suite's autouse guard replaces both, so no test can execute the real CLI.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -236,6 +237,41 @@ def _spawn(argv: Sequence[str], **kwargs: Any) -> subprocess.Popen[bytes]:
     return subprocess.Popen(list(argv), **kwargs)
 
 
+# Children of calls still running in this process. Each runs in its own session (so a
+# terminal's Ctrl-C does not reach it), which also means it would outlive the console: a child
+# left running after the console stops can finish a request whose usage is never logged.
+# ``kill_all`` runs on the console's shutdown and at interpreter exit (a7a1b40 (4)). A hard
+# kill of the console (SIGKILL, the OOM killer) still cannot run it.
+_LIVE: set[subprocess.Popen[bytes]] = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def _track(proc: subprocess.Popen[bytes]) -> None:
+    with _LIVE_LOCK:
+        _LIVE.add(proc)
+
+
+def _untrack(proc: subprocess.Popen[bytes]) -> None:
+    with _LIVE_LOCK:
+        _LIVE.discard(proc)
+
+
+def kill_all() -> int:
+    """Kill every claude child still running (its whole process group); returns how many."""
+    with _LIVE_LOCK:
+        procs = list(_LIVE)
+    killed = 0
+    for proc in procs:
+        if proc.poll() is None:
+            logger.warning("stopping claude child %d: the process is shutting down", proc.pid)
+            _kill(proc)
+            killed += 1
+    return killed
+
+
+atexit.register(kill_all)
+
+
 def _kill(proc: subprocess.Popen[bytes]) -> None:
     if proc.poll() is not None:
         return
@@ -275,11 +311,14 @@ def check_auth(binary: str, cwd: Path, environ: Mapping[str, str] | None = None)
         )
     except FileNotFoundError as exc:
         raise CliFailure("the claude command is not installed") from exc
+    _track(proc)
     try:
         out, _err = proc.communicate(timeout=AUTH_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
         _kill(proc)
         raise CliFailure("claude auth status timed out") from exc
+    finally:
+        _untrack(proc)
     try:
         data = json.loads(out.decode("utf-8", "replace") or "{}")
     except ValueError:
@@ -411,6 +450,7 @@ def run(
         )
     except FileNotFoundError as exc:
         raise CliFailure("the claude command is not installed") from exc
+    _track(proc)
 
     lines: queue.Queue[bytes | None] = queue.Queue()
     err_tail: list[bytes] = []
@@ -536,6 +576,7 @@ def run(
         _kill(proc)
         raise
     finally:
+        _untrack(proc)
         for t in threads:
             t.join(timeout=2)
 

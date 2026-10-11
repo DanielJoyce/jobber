@@ -7,7 +7,8 @@ import ipaddress
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -18,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from jobhunter.apply import ext_pairing
+from jobhunter.apply import cli_runner, ext_pairing
 from jobhunter.config import Settings
 from jobhunter.console import (
     alerts_routes,
@@ -205,7 +206,21 @@ def create_app(
     finally:
         boot.close()
 
-    app = FastAPI(title="jobhunter console", docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+        # A drafting run's claude child lives in its own session; stop it with the console so
+        # it cannot finish a request whose usage is never logged (a7a1b40 (4)). The run sees
+        # its child die and logs what the stream had reported.
+        cli_runner.kill_all()
+
+    app = FastAPI(
+        title="jobhunter console",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
     app.state.settings = settings
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["sparkline"] = sparkline
