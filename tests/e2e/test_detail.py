@@ -15,19 +15,36 @@ def test_verified_quote_is_marked(page, server):
 
 def test_A_goes_through_apply_redirect(page, server):
     gid = server.ids["live"]
-    page.goto(f"{server.url}/job/{gid}")
+    job_url = f"{server.url}/job/{gid}"
+    page.goto(job_url)
     expect(page.locator("#apply-link")).to_have_attribute("href", f"/apply/{gid}")
     requests: list[str] = []
-    page.on("request", lambda r: requests.append(r.url))
-    with page.expect_response(f"{server.url}/apply/{gid}") as resp:
+    page.context.on("request", lambda r: requests.append(r.url))
+    with page.context.expect_page() as popup_info:
         page.keyboard.press("A")
-    r = resp.value
-    assert r.status == 302
-    assert r.headers["location"] == f"{server.url}/__employer"
-    page.wait_for_url(f"{server.url}/__employer")
+    popup = popup_info.value
+    popup.wait_for_url(f"{server.url}/__employer")
     assert f"{server.url}/__employer" in requests
+    # The job view stays put: A opens the posting in a new tab.
+    assert page.url == job_url
+    expect(page.locator("#apply-link")).to_be_visible()
     clicks = server.rows("SELECT outcome FROM apply_click WHERE job_group_id = ?", (gid,))
     assert [c[0] for c in clicks] == ["redirected"]
+
+
+def test_apply_link_opens_new_tab_and_keeps_job_view(page, server):
+    gid = server.ids["live"]
+    job_url = f"{server.url}/job/{gid}"
+    page.goto(job_url)
+    link = page.locator("#apply-link")
+    expect(link).to_have_attribute("target", "_blank")
+    expect(link).to_have_attribute("rel", "noopener")
+    with page.context.expect_page() as popup_info:
+        link.click()
+    popup = popup_info.value
+    popup.wait_for_url(f"{server.url}/__employer")
+    assert page.url == job_url
+    expect(page.locator("#apply-link")).to_be_visible()
 
 
 def test_expired_link_shows_closed_page(page, server):
@@ -42,9 +59,13 @@ def test_did_you_apply_banner_yes_writes_applied_event(page, server):
     url = f"{server.url}/job/{gid}"
     page.goto(url)
     expect(page.get_by_text("Did you apply?")).to_have_count(0)
-    page.click("#apply-link")
-    page.wait_for_url(f"{server.url}/__employer")
-    page.goto(url)
+    with page.context.expect_page() as popup_info:
+        page.click("#apply-link")
+    popup_info.value.wait_for_url(f"{server.url}/__employer")
+    # Back on the job tab without a manual reload. Headless Chromium fires no focus or
+    # visibility events when a popup opens or closes, so dispatch the focus event a real
+    # browser fires when the user returns to this tab.
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
     banner = page.locator("#did-apply")
     expect(banner).to_contain_text("Did you apply?")
     banner.get_by_role("button", name="Yes").click()

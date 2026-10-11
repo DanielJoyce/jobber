@@ -4,14 +4,9 @@
 <div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.posting_href or '' }}">
   <p><a href="/inbox">&larr; inbox</a></p>
 
-  {% if d.prompt %}
-  <div class="banner did-apply" id="did-apply" role="status">
-    <strong>Did you apply?</strong>
-    <button type="button" class="act" hx-post="/job/{{ d.group_id }}/applied?choice=yes" hx-target="#did-apply" hx-swap="outerHTML">Yes</button>
-    <button type="button" class="act" hx-post="/job/{{ d.group_id }}/applied?choice=not_yet" hx-target="#did-apply" hx-swap="outerHTML">Not yet</button>
-    <button type="button" class="act" hx-post="/job/{{ d.group_id }}/applied?choice=not_interested" hx-target="#did-apply" hx-swap="outerHTML">Not interested</button>
+  <div id="did-apply-slot" data-gid="{{ d.group_id }}">
+    {% with prompt=d.prompt, group_id=d.group_id %}{% include "_did_apply.html" %}{% endwith %}
   </div>
-  {% endif %}
 
   {% if d.posting_rejection %}
   <div class="banner employer-rejection" role="note">
@@ -143,4 +138,5 @@
   </aside>
 </div>
 <script src="{{ static_url('detail.js') }}" defer></script>
+<script src="{{ static_url('apply_return.js') }}" defer></script>
 {% endblock %}
