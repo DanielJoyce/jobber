@@ -15,6 +15,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import pytest
+from quadlet_probe import DROPINS_OK, DROPINS_WHY
 from ruamel.yaml import YAML
 
 from jobhunter.ops import preflight, schedule
@@ -233,44 +234,58 @@ def test_compose_properties(compose):
 # --- generator ------------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not GENERATOR.exists(), reason="podman quadlet generator not installed")
-def test_quadlet_dry_run_generates_all_units_with_a_sample_dropin(tmp_path):
+def _generate(tmp_path: Path, *, dropin: bool) -> dict[str, str]:
+    """Run the generator over a copy of deploy/quadlet; {service name: generated text}."""
     units = tmp_path / "units"
     units.mkdir()
     for p in QUADLET_DIR.glob("*.container"):
         shutil.copy(p, units / p.name)
-    # the drop-in preflight would write for the Gmail token (run only)
-    spec = next(
-        s for s in preflight.secret_matrix(_settings()) if s.secret == "jobhunter_gmail_token"
-    )
-    dropin = units / f"{preflight.RUN}.container.d" / f"50-{spec.secret}.conf"
-    dropin.parent.mkdir()
-    dropin.write_text(preflight.dropin_text(spec))
-
+    if dropin:  # the drop-in preflight would write for the Gmail token (run only)
+        spec = next(
+            s for s in preflight.secret_matrix(_settings()) if s.secret == "jobhunter_gmail_token"
+        )
+        path = units / f"{preflight.RUN}.container.d" / f"50-{spec.secret}.conf"
+        path.parent.mkdir()
+        path.write_text(preflight.dropin_text(spec))
     env = {**os.environ, "QUADLET_UNIT_DIRS": str(units)}
     res = subprocess.run(
         [str(GENERATOR), "-dryrun", "-user"], env=env, capture_output=True, text=True, timeout=60
     )
+    if res.returncode != 0 and "unsupported key" in res.stderr + res.stdout:
+        pytest.skip("this quadlet generator is older than the keys the units use")
     assert res.returncode == 0, res.stderr + res.stdout
     out = res.stdout
     generated = re.findall(r"^---(.+\.service)---$", out, re.M)
-    assert sorted(generated) == sorted(preflight.SERVICES)
     sections = dict(zip(generated, re.split(r"^---.+---$", out, flags=re.M)[1:], strict=True))
+    assert sorted(sections) == sorted(preflight.SERVICES)
     assert "Wants=jobhunter-ctr" not in out
+    return sections
+
+
+@pytest.mark.skipif(not GENERATOR.exists(), reason="podman quadlet generator not installed")
+def test_quadlet_dry_run_generates_all_base_units(tmp_path):
+    sections = _generate(tmp_path, dropin=False)
     assert "Requires=jobhunter-ctr-backup.service" in sections["jobhunter-ctr-run.service"]
     for name, text in sections.items():
-        has_token = "gmail_token" in text
-        assert has_token == (name == "jobhunter-ctr-run.service"), name
+        assert "--secret" not in text and "gmail" not in text.lower(), name
         if name != "jobhunter-console.service":
             assert "[Install]" not in text, name
     console = sections["jobhunter-console.service"]
-    assert "gmail" not in console.lower() and "--secret" not in console
     assert "--publish 127.0.0.1:8808:8808" in console
     assert "--userns keep-id:uid=1000,gid=1000" in console
     assert "WantedBy=default.target" in console
+    assert "run --wait 4h" in sections["jobhunter-ctr-run.service"]
+
+
+@pytest.mark.skipif(not GENERATOR.exists(), reason="podman quadlet generator not installed")
+@pytest.mark.skipif(not DROPINS_OK, reason=DROPINS_WHY)
+def test_quadlet_dry_run_applies_a_sample_dropin_to_run_only(tmp_path):
+    sections = _generate(tmp_path, dropin=True)
+    for name, text in sections.items():
+        assert ("gmail_token" in text) == (name == "jobhunter-ctr-run.service"), name
+    assert "gmail" not in sections["jobhunter-console.service"].lower()
     run = sections["jobhunter-ctr-run.service"]
     assert "--secret jobhunter_gmail_token,type=mount,target=/run/secrets/gmail_token" in run
-    assert "run --wait 4h" in run
 
 
 def _settings():
