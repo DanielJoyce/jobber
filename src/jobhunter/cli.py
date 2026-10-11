@@ -1983,6 +1983,146 @@ def db_relativize_paths_cmd(
         raise typer.Exit(1)
 
 
+@db_app.command("backup")
+def db_backup_cmd(
+    auto: Annotated[
+        bool,
+        typer.Option(
+            "--auto",
+            help="Automatic backup into backups/auto/jobhunter-auto-<UTC>Z.db, then prune those "
+            "to the newest of each of the last 7 days plus the newest of each of the last 4 "
+            "ISO weeks. Run by the nightly backup unit.",
+        ),
+    ] = False,
+    to: Annotated[
+        Path | None,
+        typer.Option(
+            "--to",
+            metavar="PATH",
+            help="Write the backup here (a file that does not exist yet, or a directory).",
+        ),
+    ] = None,
+) -> None:
+    """Back up the database through SQLite's online backup API (safe while it is in use).
+
+    Without --auto it writes a manual backup, backups/jobhunter-<UTC>Z.db (or --to PATH), which
+    nothing ever prunes. Every backup is owner-only (0600) and passes integrity_check. Never
+    migrates.
+    """
+    import sqlite3
+
+    from jobhunter.core import backup
+
+    if auto and to is not None:
+        typer.echo("error: --auto and --to cannot be combined", err=True)
+        raise typer.Exit(2)
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    data_dir = db.owning_data_dir(db_path, resolve_path(settings.paths.data_dir))
+    if not db_path.is_file():
+        typer.echo(f"error: no database at {db_path}", err=True)
+        raise typer.Exit(1)
+    now = datetime.now(UTC)
+    if to is not None:
+        dest = to.expanduser()
+        if dest.is_dir():
+            dest = dest / backup.manual_name(now)
+        if dest.exists() or dest.is_symlink():
+            typer.echo(f"error: {dest} already exists; not overwriting it", err=True)
+            raise typer.Exit(1)
+    else:
+        dest = backup.manual_dir(data_dir) / backup.manual_name(now)
+    # A plain connection: no schema guard (backing up a database newer than this code is
+    # harmless and may be exactly what is wanted) and no migration (an exempt command).
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    removed: list[Path] = []
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")
+        if auto:
+            saved, removed = backup.auto_backup(conn, data_dir, now)
+        else:
+            saved = backup.online_backup(conn, dest)
+    except (backup.BackupError, sqlite3.Error) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        conn.close()
+    size_mb = saved.stat().st_size / 1_000_000
+    typer.echo(f"backed up {db_path} to {saved} ({size_mb:.1f} MB, integrity_check ok)")
+    for path in removed:
+        typer.echo(f"pruned {path}")
+
+
+@db_app.command("restore")
+def db_restore_cmd(
+    path: Annotated[Path, typer.Argument(help="The backup file to restore.")],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Restore even though the console or another process seems to be using the "
+            "database. They keep running against the restored data, and anything they write "
+            "meanwhile may be lost or land on top of it.",
+        ),
+    ] = False,
+) -> None:
+    """Replace the live database with a backup (host only; stop the console and timers first).
+
+    Holds the run lock, saves the current database to backups/jobhunter-<UTC>Z-pre-restore.db,
+    writes the backup into the live database through SQLite's backup API (never a file copy or
+    rename), then runs integrity_check and prints row counts before and after. Refuses a
+    backup newer than this code; an older one is restored and migrated later as usual.
+    """
+    from jobhunter.core import runlock
+    from jobhunter.ops import restore as rst
+
+    _host_only("db restore")
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    data_dir = db.owning_data_dir(db_path, resolve_path(settings.paths.data_dir))
+    lock = runlock.RunLock(db_path, "db restore")
+    try:
+        lock.acquire(None)
+    except runlock.LockHeld as exc:
+        typer.echo(f"error: {exc}. Wait for it to finish; nothing was changed.", err=True)
+        raise typer.Exit(1) from exc
+    try:
+        busy = rst.busy_report(db_path)
+        if busy:
+            for line in busy:
+                typer.echo(f"  {line}", err=True)
+            if not force:
+                typer.echo(
+                    f"error: the database is in use. {rst.STOP_HINT}. Or pass --force. "
+                    "Nothing was changed.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            typer.echo(
+                "WARNING: --force: restoring while the database is in use. Running processes "
+                "will see the restored data; anything they write meanwhile may be lost.",
+                err=True,
+            )
+        try:
+            result = rst.restore(path, db_path, data_dir)
+        except rst.RestoreError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    finally:
+        lock.release()
+    if result.safety_backup:
+        typer.echo(f"saved the current database to {result.safety_backup}")
+    typer.echo(
+        f"restored {result.source} into {db_path} (schema {result.source_version}); "
+        "integrity_check ok"
+    )
+    typer.echo("row counts (before -> after):")
+    for line in rst.format_counts(result):
+        typer.echo(line)
+    for note in result.notes:
+        typer.echo(note)
+
+
 def _api_hint(packet_id: int, letter: bool, question: str | None) -> str:
     extra = " --letter" if letter else f" --question {json.dumps(question)}" if question else ""
     command = f"jobhunter apply draft {packet_id}{extra} --runner api"
