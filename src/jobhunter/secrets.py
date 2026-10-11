@@ -71,7 +71,16 @@ def clean(value: str) -> tuple[str | None, str | None]:
             return None, "contains whitespace"
         if ord(ch) < 32 or 127 <= ord(ch) < 160:
             return None, "contains a control character"
+        if not 33 <= ord(ch) <= 126:
+            # httpx encodes header values as ASCII; its error would name the character
+            return None, "contains a non-ASCII character"
     return stripped, None
+
+
+def looks_like_path(raw: str) -> bool:
+    """Only an absolute path, ``~...`` or ``./...`` is ever shown, so a key pasted into
+    ``N_FILE`` by mistake is not echoed."""
+    return raw.startswith(("/", "~", "./"))
 
 
 def _read_secret_file(path: Path) -> tuple[str | None, str | None]:
@@ -86,7 +95,7 @@ def _read_secret_file(path: Path) -> tuple[str | None, str | None]:
     if len(data) > MAX_FILE_BYTES:
         return None, "file is larger than 64 KiB"
     try:
-        return data.decode("utf-8"), None
+        return data.decode("utf-8-sig"), None
     except UnicodeDecodeError:
         return None, "file is not valid UTF-8"
 
@@ -150,9 +159,16 @@ def resolve(
         current, current_reason = clean(env[name]) if name in env else (None, None)
         if raw_file:
             path = Path(raw_file).expanduser()
-            if current is not None and name in real_env:
+            if name in real_env and name in env and (current or current_reason):
+                # set in the real environment, valid or not: never pick one silently
                 env.pop(name, None)
                 reason = f"{name} and {file_var} are both set"
+                warn(f"warning: {name} ignored: {reason}")
+                results.append(SecretState(name, INVALID, reason))
+                continue
+            if not looks_like_path(raw_file):
+                env.pop(name, None)
+                reason = f"value of {file_var} is not a file path"
                 warn(f"warning: {name} ignored: {reason}")
                 results.append(SecretState(name, INVALID, reason))
                 continue
@@ -232,13 +248,18 @@ class Report:
 
 
 def startup(
-    settings: Any | None,
+    settings_loader: Callable[[], Any],
     files_loader: Callable[[], list[Path]],
     warn: Callable[[str], None],
 ) -> Report:
     """The CLI-start sequence: record the real environment, load ``.env`` files, resolve."""
     real_env = set(os.environ)
-    files = files_loader()
+    files = files_loader()  # .env first: it may set JOBHUNTER_CONFIG or a path variable
     origin = dotenv_origins(files, real_env)
+    try:
+        settings = settings_loader()
+    except Exception:
+        settings = None
+        warn("warning: config could not be loaded; only the default secret names are checked")
     names = known_names(settings, registry_auth_names())
     return Report(resolve(names, real_env, origin, warn), files)

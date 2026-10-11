@@ -292,3 +292,83 @@ def test_scorer_headers_refuse_when_the_key_was_dropped(monkeypatch):
     with pytest.raises(ScorerError) as exc:
         scorer._headers()
     assert FAKE not in str(exc.value)
+
+
+# ---- review minors ------------------------------------------------------------------
+
+
+def test_a_key_pasted_into_the_file_variable_is_never_echoed(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY_FILE", FAKE)
+    code, out, err = status()
+    assert code == 0
+    assert FAKE not in out + err
+    assert "value of OPENROUTER_API_KEY_FILE is not a file path" in out
+    assert "OPENROUTER_API_KEY" not in os.environ
+
+
+def test_bom_in_a_secret_file_is_removed(tmp_path, monkeypatch):
+    f = tmp_path / "k"
+    f.write_bytes(b"\xef\xbb\xbf" + FAKE.encode() + b"\n")
+    monkeypatch.setenv("ANTHROPIC_API_KEY_FILE", str(f))
+    status()
+    assert os.environ["ANTHROPIC_API_KEY"] == FAKE
+
+
+@pytest.mark.parametrize("bad", [FAKE + "​", "café" + FAKE, "﻿" + FAKE])
+def test_non_ascii_values_are_invalid(monkeypatch, bad):
+    monkeypatch.setenv("LLAMA_API_KEY", bad)
+    _, out, err = status()
+    assert "invalid (contains a non-ASCII character)" in line_for(out, "LLAMA_API_KEY")
+    assert "LLAMA_API_KEY" not in os.environ and FAKE not in out + err
+
+
+def test_email_shaped_and_symbol_values_still_pass(monkeypatch):
+    monkeypatch.setenv("USAJOBS_EMAIL", "first.last+jobs@example.com")
+    monkeypatch.setenv("USAJOBS_API_KEY", "AbC+/=_-.~0123456789!#$%&*")
+    status()
+    assert os.environ["USAJOBS_EMAIL"] == "first.last+jobs@example.com"
+    assert "USAJOBS_API_KEY" in os.environ
+
+
+def test_invalid_real_env_value_plus_file_reports_the_conflict(tmp_path, monkeypatch):
+    f = tmp_path / "k"
+    f.write_text(FAKE)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "has space")
+    monkeypatch.setenv("OPENROUTER_API_KEY_FILE", str(f))
+    _, out, err = status()
+    assert "both set" in line_for(out, "OPENROUTER_API_KEY")
+    assert "OPENROUTER_API_KEY" not in os.environ
+    assert "both set" in err
+
+
+def test_secrets_status_runs_despite_unmigrated_old_data(tmp_path, monkeypatch):
+    from jobhunter import legacy_data
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "jobhunter.db").write_bytes(b"x")
+    monkeypatch.setattr(legacy_data, "candidate_roots", lambda: [tmp_path])
+    code, out, _ = status()
+    assert code == 0 and "ANTHROPIC_API_KEY" in out
+
+
+def test_config_named_in_dotenv_is_used_for_known_names(tmp_path, monkeypatch):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[scoring.openrouter]\napi_key_env = "DOTENV_ROUTER_KEY"\n')
+    env = tmp_path / "e.env"
+    env.write_text(f"JOBHUNTER_CONFIG={cfg}\nDOTENV_ROUTER_KEY=bad value\n")
+    monkeypatch.setenv(ENV_FILE_VAR, str(env))
+    monkeypatch.delenv("JOBHUNTER_CONFIG", raising=False)
+    _, out, _ = status()
+    assert "invalid" in line_for(out, "DOTENV_ROUTER_KEY")
+    monkeypatch.delenv("JOBHUNTER_CONFIG", raising=False)
+    monkeypatch.delenv("DOTENV_ROUTER_KEY", raising=False)
+
+
+def test_broken_config_is_reported_and_defaults_still_checked(tmp_path, monkeypatch):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("this is = = not toml")
+    monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "bad value")
+    code, out, err = status()
+    assert code == 0 and "config could not be loaded" in err
+    assert "invalid" in line_for(out, "ANTHROPIC_API_KEY")

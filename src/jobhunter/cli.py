@@ -51,7 +51,7 @@ def _host_only(command: str, host_command: str | None = None) -> None:
 
 # Commands that run while old-layout data is unmigrated: they report on it, move it, or do
 # not touch user data at all (schedule only writes systemd units).
-UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule"}
+UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets"}
 
 
 @app.callback()
@@ -59,12 +59,8 @@ def _load_env(ctx: typer.Context) -> None:
     """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
     against a new database while the real one is still in the old layout."""
     global _SECRETS_REPORT
-    try:
-        settings = load_settings()
-    except Exception:  # a broken config file: the command itself reports it
-        settings = None
     _SECRETS_REPORT = secrets.startup(
-        settings, load_env_files, lambda line: typer.echo(line, err=True)
+        load_settings, load_env_files, lambda line: typer.echo(line, err=True)
     )
     if ctx.resilient_parsing or ctx.invoked_subcommand in UNGUARDED_COMMANDS:
         return
@@ -1556,7 +1552,9 @@ def secrets_status() -> None:
     """
     report = _SECRETS_REPORT
     if report is None:  # invoked without the CLI callback
-        report = secrets.startup(None, load_env_files, lambda line: typer.echo(line, err=True))
+        report = secrets.startup(
+            load_settings, load_env_files, lambda line: typer.echo(line, err=True)
+        )
     width = max((len(s.name) for s in report.states), default=0)
     for state in report.states:
         typer.echo(f"{state.name:<{width}}  {state.describe()}")
