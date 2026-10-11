@@ -135,7 +135,9 @@ def test_count_absolute_paths_covers_every_column(conn):
 
 def test_count_on_a_schema_without_packet_document(tmp_path):
     raw = sqlite3.connect(tmp_path / "old.db")
-    raw.execute("CREATE TABLE attachment (id INTEGER PRIMARY KEY, path TEXT)")
+    raw.execute(
+        "CREATE TABLE attachment (id INTEGER PRIMARY KEY, application_id INTEGER, path TEXT)"
+    )
     raw.execute("CREATE TABLE application (id INTEGER PRIMARY KEY, cover_letter_path TEXT)")
     raw.execute("INSERT INTO attachment (path) VALUES ('/x/y.pdf')")
     assert dbpaths.count_absolute_paths(raw) == 1
@@ -175,7 +177,7 @@ def test_dry_run_plans_and_writes_nothing(conn, seeded, tmp_path):
         ("attachment", "unresolved", None),
         ("packet_document", "relativize", "packets/1/resume-v1.pdf"),
     ]
-    assert "5 absolute path(s): 2 under the data dir, 2 to copy" in plan.summary
+    assert "5 path(s) to fix: 2 under the data dir, 2 to copy" in plan.summary
     assert paths(conn) == before
     assert not (real / "attachments").exists()
 
@@ -226,3 +228,76 @@ def test_a_row_changed_after_the_plan_is_not_overwritten(conn, seeded):
     done = dbpaths.apply_relativize(conn, plan)
     assert [c.table for c in done.failed] == ["packet_document"]
     assert paths(conn)["rendered"] == ["packets/1/edited.pdf"]
+
+
+# --- containment (review of C14: '..' and symlink escapes) ---------------------------------
+
+
+def test_resolve_inside_refuses_dotdot_and_symlinks_out(tmp_path):
+    data = tmp_path / "data"
+    (data / "packets" / "5").mkdir(parents=True)
+    secret = tmp_path / ".ssh" / "id_rsa"
+    secret.parent.mkdir()
+    secret.write_text("PRIVATE KEY")
+    (data / "packets" / "5" / "resume-v1.pdf").symlink_to(secret)
+    (data / "packets" / "5" / "ok.pdf").write_bytes(b"%PDF")
+    assert dbpaths.resolve_inside("packets/5/ok.pdf", data) == data / "packets/5/ok.pdf"
+    assert dbpaths.resolve_inside("../.ssh/id_rsa", data) is None
+    assert dbpaths.resolve_inside("packets/../../.ssh/id_rsa", data) is None
+    assert dbpaths.resolve_inside("packets/5/resume-v1.pdf", data) is None  # symlink out
+    assert dbpaths.resolve_inside(str(secret), data) is None  # absolute elsewhere
+    assert dbpaths.resolve_inside("", data) is None
+
+
+def test_escaping_relative_values_count_for_preflight(conn, tmp_path):
+    data = tmp_path / "data"
+    (data / "packets").mkdir(parents=True)
+    (data / "packets" / "link.pdf").symlink_to(tmp_path / "t.db")
+    add_app(conn, 1, cover="../../etc/passwd")
+    add_attachment(conn, 1, "packets/link.pdf")
+    add_attachment(conn, 1, "packets/fine.pdf")
+    assert dbpaths.count_absolute_paths(conn) == 1  # lexical '..' without a data dir
+    assert dbpaths.count_absolute_paths(conn, data) == 2  # plus the symlink out
+    plan = dbpaths.plan_relativize(conn, data)
+    assert sorted((c.where, c.action) for c in plan.changes) == [
+        ("application.cover_letter_path id=1", "unresolved"),
+        ("attachment.path id=1", "unresolved"),
+    ]
+    assert not plan.actionable
+
+
+def test_relativize_removes_a_row_that_would_duplicate_another(conn, twin):
+    configured, real = twin
+    (real / "packets" / "5").mkdir(parents=True)
+    (real / "packets" / "5" / "r.pdf").write_bytes(b"%PDF")
+    add_app(conn, 1)
+    add_attachment(conn, 1, str(real / "packets/5/r.pdf"))  # written before C14
+    add_attachment(conn, 1, "packets/5/r.pdf")  # re-attached after it
+    add_attachment(conn, 1, str(configured / "packets/5/r.pdf"))  # the other form, too
+    plan = dbpaths.plan_relativize(conn, configured)
+    assert [c.action for c in plan.changes] == ["duplicate", "duplicate"]
+    done = dbpaths.apply_relativize(conn, plan)
+    assert len(done.removed) == 2 and done.rewritten == []
+    assert paths(conn)["attachment"] == ["packets/5/r.pdf"]
+    assert dbpaths.count_absolute_paths(conn, configured) == 0
+
+
+def test_every_os_error_while_copying_is_a_copy_error(tmp_path):
+    src = tmp_path / "locked.pdf"
+    src.write_bytes(b"x")
+    src.chmod(0)
+    try:
+        with pytest.raises(dbpaths.CopyError):
+            dbpaths.store(src, tmp_path / "data")
+    finally:
+        src.chmod(0o600)
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ok = tmp_path / "ok.pdf"
+    ok.write_bytes(b"y")
+    ro.chmod(0o500)
+    try:
+        with pytest.raises(dbpaths.CopyError):
+            dbpaths.store(ok, ro)  # cannot create attachments/
+    finally:
+        ro.chmod(0o700)

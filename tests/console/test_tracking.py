@@ -465,6 +465,13 @@ def test_drawer_and_edits(client, conn, tmp_path):
     assert t.attachments(conn, a)[0]["path"] == "attachments/cl.txt"
     copy = Settings().paths.data_dir / "attachments" / "cl.txt"
     assert copy.read_text() == "hi" and f"<code>{copy}</code>" in r.text
+    locked = tmp_path / "locked.pdf"
+    locked.write_bytes(b"x")
+    locked.chmod(0)
+    r = post("attachments", f"kind=other&path={locked}")
+    locked.chmod(0o600)
+    assert r.status_code == 200 and "cannot copy" in r.text  # reported, not a 500
+    assert len(t.attachments(conn, a)) == 1
     r = post("attachments", f"kind=other&path={tmp_path / 'nope'}")
     assert "no such file" in r.text and len(t.attachments(conn, a)) == 1
     post(f"attachments/{t.attachments(conn, a)[0]['id']}/delete", "")

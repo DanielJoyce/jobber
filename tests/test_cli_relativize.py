@@ -67,7 +67,7 @@ def test_dry_run_lists_changes_and_writes_nothing(env):
     assert result.exit_code == 0, result.output
     assert f"{real / 'packets/1/r.pdf'} -> packets/1/r.pdf" in result.output
     assert f"copy {outside / 'cl.pdf'} -> attachments/cl.pdf" in result.output
-    assert "2 absolute path(s): 1 under the data dir, 1 to copy" in result.output
+    assert "2 path(s) to fix: 1 under the data dir, 1 to copy" in result.output
     assert "dry run: nothing written" in result.output
     assert rows(real) == before
     assert not (real / "backups").exists() and not (real / "attachments").exists()
@@ -87,7 +87,10 @@ def test_apply_backs_up_first_then_rewrites(env):
         raw.execute("SELECT cover_letter_path FROM application").fetchall(),
     ) == before
     raw.close()
-    assert "rewrote 2 row(s), copied 1 file(s); 0 absolute path(s) remain." in result.output
+    assert (
+        "rewrote 2 row(s), removed 0 duplicate(s), copied 1 file(s); 0 path(s) still"
+        in result.output
+    )
     # nothing left: a second run makes no backup
     again = runner.invoke(app, ["db", "relativize-paths", "--apply"])
     assert again.exit_code == 0 and "nothing to change" in again.output
@@ -99,7 +102,7 @@ def test_apply_exits_1_while_an_unresolvable_path_remains(env):
     (outside / "cl.pdf").unlink()
     result = runner.invoke(app, ["db", "relativize-paths", "--apply"])
     assert result.exit_code == 1, result.output
-    assert "cannot resolve" in result.output and "1 absolute path(s) remain" in result.output
+    assert "cannot resolve" in result.output and "1 path(s) still to fix" in result.output
     assert rows(real)[0] == [("packets/1/r.pdf",)]
 
 

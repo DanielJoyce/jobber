@@ -501,7 +501,9 @@ def attachments(
     conn: sqlite3.Connection, app_id: int, data_dir: Path | str | None = None
 ) -> list[dict[str, Any]]:
     """The application's attachments, oldest first. ``path`` is the stored value; with a
-    ``data_dir``, ``file`` is the file it names now (relative values resolve against it)."""
+    ``data_dir``, ``file`` is the file it names now (relative values resolve against it), or
+    None when the value would leave the data dir (``..``, a symlink out, or an absolute row
+    elsewhere that ``relativize-paths`` has not handled)."""
     rows = conn.execute(
         "SELECT * FROM attachment WHERE application_id = ? ORDER BY id", (app_id,)
     ).fetchall()
@@ -509,7 +511,8 @@ def attachments(
     for row in rows:
         item = dict(row)
         if data_dir is not None:
-            item["file"] = str(dbpaths.resolve(row["path"], data_dir))
+            inside = dbpaths.resolve_inside(row["path"], data_dir)
+            item["file"] = str(inside) if inside is not None else None
         out.append(item)
     return out
 

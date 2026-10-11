@@ -1930,8 +1930,9 @@ def db_relativize_paths_cmd(
     Paths under the data dir (as configured or its realpath, so /home/<you>/... and
     /var/home/<you>/... alike) become relative; files outside it are copied into
     <data dir>/attachments/ (sha256 checked) and the row points at the copy; rows naming a
-    missing file are reported and left alone. --apply backs the database up into
-    <data dir>/backups/ first. Host only.
+    missing file, or relative values that leave the data dir, are reported and left alone; an
+    attachment row that would duplicate another of the same application is removed. --apply
+    backs the database up into <data dir>/backups/ first. Host only.
     """
     from jobhunter.core import backup, dbpaths
 
@@ -1949,10 +1950,10 @@ def db_relativize_paths_cmd(
             typer.echo(f"  {change.describe()}")
         typer.echo(plan.summary)
         if not apply:
-            if plan.of(dbpaths.RELATIVIZE) or plan.of(dbpaths.COPY):
+            if plan.actionable:
                 typer.echo("dry run: nothing written. Run again with --apply to change them.")
             return
-        if not (plan.of(dbpaths.RELATIVIZE) or plan.of(dbpaths.COPY)):
+        if not plan.actionable:
             typer.echo("nothing to change.")
             raise typer.Exit(1 if plan.of(dbpaths.UNRESOLVED) else 0)
         with _job_lock(settings, "db relativize-paths", None):
@@ -1971,12 +1972,12 @@ def db_relativize_paths_cmd(
             typer.echo(f"copied: {data_dir / stored}")
         for change in done.failed:
             typer.echo(f"  not changed: {change.where}: {change.note}", err=True)
-        remaining = dbpaths.count_absolute_paths(conn)
+        remaining = dbpaths.count_absolute_paths(conn, data_dir)
     finally:
         conn.close()
     typer.echo(
-        f"rewrote {len(done.rewritten)} row(s), copied {len(done.copied)} file(s); "
-        f"{remaining} absolute path(s) remain."
+        f"rewrote {len(done.rewritten)} row(s), removed {len(done.removed)} duplicate(s), "
+        f"copied {len(done.copied)} file(s); {remaining} path(s) still to fix."
     )
     if remaining:
         raise typer.Exit(1)

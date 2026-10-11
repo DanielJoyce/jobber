@@ -16,6 +16,7 @@ every path that writes an ``applied`` event (``tracking.add_event`` and the "Did
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -239,21 +240,35 @@ def _attach_file(
     at: str,
 ) -> bool:
     """One ``attachment`` row for a rendered packet file (and ``cover_letter_path`` when
-    empty), stored relative to the data dir (specs/018 D18); a file outside it is copied into
-    ``attachments/``. False when it is skipped (no data dir, or the path fails validation)."""
+    empty), stored relative to the data dir (specs/018 D18). False when it is skipped: no data
+    dir, the path fails validation, or it leaves the data dir (a ``..`` value, or a symlink
+    pointing out). A rendered file always lives under ``packets/``, so one that resolves
+    anywhere else is refused, never copied in. Never raises for a bad file: this runs inside
+    the transaction that records 'applied'."""
     if data_dir is None:
         logger.warning("packet %s: %s not attached: no data dir given", packet_id, kind)
         return False
+    inside = dbpaths.resolve_inside(rendered_path, data_dir)
+    if inside is None:
+        logger.warning(
+            "packet %s: %s not attached: %r is outside the data dir", packet_id, kind, rendered_path
+        )
+        return False
     try:
-        resolved = validate_attachment_path(str(dbpaths.resolve(rendered_path, data_dir)))
-        path = dbpaths.store(resolved, data_dir)
-    except (TrackingError, dbpaths.CopyError) as exc:
+        resolved = validate_attachment_path(str(inside))
+    except TrackingError as exc:
         logger.warning("packet %s: %s not attached: %s", packet_id, kind, exc)
         return False
-    dup = conn.execute(
-        "SELECT 1 FROM attachment WHERE application_id = ? AND path = ?", (app_id, path)
-    ).fetchone()
-    if dup is None:
+    path = dbpaths.relative_to_data_dir(resolved, data_dir)
+    if path is None or not dbpaths.is_inside(resolved, data_dir):
+        logger.warning("packet %s: %s not attached: outside the data dir", packet_id, kind)
+        return False
+    real = os.path.realpath(resolved)
+    existing = conn.execute(
+        "SELECT path FROM attachment WHERE application_id = ?", (app_id,)
+    ).fetchall()
+    # Same file under either stored form (a legacy absolute row, or the relative one).
+    if not any(os.path.realpath(dbpaths.resolve(r[0], data_dir)) == real for r in existing):
         conn.execute(
             "INSERT INTO attachment (application_id, kind, path, added_at) VALUES (?, ?, ?, ?)",
             (app_id, kind, path, at),
