@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791748662,"nonce":"pwFzbTJIMVHaKQZ+k5dZV57TnkA=","message":"Decision: also added bug_images/ to the forbid-personal-paths hook in .pre-commit-config.yaml. Reason: screenshots may show personal data, so it gets the same guard as resume/ and profile/.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791749037,"nonce":"kq7MQO2W7Q2xVcYsz81tdpILc+M=","status":2}]}
