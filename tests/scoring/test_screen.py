@@ -299,7 +299,7 @@ def test_spend_cap_limits_batch(conn, profile):
     for n in range(1, 6):
         add_group(conn, n, profile)
     client = FakeClient()
-    cost = screen.ESTIMATED_COST_PER_REQUEST_USD
+    cost = screen.reserve_per_request_usd(conn, SCORER)
     batch_id = screen.submit_batch(
         conn, client, profile, limit=10, now=NOW, scorer=SCORER, remaining_usd=lambda: cost * 2.5
     )
@@ -321,7 +321,9 @@ def test_remaining_daily_budget(conn, profile):
     add_group(conn, 1, profile)
     screen.submit_batch(conn, FakeClient(), profile, limit=10, now=NOW, scorer=SCORER)
     remaining = screen.remaining_daily_budget(conn, 2.0, NOW)
-    assert remaining == pytest.approx(2.0 - 0.5 - screen.ESTIMATED_COST_PER_REQUEST_USD)
+    reserved = screen.reserve_per_request_usd(conn, SCORER)
+    assert reserved == pytest.approx(0.0026325)  # Haiku 4.5 table price, above the $0.002 floor
+    assert remaining == pytest.approx(2.0 - 0.5 - reserved)
 
 
 # ─── Evidence verification ──────────────────────────────────────────────────

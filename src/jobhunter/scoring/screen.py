@@ -20,6 +20,7 @@ import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import ValidationError
@@ -59,6 +60,16 @@ MAX_TOKENS = 2048
 # 5.5 costs roughly a tenth of that (specs/006 "Cost"). Kept high on purpose so a cap check is
 # never passed on an estimate that is too low.
 ESTIMATED_COST_PER_REQUEST_USD = 0.002
+# A typical screen call (specs/006 "Cost"), in the newer tokenizer's counts (Haiku 5.5 and
+# Opus 4.7 onward count the same text as about 30% more tokens): 2,600 uncached input, 3,900
+# cached, 455 output. For an older-tokenizer model this overestimates by about 30%, the safe
+# direction for a spend reservation.
+TYPICAL_USAGE = SimpleNamespace(
+    input_tokens=2600,
+    cache_creation_input_tokens=0,
+    cache_read_input_tokens=3900,
+    output_tokens=455,
+)
 _CUSTOM_ID = re.compile(r"^g(\d+)$")
 
 
@@ -430,12 +441,53 @@ def only_json(group_ids: Sequence[int] | None) -> str | None:
     return None if group_ids is None else json.dumps([int(g) for g in group_ids])
 
 
-def _pending_batch_usd(conn: sqlite3.Connection) -> float:
-    """Estimated cost of submitted batches not yet collected (not in ``llm_spend`` yet)."""
-    pending = conn.execute(
-        "SELECT coalesce(sum(request_count), 0) FROM score_batch WHERE collected_at IS NULL"
+def table_price_per_request_usd(scorer: str) -> float:
+    """``scorer``'s batch price for one ``TYPICAL_USAGE`` request, or 0.0 when unpriced.
+
+    Only Anthropic models have a price table; any other spec, or a model missing from it,
+    gives 0.0 so the caller falls back to its own floor.
+    """
+    try:
+        return compute_cost(TYPICAL_USAGE, scorer, batch=True)
+    except ValueError:
+        return 0.0
+
+
+def measured_cost_per_job_usd(conn: sqlite3.Connection, scorer: str) -> float:
+    """Mean measured screen cost per job for ``scorer`` (``fit_score``), or 0.0 with none."""
+    avg = conn.execute(
+        "SELECT avg(cost_usd) FROM fit_score WHERE tier = ? AND model = ? AND cost_usd > 0",
+        (TIER, scorer),
     ).fetchone()[0]
-    return pending * ESTIMATED_COST_PER_REQUEST_USD
+    return float(avg or 0.0)
+
+
+def reserve_per_request_usd(conn: sqlite3.Connection, scorer: str) -> float:
+    """What the spend cap reserves for one batched screen request to ``scorer``.
+
+    The highest of ``ESTIMATED_COST_PER_REQUEST_USD``, the mean measured for that model, and
+    the model's table price at ``TYPICAL_USAGE`` batched. Never below the old flat $0.002, so
+    a cheap model (Haiku 5.5) reserves exactly what it did; a dearer one (Sonnet 5.5, about
+    $0.005) reserves its own price, so a cap is not overrun 2.5x.
+    """
+    return max(
+        ESTIMATED_COST_PER_REQUEST_USD,
+        measured_cost_per_job_usd(conn, scorer),
+        table_price_per_request_usd(scorer),
+    )
+
+
+def _pending_batch_usd(conn: sqlite3.Connection) -> float:
+    """Estimated cost of submitted batches not yet collected (not in ``llm_spend`` yet).
+
+    Each batch's requests are reserved at ``reserve_per_request_usd`` for the model it was
+    submitted with (``score_batch.model``).
+    """
+    rows = conn.execute(
+        "SELECT model, coalesce(sum(request_count), 0) FROM score_batch "
+        "WHERE collected_at IS NULL GROUP BY model"
+    ).fetchall()
+    return sum(int(n) * reserve_per_request_usd(conn, str(model)) for model, n in rows)
 
 
 def remaining_daily_budget(conn: sqlite3.Connection, cap_usd: float, now: datetime) -> float:
@@ -521,10 +573,11 @@ def submit_batch(
     """Submit one Message Batch for eligible groups. Returns the batch id, or None.
 
     ``remaining_usd`` is the spend cap: the batch is cut to what the remaining budget covers
-    at ``ESTIMATED_COST_PER_REQUEST_USD``; nothing is submitted when that is zero.
+    at ``reserve_per_request_usd`` for ``scorer``; nothing is submitted when that is zero.
     """
     if remaining_usd is not None:
-        affordable = math.floor(max(remaining_usd(), 0.0) / ESTIMATED_COST_PER_REQUEST_USD)
+        per_request = reserve_per_request_usd(conn, scorer)
+        affordable = math.floor(max(remaining_usd(), 0.0) / per_request)
         if affordable < limit:
             logger.warning("spend cap: screening limited to %d groups", affordable)
         limit = min(limit, affordable)

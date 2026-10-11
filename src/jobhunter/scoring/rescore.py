@@ -148,7 +148,11 @@ def cost_per_job(conn: sqlite3.Connection, spec: str) -> tuple[float, str]:
         return float(row[0]), "fit_score"
     if is_decisions(spec):
         return DECISIONS_FALLBACK_COST, "default"
-    return screen.ESTIMATED_COST_PER_REQUEST_USD, "default"
+    # Nothing measured: the old flat default, or the model's table price at typical tokens
+    # when that is higher (Sonnet 5.5 is about $0.005 a job), so a plan is never underpriced.
+    return max(
+        screen.ESTIMATED_COST_PER_REQUEST_USD, screen.table_price_per_request_usd(spec)
+    ), "default"
 
 
 # The same caps the daily run checks (screen.remaining_budget: tighter of daily and weekly).
@@ -610,6 +614,19 @@ def run_request(
     return st
 
 
+def _priced_on_flat_default(plan: Plan) -> bool:
+    """True when ``plan`` was priced at the old flat default rather than measured history.
+
+    A stored plan does not record where its price came from, so the flat
+    ``screen.ESTIMATED_COST_PER_REQUEST_USD`` itself is the marker; a measured mean is
+    never exactly that. A default priced since per-model pricing is already at least the
+    table price, so treating it the same changes nothing.
+    """
+    if plan.cost_source == "fit_score":
+        return False
+    return math.isclose(plan.cost_per_job, screen.ESTIMATED_COST_PER_REQUEST_USD, rel_tol=1e-9)
+
+
 def _execute(
     conn: sqlite3.Connection,
     st: RunState,
@@ -635,11 +652,29 @@ def _execute(
             import anthropic
 
             client_factory = anthropic.Anthropic
+        # The confirmed ceiling: the batch is billed only when collected, so cut it now to
+        # what max_usd covers at the planned cost per job. The daily and weekly caps are
+        # applied inside submit_batch as usual.
+        per_job = plan.cost_per_job
+        if _priced_on_flat_default(plan):
+            # Confirmed before per-model pricing, at the flat $0.002: price it at the model's
+            # table price when that is higher (Sonnet 5.5). A plan priced on measured history
+            # keeps its measured price, so it sends every group the user confirmed.
+            per_job = max(per_job, screen.table_price_per_request_usd(spec))
+        fits = len(ids) if per_job <= 0 else math.floor(plan.max_usd / per_job + 1e-9)
+        if fits <= 0:
+            st.notes.append(f"nothing submitted: ${plan.max_usd:.2f} confirmed covers no job")
+            return
+        if fits < len(ids):
+            st.notes.append(
+                f"batch cut to {fits} of {len(ids)} groups to stay within the confirmed "
+                f"${plan.max_usd:.2f}"
+            )
         batch_id = screen.submit_batch(
             conn,
             client_factory(),
             profile,
-            limit=len(ids),
+            limit=min(len(ids), fits),
             now=now(),
             scorer=spec,
             remaining_usd=remaining,
@@ -651,7 +686,13 @@ def _execute(
             if batch_id
             else "nothing submitted (spend cap or nothing eligible)"
         )
-        st.attempted = plan.total if batch_id else 0
+        sent = (
+            conn.execute("SELECT request_count FROM score_batch WHERE id = ?", (batch_id,))
+            if batch_id
+            else None
+        )
+        got = sent.fetchone() if sent is not None else None
+        st.attempted = int(got[0]) if got else (min(len(ids), fits) if batch_id else 0)
         return
     make = scorer_factory or (lambda s: scorer_from_string(s, scoring=scoring))
     scorer = make(spec)

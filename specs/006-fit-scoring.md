@@ -446,9 +446,17 @@ tokenizer):
 | Output | 455 | $0.25/MTok | $0.00011 |
 | | | | **≈ $0.00026** |
 
-**≈ $0.26 per 1,000 jobs screened.** At 2,000/week → **$0.53/week**. The spend-cap planning
-estimate stays at $0.002 per job (`screen.ESTIMATED_COST_PER_REQUEST_USD`): deliberately high,
-so a cap is never overrun on an estimate.
+**≈ $0.26 per 1,000 jobs screened.** At 2,000/week → **$0.53/week**. The spend cap reserves,
+per batched job, the highest of $0.002 (`screen.ESTIMATED_COST_PER_REQUEST_USD`), the mean
+measured for that model, and the model's table price at these typical tokens, batched
+(`screen.reserve_per_request_usd`). For Haiku 5.5 that is the $0.002 floor, deliberately high;
+a dearer model reserves its own price (Sonnet 5.5 about $0.005, Haiku 4.5 about $0.0026 where
+it used to reserve $0.002), so no priced model overruns a cap on an estimate. An Anthropic
+model missing from the price table has no table price and, until it has measured history,
+reserves only the $0.002 floor. Uncollected batches are reserved the same way, by the model
+each was submitted with. A confirmed Anthropic re-score batch is cut to what its confirmed
+ceiling covers at the planned price per job (the table price instead, when higher, for a plan
+confirmed at the old flat $0.002).
 
 **Stage 3, per job:** 5,000 in + 3,000 cached + 1,500 out ≈ **$0.051**. At 40/week → **$2.02/week**.
 
