@@ -79,9 +79,9 @@ def test_daily_run_does_not_rescore_with_a_different_model(conn, profile, monkey
     for n in range(1, 3):
         add_group(conn, n, profile)
     score_all_once(conn, profile)
-    scorer, _ = daily(conn, profile, monkeypatch, spec="test:other-model")
+    scorer, _ = daily(conn, profile, monkeypatch, spec="local:other-model")
     assert scorer.calls == 0
-    n = conn.execute("SELECT count(*) FROM fit_score WHERE model = 'test:other-model'").fetchone()
+    n = conn.execute("SELECT count(*) FROM fit_score WHERE model = 'local:other-model'").fetchone()
     assert n[0] == 0
 
 
@@ -148,7 +148,7 @@ def test_decisions_eligibility_honours_new_only(conn, profile, new_only, expecte
 
 # ─── Groups a re-score plan covers, and the weekly cap (23142c9) ───────────
 
-OTHER = "test:plan-model"  # the scorer the user confirmed the re-score for
+OTHER = "local:plan-model"  # the scorer the user confirmed the re-score for
 
 
 def confirmed_plan(conn, profile, status="pending", heartbeat=NOW):

@@ -97,3 +97,77 @@ def test_resolve_path_relative_to_cwd(tmp_path, monkeypatch):
     assert resolve_path("data/x.db") == tmp_path / "data" / "x.db"
     assert resolve_path("/abs/path") == Path("/abs/path")
     assert resolve_path("sub", base=Path("/base")) == Path("/base/sub")
+
+
+GOOD_SCORERS = [
+    "anthropic:claude-haiku-4-5",
+    "claude-haiku-4-5",
+    "openrouter:openai/gpt-oss-120b",
+    "jev:typesafe/jev-1.13",
+    "decisions:typesafe/jev-1.13",
+    "local:qwen3-8b",
+    "openai-compat:llama-3.1-70b",
+]
+
+
+@pytest.mark.parametrize("spec", GOOD_SCORERS)
+def test_scorer_spec_accepted(tmp_path, spec):
+    cfg = _write(
+        tmp_path / "c.toml", f'[scoring]\nscreen_scorer = "{spec}"\ndeep_scorer = "{spec}"\n'
+    )
+    assert load_settings(config_path=cfg).scoring.screen_scorer == spec
+
+
+@pytest.mark.parametrize(
+    ("spec", "needle"),
+    [
+        ("openrouter:jev:typesafe/jev-1.13", 'use "jev:typesafe/jev-1.13"'),
+        ("openroute:jev:x", "did you mean 'openrouter'"),
+        ("jev:", "no model"),
+        ("local:openai-compat:x", 'use "openai-compat:x"'),
+    ],
+)
+def test_scorer_spec_rejected(tmp_path, spec, needle):
+    cfg = _write(tmp_path / "c.toml", f'[scoring]\nscreen_scorer = "{spec}"\n')
+    with pytest.raises(ValidationError) as ei:
+        load_settings(config_path=cfg)
+    assert needle in str(ei.value)
+    assert f'screen_scorer "{spec}"' in str(ei.value)
+
+
+def test_scorer_error_for_user_value_mentions_key(tmp_path):
+    cfg = _write(
+        tmp_path / "c.toml", '[scoring]\nscreen_scorer = "openrouter:jev:typesafe/jev-1.13"\n'
+    )
+    with pytest.raises(ValidationError) as ei:
+        load_settings(config_path=cfg)
+    assert "OPENROUTER_API_KEY" in str(ei.value)
+
+
+def test_deep_scorer_validated(tmp_path):
+    cfg = _write(tmp_path / "c.toml", '[scoring]\ndeep_scorer = "anthropc:x"\n')
+    with pytest.raises(ValidationError, match="deep_scorer"):
+        load_settings(config_path=cfg)
+
+
+def test_documented_scorer_examples_parse():
+    import re
+
+    from jobhunter.config import check_scorer_spec
+
+    root = Path(__file__).resolve().parent.parent
+    for name in ("config.example.toml", "README.md"):
+        specs = re.findall(r'(?:screen|deep)_scorer = "([^"]+)"', (root / name).read_text())
+        assert specs, name
+        for spec in specs:
+            check_scorer_spec(spec, name)
+
+
+def test_cli_scorer_override_rejected():
+    from typer.testing import CliRunner
+
+    from jobhunter.cli import app
+
+    res = CliRunner().invoke(app, ["score", "--submit", "--scorer", "openrouter:jev:x"])
+    assert res.exit_code != 0
+    assert 'use "jev:x"' in res.output

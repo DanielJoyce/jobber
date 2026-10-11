@@ -22,7 +22,7 @@ from jobhunter.scoring.profile import Narrative as ProfileNarrative
 from jobhunter.scoring.profile import SalaryFloor
 from jobhunter.scoring.scorers import ScoreResult
 
-SPEC = "test:model"
+SPEC = "local:test-model"
 QUOTE = "Write Terraform modules and Go tooling."
 
 

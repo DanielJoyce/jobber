@@ -26,7 +26,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from jobhunter.config import Local, OpenAICompat, OpenRouter, Scoring
+from jobhunter.config import Local, OpenAICompat, OpenRouter, Scoring, check_scorer_spec
 
 logger = logging.getLogger(__name__)
 
@@ -655,6 +655,10 @@ def scorer_from_string(
     anthropic_factory: Callable[[], Any] | None = None,
 ) -> FitScorer:
     """``"anthropic:claude-haiku-4-5"`` or ``"openai-compat:llama-3.1-70b"`` -> a scorer."""
+    try:
+        check_scorer_spec(spec)  # same check as config load, so --scorer overrides get it too
+    except ValueError as exc:
+        raise ScorerError(str(exc)) from exc
     provider, name = split_scorer(spec)
     if provider == "anthropic":
         if client is None:

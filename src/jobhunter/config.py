@@ -15,13 +15,14 @@ while an unmigrated old database exists, and ``jobhunter migrate-paths`` moves i
 
 from __future__ import annotations
 
+import difflib
 import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from jobhunter import container
 from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
@@ -184,6 +185,40 @@ class Local(BaseModel):
     max_input_tokens_per_request: int = Field(default=40_000, ge=1000)
 
 
+# Scorer spec providers, the one canonical list (scoring.scorers and scoring.decisions use it).
+DECISIONS_PROVIDERS = ("jev", "decisions")
+CHAT_PROVIDERS = ("openrouter", "openai-compat", "local")
+SCORER_PROVIDERS = ("anthropic", *CHAT_PROVIDERS, *DECISIONS_PROVIDERS)
+
+
+def check_scorer_spec(spec: str, field: str = "scorer") -> None:
+    """Raise ValueError with an actionable message when ``spec`` is not a usable scorer spec.
+
+    A bare name (no colon) is an Anthropic model, as ``split_scorer`` treats it.
+    """
+    provider, sep, model = spec.partition(":")
+    if not sep:
+        return
+    known = ", ".join(SCORER_PROVIDERS)
+    if provider not in SCORER_PROVIDERS:
+        near = difflib.get_close_matches(provider, SCORER_PROVIDERS, n=1)
+        hint = f"; did you mean {near[0]!r}?" if near else ""
+        raise ValueError(f'{field} "{spec}": unknown provider {provider!r}{hint} (known: {known})')
+    if not model.strip():
+        raise ValueError(f'{field} "{spec}": no model after "{provider}:"')
+    inner, inner_sep, rest = model.partition(":")
+    if inner_sep and inner in SCORER_PROVIDERS and provider not in DECISIONS_PROVIDERS:
+        if inner in DECISIONS_PROVIDERS:
+            fix = f"{inner}:{rest}"
+            extra = " (it still uses OPENROUTER_API_KEY)"
+            why = f"{inner.capitalize()} is its own provider"
+        else:
+            fix = model
+            extra = ""
+            why = f"{inner!r} is a provider, not part of the model name"
+        raise ValueError(f'{field} "{spec}": {why}; use "{fix}"{extra}')
+
+
 class Scoring(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -198,6 +233,12 @@ class Scoring(BaseModel):
     openai_compat: OpenAICompat = Field(default_factory=OpenAICompat)
     openrouter: OpenRouter = Field(default_factory=OpenRouter)
     local: Local = Field(default_factory=Local)
+
+    @field_validator("screen_scorer", "deep_scorer")
+    @classmethod
+    def _check_scorer(cls, value: str, info: Any) -> str:
+        check_scorer_spec(value, info.field_name)
+        return value
 
 
 class Mail(BaseModel):

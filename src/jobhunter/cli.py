@@ -124,6 +124,19 @@ MIGRATION_EXEMPT_COMMANDS = frozenset(
 RESTORE_MIGRATE_WAIT_S = 120.0
 
 
+def _check_scorer_override(spec: str | None) -> None:
+    """Reject a malformed ``--scorer`` the same way config load rejects ``screen_scorer``."""
+    if spec is None:
+        return
+    from jobhunter.config import check_scorer_spec
+
+    try:
+        check_scorer_spec(spec, "--scorer")
+    except ValueError as exc:
+        typer.echo(f"scorer error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+
 def _migrate(conn) -> list[int]:
     """Bring the schema up to date the automatic way (specs/018 Version skew).
 
@@ -497,6 +510,7 @@ def _score_mode(
     from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
 
     settings = load_settings()
+    _check_scorer_override(scorer_override)
     try:
         profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
     except ProfileError as exc:
@@ -681,6 +695,7 @@ def _score_rescore(
     _migrate(conn)
     clock = lambda: datetime.now(UTC)  # noqa: E731
     spec = scorer_override or settings.scoring.screen_scorer
+    _check_scorer_override(scorer_override)
     try:
         if scope is None:
             results = rs.drain_pending(

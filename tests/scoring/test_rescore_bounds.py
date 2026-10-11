@@ -143,7 +143,7 @@ def test_the_confirmed_plan_bounds_the_run(conn, profile):
 def test_a_confirmed_plan_runs_only_with_its_own_scorer(conn, profile):
     add_group(conn, 1, profile)
     rid = queue(conn, profile)
-    with pytest.raises(rescore.RescoreRefused, match="confirmed for test:model"):
+    with pytest.raises(rescore.RescoreRefused, match="confirmed for local:test-model"):
         rescore.run_request(
             conn, rid, profile, scoring(), now=now, scorer="anthropic:claude-haiku-4-5"
         )

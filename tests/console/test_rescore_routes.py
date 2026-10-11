@@ -17,7 +17,7 @@ from jobhunter.scoring.profile import load_profile
 from jobhunter.scoring.scorers import ScoreResult
 
 NOW = datetime.now(UTC)
-SPEC = "test:model"
+SPEC = "local:test-model"
 QUOTE = "Write Terraform modules and Go tooling."
 DESC = f"Own the Linux fleet.\n{QUOTE}"
 PREFS = """\
@@ -162,7 +162,7 @@ def test_prefs_has_labeled_section_with_help_estimate_and_confirm(client):
     assert "<strong>3</strong> job group" in text  # waiting
     text = client.get("/prefs/rescore/panel", params={"scope": "all"}).text
     assert "estimated <strong>$0.01</strong>" in text
-    assert 'hx-confirm="Re-score 3 job groups with test:model?' in text
+    assert 'hx-confirm="Re-score 3 job groups with local:test-model?' in text
     assert "This spends credits." in text
 
 

@@ -28,7 +28,7 @@ from jobhunter.scoring.scorers import ScorerError, ScoreResult
 
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
 ISO = NOW.isoformat()
-SPEC = "test:model"
+SPEC = "openai-compat:test-model"
 ORIGIN = ext_pairing.EXTENSION_ORIGIN
 BASE = "http://127.0.0.1:8808"
 LONG = " ".join(["Operate the synthetic Linux fleet and write Terraform modules."] * 6)
