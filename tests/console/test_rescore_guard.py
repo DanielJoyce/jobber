@@ -106,7 +106,7 @@ def test_a_queued_run_confirms_with_its_numbers(client, conn):
     assert "Run&hellip;" in text and 'hx-confirm="Run this queued' not in text
     panel = client.get("/prefs/rescore/panel", params={"request_id": "1", "scorer": SPEC}).text
     assert (
-        'hx-confirm="Run queued re-score #1: re-score 3 job groups with local:test-model? '
+        'hx-confirm="Run queued re-score #1: re-score 3 job groups with openrouter:test/model? '
         "Estimated cost $0.01; the run stops before it spends more than $0.02." in panel
     )
     assert 'name="request_id" value="1"' in panel

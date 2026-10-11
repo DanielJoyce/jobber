@@ -67,7 +67,7 @@ def server(tmp_path):
                 "data_dir": str(tmp_path),
             },
             # A name no real provider answers to: a test that reaches a scorer must inject one.
-            "scoring": {"screen_scorer": "local:test-model"},
+            "scoring": {"screen_scorer": "openrouter:test/model"},
         }
     )
     app = create_app(settings, lambda: db.connect(db_path))

@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from jobhunter import container
 from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
@@ -191,32 +191,40 @@ CHAT_PROVIDERS = ("openrouter", "openai-compat", "local")
 SCORER_PROVIDERS = ("anthropic", *CHAT_PROVIDERS, *DECISIONS_PROVIDERS)
 
 
-def check_scorer_spec(spec: str, field: str = "scorer") -> None:
+def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool = False) -> None:
     """Raise ValueError with an actionable message when ``spec`` is not a usable scorer spec.
 
-    A bare name (no colon) is an Anthropic model, as ``split_scorer`` treats it.
+    Bare names are rejected: downstream code keys on the ``anthropic:`` prefix, so a bare
+    model name used to slip through and break the batch path.
     """
     provider, sep, model = spec.partition(":")
-    if not sep:
-        return
     known = ", ".join(SCORER_PROVIDERS)
+    inner, inner_sep, rest = model.partition(":")
+    if not sep:
+        raise ValueError(
+            f'{field} "{spec}": no provider; write "anthropic:{spec}" (known: {known})'
+        )
     if provider not in SCORER_PROVIDERS:
-        near = difflib.get_close_matches(provider, SCORER_PROVIDERS, n=1)
-        hint = f"; did you mean {near[0]!r}?" if near else ""
+        if inner_sep and inner in DECISIONS_PROVIDERS and rest:
+            hint = f'; use "{inner}:{rest}"'
+        elif near := difflib.get_close_matches(provider, SCORER_PROVIDERS, n=1):
+            hint = f"; did you mean {near[0]!r}?"
+        else:
+            hint = ""
         raise ValueError(f'{field} "{spec}": unknown provider {provider!r}{hint} (known: {known})')
     if not model.strip():
         raise ValueError(f'{field} "{spec}": no model after "{provider}:"')
-    inner, inner_sep, rest = model.partition(":")
-    if inner_sep and inner in SCORER_PROVIDERS and provider not in DECISIONS_PROVIDERS:
-        if inner in DECISIONS_PROVIDERS:
-            fix = f"{inner}:{rest}"
-            extra = " (it still uses OPENROUTER_API_KEY)"
-            why = f"{inner.capitalize()} is its own provider"
-        else:
-            fix = model
-            extra = ""
-            why = f"{inner!r} is a provider, not part of the model name"
-        raise ValueError(f'{field} "{spec}": {why}; use "{fix}"{extra}')
+    if anthropic_only and provider != "anthropic":
+        raise ValueError(f'{field} "{spec}": the deep pass needs "anthropic:<model>"')
+    # OpenRouter slugs are author/model, so a leading provider name is a mistake. Local and
+    # openai-compat model names are free-form ("jev:latest" can be legitimate).
+    if provider == "openrouter" and inner_sep and inner in SCORER_PROVIDERS:
+        if inner in DECISIONS_PROVIDERS and rest:
+            raise ValueError(
+                f'{field} "{spec}": {inner.capitalize()} is its own provider; use '
+                f'"{inner}:{rest}" (it still uses OPENROUTER_API_KEY)'
+            )
+        raise ValueError(f'{field} "{spec}": the model name starts with the provider {inner!r}')
 
 
 class Scoring(BaseModel):
@@ -234,11 +242,16 @@ class Scoring(BaseModel):
     openrouter: OpenRouter = Field(default_factory=OpenRouter)
     local: Local = Field(default_factory=Local)
 
-    @field_validator("screen_scorer", "deep_scorer")
-    @classmethod
-    def _check_scorer(cls, value: str, info: Any) -> str:
-        check_scorer_spec(value, info.field_name)
-        return value
+    def scorer_problems(self) -> dict[str, str]:
+        """{field: message} for each malformed scorer spec. Loading never fails on these: the
+        run stage, console and CLI report them where they matter (scoring fails soft)."""
+        out: dict[str, str] = {}
+        for name, only in (("screen_scorer", False), ("deep_scorer", True)):
+            try:
+                check_scorer_spec(getattr(self, name), name, anthropic_only=only)
+            except ValueError as exc:
+                out[name] = str(exc)
+        return out
 
 
 class Mail(BaseModel):

@@ -64,8 +64,10 @@ scripts/setup-hooks.sh     # secret-scanning git hooks; asks before downloading 
 
 ## Choosing a scorer
 
-`scoring.screen_scorer` (and `deep_scorer`) in `config.toml` is `<provider>:<model>`. A malformed
-value is rejected when the config loads.
+`scoring.screen_scorer` in `config.toml` is `<provider>:<model>` (no bare model names).
+`deep_scorer` must be `anthropic:<model>`. A malformed value does not stop fetch or mail: the
+run skips scoring and logs why, `score` exits with a one-line error, and the console's re-score
+panel shows it.
 
 | Spec | Endpoint | Key |
 |---|---|---|

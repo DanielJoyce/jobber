@@ -124,14 +124,18 @@ MIGRATION_EXEMPT_COMMANDS = frozenset(
 RESTORE_MIGRATE_WAIT_S = 120.0
 
 
-def _check_scorer_override(spec: str | None) -> None:
-    """Reject a malformed ``--scorer`` the same way config load rejects ``screen_scorer``."""
-    if spec is None:
-        return
+def _check_scorer_override(settings, spec: str | None, *, deep: bool = False) -> None:
+    """Fail fast (one line, exit 2) on a malformed scorer: the ``--scorer`` override, else
+    the configured screen_scorer; with ``deep``, also deep_scorer."""
     from jobhunter.config import check_scorer_spec
 
     try:
-        check_scorer_spec(spec, "--scorer")
+        if spec is not None:
+            check_scorer_spec(spec, "--scorer")
+        else:
+            check_scorer_spec(settings.scoring.screen_scorer, "screen_scorer")
+        if deep:
+            check_scorer_spec(settings.scoring.deep_scorer, "deep_scorer", anthropic_only=True)
     except ValueError as exc:
         typer.echo(f"scorer error: {exc}", err=True)
         raise typer.Exit(2) from exc
@@ -510,7 +514,7 @@ def _score_mode(
     from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
 
     settings = load_settings()
-    _check_scorer_override(scorer_override)
+    _check_scorer_override(settings, scorer_override, deep=bool(deep or deep_group))
     try:
         profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
     except ProfileError as exc:
@@ -695,7 +699,7 @@ def _score_rescore(
     _migrate(conn)
     clock = lambda: datetime.now(UTC)  # noqa: E731
     spec = scorer_override or settings.scoring.screen_scorer
-    _check_scorer_override(scorer_override)
+    _check_scorer_override(settings, scorer_override)
     try:
         if scope is None:
             results = rs.drain_pending(

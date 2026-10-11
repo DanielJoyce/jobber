@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from jobhunter.config import resolve_path
+from jobhunter.config import check_scorer_spec, resolve_path
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.core import runlock
 from jobhunter.pipeline.listing import to_iso
@@ -45,13 +45,28 @@ LIVE = ("pending", "running")
 def available_scorers(scoring: Any, env: Mapping[str, str] | None = None) -> list[tuple[str, str]]:
     """(spec, label) for the default scorer plus scorers whose key is set. Never shows keys."""
     env = os.environ if env is None else env
-    out = [(scoring.screen_scorer, "configured default")]
+    problem = scoring.scorer_problems().get("screen_scorer")
+    out = [
+        (
+            scoring.screen_scorer,
+            "configured default, INVALID: see message" if problem else "configured default",
+        )
+    ]
     if env.get(scoring.openrouter.api_key_env):
         out.append((f"jev:{JEV_DEFAULT_MODEL}", "Jev, synchronous"))
     if env.get("ANTHROPIC_API_KEY"):
         out.append((ANTHROPIC_HAIKU, "Anthropic batch, collected later"))
     seen: set[str] = set()
     return [(s, label) for s, label in out if not (s in seen or seen.add(s))]
+
+
+def _spec_problem(spec: str) -> str | None:
+    """The one-line reason a scorer spec is malformed, or None."""
+    try:
+        check_scorer_spec(spec, "scorer")
+    except ValueError as exc:
+        return str(exc)
+    return None
 
 
 def local_time(value: str | None) -> str:
@@ -252,7 +267,10 @@ def register(
             scope = queued["scope"]  # running a queued request plans its own scope
         running = rs.running_request(conn, now())
         plan = notice = None
-        if st.kind == "ok" and running is None:
+        problem = _spec_problem(spec)
+        if problem:
+            message = message or problem
+        if st.kind == "ok" and running is None and not problem:
             try:
                 plan = rs.make_plan(conn, st.profile, settings.scoring, scope, spec, now())
                 notice = privacy_notice(spec, settings.scoring)
@@ -318,6 +336,8 @@ def register(
             if spec_in in dict(available_scorers(settings.scoring))
             else (settings.scoring.screen_scorer)
         )
+        if problem := _spec_problem(spec):
+            return render_panel(request, conn, scope=scope, scorer=spec, message=problem)
         try:
             rid = request.app.state.rescore.start(
                 conn,

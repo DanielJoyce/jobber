@@ -33,7 +33,7 @@ BODY = json.dumps(
 
 
 class FakeScorer:
-    name = "local:test-model"
+    name = "openrouter:test/model"
 
     def submit(self, requests):
         return [ScoreResult(custom_id=r.custom_id, status="succeeded", text=BODY) for r in requests]
@@ -58,9 +58,11 @@ def test_rescore_now_confirms_runs_and_links_to_the_inbox(page, server):
     expect(panel.locator("#rescore-estimate")).to_contain_text("Will score")
     panel.locator("#rescore-run").click()
     expect(panel.locator(".rescore-done")).to_contain_text("Done.", timeout=15000)
-    assert dialogs and "spends credits" in dialogs[0] and "local:test-model" in dialogs[0]
+    assert dialogs and "spends credits" in dialogs[0] and "openrouter:test/model" in dialogs[0]
     expect(panel.locator(".rescore-done a")).to_have_attribute("href", "/inbox")
-    scored = server.rows("SELECT count(*) FROM fit_score WHERE model = 'local:test-model'")[0][0]
+    scored = server.rows("SELECT count(*) FROM fit_score WHERE model = 'openrouter:test/model'")[0][
+        0
+    ]
     assert scored > 0
     row = server.rows("SELECT status, scored FROM rescore_request")[0]
     assert row[0] == "done" and row[1] == scored

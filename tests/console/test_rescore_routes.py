@@ -17,7 +17,7 @@ from jobhunter.scoring.profile import load_profile
 from jobhunter.scoring.scorers import ScoreResult
 
 NOW = datetime.now(UTC)
-SPEC = "local:test-model"
+SPEC = "openrouter:test/model"
 QUOTE = "Write Terraform modules and Go tooling."
 DESC = f"Own the Linux fleet.\n{QUOTE}"
 PREFS = """\
@@ -162,7 +162,7 @@ def test_prefs_has_labeled_section_with_help_estimate_and_confirm(client):
     assert "<strong>3</strong> job group" in text  # waiting
     text = client.get("/prefs/rescore/panel", params={"scope": "all"}).text
     assert "estimated <strong>$0.01</strong>" in text
-    assert 'hx-confirm="Re-score 3 job groups with local:test-model?' in text
+    assert 'hx-confirm="Re-score 3 job groups with openrouter:test/model?' in text
     assert "This spends credits." in text
 
 
@@ -324,3 +324,13 @@ def test_rescore_now_holds_the_run_lock_while_it_spends(client, db_path):
     gate.set()
     finish(client)
     assert runlock.RunLock(db_path, "probe").try_acquire()
+
+
+def test_invalid_configured_scorer_is_marked_and_explained():
+    from jobhunter.console.rescore_routes import _spec_problem, available_scorers
+
+    scoring = Scoring(screen_scorer="openroute:jev:typesafe/jev-1.13")
+    (spec, label), *_ = available_scorers(scoring, env={})
+    assert spec == scoring.screen_scorer and "INVALID" in label
+    assert 'use "jev:typesafe/jev-1.13"' in _spec_problem(spec)
+    assert _spec_problem("jev:typesafe/jev-1.13") is None
