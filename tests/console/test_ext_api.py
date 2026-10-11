@@ -208,6 +208,14 @@ def share(conn, gid, bid="4099999999"):
     return f"linkedin:{bid}"
 
 
+def url_of(conn, gid):
+    """The group's own posting URL: what a board capture's Apply led to."""
+    return conn.execute(
+        "SELECT j.url FROM job_group g JOIN job j ON j.id = g.canonical_job_id WHERE g.id = ?",
+        (gid,),
+    ).fetchone()[0]
+
+
 def count(conn, table):
     return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
@@ -518,8 +526,14 @@ def test_group_routes_follow_a_merged_group(client, token, conn):
     )
     ga, gb = a.json()["group"]["group_id"], b.json()["group"]["group_id"]
     ja = a.json()["group"]["job_id"]
-    linked = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb,
-                                          "board_key": share(conn, ga)})  # fmt: skip
+    body = {
+        "action_id": aid(),
+        "a": ga,
+        "b": gb,
+        "board_key": share(conn, ga),
+        "apply_url": url_of(conn, gb),
+    }
+    linked = post(client, token, "link", body)
     assert linked.json()["outcome"] == "linked_groups"
     kept = linked.json()["group_id"]
     gone = ga if kept == gb else gb
@@ -550,13 +564,23 @@ def test_link_route_refuses_while_scoring(client, token, conn):
     )
     assert scorer.started.wait(5)
     key = share(conn, ga)
-    r = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb, "board_key": key})
+    r = post(
+        client,
+        token,
+        "link",
+        {"action_id": aid(), "a": ga, "b": gb, "board_key": key, "apply_url": url_of(conn, gb)},
+    )
     assert r.status_code == 409 and "scoring in progress" in r.json()["error"]
     assert count(conn, "job_group") == 2
     scorer.release.set()
     for t in client.app.state.ext_score_threads:
         t.join(10)
-    ok = post(client, token, "link", {"action_id": aid(), "a": ga, "b": gb, "board_key": key})
+    ok = post(
+        client,
+        token,
+        "link",
+        {"action_id": aid(), "a": ga, "b": gb, "board_key": key, "apply_url": url_of(conn, gb)},
+    )
     assert ok.status_code == 200
     kept = ok.json()["group_id"]
     assert kept == ga  # the scored one

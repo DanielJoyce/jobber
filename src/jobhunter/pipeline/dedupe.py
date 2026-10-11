@@ -18,6 +18,7 @@ from rapidfuzz import fuzz
 from jobhunter.core.manual_sources import EMAIL_MANUAL, PASTE_MANUAL
 from jobhunter.pipeline.board_ids import board_key
 from jobhunter.pipeline.listing import _txn, from_iso, to_iso
+from jobhunter.pipeline.posting_urls import is_posting_url
 
 SHINGLE_WORDS = 5
 _GENERIC = re.compile(
@@ -226,7 +227,8 @@ def _board_index(conn: sqlite3.Connection) -> dict[str, int]:
 def _captured_url_index(conn: sqlite3.Connection) -> dict[str, int]:
     """One-posting URL key -> group, for pasted and captured jobs (``paste-manual``).
 
-    The captured job's chosen URL and its page URL are both keys, plus its group's apply link.
+    The captured job's chosen URL and its page URL are both keys; its apply URL and apply link
+    only when they certainly name one posting (``posting_urls``), never a careers path.
     A key two groups share maps to neither.
     """
     seen: dict[str, set[int]] = {}
@@ -236,7 +238,8 @@ def _captured_url_index(conn: sqlite3.Connection) -> dict[str, int]:
         "WHERE j.source_key = ? AND j.job_group_id IS NOT NULL",
         (PASTE_MANUAL,),
     ):
-        for k in _url_keys(r[0], r[1], r[2], r[3], r[4]):
+        applies = [u for u in (r[1], r[3], r[4]) if is_posting_url(u)]
+        for k in _url_keys(r[0], r[2], *applies):
             seen.setdefault(k, set()).add(int(r[5]))
     return {k: next(iter(g)) for k, g in seen.items() if len(g) == 1}
 

@@ -228,3 +228,147 @@ def test_capture_never_reads_page_text_into_the_log(conn):
     cap(conn, facts(posting()))
     row = conn.execute("SELECT response FROM capture_log").fetchone()[0]
     assert LONG[:40] not in json.dumps(row)
+
+
+# ─── final check of 5aed9f6 ────────────────────────────────────────────────
+
+CAREERS = "https://www.acme.example/careers"
+
+
+@pytest.mark.parametrize(
+    ("url", "posting"),
+    [
+        ("https://www.usajobs.gov/job/812345600", True),
+        ("https://www.usajobs.gov/GetJob/ViewDetails/812345600", True),
+        ("https://www.usajobs.gov/search/results/?k=analyst", False),
+        ("https://nlx.jobsyn.org/0123456789ABCDEF0123456789ABCDEF", True),
+        ("https://usnlx.com/seattle-wa/platform-engineer/0123ABCD/job/", True),
+        ("https://usnlx.com/viewjob.asp?sjobid=12345", True),
+        ("https://usnlx.com/jobs/", False),
+        ("https://jobs.mitalent.org/job-seeker/job-details/JobCode/1234567", True),
+        ("https://hire.wyo.gov/job/abc-123", True),
+        ("https://worksource.my.site.com/worksourcewa/job-search/job-details?jobId=a1B2", True),
+        ("https://jobs.utah.gov/jsp/utjobs/single-job?j=123456", True),
+        ("https://labor.eightfold.ai/careerhub/explore/jobs/1234567", True),
+        (GH, True),
+        ("https://boards.greenhouse.io/acme", False),
+        (CAREERS, False),
+        ("https://careers.acme.example/", False),
+        ("https://www.acme.example/careers/software-engineer-1234", False),
+    ],
+)
+def test_posting_url_vectors(url, posting):
+    from jobhunter.pipeline.posting_urls import is_posting_url
+
+    assert is_posting_url(url) is posting
+
+
+def test_a_careers_path_apply_does_not_make_two_linkedin_jobs_link_candidates(conn):
+    a = add(conn, li_page(1, "Software Engineer", CAREERS), "Software Engineer")
+    b = add(conn, li_page(2, "Office Manager", CAREERS), "Office Manager")
+    assert (a.outcome, b.outcome) == ("added", "added")
+    ga, gb = a.group.group_id, b.group.group_id
+    assert capture.same_job_candidates(conn, ga) == []
+    assert capture.same_job_candidates(conn, gb) == []
+    with pytest.raises(capture.CaptureError):
+        capture.link(
+            conn,
+            LinkRequest(
+                action_id=aid(), a=ga, b=gb, board_key="linkedin:4000000001", apply_url=CAREERS
+            ),
+            now=NOW,
+        )
+    assert count(conn, "job_group") == 2
+
+
+def test_a_careers_path_apply_url_is_no_key_for_a_later_ingest(conn):
+    from jobhunter.pipeline.dedupe import group_pending
+
+    gid = add(conn, li_page(1, "Software Engineer", CAREERS), "Software Engineer").group.group_id
+    conn.execute(
+        "INSERT INTO job (source_key, external_id, url, title, employer, description_text, "
+        "stage, first_seen_at, last_seen_at) VALUES ('co', 'x9', ?, 'Office Manager', "
+        "'Other Employer', 'Unrelated office work in another town.', 'normalized', ?, ?)",
+        (CAREERS, ISO, ISO),
+    )
+    group_pending(conn, now=NOW)
+    jid = conn.execute("SELECT job_group_id FROM job WHERE external_id = 'x9'").fetchone()[0]
+    assert jid != gid
+
+
+def test_a_crafted_link_with_a_board_key_alone_is_refused(conn):
+    ingested(conn, 1, url="https://boards.greenhouse.io/acme/jobs/1", title="One")
+    ingested(conn, 2, url="https://boards.greenhouse.io/acme/jobs/2", title="Two")
+    conn.execute(
+        "INSERT INTO job_board_ref (board, board_id, job_id, seen_at) "
+        "VALUES ('linkedin', '4012345678', 1, ?)",
+        (ISO,),
+    )
+    for apply_url in (None, "https://boards.greenhouse.io/acme/jobs/3"):
+        with pytest.raises(capture.CaptureError):
+            capture.link(
+                conn,
+                LinkRequest(
+                    action_id=aid(), a=1, b=2, board_key="linkedin:4012345678", apply_url=apply_url
+                ),
+                now=NOW,
+            )
+    assert count(conn, "job_group") == 2
+    ok = capture.link(
+        conn,
+        LinkRequest(
+            action_id=aid(),
+            a=1,
+            b=2,
+            board_key="linkedin:4012345678",
+            apply_url="https://boards.greenhouse.io/acme/jobs/2",
+        ),
+        now=NOW,
+    )
+    assert ok.outcome == "linked_groups"
+
+
+def pair_setup(conn):
+    ingested(
+        conn, 1, url="https://www.linkedin.com/jobs/view/4012345678/", title="Platform Engineer"
+    )
+    ingested(conn, 2, url=GH, title="Platform Engineer")
+    return li(href=GH)
+
+
+def test_pair_mode_cannot_be_added_as_new(conn):
+    f = pair_setup(conn)
+    r = cap(conn, f)
+    assert r.outcome == "same_job" and r.link_mode == "pair"
+    out = add(conn, f, "Platform Engineer", force_new=True)
+    assert out.outcome == "same_job" and count(conn, "job_group") == 2
+
+
+def test_not_the_same_on_a_pair_suppresses_the_offer(conn):
+    f = pair_setup(conn)
+    assert cap(conn, f).outcome == "same_job"
+    capture.link(conn, LinkRequest(action_id=aid(), a=1, b=2, not_same=True), now=NOW)
+    again = cap(conn, f)
+    assert again.outcome == "existing" and again.group.group_id == 1
+
+
+def test_not_the_same_on_a_pick_suppresses_the_offer(conn):
+    path = "https://www.acme.example/careers/software-engineer"
+    ingested(conn, 1, url=path, title="Software Engineer")
+    f = li_page(1, "Software Engineer II", path)
+    r = cap(conn, f)
+    assert r.outcome == "same_job" and r.link_mode == "pick"
+    capture.link(
+        conn,
+        LinkRequest(action_id=aid(), a=1, board_key=r.board.key, apply_url=path, not_same=True),
+        now=NOW,
+    )
+    assert cap(conn, f).outcome == "previewed"
+    assert count(conn, "job_board_ref") == 0
+
+
+def test_a_linkedin_apply_to_usajobs_links_at_once(conn):
+    usaj = "https://www.usajobs.gov/job/812345600"
+    ingested(conn, 1, url=usaj, title="IT Specialist (SYSADMIN)")
+    r = cap(conn, li_page(1, "IT Specialist (SYSADMIN)", usaj))
+    assert r.outcome == "linked" and r.group.group_id == 1

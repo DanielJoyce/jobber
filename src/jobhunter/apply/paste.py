@@ -39,6 +39,7 @@ from jobhunter.pipeline.dedupe_url import _identifies_job, normalize_apply_url
 from jobhunter.pipeline.dedupe_xstate import normalize_title
 from jobhunter.pipeline.locations import apply_job_locations
 from jobhunter.pipeline.normalize import normalize_job
+from jobhunter.pipeline.posting_urls import is_posting_url
 
 SYNTHETIC_PREFIX = "paste:"  # job.url when no URL was given; never shown or opened
 MIN_FETCHED_CHARS = 200  # less than this is a JavaScript shell or an error page: paste instead
@@ -139,7 +140,9 @@ def _url_matches(conn: sqlite3.Connection, key: str) -> set[int]:
     that goes to the careers home) says nothing about which posting it was.
     """
     host = host_of(key)
-    one = _identifies_job(key)
+    # Apply destinations count only when they certainly name one posting (posting_urls): a
+    # careers path that several board jobs Apply to says nothing about which posting it was.
+    one = is_posting_url(key)
     rows = conn.execute(
         "SELECT j.job_group_id AS gid, j.url, j.page_url, j.apply_url FROM job j "
         "WHERE j.job_group_id IS NOT NULL AND (instr(lower(j.url), ?) > 0 "

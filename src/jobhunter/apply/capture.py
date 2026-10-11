@@ -70,6 +70,7 @@ from jobhunter.pipeline.dedupe import _refresh_group, normalize_employer
 from jobhunter.pipeline.dedupe_url import _identifies_job, normalize_apply_url
 from jobhunter.pipeline.dedupe_xstate import normalize_title
 from jobhunter.pipeline.listing import to_iso
+from jobhunter.pipeline.posting_urls import is_posting_url
 from jobhunter.scoring.profile import Profile
 
 __all__ = ["board_key"]  # re-exported: specs/017 names it apply/capture.py::board_key
@@ -864,6 +865,22 @@ def _board_info(a: Analysis) -> BoardInfo | None:
     )
 
 
+def _ident(a: Analysis) -> str:
+    """What a Not the same answer is remembered by for a posting with no group yet."""
+    return a.board_key or f"url:{_key(a.url) or a.url}"
+
+
+def _said_not_same(conn: sqlite3.Connection, ident: str, gid: int) -> bool:
+    for r in conn.execute("SELECT response FROM capture_log WHERE outcome = 'not_same'"):
+        try:
+            data = json.loads(r[0] or "{}")
+        except ValueError:
+            continue
+        if data.get("ident") == ident and gid in data.get("pair", []):
+            return True
+    return False
+
+
 def _not_same(conn: sqlite3.Connection, a: int, b: int) -> bool:
     pair = sorted((a, b))
     for r in conn.execute("SELECT response FROM capture_log WHERE outcome = 'not_same'"):
@@ -1003,11 +1020,13 @@ def _decide(
     if a.destination and identifies_posting(a.destination):
         # Linked at once only when an ATS rule says the destination is one posting; a
         # generic careers path is only offered. A careers home matches nothing.
-        rule = match_ats(a.destination)
-        posting = rule is not None and rule.is_posting(a.destination)
+        posting = is_posting_url(a.destination)
+        ident = _ident(a)
         for d in paste.find_duplicates(conn, a.destination, "", ""):
             if d.why != paste.SAME_URL or any(d.group_id == b.group_id for b in board_hits):
                 continue
+            if _said_not_same(conn, ident, d.group_id):
+                continue  # the user said Not the same for this posting and that group
             if posting and _titles_agree(a.title, d.title):
                 dest_strong.append(d)
             else:
@@ -1035,7 +1054,12 @@ def _decide(
     def cards(ds: list[paste.Duplicate]) -> list[GroupCard]:
         return [c for d in ds if (c := card(conn, profile, d.group_id, now, d.why)) is not None]
 
-    if board_hits and dest_strong and dest_strong[0].group_id != board_hits[0].group_id:
+    if (
+        board_hits
+        and dest_strong
+        and dest_strong[0].group_id != board_hits[0].group_id
+        and not _not_same(conn, board_hits[0].group_id, dest_strong[0].group_id)
+    ):
         resp = mk(
             "same_job",
             "This board posting and the employer's posting are both in jobhunter: link them?",
@@ -1131,7 +1155,11 @@ def add(
         if prior is not None and (replayed := _replay(conn, prior, profile, now)) is not None:
             return replayed
         resp, gid, jid = _decide(conn, a, None, profile, now)
-        if req.force_new and resp.outcome in ("possible", "same_job"):
+        # Add as new: past a possible match or a "which one is it?" offer. Never past a
+        # sure board-id match (a "pair" offer: this board posting is already here).
+        if req.force_new and (
+            resp.outcome == "possible" or (resp.outcome == "same_job" and resp.link_mode == "pick")
+        ):
             gid, jid = _insert(
                 conn, a, title=title, employer=employer, description=description, now=now
             )
@@ -1353,13 +1381,34 @@ def link_same_job(conn: sqlite3.Connection, a: int, b: int, now: datetime) -> in
     return kept
 
 
-def _may_link(conn: sqlite3.Connection, a: int, b: int, board_key: str | None) -> bool:
-    """Two existing groups are merged only when one of them holds the board posting being
-    linked (its job id), or they are surely the same posting. Never two candidates that
-    merely share a careers home."""
-    if board_key and set(paste.board_groups(conn, board_key)) & {a, b}:
+def _may_link(
+    conn: sqlite3.Connection, a: int, b: int, board_key: str | None, apply_url: str | None
+) -> bool:
+    """Two existing groups are merged only when they are surely the same posting: one is a
+    ``same_job_candidates`` of the other, or one holds the board id being linked and the
+    other's own posting URL is the employer posting the board's Apply led to. The client's
+    board key alone is never enough, and two candidates that merely share a careers home
+    are never merged."""
+    if b in {d.group_id for d in same_job_candidates(conn, a)}:
         return True
-    return b in {d.group_id for d in same_job_candidates(conn, a)}
+    if a in {d.group_id for d in same_job_candidates(conn, b)}:
+        return True
+    if not (board_key and apply_url):
+        return False
+    key = _key(apply_url)
+    if not key or not _identifies_job(key):
+        return False
+    for holder in set(paste.board_groups(conn, board_key)) & {a, b}:
+        other = b if holder == a else a
+        own = {
+            k
+            for r in conn.execute("SELECT url, page_url FROM job WHERE job_group_id = ?", (other,))
+            for u in r
+            if (k := _key(u))
+        }
+        if key in own:
+            return True
+    return False
 
 
 def link(
@@ -1394,7 +1443,13 @@ def link(
                 outcome="not_same",
                 now=now,
                 group_id=req.a,
-                response={"outcome": "not_same", "pair": sorted((req.a, b)), "message": msg},
+                response={
+                    "outcome": "not_same",
+                    "pair": sorted((req.a, b)),
+                    "ident": req.board_key
+                    or (f"url:{_key(req.apply_url)}" if req.apply_url else None),
+                    "message": msg,
+                },
                 ext_version=ext_version,
             )
             return LinkResponse(outcome="not_same", group_id=None, message=msg)
@@ -1402,7 +1457,7 @@ def link(
             for gid in (req.a, b):
                 if _busy(conn, gid, now):
                     raise Conflict("scoring in progress; link when it finishes")
-            if not _may_link(conn, req.a, b, req.board_key):
+            if not _may_link(conn, req.a, b, req.board_key, req.apply_url):
                 raise CaptureError(
                     "only a posting you captured can be linked: pick the one that is this job"
                 )
@@ -1503,25 +1558,29 @@ def same_job_candidates(conn: sqlite3.Connection, group_id: int) -> list[paste.D
     """Other groups that are surely the same posting as this one (a shared board id, or a
     one-posting URL among its jobs' URLs, apply links and decoded board destinations): what
     ``/job/{id}`` offers to **Link them**. Employer and title alone are never offered."""
-    urls: list[str | None] = []
+    own: list[str | None] = []  # the posting's own URLs
+    applies: list[str | None] = []  # where its Apply goes: counted only when one posting
     keys: list[str] = []
     for r in conn.execute(
         "SELECT url, apply_url, page_url FROM job WHERE job_group_id = ?", (group_id,)
     ):
-        urls += [r[0], r[1], r[2]]
+        own += [r[0], r[2]]
+        applies.append(r[1])
     for r in conn.execute(
         "SELECT r.board, r.board_id, r.apply_url FROM job_board_ref r JOIN job j "
         "ON j.id = r.job_id WHERE j.job_group_id = ?",
         (group_id,),
     ):
         keys.append(f"{r[0]}:{r[1]}")
-        urls.append(r[2])
+        applies.append(r[2])
     link = conn.execute(
         "SELECT start_url, final_url FROM apply_link WHERE job_group_id = ?", (group_id,)
     ).fetchone()
     if link is not None:
-        urls += [link[0], link[1]]
-    real = tuple(u for u in urls if u and is_http_url(u))
+        applies += [link[0], link[1]]
+    real = tuple(
+        [u for u in own if u and is_http_url(u)] + [u for u in applies if u and is_posting_url(u)]
+    )
     if not real and not keys:
         return []
     dups = paste.find_duplicates(conn, None, "", "", urls=real, board_keys=tuple(keys))
@@ -1537,6 +1596,8 @@ def same_job_candidates(conn: sqlite3.Connection, group_id: int) -> list[paste.D
         gid = int(r[0])
         if gid == group_id or gid in seen or _key(r[4]) not in mine:
             continue
+        if not is_posting_url(r[4]):
+            continue  # a careers path the board's Apply led to names no single posting
         seen.add(gid)
         out.append(
             paste.Duplicate(

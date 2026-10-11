@@ -269,13 +269,23 @@ function candidatesBox(r) {
       })}, "Not the same"));
   }
   if (pick) {
-    row.append(el("button", {id: "not-same", onclick: () => {
+    row.append(el("button", {id: "not-same", onclick: async () => {
+      // Remembered per candidate, so this offer is not made again for this posting.
+      for (const c of r.candidates) {
+        await send({type: "link", key: current && current.key, body: {
+          action_id: aid(), a: c.group_id, b: null, board_key: boardKey, apply_url: r.url || null,
+          not_same: true,
+        }});
+      }
       box.after(previewForm(r, true));
     }}, "Not the same"));
   }
-  row.append(el("button", {id: "add-as-new", onclick: () => {
-    box.after(previewForm(r, true));
-  }}, "Add as new"));
+  if (!(r.outcome === "same_job" && r.link_mode === "pair")) {
+    // A pair offer is a sure board-id match: this posting is already here, so no Add as new.
+    row.append(el("button", {id: "add-as-new", onclick: () => {
+      box.after(previewForm(r, true));
+    }}, "Add as new"));
+  }
   box.append(row);
   return box;
 }
