@@ -1,7 +1,7 @@
 # 019 — First-run setup and readiness
 
-Status: **draft for review, revision 2** (bug `ba4d25f`). Written 2026-10-11; revised the same
-day after an adversarial review and your answers ([History](#history)).
+Status: **draft for review, revision 3** (bug `ba4d25f`). Written 2026-10-11; revised twice the
+same day after adversarial reviews and your answers ([History](#history)).
 
 You asked that on first launch jobhunter guide you through supplying your resume,
 preferences, alert-email setup and the rest, and say what is missing and which features will not
@@ -48,15 +48,16 @@ Missing inputs fail in three different ways today, and two of them are hard to n
 | Is the User-Agent contact essential? | **Yes, essential, not dismissible** | Every request to a job board otherwise carries the placeholder `<you>@example.com`; 008 says we identify ourselves honestly |
 | Should a run with no usable scorer fail? | **No: it still exits 0** and reports through the banner, `doctor` and the run summary | Ingest did useful work. This is only about scoring. Source failures keep their existing exit 1 ([reconciled below](#exit-codes-of-the-run)) |
 | First-run redirect | **`/` redirects to `/setup` on first run only**: an essential missing or broken **and** zero jobs | Guides a fresh install; never hides data you already have |
+| USAJOBS with no credentials (S10) | **Approved: skipped** when no credentials are configured; a configured but rejected key still fails the run | A fresh install is not paged every night for a source you have not set up |
 
 ### Exit codes of the run
 
 The two rules sit side by side and stay as they are: a failed **source** makes `jobhunter run`
 exit 1 (existing behaviour, [004](004-ingest-pipeline.md)), a skipped or failed **score stage**
 never does (your decision above). What changes is that both are explained: `/setup`, the banner
-and `doctor` name the cause ("nightly run failing: USAJOBS credentials missing"; "new jobs are
-not being scored: no Anthropic credential"). Ticket S10 makes an **unconfigured** source (no
-USAJOBS credentials at all) a skip, the way the email source already skips without a Gmail
+and `doctor` name the cause ("nightly run failing: USAJOBS key rejected"; "new jobs are
+not being scored: no Anthropic credential"). Ticket S10 (approved) makes an **unconfigured**
+source (no USAJOBS credentials at all) a skip, the way the email source already skips without a Gmail
 token, so a fresh install stops paging you every night for something you have not set up yet.
 A configured source that breaks (an expired token, a rejected key) still fails the run.
 
@@ -149,7 +150,9 @@ In **container** mode the console shows paths as the host sees them: `/data/...`
    else: no network, no model call, no subprocess other than `shutil.which`, no keyring or D-Bus,
    no `chmod`, no walk of a directory tree. Rendering `/setup`, the banner, and plain `doctor`
    never spend a credit or contact anyone. Subprocesses and network calls happen only on an
-   explicit action: a live-check click, `doctor --live`, or `doctor --containers`.
+   explicit action: a live-check click, `doctor --live`, or `doctor --containers`. One exception:
+   plain `doctor` runs `legacy_data.check`, which may spawn a local, read-only
+   `git rev-parse --git-common-dir` from a source checkout. The page and the banner never do.
 2. **Format, not validity.** A key's presence, source and shape can be checked locally: the C2
    rules, and the expected prefix for Anthropic API keys (`sk-ant-`) and OpenRouter keys
    (`sk-or-`). A wrong prefix is a note ("doesn't look like an Anthropic API key"), not broken.
@@ -228,8 +231,12 @@ Not reused, because they break rule 1:
 An autouse fixture in `tests/conftest.py` (S1) makes `keyring.get_password` raise, so no test
 can read a developer's real keyring.
 
-Each check costs a `stat`, an environment lookup or one small indexed query. `run_checks` must
-finish in under 50 ms on your real data. `cheap_only=True` (the banner) runs the essentials plus
+Each check costs a `stat`, an environment lookup or one small indexed query, once the slow
+inputs are cached per process: the registry's secret names and `secret_matrix` (parsing
+`registry.yaml` takes about 0.5 s; take the USAJOBS names from the startup `secrets.Report` or
+`functools.cache` `usajobs_auth`), and `lenient_state` (about 50-60 ms; cache it keyed on the
+`preferences.yaml` and resume mtimes). With those warm, `run_checks` must finish in under 50 ms on
+your real data; a timing test uses a realistic-size `preferences.yaml`. `cheap_only=True` (the banner) runs the essentials plus
 the recommended rows marked cheap: everything in the table except the alert-subscription counts
 and the backup listing.
 
@@ -241,7 +248,7 @@ the checks and by the run's score stage (S7), so the two cannot disagree. Its an
 
 | Provider | Present when | Notes |
 |---|---|---|
-| `anthropic:` (and bare names) | `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` set; or `ANTHROPIC_PROFILE` or the workload-identity variables (`ANTHROPIC_IDENTITY_TOKEN[_FILE]` with the federation ids) set; or an active profile file exists in the SDK's config directory (a `stat`, never read) | What `anthropic` 1.13 resolves, in its order. Anything only the SDK can judge is `present` with the note "via SDK profile, not checked locally". `missing` only when none exists. `ANTHROPIC_AUTH_TOKEN` is not a `*_FILE` name today (S1 adds it to `secrets.DEFAULT_NAMES`) |
+| `anthropic:` (and bare names) | `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` set; or `ANTHROPIC_PROFILE` or `ANTHROPIC_CONFIG_DIR` set; or the workload-identity variables (`ANTHROPIC_IDENTITY_TOKEN[_FILE]` with the federation ids) set; or `<config_dir>/active_config` or `<config_dir>/configs/default.json` exists, with `config_dir` honouring `ANTHROPIC_CONFIG_DIR` (stats only, never read). A test for each alone | What `anthropic` 1.13 resolves, in its order. Anything only the SDK can judge is `present` with the note "via SDK profile, not checked locally". `missing` only when none exists. `ANTHROPIC_AUTH_TOKEN` is not a `*_FILE` name today (S1 adds it to `secrets.DEFAULT_NAMES`) |
 | `openrouter:`, `jev:`, `decisions:` | the variable named by `scoring.openrouter.api_key_env` | `missing` otherwise |
 | `openai-compat:` | the variable named by `scoring.openai_compat.api_key_env`, or that name set empty | Server reachability is a live check |
 | `local:` | always `present` for the key (optional); the server is a live check | `unknown` until checked live |
@@ -287,32 +294,45 @@ credentials: those go to the run unit and the `jobhunter-ctr` wrapper (verify al
 USAJOBS), per [018](018-containers.md#which-container-gets-which-secret). So the run reports
 what it sees:
 
-- **Inputs.** `jobhunter run` writes `<data dir>/readiness.json` (0600, atomic) **after it takes
-  the run lock**, so a run that times out on the lock writes nothing. It records each check's id,
-  effective status, fixed message, `checked_at`, the mode, and the writer: `timer` when started
-  by systemd (`INVOCATION_ID` set), otherwise `manual`. No values, no free-form text.
-- **Outcome.** At the end the run adds the score stage's result as a fixed code (`scored`,
-  `skipped_no_credential`, `cap_reached`, `failed:<exception type>`, `no_profile`) and each
-  failed source's mapped reason. The `run` table stores only counts, so this is how the console
-  learns that the last run did not score.
-- **On demand.** `jobhunter doctor --snapshot` writes the inputs part; `jobhunter-ctr doctor
-  --snapshot` does it inside a one-off container, which sees every secret the wrapper gets, to
-  refresh `unknown` rows without waiting for the night.
-- **Host section.** On the host, `jobhunter doctor --containers --snapshot` adds a `host`
-  section with preflight's [mapped results](#jobhunter-doctor), which the console container shows
-  on its Containers row with the time. Without it the row says "run `jobhunter doctor
-  --containers` on the host".
+- **One file, four sections.** `<data dir>/readiness.json` (0600) holds `run_inputs`,
+  `run_outcome`, `manual_inputs` and `host`. Each has its own `checked_at`, writer and trigger.
+  Every writer takes a small lock (`readiness.json.lock`, `flock`), reads the file, replaces only
+  its own section, and renames a temp file into place, so no writer erases another's section.
+- **Run inputs.** `jobhunter run` writes `run_inputs` **after it takes the run lock**, so a run
+  that times out on the lock writes nothing: each check's id, effective status and fixed message,
+  the mode, and the trigger. No values, no free-form text.
+- **Run outcome.** At the end the run writes `run_outcome`: the score stage's result as a fixed
+  code (`scored`, `skipped_no_credential` from S7, `cap_reached`, `failed:<exception type>`,
+  `no_profile`) and each failed source's mapped reason. Only `run` writes it. The `run` table
+  stores only counts, so this is how the console learns that the last run did not score.
+- **Trigger.** Timer runs are marked explicitly: `Environment=JOBHUNTER_TRIGGER=timer` in the host
+  `jobhunter-run.service` and in the Quadlet run, collect and rescore units (systemd's
+  `INVOCATION_ID` does not reach a container). The value goes into the snapshot and into a new
+  `run.trigger` column (a migration in S4; `manual` when unset).
+- **Manual inputs.** `jobhunter doctor --snapshot`, or `jobhunter-ctr doctor --snapshot` inside a
+  one-off container (which sees every secret the wrapper gets), writes `manual_inputs`. It fills
+  rows the console cannot see and is labelled "as seen from your shell at HH:MM" (or "from
+  `jobhunter-ctr`"). It never stands in for the nightly run in the rule below, since on the host
+  your shell's environment is not the timer's.
+- **Host section.** On the host, `jobhunter doctor --containers --snapshot` writes `host`, with
+  preflight's [mapped results](#jobhunter-doctor), which the console container shows on its
+  Containers row with the time. Without it the row says "run `jobhunter doctor --containers` on
+  the host".
 
-**Effective status.** A snapshot is fresh when written within 36 hours. For a row the console
-cannot check, the effective status is the fresh snapshot's, else `unknown`. For a row both can
-check (scorer, caps, preferences, resume and the rest), the effective status is **the worse of
-the two**, and a disagreement is shown: "the console sees ANTHROPIC_API_KEY; the nightly run at
-02:00 did not". A fresh outcome of `skipped_no_credential` or `no_profile` makes the scorer or
-profile row broken whatever the console sees. `essentials_ok`, the banner and dismissals all use
-the effective status.
+**Effective status.** A section is fresh when written within 36 hours. For a row the console
+cannot check, the effective status is the newer of a fresh `run_inputs` or `manual_inputs`, else
+`unknown`. For a row both can check (scorer, caps, preferences, resume and the rest), it is **the
+worse of the console's view and a fresh `run_inputs`**, and a disagreement is shown: "the console
+sees ANTHROPIC_API_KEY; the run at 02:00 (timer) did not". A fresh `run_outcome` of
+`skipped_no_credential` or `no_profile` makes the scorer or profile row broken whatever the
+console sees, **until a newer `run_inputs` shows that row ok**, so fixing the cause and running
+again clears it. The scorer and profile fixes therefore end with "then run `jobhunter run --stage
+prefilter,score` (or `jobhunter-ctr run --stage prefilter,score`) to confirm". `essentials_ok`, the
+banner and dismissals all use the effective status.
 
-**Timers not running** is judged from the `run` table (no run with `started_at` in the last 36
-hours), not from the snapshot's age, since a manual run also writes one.
+**Timers not running** is judged from the newest `run` row with `trigger = 'timer'` (none in the
+last 36 hours), so a manual run does not hide dead timers. Wording that says "nightly" is used only
+for timer-triggered data; manual runs are labelled "manual run at HH:MM".
 
 ## `/setup`
 
@@ -348,7 +368,7 @@ Scoring
 
 ### Writes from the page
 
-`/setup` adds four POST routes and reuses one. All go through the existing middleware (loopback
+`/setup` adds four POST routes and one GET page, and reuses one route. All go through the existing middleware (loopback
 `Host` and same-origin `Origin` on writes, [017](017-assisted-apply.md#local-api-security), C1).
 None takes a secret.
 
@@ -357,10 +377,12 @@ None takes a secret.
 | `POST /setup/starter-prefs` | Writes `SKELETON` (`prefs_graceful.py`) through `write_preferences_data` (atomic, 0600), then 303 to `/prefs?created=1` | Refuses with 409 if the file exists. Not `/prefs/save`: that route builds the file from form fields, and a bare POST gets weights of 0 (422) and loses the skeleton's exclusions. Test: the written YAML loads to the same data as `SKELETON` |
 | `POST /setup/resume` | The `/prefs` upload's checks (`check_upload`: `.md`/`.txt`, 1 MB, UTF-8) and write helper, writing a path relative to the profile folder; answers with the refreshed resume row (htmx) or 303 to `/setup` | Not `/prefs/resume`, which renders the whole prefs page |
 | `POST /setup/dismiss` | Body: one or more `check_id`, each validated against the fixed id list, recommended or due rows only; writes `<data dir>/setup-dismissed.json` atomically at 0600 (id plus the effective status dismissed at) | 422 for an essential or unknown id |
-| `POST /setup/live/{check_id}` | One [live check](#live-checks); `check_id` from the fixed list | Requires a loopback `Host` **even with `--allow-remote`**, like `/ext/`; the buttons are hidden under `--allow-remote` |
+| `POST /setup/live/{check_id}` | One [live check](#live-checks); `check_id` from the fixed list | Requires the **peer address** (`request.client.host`) to be loopback, since `Host` is client-supplied. Under `--allow-remote` it always answers 403 and the buttons are hidden; use `doctor --live` then |
+| `GET /setup/gmail` | The Google Cloud how-to, rendered from a packaged template built from `mail/auth.py` `CLOUD_STEPS` (the single source), with the target path and variable for the mode | Served by the console, so it works in containers, where `docs/` is not in the image. `/alerts`' `SETUP_DOC` (today a dead relative link to `specs/012`) points here too |
 | `POST /prefs/ext/pair` (reused) | The one-time pairing code panel; it already answers with the `_ext_pair.html` fragment | |
 
-Everything else is a link (`/prefs#sec-pay` and the other sections, `/alerts`, `/sources`) or
+Everything else is a link (`/prefs#sec-pay` and the other sections, `/alerts`, `/sources`,
+`/setup/gmail`) or
 the exact command with a copy button and a selectable `<code>` fallback.
 
 **No secret is ever typed into the console.** Why: the console has no authentication, a form
@@ -372,7 +394,8 @@ The page shows where each key goes, per mode:
   editor, then restart the console.
 - **container / host managing containers**: the form in `docs/containers.md`, which keeps the
   key off the command line and out of history, then the full [018](018-containers.md#mechanism)
-  sequence:
+  sequence. When the row is broken or the secret already exists, the line uses
+  `podman secret create --replace` (018), since plain `create` refuses a name in use:
 
   ```
   read -rs KEY && printf '%s' "$KEY" | podman secret create jobhunter_anthropic - && unset KEY
@@ -394,16 +417,25 @@ needs the client JSON.
 
 | Step | Row | Done when (local) | Fix |
 |---|---|---|---|
-| 1 | Google client JSON (12) | the file exists (container: the run snapshot says so) | The ten-minute Cloud console procedure from [012](012-email-ingest.md#setting-up-gmail), as a docs how-to (`docs/gmail.md`, written in S8) linked from the row, with the file's target path for the mode (`podman secret create jobhunter_google_client <file>` for containers) |
+| 1 | Google client JSON (12) | the file exists (container: the snapshot says so) | The ten-minute Cloud console procedure, shown inline and at `GET /setup/gmail` (from `CLOUD_STEPS`), with the file's target path for the mode (`podman secret create jobhunter_google_client <file>` for containers). `docs/gmail.md` (S8) is the repository copy |
 | 2 | Alerts address (11) | not the placeholder | The `[mail] alerts_address` line, your `+jobs` address, and the restart note |
 | 3 | Gmail token (13) | [Gmail token](#gmail-token) rules | `jobhunter mail auth`, or `--podman-secret jobhunter_gmail_token` |
 | 4 | Label and filter (14) | an alert arrived under the label in the last 14 days (`mail_message`); otherwise `unknown` until the live check | `jobhunter mail setup` (or `jobhunter-ctr mail setup`); it prints filter XML for manual import if you skip the settings scope |
 | 5 | Board subscriptions (15) | `/alerts` counts: subscribed, receiving, stale | Link to `/alerts`, the existing checklist, which gives each board's sign-up link, criteria and the address to use |
-| 6 | LinkedIn job alerts (16) | alerts from LinkedIn's sender arrived under the label | Create alerts in LinkedIn (Jobs, search, "Set alert"). LinkedIn mails the address on your account: add your `+jobs` address there if LinkedIn accepts it; if not, record it on `/alerts` as rejecting `+` and add LinkedIn's alert sender to `mail.fallback_sender_domains`, which files it under the label. Until bug `430a0e7` lands these are kept but yield no jobs; the row says how many are waiting |
-| 7 | Craigslist saved searches (16), optional | as 6 | A Craigslist account, a saved search with email alerts, the same address rule. Parser pending (bug `b0ac328`); low priority |
+| 6 | LinkedIn job alerts (16) | alerts from LinkedIn's job-alert sender arrived under the label | Create alerts in LinkedIn (Jobs, search, "Set alert"). Do **not** make the `+jobs` address your LinkedIn primary email: every LinkedIn notification would follow it. Route only the alerts: S9 adds `mail.fallback_senders`, a list of **exact sender addresses** (LinkedIn's job-alert sender, confirmed from a real alert with `mail sample` before it ships as a suggested value), which `mail setup` turns into `from:<address>` filters. Never put `linkedin.com` in `fallback_sender_domains`: that becomes `from:@linkedin.com`, which takes InMail, recruiter and connection messages out of your inbox and stores their subjects as alerts. `/setup` and `/alerts` warn when a domain entry matches a site that also sends personal mail |
+| 7 | Craigslist saved searches (16), optional | as 6 | A Craigslist account and a saved search with email alerts, routed by the exact alert sender in `mail.fallback_senders`, not the domain. Low priority |
 
 Steps 6 and 7 also become rows on `/alerts` (S9), since they are not registry sources and the
-checklist does not list them today. jobhunter never fetches linkedin.com or craigslist.org
+checklist does not list them today.
+
+**Alerts that arrive before their parser.** LinkedIn (bug `430a0e7`) and Craigslist (bug `b0ac328`)
+have no parser yet. Their messages stay in Gmail under the label; jobhunter stores only metadata
+(`mail_message`), not bodies, and a message with no parser yields no jobs. Each parser ticket
+therefore includes a one-time **re-read**: when the parser lands, it fetches that sender's messages
+still under the label (by the Gmail ids recorded in `mail_message`) and ingests them once, so
+alerts received while it was pending are not lost. Until then the row says "N LinkedIn alerts
+received; they will be read when the parser lands (`430a0e7`)". The PM adds this re-read to both
+bugs when S9 is filed. jobhunter never fetches linkedin.com or craigslist.org
 ([008](008-compliance.md)); the alert email is the only channel.
 
 ### Live checks
@@ -425,7 +457,10 @@ The Gmail check does not reuse `mail status` or `mailbox_status` output, whose f
 `to:<your address>`; it compares criteria internally and returns only the booleans. The runner
 check never adds to `cli_runner._AUTH_OK` and never calls `runner_state.turn_off`: a failed check
 is a status, not a turn-off. In container mode the console cannot see the Gmail token, so the
-Gmail button is replaced by `jobhunter-ctr mail status`.
+Gmail button is replaced by `jobhunter-ctr mail status`. In host-managing mode, `doctor --live`
+does not test the host shell's keys (the containers use podman secrets): for every secret-backed
+check it prints `jobhunter-ctr doctor --live` instead, which runs the same checks with the
+wrapper's secrets.
 
 **No live check may spend credits.** A future one that would must be labelled "Test (may spend
 credits, about $X)", must confirm, and is never part of `doctor --live`.
@@ -496,8 +531,11 @@ runs `quadlet -dryrun` on copies of the units in a temporary directory. It never
 or the marker in dry run; `container preflight` itself still does. S2 extracts a
 `build_preflight_context()` helper from `container_preflight_cmd`. Preflight's lines contain
 podman and quadlet stderr, so they print in the terminal only; `--json` and the snapshot carry
-fixed ids (`podman`, `bind_sources`, `labels`, `host_timers`, `db_paths`, `version_skew`,
-`env_files`, `base_units`, `quadlet`) with ok/warn/fail and fixed messages. With the marker
+fixed ids with ok/warn/fail and fixed messages. S2 adds an `id` argument to preflight's
+`Result.add` and sets it at every call: `podman`, `bind_sources`, `owner`, `labels`,
+`host_timers`, `db_paths`, `version_skew`, `env_files`, `mounted_config`, `secrets`,
+`dropin_conflict`, `base_units`, `quadlet`, `marker`. A line without an id maps to a catch-all
+`preflight_other` that keeps its severity, never to ok. With the marker
 present, a FAIL is **essential** (the units will not start) and a WARN recommended; without it,
 both are recommended. Without `--containers`, host-managing mode shows the Containers row as
 `unknown` unless a fresh host section exists.
@@ -507,11 +545,13 @@ both are recommended. Without `--containers`, host-managing mode shows the Conta
 - `/setup` and its routes sit behind the existing middleware: loopback `Host` on every request
   and same-origin `Origin` on writes unless `--allow-remote`. Under `--allow-remote` a LAN
   client can read `/setup` (no values, but which keys are set) and post the three non-live
-  writes, exactly as it can already edit `/prefs`; the live-check route keeps the loopback-only
-  door, since it uses your credentials. `Cache-Control: no-store` like every page.
+  writes, exactly as it can already edit `/prefs`. The live-check route refuses every request
+  under `--allow-remote` (403) and otherwise checks the peer address, since it uses your
+  credentials. `Cache-Control: no-store` like every page.
 - Light and dark through the existing `app.css` tokens; checked at 375 px wide, where each row
   stacks (status and title, then detail, then the fix) with no horizontal scroll.
-- A test requests every link `/setup` renders and expects 200.
+- A test requests every internal link `/setup` renders (including `/setup/gmail`) and expects
+  200; external links (Google Cloud console, LinkedIn) are not fetched.
 
 ## Testing
 
@@ -538,6 +578,11 @@ both are recommended. Without `--containers`, host-managing mode shows the Conta
   no jobs: `doctor` exits 1 naming the screen scorer; `GET /` redirects to `/setup`; `/inbox`
   shows the banner; the run summary carries the S7 line and the run exits 0. With one job seeded,
   `/` shows the banner instead of redirecting.
+- Snapshot writers: the run's write keeps `host` and `manual_inputs`; a manual
+  `doctor --snapshot` never changes `run_inputs`; after the fix and a newer `run_inputs`, the
+  scorer row clears. A manual run does not reset "timers not running".
+- `/setup/live/*` with `Host: 127.0.0.1` from a non-loopback peer is 403; under
+  `--allow-remote` every request is 403.
 - Banner: Hide dismisses a recommended row; a status change brings it back; essentials have no
   Hide and `/setup/dismiss` refuses them.
 - Browser check before merge, against a copy of your database (CLAUDE.md): light, dark, 375 px.
@@ -552,29 +597,59 @@ worker and reviewer per the CLAUDE.md table (the reviewer is always stronger).
 | S0 | Every profile load through `load_profile_for` (runner, `_score_mode`, `eval`, `llm bench`, backfill); test that only `scoring/profile.py` passes `paths.resume_path`. PR note: if the YAML names a different resume, `scoring_version` changes for the run, `--rescore-pending` and `--deep`; existing jobs re-score only when you ask | normal | sonnet / opus | |
 | S1 | `readiness.py`: `Check`, modes, every local check, `credential_for`, `ANTHROPIC_AUTH_TOKEN` as a known secret, `_absolute_path_count` moved to `core/dbpaths.py`, the keyring-raises fixture, no-leak and no-subprocess tests. Resume row compares both resolutions until S0 | normal | sonnet / opus | |
 | S2 | `jobhunter doctor`: output, `-v`, `--json`, `--group`, exit codes, guard exemptions, read-only DB, `--containers` with `build_preflight_context()` and fixed ids; console refusal messages point at `doctor` | normal | sonnet / opus | S1 |
-| S3a | `/setup` page and its routes (`starter-prefs`, `resume`, `dismiss`), the email-alerts guide, mode-aware fixes and host paths, restart notes; dark mode and 375 px | normal | sonnet / opus | S1 |
+| S3a | `/setup` page and its routes (`starter-prefs`, `resume`, `dismiss`), `GET /setup/gmail` from `CLOUD_STEPS` with `/alerts`' `SETUP_DOC` pointed at it, the email-alerts guide, mode-aware fixes (`--replace` when the secret exists) and host paths, restart notes; dark mode and 375 px | normal | sonnet / opus | S1 |
 | S3b | Banner on `/` and `/inbox` replacing the profile banner, Hide, first-run redirect (and the `GET /` test updates), `init` and `console` hints | normal | sonnet / opus | S3a |
-| S4 | Snapshot: `doctor --snapshot`, `run` writes inputs after the lock and the outcome at the end, host section from `--containers`; console effective status (worse of two, unknown rules), disagreement text | hard (two processes, freshness rules) | opus / opus at higher effort | S2, S3a |
+| S4 | Snapshot: sectioned `readiness.json` with a lock and per-section writes; `doctor --snapshot`; `run` writes inputs after the lock and the outcome at the end; `JOBHUNTER_TRIGGER=timer` in the run, collect and rescore units and a `run.trigger` column; host section; console effective status (worse of two, newer inputs clear an outcome, unknown rules) | hard (several processes, freshness rules, a migration) | opus / opus at higher effort | S2, S3a, S7 |
 | S5 | `mail auth` writes `gmail-auth.json` (issued_at, storage kind; `--from-local` keeps the old date); the token-age rules and `RefreshError` mapping in the Gmail row | normal | sonnet / opus | S1 |
-| S6 | Live checks: route with the loopback-only door, buttons, `doctor --live`; booleans only; uncached `auth_status()`; OpenRouter only on `openrouter.ai`; tests prove no model call and no leak | hard (credit paths, credentials) | opus / opus at higher effort | S2, S3a |
+| S6 | Live checks: route gated on a loopback peer address (403 under `--allow-remote`), buttons, `jobhunter-ctr doctor --live` hand-off in host-managing mode, `doctor --live`; booleans only; uncached `auth_status()`; OpenRouter only on `openrouter.ai`; tests prove no model call and no leak | hard (credit paths, credentials) | opus / opus at higher effort | S2, S3a |
 | S7 | Score stage asks `credential_for` first and prints the skip line on `missing`; exit code unchanged | normal | sonnet / opus | S1 |
-| S8 | Docs: `docs/gmail.md` from 012's Gmail setup; first-run section in `README.md` and `docs/containers.md` pointing at `/setup` and `doctor` | mechanical | haiku / sonnet | S2, S3a |
-| S9 | `/alerts` rows for LinkedIn and Craigslist alerts (sign-up steps, address rule, "parser pending" with the count waiting) | normal | sonnet / opus | |
-| S10 | USAJOBS with no credentials configured is a skip (`unavailable()`, like the mail source), not a failure; a rejected key still fails | normal | sonnet / opus | |
+| S8 | Docs: `docs/gmail.md`, the repository copy of `/setup/gmail`; first-run section in `README.md` and `docs/containers.md` pointing at `/setup` and `doctor` | mechanical | haiku / sonnet | S2, S3a |
+| S9 | `mail.fallback_senders` (exact sender addresses, `from:<address>` filters in `mail setup`); `/alerts` rows for LinkedIn and Craigslist (sign-up steps, address rule, "read when the parser lands" with the count); the domain-wide fallback warning; the re-read requirement added to `430a0e7` and `b0ac328` | normal | sonnet / opus | |
+| S10 | USAJOBS with no credentials configured is a skip (`unavailable()`, like the mail source), not a failure; a rejected key still fails (approved 2026-10-11) | normal | sonnet / opus | |
 
 Order: S0, S1, S9 and S10 can start together; then S2, S3a, S5 and S7 after S1; S3b after S3a;
-S4 and S6 last. About 6-8 days of worker time.
+S8 after S2 and S3a; S4 after S2, S3a and S7; S6 after S2 and S3a.
+
+**Estimate**, by the calibrated rule (ticket wall-clock: mechanical 0.75 h, normal 1.4 h, hard
+2.1 h; schedule = sum / 3, plus 30%, range 0.7x to 1.6x; floor = the longest dependency chain):
+
+- Sum: 9 normal (12.6 h) + 2 hard (4.2 h) + 1 mechanical (0.75 h) = 17.55 h.
+- Schedule: 17.55 / 3 = 5.85 h, plus 30% = **about 7.5 h** of continuous run, range about 5.3 to
+  12 h.
+- Floor: the longest chain, S1 then S3a then S4 (or S1, S2, S6), is 4.9 h, below the range, so it
+  does not bind.
+- About 11M subagent tokens (10M for eleven tickets, scaled to twelve).
 
 **Later, not proposed now:** preferences in the database instead of `preferences.yaml`, if you
 find you never hand-edit the YAML (it would reverse 014's file-as-source-of-truth decision).
 
 ## Open questions
 
-1. **S10, missing USAJOBS credentials as a skip.** Today a fresh install pages you every night
-   for a source you have not set up. **Default: yes, skip when unconfigured**; `/setup` and the
-   banner's recommended line still show it.
+None. S10 was approved on 2026-10-11.
 
 ## History
+
+### Revision 3: second review and your S10 answer
+
+A re-review found 17 issues (3 blocking), all addressed:
+
+- The Gmail how-to is served by the console (`GET /setup/gmail`, from `CLOUD_STEPS`) instead of a
+  repository doc it cannot serve; `/alerts`' dead `SETUP_DOC` link points there too.
+- The LinkedIn step no longer suggests a `linkedin.com` domain filter, which would hide recruiter
+  mail: S9 adds exact-sender filters (`mail.fallback_senders`). Alerts received before a parser
+  lands are re-read from Gmail once when it does.
+- `readiness.json` is sectioned with a lock, so writers do not erase each other; a manual
+  `doctor --snapshot` never stands in for the nightly run; a newer run clears an old outcome.
+- Timer runs are marked with `JOBHUNTER_TRIGGER=timer` and a `run.trigger` column, so a manual
+  run does not hide dead timers.
+- Preflight lines get ids at every call, with a catch-all that keeps severity.
+- The live route checks the peer address and refuses everything under `--allow-remote`.
+- Smaller: `ANTHROPIC_CONFIG_DIR` and the SDK's `active_config` pointer; `legacy_data`'s git call
+  allowed in plain `doctor`; caches that make the 50 ms budget real; `--replace` for existing
+  secrets; host-managing `doctor --live` defers to `jobhunter-ctr`; S4 depends on S7; internal
+  links only in the link test; estimates on the calibrated rule.
+
+Your answer (2026-10-11): S10 approved.
 
 ### Revision 2: adversarial review and your answers
 
