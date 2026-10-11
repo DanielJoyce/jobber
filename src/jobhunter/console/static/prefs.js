@@ -47,4 +47,32 @@
     if (ev.target && ev.target.matches && ev.target.matches("input[data-weight]")) updateWeights();
   });
   document.addEventListener("DOMContentLoaded", updateWeights);
+
+  // Live preview: it waits for an idle pause (hx-trigger delay), so say it is pending from the
+  // first change; htmx keeps the note up (hx-indicator) while the request runs. A request that
+  // finishes after a newer change does not hide it: that change's preview is still to come.
+  var changes = 0;
+  function pending(on) {
+    var note = document.getElementById("preview-pending");
+    if (note) note.classList.toggle("is-pending", on);
+  }
+  function changed() {
+    changes += 1;
+    pending(true);
+  }
+  function inForm(ev) {
+    return ev.target && ev.target.closest && ev.target.closest("#prefs-form");
+  }
+  function fromForm(ev) {
+    return ev.detail && ev.detail.elt && ev.detail.elt.id === "prefs-form" && ev.detail.xhr;
+  }
+  document.addEventListener("input", function (ev) { if (inForm(ev)) changed(); });
+  document.addEventListener("change", function (ev) { if (inForm(ev)) changed(); });
+  document.addEventListener("prefs-changed", changed);
+  document.addEventListener("htmx:beforeRequest", function (ev) {
+    if (fromForm(ev)) ev.detail.xhr.jhChanges = changes;
+  });
+  document.addEventListener("htmx:afterRequest", function (ev) {
+    if (fromForm(ev) && ev.detail.xhr.jhChanges === changes) pending(false);
+  });
 })();

@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from jobhunter.apply import answers as ans
 from jobhunter.console import prefs as pf
@@ -187,6 +188,11 @@ def register(
     @app.post("/prefs/preview", response_class=HTMLResponse)
     async def preview(request: Request, conn: Conn) -> HTMLResponse:
         form = pf.parse_form(await request.body())
+        # The bucket and prefilter counts are synchronous DB and CPU work: off the event loop,
+        # so a state click (or any page) is not queued behind a running preview (501fee8).
+        return await run_in_threadpool(preview_work, request, conn, form)
+
+    def preview_work(request: Request, conn: sqlite3.Connection, form: pf.Form) -> HTMLResponse:
         profile = state_of(request).profile
         ctx: dict[str, Any] = {"errors": {}, "changes": {}, "conflict": False}
         ctx["conflict"] = pf.form_value(form, "mtime_ns") != str(mtime_of(request))
@@ -275,6 +281,9 @@ def register(
     @app.post("/prefs/save", response_class=HTMLResponse)
     async def save(request: Request, conn: Conn) -> Response:
         form = pf.parse_form(await request.body())
+        return await run_in_threadpool(save_work, request, conn, form)
+
+    def save_work(request: Request, conn: sqlite3.Connection, form: pf.Form) -> Response:
         st = state_of(request)
         if st.writes_whole_file:
             return save_whole_file(request, conn, st, form)
@@ -357,6 +366,9 @@ def register(
     async def save_raw(request: Request, conn: Conn) -> Response:
         """Advanced: replace a broken preferences.yaml with hand-typed YAML (old one kept)."""
         form = pf.parse_form(await request.body())
+        return await run_in_threadpool(save_raw_work, request, conn, form)
+
+    def save_raw_work(request: Request, conn: sqlite3.Connection, form: pf.Form) -> Response:
         text = pf.form_value(form, "raw_yaml").replace("\r\n", "\n")
         try:
             expected = int(pf.form_value(form, "mtime_ns"))
@@ -392,14 +404,20 @@ def register(
     async def upload_resume(
         request: Request, conn: Conn, file: Annotated[UploadFile | None, File()] = None
     ) -> Response:
+        name = file.filename if file is not None else None
+        data = await file.read(gr.MAX_RESUME_BYTES + 1) if file is not None and name else b""
+        return await run_in_threadpool(upload_resume_work, request, conn, name, data)
+
+    def upload_resume_work(
+        request: Request, conn: sqlite3.Connection, filename: str | None, data: bytes
+    ) -> Response:
         before = state_of(request)
-        if file is None or not file.filename:
+        if not filename:
             return render_page(
                 request, conn, before, upload_error="Choose a .md or .txt file first.", status=422
             )
-        data = await file.read(gr.MAX_RESUME_BYTES + 1)
         try:
-            text = gr.check_upload(file.filename, data)
+            text = gr.check_upload(filename, data)
         except gr.UploadError as exc:
             return render_page(request, conn, before, upload_error=str(exc), status=exc.status)
         valid_before = before.kind in ("ok", "resume")
@@ -407,7 +425,7 @@ def register(
             pf.detect_file_edits(conn, before.profile, now())
         old_hash = gr.sha256_text(before.profile.resume_text)
         target = gr.resume_target(request.app.state.settings, before.profile)
-        dest = gr.store_resume(target, file.filename, text, now())
+        dest = gr.store_resume(target, filename, text, now())
         after = state_of(request)
         if after.kind == "resume" and not after.profile.resume_path:
             # The loader still can't find it: point preferences.yaml at the new location.

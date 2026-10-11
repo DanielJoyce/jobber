@@ -235,6 +235,10 @@ def load_group_locations(conn: sqlite3.Connection, group_id: int) -> list[JobLoc
         "WHERE g.id = ? ORDER BY (j.id = g.canonical_job_id) DESC, l.is_primary DESC, j.id, l.id",
         (group_id,),
     ).fetchall()
+    return _group_locations(rows)
+
+
+def _group_locations(rows: Iterable[sqlite3.Row]) -> list[JobLocation]:
     out = _dedupe(
         JobLocation(
             state=r["state"], city=r["city"], county=r["county"], lat=r["lat"], lon=r["lon"]
@@ -243,6 +247,41 @@ def load_group_locations(conn: sqlite3.Connection, group_id: int) -> list[JobLoc
     )
     if out:
         out[0] = out[0].model_copy(update={"is_primary": True})
+    return out
+
+
+def load_many_job_group_locations(
+    conn: sqlite3.Connection, job_ids: Iterable[int]
+) -> dict[int, list[JobLocation]]:
+    """``load_job_group_locations`` for many jobs in a few queries (the /prefs preview)."""
+    ids = list(dict.fromkeys(job_ids))
+    group_of: dict[int, int | None] = {}
+    by_group: dict[int, list[sqlite3.Row]] = {}
+    chunk = 500
+    for i in range(0, len(ids), chunk):
+        part = ids[i : i + chunk]
+        marks = ",".join("?" for _ in part)
+        for r in conn.execute(f"SELECT id, job_group_id FROM job WHERE id IN ({marks})", part):
+            group_of[r["id"]] = r["job_group_id"]
+    groups = sorted({g for g in group_of.values() if g is not None})
+    for i in range(0, len(groups), chunk):
+        part = groups[i : i + chunk]
+        marks = ",".join("?" for _ in part)
+        for r in conn.execute(
+            "SELECT g.id AS gid, l.state, l.city, l.county, l.lat, l.lon FROM job_locations l "
+            "JOIN job j ON j.id = l.job_id JOIN job_group g ON g.id = j.job_group_id "
+            f"WHERE g.id IN ({marks}) "
+            "ORDER BY g.id, (j.id = g.canonical_job_id) DESC, l.is_primary DESC, j.id, l.id",
+            part,
+        ):
+            by_group.setdefault(r["gid"], []).append(r)
+    out: dict[int, list[JobLocation]] = {}
+    for job_id in ids:
+        gid = group_of.get(job_id)
+        if gid is None:
+            out[job_id] = load_locations(conn, job_id)
+        else:
+            out[job_id] = _group_locations(by_group.get(gid, []))
     return out
 
 

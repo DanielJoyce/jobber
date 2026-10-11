@@ -73,7 +73,8 @@
   <div class="prefs-layout">
     <form id="prefs-form" class="prefs-form" method="post" action="/prefs/save"
           hx-post="/prefs/preview" hx-target="#prefs-preview" hx-swap="innerHTML"
-          hx-trigger="input delay:500ms, change delay:500ms, prefs-changed from:body delay:100ms">
+          hx-trigger="input delay:500ms, change delay:500ms, prefs-changed from:body delay:800ms"
+          hx-sync="this:replace" hx-indicator="#preview-pending" hx-disinherit="hx-sync hx-indicator">
       <input type="hidden" name="mtime_ns" value="{{ mtime_ns }}">
 
       <section class="panel" id="sec-pay">
@@ -273,6 +274,7 @@
     <form id="resume-upload" method="post" action="/prefs/resume" enctype="multipart/form-data"></form>
 
     <aside class="prefs-side" aria-live="polite">
+      <p id="preview-pending" class="preview-pending" role="status">Updating preview…</p>
       <div class="panel" id="prefs-preview">
         <p class="muted">Change a setting to preview its effect before saving.</p>
       </div>

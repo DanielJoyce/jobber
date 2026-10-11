@@ -25,7 +25,7 @@ from ruamel.yaml.error import YAMLError
 from jobhunter.console.inbox import BUCKET_TITLES
 from jobhunter.core import db, geo
 from jobhunter.core.models import EmploymentType
-from jobhunter.pipeline.locations import load_job_group_locations
+from jobhunter.pipeline.locations import load_many_job_group_locations
 from jobhunter.scoring import buckets as bk
 from jobhunter.scoring import rescore as rs
 from jobhunter.scoring.prefilter import _CREDENTIAL_PATTERNS, evaluate
@@ -544,8 +544,9 @@ def prefilter_delta(
     count_b: Counter[str] = Counter()
     count_a: Counter[str] = Counter()
     rejected_b = rejected_a = 0
+    all_locs = load_many_job_group_locations(conn, (job["id"] for job in rows))
     for job in rows:
-        locs = load_job_group_locations(conn, job["id"])
+        locs = all_locs[job["id"]]
         passed_b, reasons_b = evaluate(job, locs, before, now)
         passed_a, reasons_a = evaluate(job, locs, after, now)
         rejected_b += not passed_b
