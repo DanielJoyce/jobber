@@ -201,6 +201,21 @@ def test_lowercase_tool_names_not_in_the_resume_fail(tool):
     assert f"'{tool}' is not anywhere in your resume" in reasons
 
 
+@pytest.mark.parametrize(
+    ("draft", "resume"),
+    [
+        ("Deployed services with ArgoCD", "Ran Argo CD for GitOps deploys."),
+        ("Trained models with scikit-learn", "Built models in sklearn."),
+        ("Defined APIs in protobuf", "Wrote Protocol Buffers schemas."),
+    ],
+)
+def test_lowercase_tool_spellings_count_as_the_same_tool(draft, resume):
+    from jobhunter.apply.factcheck import _norm, _tech_reasons
+
+    reasons, _ = _tech_reasons(draft, _norm(resume), resume)
+    assert reasons == []
+
+
 def test_resume_may_not_cite_notes_and_header_must_exist():
     doc = resume_doc(header=("L1", "L77"), bullets=[("Wrote Terraform modules", ["L7", "N1"])])
     doc["context"]["lines"] = {**LINES, "N1": "I like their docs"}

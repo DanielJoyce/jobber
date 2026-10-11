@@ -275,6 +275,12 @@ TECH: tuple[str, ...] = (
     "sqlalchemy",
 )
 SYNONYMS: dict[str, str] = {
+    # Spellings of the lower-case tool names above (a7a1b40 (6) review).
+    "argo cd": "argocd",
+    "sklearn": "scikit-learn",
+    "scikit learn": "scikit-learn",
+    "protocol buffers": "protobuf",
+    "protobufs": "protobuf",
     "k8s": "kubernetes",
     "kube": "kubernetes",
     "golang": "go",
