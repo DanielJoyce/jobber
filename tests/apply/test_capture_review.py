@@ -372,3 +372,19 @@ def test_a_linkedin_apply_to_usajobs_links_at_once(conn):
     ingested(conn, 1, url=usaj, title="IT Specialist (SYSADMIN)")
     r = cap(conn, li_page(1, "IT Specialist (SYSADMIN)", usaj))
     assert r.outcome == "linked" and r.group.group_id == 1
+
+
+def test_a_shared_careers_apply_path_offers_only_a_job_whose_title_agrees(conn):
+    """56d7fcf (1): an employer whose every LinkedIn Apply goes to one generic careers path
+    must not get an is-it-this-job offer on each later job; only a matching title is offered."""
+    path = "https://www.acme.example/careers/apply"
+    ingested(conn, 1, url=path, title="Software Engineer")
+    assert cap(conn, li_page(1, "Office Manager", path)).outcome == "previewed"
+    r = cap(conn, li_page(2, "Software Engineer", path))
+    assert r.outcome == "same_job" and r.link_mode == "pick"
+
+
+def test_an_ats_posting_destination_with_other_titles_is_still_offered(conn):
+    ingested(conn, 1, url=GH, title="Platform Engineer")
+    r = cap(conn, li_page(1, "Office Manager", GH))
+    assert r.outcome == "same_job" and r.link_mode == "pick"

@@ -435,3 +435,44 @@ def test_a_finished_score_now_does_not_refuse_a_retry_after_a_re_paste(conn, pro
         conn, profile, SCORING, gid, token=again.token, now=later, scorer_factory=lambda s: scorer
     )
     assert scorer.calls == 1
+
+
+def test_an_orphaned_claim_is_re_evaluated_by_the_prefilter(conn, profile):  # noqa: F811
+    """56d7fcf (5): a Score now whose process was killed leaves a passed=1 user-requested row.
+    Once the group is scored nightly (flag 0), the prefilter's rules decide again rather than
+    the stale claim; a live claim, or one a score answered, is left alone."""
+    gid = captured(conn, url="https://careers.example.org/jobs/9001")
+    jid = g(conn, gid)["canonical_job_id"]
+    est = group_score.estimate(conn, profile, SCORING, gid, NOW)
+    group_score.start(conn, profile, SCORING, gid, token=est.token, now=NOW)  # then killed
+    flag(conn, gid, 0)  # a link into a flag-0 group
+    conn.execute(
+        "UPDATE job SET salary_stated = 1, salary_min = 1, salary_max = 2, "
+        "salary_period = 'hour' WHERE id = ?",
+        (jid,),
+    )
+
+    def reasons():
+        return conn.execute(
+            "SELECT passed, reasons FROM prefilter_result WHERE job_id = ?", (jid,)
+        ).fetchone()
+
+    prefilter.run_prefilter(conn, profile, now=NOW + timedelta(minutes=5))
+    assert json.loads(reasons()["reasons"]) == ["user-requested"]  # still live: left alone
+    prefilter.run_prefilter(conn, profile, now=NOW + group_score.CLAIM_TTL)
+    passed, why = reasons()
+    assert passed == 0 and "user-requested" not in json.loads(why)
+    assert eligible(conn, profile) == []
+
+
+def test_an_answered_claim_is_not_re_evaluated(conn, profile):  # noqa: F811
+    gid = captured(conn, url="https://careers.example.org/jobs/9001")
+    jid = g(conn, gid)["canonical_job_id"]
+    est = group_score.estimate(conn, profile, SCORING, gid, NOW)
+    group_score.score_now(
+        conn, profile, SCORING, gid, token=est.token, now=NOW, scorer_factory=lambda s: FakeScorer()
+    )
+    flag(conn, gid, 0)
+    prefilter.run_prefilter(conn, profile, now=NOW + timedelta(hours=1))
+    row = conn.execute("SELECT reasons FROM prefilter_result WHERE job_id = ?", (jid,)).fetchone()
+    assert json.loads(row[0]) == ["user-requested"]

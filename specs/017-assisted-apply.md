@@ -798,7 +798,8 @@ the extension never acts on linkedin.com).
 | What matched | Response | Writes |
 |---|---|---|
 | The ATS URL matches a group (an ingested Greenhouse posting, a pasted one), the URL **identifies one posting**, and the titles agree (equal after `normalize_title`, or similarity at least 92) | `existing`: "This LinkedIn job is *Title* at *Employer*, from Greenhouse" | `job_board_ref` mapping the LinkedIn id to that group's canonical job (`linked`) |
-| The ATS URL matches but is a careers home (LinkedIn's off-site link often is), or the titles disagree | `same_job` offer, on your click only | nothing until you click |
+| The ATS URL identifies one posting but the titles disagree, or it is a generic careers path on the employer's site (not an ATS posting URL) and the titles agree | `same_job` offer, on your click only | nothing until you click |
+| A careers home (LinkedIn's off-site link often is), or a generic careers path whose titles disagree (one shared apply path would otherwise offer every later job of that employer, 56d7fcf) | no match; added or previewed as usual | as usual |
 | The LinkedIn id matches a group (an alert group from `430a0e7`, or an earlier capture) | `existing`; the group's `apply_link` is written from the decoded destination when it has none or its row is `unresolved` or `blocked` (never over a `live` or `expired` one; `status = 'unresolved'`, no request made), so its Apply button goes straight to the ATS | `job_board_ref`, `apply_link` |
 | Both, and they are **different groups** | `same_job`: both shown, **Link them** on your click ([below](#linking-two-groups)) | nothing until you click |
 | Neither | added or previewed as usual, with the `job_board_ref` row; when the destination is a supported ATS, the popup also offers **Fetch from greenhouse.io** (1a's Fetch posting text, robots.txt decides) for the employer's own text | the new group, `job_board_ref` |
@@ -836,6 +837,13 @@ progress; link when it finishes".
 | Exactly one is scored | The scored one | as the kept group's (so an unscored ingested group absorbed into a scored capture is not scored again) |
 | Both scored, or neither, and one is ingested | The ingested one | 0, its own |
 | Neither is ingested (two captures, or a capture and an `email-manual` group) | The scored one; else the one with an application or packet; else the ATS capture; else the older | 1 |
+
+This differs on purpose from [A later ingest of a captured posting](#a-later-ingest-of-a-captured-posting),
+where an applied capture stays on request: there the ingested job had no group yet, so keeping
+the flag prevents a new nightly score. Here the unscored ingested group already existed with flag
+0 and was in the nightly queue before the link, so a link of an applied, unscored capture with it
+gives flag 0 and the nightly run scores the kept group once, as it would have without the link
+(review follow-up 56d7fcf).
 
 After that, the LinkedIn alert email, the LinkedIn page and the ATS posting are one job.
 
