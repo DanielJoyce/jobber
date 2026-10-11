@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: hadolint/hadolint-action@v3.1.0
+      - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: Containerfile
           failure-threshold: warning
@@ -51,17 +51,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve placeholder base-image digests
-        # Containerfile pins use an all-zero placeholder until someone runs
-        # scripts/pin-image-digests.sh and commits the result. Until then CI resolves the tags
-        # to current digests for this build only (and says so); once pinned this is a no-op.
-        run: |
-          if ./scripts/pin-image-digests.sh --check; then
-            echo "base images are pinned"
-          else
-            echo "::warning::Containerfile has placeholder digests; resolved for this run only. Run scripts/pin-image-digests.sh and commit."
-            ./scripts/pin-image-digests.sh | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+      - name: Base images are pinned by real digests
+        # Fails while a placeholder digest remains. To bump pins: scripts/pin-image-digests.sh.
+        shell: bash
+        run: ./scripts/pin-image-digests.sh --check
 
       - name: Build
         run: |

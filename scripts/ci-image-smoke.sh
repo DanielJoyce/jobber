@@ -21,7 +21,7 @@ pass() { echo "ok: $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 cleanup() {
-    podman rm -f "$console" "$secret_ctr" >/dev/null 2>&1 || true
+    podman rm -f "$console" "${console}-default" "$secret_ctr" >/dev/null 2>&1 || true
     podman volume rm -f "$vol" >/dev/null 2>&1 || true
     podman secret rm "$secret" >/dev/null 2>&1 || true
 }
@@ -68,7 +68,7 @@ out=$(run --entrypoint sh "$image" -c 'ls -A /app')
 out=$(run --entrypoint sh "$image" -c \
     'find /app /home /data /cache /config -maxdepth 4 \( -name ".env*" -o -name "*token*.json" -o -name "*client_secret*.json" -o -name config.toml -o -name "*.local.toml" -o -name data -o -name profile -o -name resume \) -not -path "/app/.venv/*" -not -path "/data" -not -path "/cache" -not -path "/config"')
 [ -z "$out" ] || fail "personal or secret files in the image: $out"
-out=$(run --entrypoint sh "$image" -c 'ls -A /data /cache /config')
+out=$(run --entrypoint sh "$image" -c 'find /data /cache /config -mindepth 1')
 [ -z "$out" ] || fail "mount points are not empty: $out"
 pass "no .env, data, profile, resume, token or client_secret files in the image"
 
@@ -95,7 +95,8 @@ grep -qF "$fake" <<<"$status" && fail "secret value in secrets status output"
 inspect=$(podman inspect "$secret_ctr")
 grep -qF "$secret_ctr" <<<"$inspect" || fail "podman inspect output looks empty (no container name)"
 grep -qF "$fake" <<<"$inspect" && fail "secret value in podman inspect"
-grep -qF "$fake" <<<"$(podman logs "$secret_ctr" 2>&1)" && fail "secret value in podman logs"
+logs_all=$(podman logs "$secret_ctr" 2>&1)
+grep -qF "$fake" <<<"$logs_all" && fail "secret value in podman logs"
 podman rm "$secret_ctr" >/dev/null
 pass "CRLF secret resolves as set (file ...); value absent from inspect, logs and output"
 
@@ -124,5 +125,21 @@ pass "foreign Host refused with 403"
 podman exec "$console" python -c \
     'import urllib.request as u, sys; sys.exit(0 if u.urlopen("http://127.0.0.1:8808/healthz", timeout=5).status == 200 else 1)'
 pass "/healthz 200 from inside the container"
+
+# The image default (CMD console, loopback bind per D11) must start too; the Quadlet unit uses it.
+podman run -d --name "${console}-default" --network=none "$image" >/dev/null
+code=000
+for _ in $(seq 1 "${SMOKE_WAIT:-30}"); do
+    code=$(podman exec "${console}-default" python -c \
+        'import urllib.request as u; print(u.urlopen("http://127.0.0.1:8808/healthz", timeout=5).status)' \
+        2>/dev/null || true)
+    [ "$code" = "200" ] && break
+    sleep 1
+done
+if [ "$code" != "200" ]; then
+    podman logs "${console}-default" >&2 || true
+    fail "the default CMD did not serve /healthz (got '$code')"
+fi
+pass "default CMD serves /healthz on loopback"
 
 echo "all image smoke checks passed"

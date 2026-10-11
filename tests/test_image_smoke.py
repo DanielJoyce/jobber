@@ -51,9 +51,10 @@ case "$sub" in
         printf 'config_file /config/config.toml\n' ;;
       *"ls -A /app"*) echo .venv ;;
       *"find /app"*) printf '%s' "${FAKE_FOUND:-}" ;;
-      *"ls -A /data"*) ;;
+      *"find /data"*) printf '%s' "${FAKE_MOUNT:-}" ;;
       *"ls /data"*) echo jobhunter.db ;;
     esac ;;
+  exec) echo 200 ;;
   *) ;;
 esac
 exit 0
@@ -124,6 +125,7 @@ def test_secret_value_in_inspect_or_logs_fails(tmp_path: Path, where: str) -> No
         ({"FAKE_COMMIT": "other00"}, "build commit"),
         ({"FAKE_FOUND": "/app/.env"}, "personal or secret files"),
         ({"FAKE_HEALTH": "000"}, "/healthz"),
+        ({"FAKE_MOUNT": "/data/stray.db\n"}, "mount points are not empty"),
     ],
 )
 def test_smoke_checks_catch_regressions(tmp_path: Path, env: dict[str, str], message: str) -> None:
