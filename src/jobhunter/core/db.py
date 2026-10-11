@@ -140,6 +140,12 @@ def _migrations_snapshot() -> tuple[tuple[int, str, str], ...]:
     return tuple(_scan_migrations())
 
 
+def prime_migrations() -> None:
+    """Take the per-process migration snapshot now (CLI and console start), not at first
+    database use, which may come hours later after waiting for the run lock."""
+    _migrations_snapshot()
+
+
 def _scan_migrations() -> list[tuple[int, str, str]]:
     """Read the migrations folder now (uncached)."""
     found: list[tuple[int, str, str]] = []

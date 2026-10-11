@@ -148,6 +148,9 @@ def _say_backed_up(path: Path) -> None:
 def _load_env(ctx: typer.Context) -> None:
     """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
     against a new database while the real one is still in the old layout."""
+    # Snapshot the migrations this code ships now, at start: a job that waits hours for the
+    # run lock across a fast-forward must treat migrations merged meanwhile as unknown.
+    db.prime_migrations()
     global _SECRETS_REPORT
     _SECRETS_REPORT = secrets.startup(
         load_settings, load_env_files, lambda line: typer.echo(line, err=True)

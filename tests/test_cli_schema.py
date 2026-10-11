@@ -303,3 +303,37 @@ def test_a_failed_backup_is_one_error_line(env, monkeypatch):
     assert result.exit_code == 1
     assert "error: pre-migrate backup failed, so nothing was migrated" in result.output
     assert version_of(env / "jobhunter.db") == OLDER
+
+
+def test_cli_snapshots_known_migrations_at_start_not_first_db_use(env, tmp_path, monkeypatch):
+    # `run --wait 4h` may first open the database hours after starting, across a fast-forward.
+    from importlib import resources
+
+    folder = tmp_path / "migrations"
+    folder.mkdir()
+    for entry in resources.files(db.MIGRATIONS_PACKAGE).iterdir():
+        if entry.name.endswith(".sql"):
+            (folder / entry.name).write_text(entry.read_text(encoding="utf-8"))
+    monkeypatch.setattr(db.resources, "files", lambda _pkg: folder)
+    db._migrations_snapshot.cache_clear()
+    seen: list[int] = []
+
+    @cli.db_app.command("probe")
+    def probe() -> None:
+        (folder / "0099_merged_meanwhile.sql").write_text("SELECT 1;\n")  # the fast-forward
+        seen.append(db.code_version())  # first use of the migration list in this process
+
+    try:
+        assert runner.invoke(app, ["db", "probe"]).exit_code == 0
+    finally:
+        cli.db_app.registered_commands.pop()
+        monkeypatch.undo()
+        db._migrations_snapshot.cache_clear()
+    assert seen == [NEWEST]
+
+
+def test_console_snapshots_known_migrations_at_start(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(db, "prime_migrations", lambda: called.append(1))
+    create_app(_settings(tmp_path))
+    assert called == [1]

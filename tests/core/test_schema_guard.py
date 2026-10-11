@@ -198,8 +198,8 @@ def test_manual_backups_outside_auto_are_never_touched(tmp_path, monkeypatch):
         db.migrate(conn, data_dir=tmp_path, now=datetime(2026, 10, 10, 12, 0, i, tzinfo=UTC))
         conn.close()
     assert manual.read_text() == "x"
-    # newest 3, plus the oldest backup to this target (kept as the pre-upgrade restore point)
-    assert len(list((tmp_path / "backups" / "auto").iterdir())) == 4
+    # all from the same version: nothing older to protect, so the newest 3
+    assert len(list((tmp_path / "backups" / "auto").iterdir())) == 3
 
 
 # --- deployment marker ------------------------------------------------------------------
@@ -342,7 +342,7 @@ def test_retries_after_a_partial_failure_keep_a_backup_from_before_the_upgrade(
     db.connect(pre_upgrade).close()
 
 
-def test_pruning_protects_the_lowest_from_for_the_current_target(tmp_path):
+def test_pruning_protects_the_newest_backup_from_below_the_current_version(tmp_path):
     auto = tmp_path / "auto"
     auto.mkdir()
     names = [
@@ -354,8 +354,31 @@ def test_pruning_protects_the_lowest_from_for_the_current_target(tmp_path):
     ]
     for name in names:
         (auto / name).write_text("x")
-    removed = backup.prune_pre_migrate(auto, protect_to=35)
+    removed = backup.prune_pre_migrate(auto, protect_below=34)
     assert [p.name for p in removed] == ["pre-migrate-28-33-20261001T000000Z.db"]
+
+
+def test_a_new_target_after_a_partial_failure_keeps_the_pre_upgrade_backup(tmp_path, monkeypatch):
+    # 0035 fails partway through an upgrade from 28; then 0036 merges and raises the target.
+    path = make_db(tmp_path / "jh.db", monkeypatch)
+    auto = tmp_path / "backups" / "auto"
+    ok = (NEWEST + 1, "adds_column", "ALTER TABLE source ADD COLUMN extra TEXT;\n")
+    bad = (NEWEST + 2, "fails", "INSERT INTO source(key) VALUES (NULL);\n")
+    monkeypatch.setattr(db, "_load_migrations", lambda: [*REAL, ok, bad])
+    for attempt in range(3):  # the failure, then two automatic retries from NEWEST + 1
+        conn = db.connect(path)
+        with pytest.raises(db.MigrationFailed):
+            db.migrate(conn, now=datetime(2026, 10, 10, 1, 0, attempt, tzinfo=UTC))
+        conn.close()
+    pre_upgrade = auto / f"pre-migrate-{NEWEST}-{NEWEST + 2}-20261010T010000Z.db"
+    assert pre_upgrade.exists()
+    newer = (NEWEST + 3, "later_merge", "SELECT 1;\n")
+    monkeypatch.setattr(db, "_load_migrations", lambda: [*REAL, ok, bad, newer])
+    conn = db.connect(path)
+    with pytest.raises(db.MigrationFailed):
+        db.migrate(conn, now=datetime(2026, 10, 11, 1, 0, 0, tzinfo=UTC))
+    conn.close()
+    assert pre_upgrade.exists()
 
 
 def test_owning_data_dir(tmp_path):

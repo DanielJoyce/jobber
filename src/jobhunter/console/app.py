@@ -196,6 +196,7 @@ def create_app(
     (default ``console.public_port``, else ``console.port``); ``/ext/`` requests must name a
     loopback ``Host`` on it, even with ``allow_remote``.
     """
+    db.prime_migrations()  # this process's known migrations: the code it started with
     factory: ConnFactory = conn_factory or (lambda: db.connect(settings.paths.db_path))
     get_profile: ProfileLoader = profile_loader or default_profile_loader(settings)
     now: Clock = clock or (lambda: datetime.now(UTC))
