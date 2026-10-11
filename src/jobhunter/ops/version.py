@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from importlib import metadata
 from pathlib import Path
 
@@ -33,6 +33,9 @@ class VersionInfo:
     pending_migrations: list[int]
     deployment: str  # host or container
     marker: str | None
+    # Every migration this code ships (sets matter). Defaulted: images built before C13's
+    # review fix print no such key, and `jobhunter upgrade` rebuilds VersionInfo from that.
+    code_migrations: list[int] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -124,6 +127,7 @@ def collect(db_path: Path, data_dir: Path) -> VersionInfo:
         commit=commit,
         commit_source=source,
         code_schema=db.code_version(),
+        code_migrations=[v for v, _, _ in db._load_migrations()],
         db_path=str(db_path),
         db_schema=schema,
         db_state=state,
