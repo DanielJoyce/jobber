@@ -43,6 +43,8 @@ STALE_AFTER = timedelta(hours=6)
 EXIT_STALE = 75  # EX_TEMPFAIL: a failure, so systemd's OnFailure= fires
 EXIT_TIMEOUT = 75
 POLL_S = 5.0
+FLOCK_TRIES = 5
+FLOCK_RETRY_S = 0.01
 _DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*$", re.IGNORECASE)
 _UNIT_S = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -130,15 +132,18 @@ def read_holder(path: Path) -> Holder | None:
 def probe(db_path: Path | str) -> tuple[bool, Holder | None]:
     """Read-only: is the run lock for this database held right now, and by whom (advisory).
 
-    Never creates the file and never takes the lock for good. An idle database costs one
-    ``read`` of an empty file: release truncates the metadata, so empty means free and no
-    flock is attempted (a probe must not make a real acquirer's non-blocking attempt fail).
-    Only when metadata is present is a shared non-blocking flock tried, to tell a live holder
-    from metadata left by a killed one.
+    Never creates the file and never keeps the lock. An idle database costs one read of an
+    empty file: release truncates the metadata, so empty means free and no flock is tried.
+    When metadata is present and was written on this boot, a shared non-blocking flock tells
+    a live holder from metadata left by a killed one. That flock can briefly make a real
+    acquirer's LOCK_EX|LOCK_NB fail, which is why ``acquire`` retries a few times before it
+    believes there is a holder. Metadata from another boot is certainly dead: no flock.
     """
     path = lock_path(db_path)
     holder = read_holder(path)
     if holder is None:
+        return False, None
+    if holder.boot_id is not None and holder.boot_id != current_boot_id():
         return False, None
     try:
         fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
@@ -237,14 +242,14 @@ class RunLock:
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
         deadline = None if not wait else self._monotonic() + wait
         told = False
+        first = True  # only the first look retries: later ones are POLL_S apart anyway
         boot = self._boot_id()
         try:
             while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                got = self._try_flock(fd, FLOCK_TRIES if first else 1)
+                first = False
+                if got:
                     break
-                except BlockingIOError:
-                    pass
                 holder = read_holder(self.path)
                 age = holder.age(self._clock(), self._monotonic(), boot) if holder else None
                 if age is not None and age > STALE_AFTER:
@@ -274,6 +279,18 @@ class RunLock:
             raise
         self._fd = fd
         self._write_metadata()
+
+    def _try_flock(self, fd: int, tries: int) -> bool:
+        """LOCK_EX without waiting, retried briefly: a read-only probe (``probe``) may hold a
+        shared lock for a moment, which must not look like a holder."""
+        for attempt in range(tries):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                if attempt < tries - 1:
+                    time.sleep(FLOCK_RETRY_S)
+        return False
 
     def _write_metadata(self) -> None:
         assert self._fd is not None

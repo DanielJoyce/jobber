@@ -179,3 +179,37 @@ def test_parse_duration(text, seconds):
 def test_parse_duration_rejects(text):
     with pytest.raises(ValueError):
         runlock.parse_duration(text)
+
+
+def test_a_probe_holding_a_shared_lock_does_not_fail_acquire(tmp_path):
+    import fcntl
+    import threading
+
+    db = tmp_path / "jh.db"
+    path = runlock.lock_path(db)
+    old = (datetime.now(UTC) - timedelta(hours=9)).isoformat()
+    path.write_text(json.dumps({"pid": 1, "host": "h", "command": "x", "started_at": old}))
+    fd = os.open(path, os.O_RDONLY)
+    fcntl.flock(fd, fcntl.LOCK_SH)  # what runlock.probe does for a moment
+
+    def drop():
+        time.sleep(0.02)
+        os.close(fd)
+
+    t = threading.Thread(target=drop)
+    t.start()
+    lock = runlock.RunLock(db, "timer")
+    lock.acquire(0)  # no StaleHolder, no LockHeld: the shared lock goes away within the retries
+    t.join()
+    assert lock.held
+    lock.release()
+
+
+def test_probe_skips_flock_for_metadata_from_another_boot(tmp_path):
+    db = tmp_path / "jh.db"
+    lock = runlock.RunLock(db, "x", boot_id=lambda: "some-other-boot")
+    lock.acquire(None)
+    try:
+        assert runlock.probe(db) == (False, None)  # certainly dead: not even asked
+    finally:
+        lock.release()

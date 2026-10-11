@@ -148,3 +148,13 @@ def test_every_base_page_carries_the_hook(client, path):
     r = client.get(path)
     assert r.status_code == 200
     assert 'id="activity"' in r.text and 'hx-get="/activity"' in r.text
+
+
+@pytest.mark.parametrize("js", ["tracking.js", "inbox.js"])
+def test_page_scripts_ignore_the_activity_poll(js):
+    """The 3s /activity swap fires document-level htmx events; page handlers that consume a
+    pending selection on any event would lose it (bug edb9ba6 review)."""
+    from jobhunter.console.app import STATIC_DIR
+
+    src = (STATIC_DIR / js).read_text(encoding="utf-8")
+    assert 'requestConfig.path === "/activity"' in src
