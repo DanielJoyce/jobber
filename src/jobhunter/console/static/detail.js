@@ -11,7 +11,10 @@
     },
     A: function () {
       var link = document.getElementById("apply-link");
-      if (link) window.open(link.getAttribute("href"), "_blank", "noopener");
+      if (link) {
+        window.open(link.getAttribute("href"), "_blank", "noopener");
+        document.dispatchEvent(new CustomEvent("jh:apply-opened"));
+      }
     },
     b: function () {
       window.location.href = "/inbox";

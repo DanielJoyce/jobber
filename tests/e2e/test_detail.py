@@ -62,7 +62,10 @@ def test_did_you_apply_banner_yes_writes_applied_event(page, server):
     with page.context.expect_page() as popup_info:
         page.click("#apply-link")
     popup_info.value.wait_for_url(f"{server.url}/__employer")
-    page.goto(url)
+    # Back on the job tab without a manual reload. Headless Chromium fires no focus or
+    # visibility events when a popup opens or closes, so dispatch the focus event a real
+    # browser fires when the user returns to this tab.
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
     banner = page.locator("#did-apply")
     expect(banner).to_contain_text("Did you apply?")
     banner.get_by_role("button", name="Yes").click()

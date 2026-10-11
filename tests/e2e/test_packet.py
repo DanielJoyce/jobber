@@ -41,6 +41,24 @@ def test_p_on_job_page_prepares_then_opens_the_same_packet(page, server):
     assert [r[0] for r in status] == ["preparing"]
 
 
+def test_open_application_opens_a_new_tab_and_keeps_the_packet(page, server):
+    gid = server.ids["live"]
+    page.goto(f"{server.url}/job/{gid}")
+    page.keyboard.press("p")
+    page.wait_for_url(re.compile(r"/packet/\d+$"))
+    packet_url = page.url
+    link = page.locator("#open-application")
+    expect(link).to_have_attribute("target", "_blank")
+    expect(link).to_have_attribute("rel", "noopener")
+    with page.context.expect_page() as popup_info:
+        link.click()
+    popup_info.value.wait_for_url(f"{server.url}/__employer")
+    assert page.url == packet_url
+    expect(page.locator("#open-application")).to_be_visible()
+    clicks = server.rows("SELECT outcome FROM apply_click WHERE job_group_id = ?", (gid,))
+    assert [c[0] for c in clicks] == ["redirected"]
+
+
 def test_n_then_new_packet_from_pasted_text(page, server):
     page.goto(f"{server.url}/inbox")
     page.keyboard.press("n")
