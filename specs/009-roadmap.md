@@ -161,12 +161,14 @@ dropdown of usable models, its price, whether its key or Claude subscription is 
 free checks; live checks only on click), and Save or Save + re-run (the existing re-score
 confirm, never an automatic spend). Choices are saved to `<data dir>/models.toml`, layered over
 `config.toml`; an invalid screening or deep choice blocks that use rather than falling back to
-another provider. First the per-model spend reservation (M0), the catalog (M1) and credential
+another provider. First the catalog (M1) and credential
 detection (M3, after 019 S1); then storage (M2), the page (M4) and Save + re-run (M5); then
-help (M6), banners on other pages (M7), the config-watch hook (M8, after 019 S12a) and the
-readiness rows (M10, after 019 S2). M9 (`score --submit` only scores new jobs) is independent.
-About 9 h of continuous run (range 8.4 to 14.6 h, 12 tickets by the calibrated rule), about
-17M subagent tokens.
+help (M6), banners on other pages (M7), the config-watch hook (M8, after 019 S12a), the
+readiness rows (M10, after 019 S2), and the deep-pass button (M11: pick N, see the groups and the cost, confirm, background run). M9 (`score --submit` only scores new jobs) is independent.
+M5 also waits on the per-model spend reservation fixes (git-bug `026b50c`, PR 121, and
+`df51dff`). About 8.4 h of
+continuous run (the dependency chain binds; range 8.4 to 13.1 h, 11 tickets by the calibrated rule),
+about 15M subagent tokens.
 
 **Done when** a fresh install with no Anthropic credential shows the message on `/models` with
 a working help link, a model saved there is the one the next nightly run uses, a broken

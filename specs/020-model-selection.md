@@ -1,7 +1,7 @@
 # 020 — Choosing models
 
-Status: **draft for review, revision 2** (bug `051d76b`). Written 2026-10-11 and revised the
-same day after an adversarial review ([History](#history)). Checked against `main` with PR 117
+Status: **draft for review, revision 3** (bug `051d76b`). Written 2026-10-11 and revised the
+same day after an adversarial review and your answer on the deep pass ([History](#history)). Checked against `main` with PR 117
 (bug `15f7012`, Claude 5.5 defaults and the verified price table) and PR 118 (019 revision 4b:
 readiness checks, help pages, config watch) merged.
 
@@ -18,8 +18,12 @@ spec adds:
   link to the help page that fixes it.
 - **`<data dir>/models.toml`**, the file `/models` saves to. It is layered over `config.toml`,
   which the console still never writes.
-- **One fix to existing spend checks** that has to come first: the batch spend reservation is a
-  flat $0.002 a job whatever the model ([M0](#proposed-tickets)).
+- **A console button for the deep pass** (your decision, 2026-10-11): pick N, see which groups
+  it would deep-score and what it costs, confirm, and it runs in the background
+  ([Deep pass from the console](#deep-pass-from-the-console)).
+- **Two fixes to existing spend checks** that have to come first, filed separately: the batch
+  spend reservation is a flat $0.002 a job whatever the model (git-bug `026b50c`, PR 121), and
+  the sync path and the `/prefs` estimate have the same flaw (git-bug `df51dff`).
 
 ## Decisions
 
@@ -29,8 +33,9 @@ spec adds:
 | Does Save spend? | **Never.** Save + re-run only opens the confirm step that already exists for that use | A model change can make the nightly run cost more; a re-run costs money now. Both stay your call |
 | Which subscription checks are free and automatic | `claude` on `PATH`, a `stat` of the CLI's login file, `CLAUDE_CODE_OAUTH_TOKEN` set, the runner state, and recent subscription drafts. `claude auth status` runs only when you press **Check (free)** | 019 rule 1: no subprocess while rendering a page |
 | Models that cannot do a use | **Not offered** for it, but if one is already in effect (from `config.toml`) it is still shown, selected, with the reason | Opus 5.5's thinking cannot be turned off (PR 117 `THINKING_OFF`, `scorers.py:143`), and the screen and fact check are bounded calls (`screen.MAX_TOKENS` 2,048) |
-| Screening models dearer than the flat reservation | **Not offered until M0 lands** (Sonnet 5.5 today) | The batch path reserves $0.002 a job for every model (`screen.py:527`); Sonnet 5.5 costs about $0.005 a job, so caps would be overrun about 2.5x |
+| Screening models dearer than the flat reservation | **Not offered until `026b50c` and `df51dff` land**, for every provider: Sonnet 5.5, any OpenRouter slug whose cached price is above $0.002 a job at typical tokens, and any OpenRouter, Jev or openai-compat slug with no known price. An effective value already set that way is still shown, selected, with this reason | The batch path reserves $0.002 a job for every model (`screen.py:527`) and the sync path does the same (`screen.py:911`); Sonnet 5.5 costs about $0.005 a job, so caps would be overrun about 2.5x |
 | An Anthropic model with no price | **Refused** on save | `compute_cost` raises `no pricing for model` (`scorers.py:97`), and spend caps would not see the cost |
+| Deep pass from the console | **Yes** (your decision, 2026-10-11): on the `/models` deep row, the job page (one group) and Today (top N). Plan, estimate, explicit confirm, background run; never automatic | Most users will not use the CLI |
 | A broken or invalid `models.toml` | **Fail closed for spending, fail soft for ingest.** An invalid screening or deep key blocks that use (skipped with a message, jobs stay queued), never falls back to another provider. Drafting falls back to `config.toml` with a notice, because every draft is a click that shows its estimate | Falling back could spend on a provider you switched away from ([Storage](#storage)) |
 
 Recorded on bug `051d76b`.
@@ -40,7 +45,7 @@ Recorded on bug `051d76b`.
 | Use | Setting, default | Providers allowed | Used by | Re-running means |
 |---|---|---|---|---|
 | **Screening** (Stage 2) | `[scoring] screen_scorer`, `anthropic:claude-haiku-5-5` (`config.py:233`) | `anthropic`, `openrouter`, `openai-compat`, `local`, `jev`, `decisions` (`config.SCORER_PROVIDERS`, `config.py:191`) | The nightly run's score stage (`pipeline/runner.py:433`); `score --submit` and `--collect` (`cli.py:546`); the re-score panel's default (`console/rescore_routes.py:51`); Score now on captured and packet pages and the extension (`apply/score.py:128`, `ext_routes.py:472`); `backfill`; `llm bench`'s default (`cli.py:1731`) | A **confirmed re-score** (`scoring/rescore.py`, [014](014-preferences-console.md#re-score-now)) with the new scorer, scope "recent" (open A-E, last 14 days) or "all". Eligibility is per model (`screen.py` `_ELIGIBLE` keys on `f.model`), so every group in scope is eligible again. The nightly run takes only groups with no screen score under any model (`new_only`), so without a re-run it scores only new jobs with the new model. **But** a hand-run `score --submit` does not use `new_only` (`cli.py:600`, `614`-`622`): it re-screens up to `--limit 500` already-scored groups under the new model, with no confirm, bounded only by the caps. The page and help say so; M9 proposes changing it |
-| **Deep pass** (Stage 3) | `[scoring] deep_scorer`, `anthropic:claude-opus-5-5` (`config.py:234`) | `anthropic` only (`check_scorer_spec(..., anthropic_only=True)`, `config.py:217`) | `jobhunter score --deep N` and `--deep-group GID` only (`cli.py:571`, `397`). No console route runs it | A new deep model applies **only to groups not yet deep-scored**. `score --deep N` skips groups deep-scored under **any** model and moves on to the next N (`deep.py:217`, by design since PR 117: a model change must not pay again for the same groups). To re-run a group under the new model: `score --deep-group GID`, one group at a time (`deep.py:209` `_stored` is per model) |
+| **Deep pass** (Stage 3) | `[scoring] deep_scorer`, `anthropic:claude-opus-5-5` (`config.py:234`) | `anthropic` only (`check_scorer_spec(..., anthropic_only=True)`, `config.py:217`) | `jobhunter score --deep N` and `--deep-group GID` only (`cli.py:571`, `397`). No console route runs it today; M11 adds one ([Deep pass from the console](#deep-pass-from-the-console)) | A new deep model applies **only to groups not yet deep-scored**. `score --deep N` skips groups deep-scored under **any** model and moves on to the next N (`deep.py:217`, by design since PR 117: a model change must not pay again for the same groups). To re-run a group under the new model: `score --deep-group GID`, one group at a time (`deep.py:209` `_stored` is per model) |
 | **Packet drafting** | `[apply] runner` `cli`; `cli_model` `opus` (a CLI alias); `api_model` `claude-opus-5-5`; `effort` `medium` (`config.py:307`-`310`) | `cli`: the `claude` CLI on your subscription. `api`: the Anthropic SDK | Generate on the packet page (`console/packet_routes.py:397`) and `jobhunter apply draft` (`generator.py:1071`, `1080`). In containers only `apply draft` on the host (`packet_routes.py:406`, 018 D16) | Generate again on one packet. Each click makes a new version; old versions stay. Never in bulk |
 | **Fact check** (entailment) | `[apply] entailment_check` on; `cli_entailment_model` `haiku`; `api_entailment_model` `claude-haiku-5-5` (`config.py:315`-`317`) | Same runner as the draft it checks | After every generation (`generator.py:908`, `920`) | Runs again with the next Generate. There is no check-only re-run today |
 
@@ -71,12 +76,16 @@ What the inventory turned up:
   request (`screen.py:438`); a model with no history is planned at $0.002 a job
   (`rescore.py:150`-`151`); and the Anthropic re-score submits its whole plan without checking
   the plan's `max_usd` (`rescore.py:634`-`653`). That is safe for Haiku 5.5 (about $0.0003 a
-  job) and wrong for anything above $0.002. The PM is filing this existing-code bug
-  separately; M0 is the fix 020 depends on.
+  job) and wrong for anything above $0.002. These are existing-code bugs, filed separately:
+  git-bug `026b50c` (PR 121, in review) makes the batch reservation per model, counts
+  uncollected batches per model and caps the Anthropic re-score batch at its plan; git-bug
+  `df51dff` covers the rest, the sync path's flat reservation (`screen.py:911`) and the
+  `/prefs` estimate (below). 020 depends on both.
 - **Two estimates ignore the model.** `/prefs`' paid-save estimate averages `fit_score.cost_usd`
   over every model ever used (`prefs.py:737`-`748`), and the fact check is always estimated and
   cap-checked at a flat $0.003 (`ENTAILMENT_ESTIMATE_USD`, `generator.py:62`, `434`, `902`,
-  `923`, `932`), which a Sonnet 5.5 check can exceed about ten times. M0 and M1 fix them.
+  `923`, `932`), which a Sonnet 5.5 check can exceed about ten times. `df51dff` fixes the
+  first and M1 the second.
 
 ## Credential detection
 
@@ -197,7 +206,7 @@ records the source in the PR; the table below is the starting point):
 
 | Use | Offered | Not offered, and why |
 |---|---|---|
-| Screening | Haiku 5.5 (default); Haiku 4.5 under Older; **Sonnet 5.5 once M0 lands** | Opus 5.5: thinking cannot be turned off. Sonnet 5.5 before M0: the flat $0.002 reservation is below its price |
+| Screening | Haiku 5.5 (default); Haiku 4.5 under Older; **Sonnet 5.5 once `026b50c` and `df51dff` land** | Opus 5.5: thinking cannot be turned off. Sonnet 5.5 before those fixes: the flat $0.002 reservation is below its price |
 | Deep pass | Opus 5.5 (default), Sonnet 5.5 | Haiku 4.5: it rejects `output_config.effort`, and the deep pass sends effort `high` (`deep.py` `EFFORT`) |
 | Drafting, `api` | Opus 5.5 (default), Sonnet 5.5 | Haiku 4.5: same effort reason (`generator.api_params`) |
 | Drafting, `cli` | Aliases `opus` (default), `sonnet`; ids `claude-opus-5-5`, `claude-sonnet-5-5` | The `haiku` alias and `claude-haiku-4-5`: the CLI runner always passes `--effort` (`generator.py:1080`-`1081`, `cli_runner.py:189`-`191`), and Haiku 4.5 rejects it. The fallback-only ids (`claude-opus-4-8`, `claude-sonnet-5`) |
@@ -213,14 +222,23 @@ use measured history first, as the existing estimates do:
 | Use | Per unit | "At your volume" |
 |---|---|---|
 | Screening | Per 1,000 jobs: the measured average `fit_score.cost_usd` for that model (`rescore.cost_per_job`); else the price table at `backfill.TYPICAL_USAGE`, batch-priced for Anthropic; else the decisions fallback; else the cached OpenRouter price at typical tokens (load-only); `local:` is $0 | Jobs screened in the last 7 days × per job, as "about $X a week" |
-| Deep pass | Per job: the measured average for `tier = 'deep'` and that model; else the price table at 006's typical deep tokens | × `deep_shortlist` per `score --deep` run |
+| Deep pass | Per job: the measured average for `tier = 'deep'` and that model; else the price table at 006's typical deep tokens | × the N you pick in the [deep panel](#deep-pass-from-the-console) (default 10) |
 | Drafting | Per resume, letter and answer: `generator.estimate`, taken per model (today it takes the median over every model; M1 filters on `packet_document.model`) | none. `cli` shows "$0 on your subscription; about $X at API prices", from the median `api_equiv_usd` |
 | Fact check | Per draft: the price table at the check's typical tokens for `api_entailment_model`, else `ENTAILMENT_ESTIMATE_USD`. M1 uses the same figure in `generator.estimate` and the cap checks, not the flat $0.003 | none |
 
 The page states which source each number came from ("measured over 412 jobs", "price table",
-"no price: the cap check uses $0.04 a request"). After M0 the cap reservation for screening is
-the larger of $0.002, the measured average and the table price, so the number the page shows
-and the number the cap reserves can differ only upward, and the page says so when they do.
+"no price: the cap check uses $0.04 a request"). After `026b50c` and `df51dff` the cap
+reservation for screening is the larger of $0.002, the measured average and the table price,
+so the number the page shows and the number the cap reserves can differ only upward, and the
+page says so when they do.
+
+**The reservation rule for every provider.** Until both fixes land, the catalog's screening list
+leaves out any option whose per-job price at typical tokens is above $0.002, or is unknown: an
+OpenRouter slug priced above it in the cache, and an OpenRouter, Jev, decisions or
+openai-compat slug with no price at all. (Jev's per-job default, $0.00013, and `local:` at $0
+are under it.) `models set` refuses them without `--force`, with the reason. The rule is one
+function, `catalog.within_reservation(spec)`, which returns true for everything once the fixes
+are present (M5 switches it), so nothing else has to change when they land.
 
 **Measure before switching** ([016](016-alternative-scorers.md#ground-rules) rule 1). Each
 screening option shows how many of your labeled jobs it has scored (a count from `fit_score`
@@ -292,11 +310,14 @@ set on /models".
   cannot be known), the use is **blocked**: `Scoring.scorer_problems()` (`config.py:245`)
   reports it, and every path that spends on that use skips with its existing message
   ("skipped; survivors stay queued") instead of falling back to `config.toml` or the default.
-  `scorer_problems` is already what the run's score stage checks (`runner.py:434`) and what
-  `score`'s mode check uses (`cli.py:127` `_check_scorer_override`). M2 adds the check where
-  it is missing today: the re-score drain (`cli.py:712` checks only an explicit `--scorer`),
-  `backfill`, Score now (`apply/score.py:130` checks only the spec's syntax), the extension's
-  Score now, and the re-score panel. Why: you may have chosen `local:` or a cheap OpenRouter
+  `scorer_problems` is what the run's score stage checks (`runner.py:434`). `score`'s mode
+  check, `_check_scorer_override` (`cli.py:127`), calls `check_scorer_spec` on the configured
+  spec directly, so M2 points it at `scorer_problems` too. M2 adds the check everywhere else
+  that spends: `score --submit` and `--collect`, `score --deep` and `--deep-group`, the
+  re-score drain (`cli.py:712` checks only an explicit `--scorer`), `backfill`, `llm bench`
+  when no `--scorer` is given (it calls the default scorer for real), Score now
+  (`apply/score.py:130` checks only the spec's syntax), the extension's Score now, the re-score
+  panel and the deep panel. Why: you may have chosen `local:` or a cheap OpenRouter
   model on `/models` to stop spending, and a hand edit or a version difference must not quietly
   send tonight's jobs to the Anthropic default.
 - **Drafting keys fall back.** An invalid `[apply]` key in `models.toml` is ignored and the
@@ -418,7 +439,7 @@ Screening new jobs                                   from config.toml
 Deep pass                                            default
   [ Claude Opus 5.5 ▾ ]   about $0.05 a job
   New deep runs use it; 38 groups keep their Opus 5 reports.
-  [ Save ]   Re-run your top groups: jobhunter score --deep-group 1412  (about $0.05) …
+  [ Save ]  [ Deep-score… ]
 
 Packet drafting                                      saved on /models at 14:05
   Runner (•) Subscription (claude CLI)  ( ) API key
@@ -458,8 +479,8 @@ now, but it decides what the nightly run spends.
 | `/models` | GET | middleware | The page. No network, no subprocess, no write |
 | `/models/{use}/preview` | GET | middleware | Price, access and queued re-score lines for a candidate value. No network. Its only write is the prefilter catch-up ([Queued re-scores](#queued-re-scores)) |
 | `/models/{use}` | POST | loopback peer | Save (and Save + re-run). Body: the changed fields, the base digest, `queued=new\|keep`, `force` |
-| `/models/{use}/reset` | POST | loopback peer | Remove the use's keys from `models.toml` |
-| `/models/history/{id}/revert` | POST | loopback peer | Write the entry's old value as a new change |
+| `/models/{use}/reset` | POST | loopback peer | Remove the use's keys from `models.toml`. Body: the base digest and `queued=new\|keep` |
+| `/models/history/{id}/revert` | POST | loopback peer | Write the entry's old value as a new change. Body: the base digest and `queued=new\|keep` |
 | `/models/reset-file` | POST | loopback peer | Replace a broken `models.toml` with an empty one (the old file kept as `models.toml.broken-<time>`) |
 | `/models/load` | POST | loopback peer | Before S12a: take the on-disk `models.toml` layer into the running settings |
 | `/models/openrouter/refresh` | POST | loopback peer; **403 under `--allow-remote`** | Fetch the public OpenRouter `/models` list and rewrite the cache. Network, so it is gated like 019 S6 |
@@ -490,7 +511,7 @@ Saving spends nothing:
      them with Haiku 5.5 (about $0.13)." A run already waiting for the run lock read its
      settings before it waited (019 B) and uses the old model.
    - **Deep pass**: "New deep runs use Sonnet 5.5. 38 groups keep their Opus 5.5 reports;
-     `score --deep N` moves on to the next N." Plus the re-run commands below.
+     Deep-score top N moves on to the next N." Plus a link to the deep panel to re-run them.
    - **Drafting and the fact check**: "the next Generate uses it".
 
 ### Save + re-run
@@ -499,12 +520,127 @@ Never runs anything by itself. It saves, then opens the existing confirm step fo
 
 | Use | Save + re-run opens |
 |---|---|
-| Screening | The **re-score panel**, inline on `/models` (`_rescore_panel.html`, `GET /prefs/rescore/panel?scorer=<new spec>`), with the new model selected and the scope choice. You see the job count, the estimate and the spend ceiling, then press Run and confirm. The plan token (`rescore_routes.py:152`) makes the run match what you confirmed. With an Anthropic model it only submits a batch, capped at the plan's `max_usd` after M0; the nightly collect, or `score --collect-pending`, finishes it. The panel says "the model is saved; Cancel only cancels the re-score" |
-| Deep pass | No button ([open question 1](#open-questions)). The row lists the five highest-ranked groups whose deep report came from another model, each as `jobhunter score --deep-group GID` with its estimate, and says that `score --deep N` scores the next N unscored groups, not these. A flag that re-runs the top N in one go (`--deep N --redo`, with its own confirm) is a possible later ticket, not proposed now |
+| Screening | The **re-score panel**, inline on `/models` (`_rescore_panel.html`, `GET /prefs/rescore/panel?scorer=<new spec>`), with the new model selected and the scope choice. You see the job count, the estimate and the spend ceiling, then press Run and confirm. The plan token (`rescore_routes.py:152`) makes the run match what you confirmed. With an Anthropic model it only submits a batch, capped at the plan's `max_usd` after git-bug `026b50c`; the nightly collect, or `score --collect-pending`, finishes it. The panel says "the model is saved; Cancel only cancels the re-score" |
+| Deep pass | The [deep panel](#deep-pass-from-the-console), inline, with the new model, N and both choices (next unscored, or re-run the top groups). You review the groups, the estimate and the caps, then confirm. Cancel leaves the save in effect |
 | Drafting, fact check | No bulk re-run. The row lists up to five packets whose current documents came from another model (`packet_document.model`), each linking to its packet page, where Generate shows its estimate (API) or paid-usage confirm (subscription on extra usage) as today. When `/models` was opened from a packet page (`?next=/packet/N`, checked with `safe_next`), the button is **Save and go back** |
 
 The re-score panel's own scorer list (`available_scorers`, `rescore_routes.py:45`) shows the
 effective screening choice as "your default", plus the usable catalog choices from M1.
+
+## Deep pass from the console
+
+Your decision (2026-10-11): most users will not use the CLI, so the console runs the deep pass
+too. Today only `jobhunter score --deep N` and `--deep-group GID` do (`cli.py:571`-`595`), one
+`deep.deep_score` call per group, each a streamed Opus request (`deep.py:274`).
+
+### Where it appears
+
+One panel, `_deep_panel.html`, in three places:
+
+| Place | What it offers |
+|---|---|
+| `/models`, the deep row | **Deep-score…**, and Save + re-run: the panel with the row's model |
+| Job page, one group | **Deep-score this job** (no deep report yet) or **Re-run with Opus 5.5** (a report from another model). One group, like `--deep-group` |
+| Today (`/`), next to the shortlist, and a link from the inbox header | **Deep-score top N**: the panel in "next unscored" mode |
+
+### The panel
+
+```
+Deep pass with Claude Opus 5.5
+  This costs more than screening: about $0.05 a job (price table), about 200 times
+  the screen. It runs only when you confirm.
+
+  How many   [ 10 ▾ ]   (5, 10, 20, 40; default 10)
+  (•) Next unscored: the top 10 by screen score with no deep report yet
+  ( ) Re-run my top groups with Opus 5.5: 4 of the top 10 have a report from Opus 5
+
+  Would deep-score:  Acme, Staff Engineer (B) · Globex, Platform Lead (B) · … [show all]
+  Estimate  about $0.51   Ceiling  $0.65   Worst case per job  $0.67
+  Left today $1.41 of $2.00, this week $8.20 of $10.00
+                                          [ Cancel ]  [ Deep-score 10 jobs, up to $0.65 ]
+```
+
+- **N** defaults to 10, at most `deep_shortlist` (40). "Next unscored" lists exactly what
+  `deep.shortlist(conn, profile, N, scorer=...)` returns (`deep.py:217`): the top N by computed
+  screen overall with no deep report under any model, skipping rejected groups and paid
+  failures. "Re-run my top groups" lists, by the same ranking, the top N whose deep report came
+  from another model. Each runs per group, as `--deep-group` does: `deep_score` checks the
+  stored report per model (`_stored`, `deep.py:209`), so a group already done with this model
+  is "existing" and costs nothing.
+- **Estimate**: per job from the measured `tier = 'deep'` average for this model, else the
+  price table at 006's typical deep tokens (M1), times the groups listed. The **ceiling** is
+  the estimate plus the re-score headroom (`rescore.max_usd_for`). The panel shows the
+  remaining daily and weekly cap (`screen.remaining_budget`, the tighter of the two, which the
+  CLI path already uses).
+- **Worst case per call.** `deep.MAX_TOKENS` is 32,000 and caps thinking and output together,
+  so one Opus 5.5 call can cost about $0.67 (32,000 output tokens at $20/MTok plus the input).
+  Today's pre-check admits a call when $0.08 is left (`deep.py:300`,
+  `ESTIMATED_COST_PER_REQUEST_USD`). The console run admits a call only when **both** the
+  remaining cap and the confirmed ceiling still cover that worst case (from the price table
+  for the model), so no run can pass the cap or its ceiling even when a report runs long. The
+  cost of this rule: the last ~$0.67 of a day's cap is not used by deep runs. The panel shows
+  the worst case, and the plan says how many of the N fit now ("only 7 of 10 fit under today's
+  cap"). M11 applies the same admission rule to the CLI's `--deep`, so the two cannot differ.
+- **Confirm.** The button names the count and the ceiling. The form posts a plan token (mode,
+  model, `scoring_version`, group ids and ceiling, as `rescore.Plan.token` does). If the plan
+  built at click time differs (new screen scores, a profile change, another model saved),
+  nothing runs and the panel shows the new plan. Only the confirmed group ids run, each at most
+  once.
+- **Disabled**, with the reason, when the deep model is blocked (an invalid `models.toml` key),
+  its credential is missing (`model_access`), nothing is eligible, or the remaining cap is
+  below the worst case for one job.
+
+### Running it
+
+- **Background, one run at a time**, on the console re-score's machinery: a `DeepManager` beside
+  `RescoreManager` (`rescore_routes.py:101`), a thread with its own connection and the settings
+  object it started with, the **run lock** taken without waiting (`take_run_lock`,
+  `rescore_routes.py:85`: a timer run or a CLI score holding it means refused, nothing spent),
+  and a heartbeat. A re-score and a deep run never run at once.
+- **State in the database**, so progress survives a reload and the activity band can read it: a
+  migration adds `deep_request` (`requested_at`, `mode` `next|rerun|group`, `scorer`,
+  `scoring_version`, `group_ids`, `estimated_usd`, `max_usd`, `status`
+  `running|done|failed|canceled`, `done`, `spent_usd`, `error`, timestamps), shaped like
+  `rescore_request`. Errors are stored as fixed text or the exception type, never `str(exc)`
+  (019 rule 4). There is no pending state: a row exists only once you confirm.
+- **019 S12b's work registry.** The run enters `app.state.work` before its thread starts and
+  leaves it in a `finally`, so a config-watch Restart answers 409 while it runs and a restarting
+  console refuses to start one (503). If S12b has not landed, M11 leaves the hook S12b fills.
+- **The activity band** (`_activity.html`, from `edb9ba6`): "Deep pass 3/10 with Opus 5.5" while
+  it runs, then "10 deep reports, $0.49" or "Deep pass failed: <fixed reason>", dismissible like
+  the re-score lines.
+- **Stops** when the next call would not fit under the cap or the ceiling (worst case), on a
+  `capped` result, on Cancel (finishes the call in flight, starts no other), or on an API error
+  that is not about one group (401, 403, 429 after the SDK's retries). A refusal, a cut-off
+  report or bad output for one group is recorded as today (`score_failure`) and the run moves
+  on. Spend is logged per call as the CLI path logs it.
+- **Never automatic.** No timer, page load or save starts a deep run; only the confirm POST does.
+
+### Deep routes
+
+| Route | Method | Gate | Does |
+|---|---|---|---|
+| `/deep/panel` | GET | middleware | The panel for `?n=&mode=&scorer=&group=`. Plans only: no network, no write |
+| `/deep/run` | POST | loopback peer (a non-loopback peer gets 403, with or without `--allow-remote`) | Checks the plan token, takes the run lock, creates `deep_request`, starts the thread |
+| `/deep/{id}/progress` | GET | middleware | The progress fragment |
+| `/deep/{id}/cancel` | POST | loopback peer | Cancel after the call in flight |
+
+It spends your credits, so a non-loopback peer never starts it. The panel shown to one has no
+Run button and gives the command instead (`jobhunter score --deep N`, or `jobhunter-ctr score
+--deep N`).
+
+### Testing (deep)
+
+- **No spend without the confirm**: rendering the panel in every place, changing N and mode, and
+  a stale or missing plan token construct no Anthropic client (the factory fails the test) and
+  write no `deep_request` or `llm_spend` row.
+- The listed groups equal `deep.shortlist` for "next unscored"; "re-run" lists only reports from
+  another model; a group already done with this model costs nothing.
+- **Worst case**: with a fake client returning 32,000 output tokens, a run never ends above the
+  cap or the ceiling; the CLI `--deep` obeys the same rule.
+- Run lock held: refused, nothing spent. Registry: Restart gets 409 while a deep run is in it.
+- Non-loopback peer: 403 on run and cancel, under `--allow-remote` too; the panel shows the
+  command.
 
 ## Banners elsewhere
 
@@ -553,8 +689,9 @@ models`). 019's drift tests check every link and anchor.
   `apply draft`.
 - **Fail closed**: an invalid `screen_scorer` in `models.toml` (a bare name,
   `openrouter:jev:...`, an unpriced Anthropic model, Opus 5.5), and a file that is not TOML.
-  The run's score stage, the re-score drain, `score --submit`, `score --deep`, `backfill`,
-  Score now and the panel each skip with the message, and **no Anthropic client is
+  The run's score stage, the re-score drain, `score --submit`, `--collect`, `score --deep`,
+  `score --deep-group`, `backfill`, `llm bench` without `--scorer`, Score now (page and
+  extension), the re-score panel and the deep panel each skip with the message, and **no Anthropic client is
   constructed** (the factory is patched to fail the test). An invalid `[apply]` key falls back
   with the notice. An unknown key is a warning only. A sentinel value is never echoed.
 - **Writes**: two concurrent saves serialize under the lock; a stale digest gets 409 and writes
@@ -579,7 +716,10 @@ models`). 019's drift tests check every link and anchor.
   in the response or logs; ids are escaped and capped.
 - **Catalog**: every `PRICING_PER_MTOK` key has an entry and the reverse; Opus 5.5 is not
   offered for screening or either fact check; `haiku` and Haiku 4.5 are not offered for CLI
-  drafting; Sonnet 5.5 is offered for screening only when M0's reservation is present; an
+  drafting; until `026b50c` and `df51dff` are present, no screening option above $0.002 a
+  job or without a price is offered on any provider (Sonnet 5.5, a dear cached OpenRouter
+  slug, an unpriced slug) and `models set` refuses them without `--force`, while an effective
+  value of that kind still renders selected with its reason; an
   old-format OpenRouter cache still loads; a cache with `structured: false` hides that slug.
 - **Banners**: each page in the table shows the line for `missing` and blocked uses and nothing
   for `likely` or `unknown`; every link resolves (019's link test, extended to `/models`).
@@ -593,49 +733,69 @@ worker and reviewer per the CLAUDE.md table.
 
 | # | Ticket | Difficulty | Worker / reviewer | Depends on |
 |---|---|---|---|---|
-| M0 | Per-model spend reservation: `submit_batch` and the sync path (`screen.py:527`, `911`), `_pending_batch_usd` (per batch, from `score_batch.model`) and `rescore.cost_per_job`'s no-history fallback all use max($0.002, measured, table price at `TYPICAL_USAGE`); the Anthropic re-score batch capped at `plan.max_usd / per_job` (`rescore.py:634`); `/prefs`' estimate (`prefs.py:737`) priced for the current screening model; test: Sonnet 5.5 screening never submits more than the cap covers at its table price. Shares or replaces the PM's separately filed cap bug | hard (money path) | opus / opus at higher effort | |
 | M1 | `scoring/catalog.py`: Anthropic table keyed on `PRICING_PER_MTOK` with per-use rules for both runners (checked against the platform docs, sources in the PR), CLI aliases, Jev default, OpenRouter cache `models` map (backward compatible), the load-only cache reader, the refresh function; per-use price estimates with their sources; `generator.estimate` per model; the fact-check estimate and cap checks priced from `api_entailment_model` | hard (estimates feed the drafting cap preflight and `apply draft`'s confirm) | opus / opus at higher effort | |
 | M2 | `models.toml`: `load_layers()`, key allowlist, per-key validation, unknown keys as warnings, fail closed for screening and deep through `scorer_problems` on every spending path (drain, backfill, Score now, extension, panel), drafting fallback with notice; atomic locked write with digest; changed-fields-only writes; `model_change` migration, history and revert; the queued re-score line and `keep` choice as functions; `jobhunter models show/set/reset/catalog`; `jobhunter paths` row; run summary line | hard (every process's config loading, a migration, it decides what the nightly run spends) | opus / opus at higher effort | M1 (use rules; may stub them and land first) |
 | M3 | `model_access.py` on `credential_for`: providers, the subscription order (login-file path confirmed on the real CLI), the per-mode table, `problems()`; the re-score panel's scorer list, `packet_docs.runner_status` and `generator._preflight` moved off bare `ANTHROPIC_API_KEY` | hard (credentials, the drafting money path) | opus / opus at higher effort | S1 `a1af329` |
 | M4 | `/models` page and its routes: nav, Access rows (S6 buttons when present, else commands), the local server check route, use rows with the effective value selected, preview, Save under `settings_lock` (field-only swap), Reset, Reset file, Load, History and Revert, digest swap, loopback-peer gating with the read-only command view, OpenRouter refresh, source labels, the `/models` banner, dark mode and 375 px | hard (a live settings swap under concurrent requests, like S12a) | opus / opus at higher effort | M1, M2, M3; S3a `9512dd7` (shared status partials); S6 `531b700` optional |
-| M5 | Save + re-run: inline re-score panel with the new scorer (no request until confirm), the queued re-score line in previews and the two Save buttons, deep `--deep-group` list with estimates, packet list and Save and go back; `available_scorers` from the catalog; Sonnet 5.5 offered for screening | hard (re-score money path) | opus / opus at higher effort | M4, M0 |
+| M5 | Save + re-run: inline re-score panel with the new scorer (no request until confirm), the queued re-score line in previews and the two Save buttons, deep `--deep-group` list with estimates, packet list and Save and go back; `available_scorers` from the catalog; `catalog.within_reservation` switched on once `026b50c` and `df51dff` are in, which offers Sonnet 5.5 and dearer OpenRouter slugs for screening | hard (re-score money path) | opus / opus at higher effort | M4; git-bug `026b50c` (PR 121) and `df51dff` |
 | M6 | Help: `help/models.md`; the headings the banners link in `scorers.md`, `openrouter.md` and `drafting.md` if missing; troubleshooting entries for a blocked use and a broken `models.toml` | mechanical | haiku / sonnet | S11a, S11b, S11c |
 | M7 | Banners on the re-score panel, packet page, captured page and Score now panels; blocked-use lines; the "no model access" line; link tests | normal | sonnet / opus | M3, M4, M6 |
 | M8 | Config watch on the layers: `models.toml` fingerprinted, layer diffs, "no effect: set on /models", problems as validation errors, exempt from the replaced-file rule, self-write baseline, the shared `settings_lock` in Apply, the queued re-score line next to Apply | normal | sonnet / opus | M2, M4, S12a |
 | M9 | Plain `score --submit` uses the nightly `new_only` rule unless `--scorer` is given, so a model change never re-screens scored jobs without a confirmed re-score; help and changelog note | normal | sonnet / opus | |
 | M10 | Readiness and `doctor`: the 019 inventory row "Model choices" (broken file, blocked use), model access lines in `doctor` and `--json`, `doctor -v` prints each model setting's source | normal | sonnet / opus | S1 `a1af329`, S2 `3cdd9d1`, M2, M3 |
+| M11 | Deep pass from the console: `_deep_panel.html` on `/models`, the job page and Today (inbox link); `deep_request` migration; plan with token (next unscored from `deep.shortlist`, re-run top groups, one group); price-table estimate, ceiling, remaining caps, worst-case admission per call (also applied to the CLI `--deep`); `DeepManager` with the run lock, heartbeat, 019 S12b work registry entry, cancel; activity band lines; routes gated on a loopback peer; tests that nothing is spent without the confirm POST, that a stale token runs nothing, and that a worst-case call never passes the cap | hard (a paid background run) | opus / opus at higher effort | M1, M3, M4; S12b optional (registry hook) |
 
-Order: M0, M1, M9 can start now; M3 after S1. M2 after M1 (or against a stub). M6 whenever
-S11a-c land. M4 after M1, M2, M3. M5 after M4 and M0. M7 after M4 and M6. M8 after M2, M4 and
-S12a. M10 after S1, S2, M2 and M3.
+Order: M1 and M9 can start now; M3 after S1. M2 after M1 (or against a stub). M6 whenever
+S11a-c land. M4 after M1, M2, M3. M5 after M4, `026b50c` and `df51dff`. M11 after M1, M3 and
+M4. M7 after M4 and M6. M8 after M2, M4 and S12a. M10 after S1, S2, M2 and M3. The two
+prerequisite bugs are counted in their own estimates, not here.
 
 **Estimate**, by the calibrated rule (ticket wall-clock: mechanical 0.75 h, normal 1.4 h, hard
 2.1 h; schedule = sum / 3, plus 30%, range 0.7x to 1.6x; floor = the longest dependency chain,
 which is also the low end of the range):
 
-- Sum: 7 hard (14.7 h) + 4 normal (5.6 h) + 1 mechanical (0.75 h) = 21.05 h.
-- Schedule: 21.05 / 3 = 7.0 h, plus 30% = 9.1 h.
-- Floor: the longest chain inside 020 is M1, M2, M4, M5 = 4 x 2.1 = **8.4 h** (6.3 h if M2 lands
-  against a stub of M1's use rules). It is below 9.1 h, so it does not bind.
-- **About 9 h** of continuous run once S1 has landed, range about 8.4 to 14.6 h.
-- Tokens, per ticket (normal 0.6M, mechanical 0.5M, hard 2.0M): 7 x 2.0 + 4 x 0.6 + 0.5 =
-  **about 16.9M**.
-- Not included: waiting on 019's tickets (S1, S2, S3a, S6, S11a-c, S12a), PR merge waits, and
-  your review.
+- Eleven tickets: 6 hard (M1, M2, M3, M4, M5, M11: 12.6 h) + 4 normal (M7, M8, M9, M10:
+  5.6 h) + 1 mechanical (M6: 0.75 h) = 18.95 h.
+- Schedule: 18.95 / 3 = 6.3 h, plus 30% = 8.2 h; range 0.7x to 1.6x = 5.7 to 13.1 h.
+- Floor: the longest chains inside 020 are M1, M2, M4, M5 and M1, M2, M4, M11 = 4 x 2.1 =
+  **8.4 h**. It is above 8.2 h, so **it binds**: about **8.4 h** of continuous run, range 8.4 to
+  13.1 h (the floor replaces the 5.7 h low end). Landing M2 against a stub of M1's use rules
+  would shorten the chain to 6.3 h, and then the 8.2 h schedule would bind instead.
+- Tokens, per ticket (normal 0.6M, mechanical 0.5M, hard 2.0M): 6 x 2.0 + 4 x 0.6 + 0.5 =
+  **about 14.9M**.
+- Not included: git-bug `026b50c` (PR 121) and `df51dff`; waiting on 019's tickets (S1, S2,
+  S3a, S6, S11a-c, S12a); PR merge waits; and your review.
 
 ## Open questions
 
-Answered 2026-10-11: choices go in a separate, console-managed `models.toml` (TOML, to match
-`config.toml`), never in `config.toml`. Placed in the data dir for containers
-([Storage](#storage)).
+None. Answered 2026-10-11:
 
-1. **A console button for the deep pass?** Today only `jobhunter score --deep N` and
-   `--deep-group GID` run it, and a button would add a new paid background run to the console.
-   **Recommended: not now.** The row lists the `--deep-group` commands for your top groups with
-   their estimates; a button, or a `--redo` flag, can be a later ticket if you use the deep pass
-   often.
+- Choices go in a separate, console-managed `models.toml` (TOML, to match `config.toml`), never
+  in `config.toml`. Placed in the data dir for containers ([Storage](#storage)).
+- The console gets a deep-pass button, because most users will not use the CLI
+  ([Deep pass from the console](#deep-pass-from-the-console)).
+
 
 ## History
+
+### Revision 3: deep pass button
+
+Your decision (2026-10-11): the console runs the deep pass. Added
+[Deep pass from the console](#deep-pass-from-the-console): one panel on `/models`, the job page
+and Today; N with the groups listed (next unscored from `deep.shortlist`, or re-run the top
+groups per group); the cost against screening, the estimate, ceiling and remaining caps; an
+explicit confirm with a plan token; a background run on the re-score machinery (run lock, 019
+S12b registry, activity band); a worst-case-per-call admission rule, because `deep.MAX_TOKENS`
+lets one Opus 5.5 call cost about $0.67 while today's pre-check reserves $0.08. Ticket M11.
+
+Final check of revision 2: M0 duplicated git-bug `026b50c` (PR 121), so it is dropped and
+`026b50c` plus `df51dff` (the sync path's flat reservation and the `/prefs` estimate) are named
+as prerequisites of M5 and of the dearer screening options. The not-offered rule now covers every
+provider: any screening option priced above $0.002 a job, or without a price, waits for them.
+`_check_scorer_override` is described as it is (it calls `check_scorer_spec`), and M2 points it
+at `scorer_problems`. The fail-closed list gains `llm bench`'s default scorer and `score
+--deep-group`. Reset and Revert carry `queued=new|keep`. Recounted: 11 tickets, about 8.4 h
+(the floor binds), about 14.9M tokens.
 
 ### Revision 2: adversarial review
 
