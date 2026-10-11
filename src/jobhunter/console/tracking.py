@@ -3,7 +3,9 @@
 Events are the truth: ``application_event`` is append-only and ``application.status`` is a
 rebuildable cache of the latest event. This module owns the data layer for /pipeline and
 /followups: status derivation, staleness, kanban grouping, follow-up nudges, contacts and
-attachments. Attachments are local file paths only; files are never read, copied or uploaded.
+attachments. Attachments are local files, stored relative to the data directory
+(specs/018 D18, C14); a file outside it is copied into ``<data dir>/attachments/`` first. Files
+are never uploaded anywhere.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from jobhunter.core import dbpaths
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
 
 BOARD_STATUSES = (
@@ -494,10 +497,24 @@ def validate_attachment_path(raw: str, repo_root: Path = REPO_ROOT) -> Path:
     return path
 
 
-def attachments(conn: sqlite3.Connection, app_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
+def attachments(
+    conn: sqlite3.Connection, app_id: int, data_dir: Path | str | None = None
+) -> list[dict[str, Any]]:
+    """The application's attachments, oldest first. ``path`` is the stored value; with a
+    ``data_dir``, ``file`` is the file it names now (relative values resolve against it), or
+    None when the value would leave the data dir (``..``, a symlink out, or an absolute row
+    elsewhere that ``relativize-paths`` has not handled)."""
+    rows = conn.execute(
         "SELECT * FROM attachment WHERE application_id = ? ORDER BY id", (app_id,)
     ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        if data_dir is not None:
+            inside = dbpaths.resolve_inside(row["path"], data_dir)
+            item["file"] = str(inside) if inside is not None else None
+        out.append(item)
+    return out
 
 
 def add_attachment(
@@ -507,22 +524,32 @@ def add_attachment(
     path: str,
     now: datetime | None = None,
     repo_root: Path = REPO_ROOT,
+    *,
+    data_dir: Path | str,
 ) -> int:
-    """Record a local path (never uploaded or copied)."""
+    """Record a local file, relative to ``data_dir`` (specs/018 D18).
+
+    A file outside the data directory is copied into ``<data dir>/attachments/`` (sha256
+    checked) and the copy is recorded; the original is left where it is.
+    """
     if kind not in ATTACHMENT_KINDS:
         raise TrackingError(f"unknown attachment kind {kind!r}")
     if not application_exists(conn, app_id):
         raise TrackingError(f"no such application {app_id}")
     resolved = validate_attachment_path(path, repo_root)
+    try:
+        stored = dbpaths.store(resolved, data_dir)
+    except dbpaths.CopyError as exc:
+        raise TrackingError(str(exc)) from exc
     cur = conn.execute(
         "INSERT INTO attachment (application_id, kind, path, added_at) VALUES (?, ?, ?, ?)",
-        (app_id, kind, str(resolved), _iso(now or datetime.now(UTC))),
+        (app_id, kind, stored, _iso(now or datetime.now(UTC))),
     )
     conn.commit()
     return int(cur.lastrowid or 0)
 
 
 def delete_attachment(conn: sqlite3.Connection, attachment_id: int) -> None:
-    """Removes the record only; the file on disk is untouched."""
+    """Removes the record only; the file on disk (or its copy in attachments/) is untouched."""
     conn.execute("DELETE FROM attachment WHERE id = ?", (attachment_id,))
     conn.commit()

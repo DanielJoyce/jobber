@@ -60,7 +60,11 @@ def register(
         return request.headers.get("hx-request") == "true"
 
     def drawer_ctx(
-        conn: sqlite3.Connection, app_id: int, error: str | None = None, oob: bool = False
+        request: Request,
+        conn: sqlite3.Connection,
+        app_id: int,
+        error: str | None = None,
+        oob: bool = False,
     ) -> dict[str, Any]:
         counts: dict[str, int] = {}
         if oob:
@@ -72,7 +76,7 @@ def register(
             "a": conn.execute("SELECT * FROM application WHERE id = ?", (app_id,)).fetchone(),
             "events": t.events(conn, app_id),
             "contacts": t.contacts(conn, app_id),
-            "attachments": t.attachments(conn, app_id),
+            "attachments": t.attachments(conn, app_id, data_dir(request)),
             "statuses": t.ALL_STATUSES,
             "kinds": t.ATTACHMENT_KINDS,
             "error": error,
@@ -88,7 +92,7 @@ def register(
         if not is_htmx(request):
             return RedirectResponse(f"/pipeline/{app_id}", status_code=303)
         return templates.TemplateResponse(
-            request, "_drawer.html", drawer_ctx(conn, app_id, error, oob=True)
+            request, "_drawer.html", drawer_ctx(request, conn, app_id, error, oob=True)
         )
 
     @app.get("/pipeline", response_class=HTMLResponse)
@@ -124,7 +128,7 @@ def register(
     @app.get("/pipeline/{app_id}", response_class=HTMLResponse)
     def pipeline_detail(request: Request, conn: Conn, app_id: int) -> HTMLResponse:
         require_app(conn, app_id)
-        ctx = drawer_ctx(conn, app_id)
+        ctx = drawer_ctx(request, conn, app_id)
         if is_htmx(request):
             return templates.TemplateResponse(request, "_drawer.html", ctx)
         return templates.TemplateResponse(
@@ -239,7 +243,14 @@ def register(
         require_app(conn, app_id)
         error = None
         try:
-            t.add_attachment(conn, app_id, f.get("kind") or "other", f.get("path", ""), now())
+            t.add_attachment(
+                conn,
+                app_id,
+                f.get("kind") or "other",
+                f.get("path", ""),
+                now(),
+                data_dir=data_dir(request),
+            )
         except t.TrackingError as exc:
             error = str(exc)
         return drawer_response(request, conn, app_id, error)
