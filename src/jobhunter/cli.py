@@ -1917,6 +1917,71 @@ def db_migrate_cmd() -> None:
     )
 
 
+@db_app.command("relativize-paths")
+def db_relativize_paths_cmd(
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Back up the database, then make the changes listed."),
+    ] = False,
+) -> None:
+    """Rewrite absolute file paths in the database relative to the data dir (specs/018 C14).
+
+    Dry run by default: lists every absolute path and what it would become, writes nothing.
+    Paths under the data dir (as configured or its realpath, so /home/<you>/... and
+    /var/home/<you>/... alike) become relative; files outside it are copied into
+    <data dir>/attachments/ (sha256 checked) and the row points at the copy; rows naming a
+    missing file are reported and left alone. --apply backs the database up into
+    <data dir>/backups/ first. Host only.
+    """
+    from jobhunter.core import backup, dbpaths
+
+    _host_only("db relativize-paths")
+    settings = load_settings()
+    db_path = resolve_path(settings.paths.db_path)
+    data_dir = resolve_path(settings.paths.data_dir)
+    conn = db.connect(db_path)
+    try:
+        _migrate(conn)
+        plan = dbpaths.plan_relativize(conn, data_dir)
+        typer.echo(f"data dir: {data_dir}")
+        typer.echo(f"database: {db_path}")
+        for change in plan.changes:
+            typer.echo(f"  {change.describe()}")
+        typer.echo(plan.summary)
+        if not apply:
+            if plan.of(dbpaths.RELATIVIZE) or plan.of(dbpaths.COPY):
+                typer.echo("dry run: nothing written. Run again with --apply to change them.")
+            return
+        if not (plan.of(dbpaths.RELATIVIZE) or plan.of(dbpaths.COPY)):
+            typer.echo("nothing to change.")
+            raise typer.Exit(1 if plan.of(dbpaths.UNRESOLVED) else 0)
+        with _job_lock(settings, "db relativize-paths", None):
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            owner = db.owning_data_dir(db_path, data_dir)
+            dest = owner / "backups" / f"jobhunter-{stamp}-pre-relativize-paths.db"
+            try:
+                backup.online_backup(conn, dest)
+            except backup.BackupError as exc:
+                typer.echo(f"error: {exc}; nothing changed.", err=True)
+                raise typer.Exit(1) from exc
+            typer.echo(f"backup: {dest}")
+            plan = dbpaths.plan_relativize(conn, data_dir)  # under the lock, after the backup
+            done = dbpaths.apply_relativize(conn, plan)
+        for stored in done.copied:
+            typer.echo(f"copied: {data_dir / stored}")
+        for change in done.failed:
+            typer.echo(f"  not changed: {change.where}: {change.note}", err=True)
+        remaining = dbpaths.count_absolute_paths(conn)
+    finally:
+        conn.close()
+    typer.echo(
+        f"rewrote {len(done.rewritten)} row(s), copied {len(done.copied)} file(s); "
+        f"{remaining} absolute path(s) remain."
+    )
+    if remaining:
+        raise typer.Exit(1)
+
+
 def _api_hint(packet_id: int, letter: bool, question: str | None) -> str:
     extra = " --letter" if letter else f" --question {json.dumps(question)}" if question else ""
     command = f"jobhunter apply draft {packet_id}{extra} --runner api"
