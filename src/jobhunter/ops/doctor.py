@@ -181,7 +181,7 @@ def gather(
     secrets_report=None,
     settings_loader: Callable[[], Settings] = load_settings,
     context_builder: Callable[[], preflight.Context] | None = None,
-    run_preflight: Callable[..., preflight.Result] = preflight.run,
+    run_preflight: Callable[..., preflight.Result] | None = None,
     home: Path | None = None,
 ) -> Report:
     """Every local check plus ``data.layout``, and with ``containers`` preflight's mapped rows.
@@ -209,7 +209,7 @@ def gather(
     if containers:
         if context_builder is None:
             raise RuntimeError("--containers needs a preflight context builder")
-        result = run_preflight(context_builder(), dry_run=True)
+        result = (run_preflight or preflight.run)(context_builder(), dry_run=True)
         report.preflight_ran = True
         report.preflight_lines = list(result.lines)
         mapped = map_preflight(result)
