@@ -164,19 +164,33 @@ def test_malformed_values_are_refused_with_a_reason(use, value):
 # ─── The reservation rule ───────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "spec",
-    [
-        "anthropic:claude-sonnet-5-5",  # about $0.010 a job unbatched
-        "anthropic:claude-haiku-4-5",  # about $0.005 a job unbatched
-        f"openrouter:{DEAR}",
-        "openrouter:unpriced/model",
-        "openrouter:not/in-cache",
-        "decisions:not/in-cache",
-        "openai-compat:my-model",  # prices 0: unknown
-    ],
-)
-def test_screening_options_over_the_flat_reservation_wait_for_the_fix(scoring, spec):
+OVER_THE_FLAT = [
+    "anthropic:claude-sonnet-5-5",  # about $0.010 a job unbatched
+    "anthropic:claude-haiku-4-5",  # about $0.005 a job unbatched
+    f"openrouter:{DEAR}",
+    "openrouter:unpriced/model",
+    "openrouter:not/in-cache",
+    "decisions:not/in-cache",
+    "openai-compat:my-model",  # prices 0: unknown
+]
+
+
+def test_the_switch_is_on():
+    """020 M5b (a322711): per-model reservations are on every screening path."""
+    assert catalog.RESERVATION_PER_MODEL is True
+
+
+@pytest.mark.parametrize("spec", OVER_THE_FLAT)
+def test_screening_options_over_the_flat_reservation_are_within_it_now(scoring, spec):
+    assert catalog.within_reservation(spec, scoring)
+    verdict = catalog.judge("screen", spec, scoring)
+    assert verdict.offered, verdict.reason
+
+
+@pytest.mark.parametrize("spec", OVER_THE_FLAT)
+def test_with_the_switch_off_they_wait_for_the_fix(scoring, spec, monkeypatch):
+    """The pre-M5 rule, kept behind the switch."""
+    monkeypatch.setattr(catalog, "RESERVATION_PER_MODEL", False)
     assert not catalog.within_reservation(spec, scoring)
     verdict = catalog.judge("screen", spec, scoring)
     assert not verdict.offered and "026b50c" in verdict.reason
@@ -198,8 +212,7 @@ def test_screening_options_within_the_reservation_are_offered(scoring, spec):
     assert catalog.judge("screen", spec, scoring).offered
 
 
-def test_the_switch_offers_dearer_screening_options(scoring, monkeypatch):
-    monkeypatch.setattr(catalog, "RESERVATION_PER_MODEL", True)
+def test_the_switch_offers_dearer_screening_options(scoring):
     offered = values("screen", scoring)
     assert "anthropic:claude-sonnet-5-5" in offered
     assert f"openrouter:{DEAR}" in offered
@@ -210,7 +223,8 @@ def test_the_switch_offers_dearer_screening_options(scoring, monkeypatch):
     assert not catalog.judge("screen", "anthropic:claude-haiku-9", scoring).offered
 
 
-def test_configured_openai_compat_prices_are_used(tmp_path):
+def test_configured_openai_compat_prices_are_used(tmp_path, monkeypatch):
+    monkeypatch.setattr(catalog, "RESERVATION_PER_MODEL", False)
     cheap = Scoring(openai_compat=OpenAICompat(input_usd_per_mtok=0.1, output_usd_per_mtok=0.2))
     assert catalog.within_reservation("openai-compat:m", cheap)
     dear = Scoring(openai_compat=OpenAICompat(input_usd_per_mtok=5.0, output_usd_per_mtok=20.0))

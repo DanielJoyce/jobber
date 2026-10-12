@@ -65,12 +65,13 @@ PRICES_CHECKED = "2026-10-11"
 
 # ─── The reservation switch ─────────────────────────────────────────────────
 
-# Until per-model spend reservations are in on every screening path (git-bug 026b50c, merged
-# as PR 121, and df51dff, PR 123), the spend cap reserves a flat
-# ``screen.ESTIMATED_COST_PER_REQUEST_USD`` ($0.002) per screened job on the sync path. A
-# screening option dearer than that, or with no known price, could overrun the caps, so it is
-# not offered. M5 flips this to True once both fixes are on main; nothing else changes then.
-RESERVATION_PER_MODEL = False
+# Per-model spend reservations are in on every screening path (git-bug 026b50c, PR 121, and
+# df51dff, PR 123): the cap reserves each job at the highest of the flat
+# ``screen.ESTIMATED_COST_PER_REQUEST_USD`` ($0.002), the model's measured mean and its table
+# price (``screen.reserve_per_job_usd``), so a dearer screening option no longer overruns a
+# cap on an estimate. 020 M5b (git-bug a322711) switched this on: every screening option is
+# within the reservation. Off, only options at or under the flat $0.002 are offered.
+RESERVATION_PER_MODEL = True
 FLAT_RESERVATION_USD = screen.ESTIMATED_COST_PER_REQUEST_USD
 
 # ─── Typical tokens per use ─────────────────────────────────────────────────
@@ -499,9 +500,10 @@ def within_reservation(
 ) -> bool:
     """May ``spec`` be offered for screening under today's spend reservation?
 
-    True for everything once ``RESERVATION_PER_MODEL`` is on (M5). Until then, only a spec
-    whose per-job list price at typical tokens is known and at most the flat $0.002 the cap
-    reserves. The unbatched price is used: Score now and the sync path pay it.
+    True for everything while ``RESERVATION_PER_MODEL`` is on (since M5b): every path reserves
+    the model's own price. Off, only a spec whose per-job list price at typical tokens is known
+    and at most the flat $0.002 the cap used to reserve. The unbatched price is used: Score
+    now and the sync path pay it.
     """
     if RESERVATION_PER_MODEL:
         return True
@@ -687,7 +689,7 @@ def options(
     """The options the catalog offers for ``use``: current first, then Older.
 
     Not every model that works is listed for screening: OpenRouter slugs come from the cache
-    (structured output not refused, priced within the reservation), local ids from the last
+    (structured output not refused; within the reservation rule), local ids from the last
     server check. The effective value is the caller's to add when it is not here (``judge``
     says why).
     """

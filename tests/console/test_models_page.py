@@ -275,7 +275,7 @@ def test_save_anyway_for_an_uncached_openrouter_slug(client):
     r = save(client, "screen", page, screen_other="openrouter:acme/unlisted-1")
     assert r.status_code == 200
     text = unescape(r.text)
-    assert "Save anyway" in text and "no known price" in text
+    assert "Save anyway" in text and "not in the cached OpenRouter list" in text
     assert not models_path(client).exists()
     assert selected(r.text, "screen") == "openrouter:acme/unlisted-1"  # the candidate stays
     slug = "openrouter:acme/unlisted-1"
@@ -762,3 +762,21 @@ def test_banner_names_a_missing_anthropic_credential(client, monkeypatch):
     assert "No Anthropic API credential found" in text
     assert "Screening and the deep pass cannot run" in text
     assert '<a href="/help/scorers">How to fix it</a>' in text
+
+
+# ─── 020 M5b: the price line says what the cap holds ────────────────────────
+
+
+def test_screen_price_line_shows_the_hold_when_it_is_above_the_estimate(client):
+    row = unescape(row_html(client.get("/models").text, "screen"))
+    # Haiku 5.5 at about $0.26 per 1,000; the cap holds the $0.002 floor.
+    assert "About $0.26 per 1,000 jobs (price table)." in row
+    assert "The spend cap holds $0.002 a job while a run is in flight ($2.00 per 1,000)" in row
+
+
+def test_screen_price_line_has_no_hold_when_it_equals_the_estimate(tmp_path):
+    cfg = write_config(tmp_path, '[scoring]\nscreen_scorer = "anthropic:claude-sonnet-5-5"\n')
+    row = unescape(row_html(make_client(settings_from(cfg)).get("/models").text, "screen"))
+    assert "About $5.07 per 1,000 jobs (price table)." in row
+    assert "The spend cap holds" not in row
+    assert "not offered" not in row  # offered for screening now

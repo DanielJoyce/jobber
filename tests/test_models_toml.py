@@ -399,7 +399,16 @@ def test_check_save_refuses_what_could_never_work():
     assert mc.check_save("screen", "anthropic:claude-haiku-5-5").ok
 
 
-def test_check_save_needs_force_for_a_dearer_screening_model():
+def test_a_dearer_screening_model_saves_without_force():
+    """020 M5b: each path reserves the model's own price, so "save anyway" is not needed."""
+    assert mc.check_save("screen", "anthropic:claude-sonnet-5-5").ok
+    assert mc.check_save("screen", "anthropic:claude-haiku-4-5").ok
+
+
+def test_check_save_needs_force_for_a_dearer_screening_model_with_the_switch_off(monkeypatch):
+    from jobhunter.scoring import catalog
+
+    monkeypatch.setattr(catalog, "RESERVATION_PER_MODEL", False)
     check = mc.check_save("screen", "anthropic:claude-sonnet-5-5")
     assert check.error is None and check.needs_force
     assert "reserves" in check.needs_force[0]
@@ -515,12 +524,11 @@ def test_models_set_refuses_a_value_that_cannot_work(dirs):
     assert not mfile.exists()
 
 
-def test_models_set_dearer_screening_needs_force(dirs):
+def test_models_set_dearer_screening_needs_no_force(dirs):
     _, mfile = dirs
     out = cli.invoke(app, ["models", "set", "screen", "anthropic:claude-sonnet-5-5"])
-    assert out.exit_code == 2 and "--force" in out.output and not mfile.exists()
-    out = cli.invoke(app, ["models", "set", "screen", "anthropic:claude-sonnet-5-5", "--force"])
     assert out.exit_code == 0, out.output
+    assert "--force" not in out.output and mfile.exists()
     assert load_settings().scoring.screen_scorer == "anthropic:claude-sonnet-5-5"
 
 

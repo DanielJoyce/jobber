@@ -160,6 +160,34 @@ def cost_per_job(
     return max(screen.ESTIMATED_COST_PER_REQUEST_USD, price), "default"
 
 
+def _packs(spec: str, scoring: Scoring | None) -> bool:
+    """True when ``spec`` sends several jobs a request (its cap check is per wave, not per job)."""
+    provider = spec.partition(":")[0]
+    scoring = scoring or Scoring()
+    if provider == "openrouter":
+        return scoring.openrouter.jobs_per_request > 1
+    if provider == "openai-compat":
+        return scoring.openai_compat.jobs_per_request > 1
+    return False
+
+
+def reserve_per_job(conn: sqlite3.Connection, spec: str, scoring: Scoring | None = None) -> float:
+    """What the spend cap holds per job while a run with ``spec`` is in flight. Read-only.
+
+    The figure the run's own up-front cap check uses (020 M5b, git-bug a322711): the Anthropic
+    batch's ``screen.reserve_per_request_usd`` (batch prices), or ``score_sync``'s
+    ``screen.reserve_per_job_usd`` for a one-job-a-request scorer. Never below
+    ``cost_per_job``. Decisions models (Jev) and packed requests check the cap per request or
+    per wave on their own estimate, so for them this is ``cost_per_job``. Reads the cached
+    OpenRouter catalog only; never fetches.
+    """
+    per_job, _ = cost_per_job(conn, spec, scoring)
+    if is_decisions(spec) or _packs(spec, scoring):
+        return per_job
+    held = screen.reserve_per_job_usd(conn, spec, scoring, batch=is_anthropic(spec))
+    return max(per_job, held)
+
+
 def refresh_catalog(
     spec: str, scoring: Scoring, scorer_factory: ScorerFactory | None = None
 ) -> None:
@@ -211,6 +239,28 @@ class Plan:
     group_ids: list[int] = field(default_factory=list)  # exactly the groups the run may send
     max_usd: float = 0.0  # the run stops before its own spend would pass this
     scoring_version: str = ""
+    # What the spend cap holds per job while the run is in flight (``reserve_per_job``): at
+    # least ``cost_per_job``, higher when the cap reserves more than the estimate (Haiku 5.5's
+    # $0.002 floor, or a model's table price above its measured mean).
+    reserve_per_job: float = 0.0
+
+    @property
+    def reserved_usd(self) -> float:
+        """What the cap holds for every planned job at once."""
+        return self.total * max(self.reserve_per_job, self.cost_per_job)
+
+    @property
+    def fits_now(self) -> int:
+        """Planned jobs the remaining cap covers at the reservation now (the run sends no more)."""
+        per_job = max(self.reserve_per_job, self.cost_per_job)
+        if per_job <= 0:
+            return self.total
+        return min(self.total, math.floor(max(self.remaining_usd, 0.0) / per_job + 1e-9))
+
+    @property
+    def reserve_differs(self) -> bool:
+        """The cap holds more per job than the estimate (the page says so)."""
+        return self.reserve_per_job > self.cost_per_job * (1 + 1e-9)
 
     @property
     def token(self) -> str:
@@ -314,6 +364,7 @@ def make_plan(
         group_ids=planned,
         max_usd=max_usd_for(est),
         scoring_version=profile.scoring_version,
+        reserve_per_job=reserve_per_job(conn, spec, scoring),
     )
     _check_cap(plan)
     return plan
@@ -325,6 +376,14 @@ def _check_cap(plan: Plan) -> None:
             f"estimated ${plan.estimated_usd:.2f} is over the remaining spend cap "
             f"(${max(plan.remaining_usd, 0):.2f}); raise scoring.daily_cap_usd / weekly_cap_usd "
             "in config.toml, or pick a smaller scope"
+        )
+    elif plan.total and plan.fits_now == 0:
+        # The estimate fits, but the cap holds more per job than is left, so the run would
+        # send nothing (020 M5b): say so now rather than after a confirm.
+        plan.refusal = (
+            f"the spend cap holds ${plan.reserve_per_job:.4f} a job while a run is in flight "
+            f"and ${max(plan.remaining_usd, 0):.4f} is left, so no job fits; raise "
+            "scoring.daily_cap_usd / weekly_cap_usd in config.toml, or wait for the cap to reset"
         )
 
 
@@ -347,6 +406,7 @@ def stored_plan(
         group_ids=ids,
         max_usd=float(row["max_usd"] or 0.0),
         scoring_version=row["scoring_version"],
+        reserve_per_job=reserve_per_job(conn, row["scorer"], scoring),
     )
     _check_cap(plan)
     return plan

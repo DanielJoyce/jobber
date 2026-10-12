@@ -20,7 +20,10 @@ Prices are in [Costs and credits](costs-and-credits.md). The scorer formats (`an
    selected, and the row says where it came from: `models.toml`, `config.toml` or the default.
    Options the catalog does not offer for that use are not in the list.
 2. Read the line under the dropdown. It gives the price and whether the credential for that
-   model is there (see [Access](#access-keys-subscription-and-local-server)).
+   model is there (see [Access](#access-keys-subscription-and-local-server)). For screening,
+   a second line appears when the spend cap holds more per job than the estimate, for
+   example the $0.002 a job it holds for Haiku 5.5 (see
+   [Reservations](costs-and-credits.md#reservations)).
 3. Press **Save**. Saving spends nothing and does not start a run. If re-scores are queued, the
    row asks first what they should use (see [Queued re-scores](#queued-re-scores)).
 
@@ -187,6 +190,9 @@ jobhunter models catalog --refresh
   contacts nothing.
 - `set USE VALUE` validates the value and writes it, the same as the page. It spends nothing.
   `--force` saves a value the catalog would not offer. It never saves a value that cannot work.
+  A dearer screening model, such as `anthropic:claude-sonnet-5-5`, needs no `--force`: the
+  spend cap holds each model's own price (see
+  [Reservations](costs-and-credits.md#reservations)).
 - `reset USE` removes the use's key from `models.toml`. `USE` can also be `drafting`, `check`
   or `all`.
 - `reset-file` replaces a broken `models.toml`. Add `--force` to empty a file that is valid TOML.

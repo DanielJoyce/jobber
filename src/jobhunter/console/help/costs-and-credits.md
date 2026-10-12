@@ -76,10 +76,25 @@ uncollected batch is counted against the cap straight away, at an estimate per r
 replaced by the real cost when the batch is collected. This is what stops two runs in a row
 from each thinking the whole budget is free.
 
-For a batched Anthropic model the estimate is the model's batch price for a typical request,
-never below a flat $0.002 a job. A model the price table does
-not list is refused for `anthropic:` specs, because its cost could not be capped. Other
-scorers report their own costs; see [OpenRouter and Jev](openrouter.md) for how.
+Every screening model holds its own price against the cap: the highest of a flat $0.002 a
+job, the average it has actually cost you, and its list price for a typical job. A batched
+Anthropic model holds its batch price. So Haiku 5.5 holds $0.002 a job (its real cost is
+about a tenth of that), Sonnet 5.5 about $0.005 a job in a batch, and a model scored one job
+at a time (OpenRouter, say) its unbatched price. This is why a dearer screening model, such
+as Sonnet 5.5, is offered on [Models](/models) without **Save anyway**: it can no longer run
+past a cap on a price that is too low.
+
+The same figure decides how many jobs a run may send. A batch or a run is cut to what is left
+of the cap at that price, and a single job is sent only when one whole job fits. When what
+the cap holds is more than the estimate, the Models page, the re-score panel and Score now
+say so, and the re-score panel says how many jobs fit under the cap now.
+
+Batches already submitted keep the hold of the model they were sent with until they are
+collected; collecting one replaces its hold with what it really cost.
+
+A model the price table does not list is refused for `anthropic:` specs, because its cost
+could not be capped. Other scorers report their own costs; see
+[OpenRouter and Jev](openrouter.md) for how.
 
 ## Prices
 

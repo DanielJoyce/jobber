@@ -844,6 +844,13 @@ def _score_rescore(
             f"estimated ${plan.estimated_usd:.2f} at ${plan.cost_per_job:.5f}/job "
             f"({plan.cost_source}); spend cap remaining ${max(plan.remaining_usd, 0):.2f}"
         )
+        if plan.total and plan.reserve_differs:
+            typer.echo(
+                f"while it runs the spend cap holds ${plan.reserve_per_job:.4f}/job "
+                f"(${plan.reserved_usd:.2f} for all {plan.total})"
+            )
+        if plan.total and not plan.refusal and plan.fits_now < plan.total:
+            typer.echo(f"only {plan.fits_now} of {plan.total} fit under the cap now")
         if plan.refusal:
             typer.echo(f"refused: {plan.refusal}", err=True)
             raise typer.Exit(1)
