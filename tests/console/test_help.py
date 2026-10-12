@@ -100,6 +100,10 @@ def test_tables_scroll_in_their_own_box():
         ),
         ("../../../../deploy/quadlet/", f"{helpdocs.GITHUB_BLOB}deploy/quadlet"),
         ("not-a-topic.md", f"{helpdocs.GITHUB_BLOB}src/jobhunter/console/help/not-a-topic.md"),
+        (
+            "../../../../specs/018-containers.md?plain=1#L40",
+            f"{helpdocs.GITHUB_BLOB}specs/018-containers.md?plain=1#L40",
+        ),
         ("#a-heading", "#a-heading"),
         ("/setup", "/setup"),
         ("/prefs#sec-pay", "/prefs#sec-pay"),
@@ -250,6 +254,7 @@ def test_each_topic_renders(client, topic):
     r = client.get(f"/help/{topic}")
     assert r.status_code == 200
     assert "help-topics" in r.text  # the phone-width <details> topic list
+    assert "help-side" in r.text  # the desktop sidebar
     assert "<h1" in r.text
     assert "help.css" in r.text
 

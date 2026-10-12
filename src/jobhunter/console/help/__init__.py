@@ -215,10 +215,11 @@ def rewrite_href(href: str) -> str:
     if resolved.startswith("..") or parts.path == "":
         return href
     fragment = f"#{parts.fragment}" if parts.fragment else ""
+    query = f"?{parts.query}" if parts.query else ""
     directory, name = posixpath.split(resolved)
     if directory == REPO_HELP_PATH and name.endswith(".md") and name[:-3] in TOPIC_BY_SLUG:
-        return f"/help/{name[:-3]}{fragment}"
-    return f"{GITHUB_BLOB}{resolved}{fragment}"
+        return f"/help/{name[:-3]}{query}{fragment}"
+    return f"{GITHUB_BLOB}{resolved}{query}{fragment}"
 
 
 # --- rendering -----------------------------------------------------------------------------

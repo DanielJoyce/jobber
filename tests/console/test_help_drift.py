@@ -45,23 +45,22 @@ def text_of(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def prose(text: str) -> str:
-    """The text with fenced code removed."""
-    return re.sub(r"^(```|~~~).*?^\1[^\n]*$", "", text, flags=re.M | re.S)
-
-
 # --- commands ------------------------------------------------------------------------------
+
+
+def fenced_code(text: str) -> list[str]:
+    """Contents of every fenced or indented code block, parsed the way the renderer parses."""
+    toks = helpdocs._MD.parse(helpdocs.strip_markers(text))
+    return [t.content for t in toks if t.type in ("fence", "code_block")]
 
 
 def command_lines(text: str) -> list[str]:
     lines: list[str] = []
-    in_fence = False
-    for raw in text.splitlines():
-        if raw.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence and re.match(r"jobhunter(-ctr)? ", raw):
-            lines.append(raw)
+    for block in fenced_code(text):
+        for raw in block.splitlines():
+            line = raw.strip().removeprefix("$ ")
+            if re.match(r"jobhunter(-ctr)? ", line):
+                lines.append(line)
     return lines
 
 
@@ -94,6 +93,19 @@ def check_command(line: str) -> str | None:
         if tok.startswith("-") and len(tok) > 1 and tok.split("=")[0] not in known:
             return f"{tok} is not an option of {cmd.name}"
     return None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "```bash\njobhunter frobnicate\n```\n",
+        "1. Step\n\n   ```bash\n   jobhunter frobnicate\n   ```\n",
+        "~~~bash\njobhunter frobnicate\n~~~\n",
+        "```console\n$ jobhunter frobnicate\n```\n",
+    ],
+)
+def test_command_lines_finds_every_fence_shape(text):
+    assert command_lines(text) == ["jobhunter frobnicate"]
 
 
 def test_command_checker_catches_bad_commands():
@@ -267,14 +279,19 @@ def test_rendered_html_has_no_markers_or_escaped_html(path):
     html = helpdocs.render(path.stem).html
     assert "jh:" not in html
     assert "&lt;!--" not in html
-    # stray HTML would be shown escaped: the files must not contain any outside code
-    assert not re.search(
-        r"<(?!you>)[a-zA-Z/!]", prose(strip_inline_code(text_of(path))).replace("<!-- jh:", "")
-    ), f"{path.name} has stray HTML outside code"
+    assert "&lt;" not in outside_code(html), f"{path.name} has stray HTML outside code"
 
 
-def strip_inline_code(text: str) -> str:
-    return re.sub(r"`[^`\n]*`", "", text)
+def outside_code(html: str) -> str:
+    html = re.sub(r"<pre>.*?</pre>", "", html, flags=re.S)
+    return re.sub(r"<code>.*?</code>", "", html, flags=re.S)
+
+
+def test_outside_code_flags_bare_placeholders_and_spares_code():
+    bare = helpdocs.render_text("Write <you>+jobs here\n").html
+    assert "&lt;" in outside_code(bare)
+    ok = helpdocs.render_text("`<you>`\n\n1. s\n\n   ```bash\n   x <name>\n   ```\n").html
+    assert "&lt;" not in outside_code(ok)
 
 
 @pytest.mark.parametrize("path", FILES, ids=IDS)
@@ -320,3 +337,10 @@ def test_help_package_does_not_touch_settings_or_the_database():
     forbidden_names = ("jobhunter.config", "jobhunter.core", "sqlite3", "app.state", "get_conn")
     for forbidden in (*forbidden_names, "Depends"):
         assert forbidden not in src, forbidden
+
+
+def test_readme_help_table_lists_exactly_the_topics():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    linked = re.findall(r"\]\(src/jobhunter/console/help/([a-z-]+)\.md\)", readme)
+    assert sorted(linked) == sorted(t.slug for t in helpdocs.TOPICS)
+    assert all((helpdocs.HELP_DIR / f"{s}.md").is_file() for s in linked)

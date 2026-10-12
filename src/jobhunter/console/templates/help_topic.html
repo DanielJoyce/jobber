@@ -2,6 +2,9 @@
 {% block head %}<link rel="stylesheet" href="{{ static_url('help.css') }}">{% endblock %}
 {% block main %}
 <div class="help-layout">
+  <aside class="help-side">
+    {% include "_help_nav.html" %}
+  </aside>
   <details class="help-topics">
     <summary>Help topics</summary>
     {% include "_help_nav.html" %}

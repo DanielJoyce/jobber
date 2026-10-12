@@ -1,7 +1,7 @@
 /* Help pages (specs/019 Addendum A). Colours come from the app.css tokens, so light and dark
    follow the theme. At phone width the topic list is a <details> above the page. */
 .help-layout { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 24px; align-items: start; }
-.help-topics > summary { display: none; }
+.help-topics { display: none; }
 .help-nav ul { list-style: none; margin: 8px 0 0; padding: 0; }
 .help-nav li { margin: 0; }
 .help-nav a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--text-secondary); text-decoration: none; }
@@ -25,6 +25,7 @@
 .help-entry li.lvl3 { margin-left: 1em; list-style: circle; }
 @media (max-width: 760px) {
   .help-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .help-topics { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+  .help-side { display: none; }
+  .help-topics { display: block; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
   .help-topics > summary { display: list-item; cursor: pointer; color: var(--text-secondary); }
 }
