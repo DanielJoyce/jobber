@@ -197,6 +197,16 @@ def sparkline(series: list[float | None], width: int = 120, height: int = 28) ->
     return " ".join(pts)
 
 
+def with_frame_ancestors(csp: str | None) -> str:
+    """``csp`` with ``frame-ancestors 'none'`` set, keeping its other directives."""
+    kept = [
+        d.strip()
+        for d in (csp or "").split(";")
+        if d.strip() and d.split()[0].lower() != "frame-ancestors"
+    ]
+    return "; ".join([*kept, "frame-ancestors 'none'"])
+
+
 def create_app(
     settings: Settings,
     conn_factory: ConnFactory | None = None,
@@ -331,6 +341,18 @@ def create_app(
         response = await call_next(request)
         if not request.url.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.middleware("http")
+    async def deny_framing(request: Request, call_next):
+        # Why: a hostile page could frame the console and clickjack the paid buttons (the
+        # spend confirm is a JS dialog inside the frame). Nothing of ours frames the console:
+        # the extension only calls /ext/ over fetch. Merge into any CSP a route already sets.
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = with_frame_ancestors(
+            response.headers.get("Content-Security-Policy")
+        )
         return response
 
     def render(request: Request, title: str, active: str) -> HTMLResponse:
