@@ -448,3 +448,39 @@ def home_dir() -> Path:
     import os
 
     return Path(os.environ["HOME"])
+
+
+def test_containers_with_a_broken_config_does_not_traceback_or_echo_values(
+    tmp_path, monkeypatch, no_key
+):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[fetch]\nuser_agent_contact = "{SENTINEL}@example.org"\nbogus = 1\n')
+    monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
+    for args in (["--containers"], ["--containers", "--json"], ["--containers", "-v"]):
+        result = run_doctor(*args)  # the real build_preflight_context, no stub
+        assert result.exit_code == 1, result.output
+        assert "Traceback" not in result.output
+        assert SENTINEL not in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+    rows = {r["id"]: r for r in json.loads(run_doctor("--containers", "--json").stdout)}
+    assert "not run" in rows["preflight.preflight_other"]["detail"]
+
+
+def test_a_failing_context_builder_reports_the_exception_type_only(
+    tmp_path, monkeypatch, stub_preflight
+):
+    complete_setup(tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise ValueError(f"input_value={SENTINEL}")
+
+    monkeypatch.setattr(cli, "build_preflight_context", boom)
+    result = run_doctor("--containers", "--json")
+    assert SENTINEL not in result.output and "Traceback" not in result.output
+    assert "ValueError" in result.stdout
+
+
+def test_summary_names_the_ctr_command_in_container_mode(tmp_path, monkeypatch):
+    complete_setup(tmp_path, monkeypatch)
+    monkeypatch.setenv("JOBHUNTER_CONTAINER", "1")
+    assert "jobhunter-ctr doctor -v" in run_doctor().output.splitlines()[-1]

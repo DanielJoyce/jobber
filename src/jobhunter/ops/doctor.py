@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from jobhunter import legacy_data, readiness
+from jobhunter import container, legacy_data, readiness
 from jobhunter.config import Settings, load_settings
 from jobhunter.ops import preflight
 from jobhunter.readiness import (
@@ -173,6 +173,14 @@ def map_preflight(result: preflight.Result) -> list[Check]:
     return rows
 
 
+def _preflight_skipped(why: str) -> Check:
+    return Check(
+        f"preflight.{PREFLIGHT_OTHER}", RUNNING, RECOMMENDED, BROKEN, False,
+        PREFLIGHT_TITLES[PREFLIGHT_OTHER], f"not run: {why}", "The container deployment",
+        Fix("command", "jobhunter container preflight --dry-run"),
+    )  # fmt: skip
+
+
 def gather(
     *,
     now: datetime | None = None,
@@ -209,10 +217,18 @@ def gather(
     if containers:
         if context_builder is None:
             raise RuntimeError("--containers needs a preflight context builder")
-        result = (run_preflight or preflight.run)(context_builder(), dry_run=True)
-        report.preflight_ran = True
-        report.preflight_lines = list(result.lines)
-        mapped = map_preflight(result)
+        mapped: list[Check]
+        if config_error is not None:
+            mapped = [_preflight_skipped("the config file will not load")]
+        else:
+            try:
+                result = (run_preflight or preflight.run)(context_builder(), dry_run=True)
+            except Exception as exc:  # never a traceback: it could echo a config value
+                mapped = [_preflight_skipped(f"preflight failed ({type(exc).__name__})")]
+            else:
+                report.preflight_ran = True
+                report.preflight_lines = list(result.lines)
+                mapped = map_preflight(result)
         # The placeholder row said "run doctor --containers"; the real rows replace it.
         checks = [
             c for c in checks if not (c.id == "containers.deployment" and c.status == UNKNOWN)
@@ -257,7 +273,8 @@ def summary(checks: list[Check]) -> str:
         if essentials
         else "all essentials ok"
     )
-    return f"{head}, {recommended} recommended, {unknown} unknown. Details: jobhunter doctor -v"
+    cmd = container.doctor_command()
+    return f"{head}, {recommended} recommended, {unknown} unknown. Details: {cmd} -v"
 
 
 def render(report: Report, *, verbose: bool = False) -> list[str]:
