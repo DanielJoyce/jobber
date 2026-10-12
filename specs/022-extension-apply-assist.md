@@ -392,9 +392,12 @@ answer within 20 seconds. So:
   `stopped`). `kind` is `resume`, `cover_letter` or `question_draft`.
 - **Lifecycle.** The runner is reached through `app.state` (`app.state.packet_runner`, the CLI
   runner, and the existing `packet_api_client_factory`), so tests replace both. The lifespan
-  shutdown joins live `ext-draft-*` threads (up to the CLI timeout) before closing. Each draft
-  thread registers in 019 S12b's work registry (`app.state.work`, on `main`) before it starts and
-  leaves in its `finally`, so a Restart answers 409 meanwhile.
+  shutdown joins live `ext-draft-*` threads (up to the CLI timeout) before closing. `start`
+  enters 019 S12b's work registry (`app.state.work`, on `main`) **before** it takes the claim and
+  writes the `draft_run` row; the draft thread leaves it in its `finally` (and `start` leaves it
+  if it fails), so a Restart answers 409 meanwhile. While a restart is under way the registry
+  refuses new entries and the `generate` route answers **503** ("jobhunter is restarting; try
+  again in a moment"), with nothing claimed or written.
 
 ## 3. Recording applied
 
@@ -507,8 +510,12 @@ job. It records through the same route with mode `mark`, never changes an ATS's 
 
 ### Matching the page to a job
 
-`apply/page_match.py::match(conn, frame_url, tab_id, session_id=None)` (the worker passes
-`sender.tab.id`; the console never trusts a tab id from page content):
+`apply/page_match.py::match(conn, frame_url, tab_id, session_id=None)`. The worker supplies
+`tab_id`; the console never trusts a tab id from page content. For a **content-script** message
+it is `sender.tab.id`. For an **extension-page** message (the side panel or the popup window),
+`sender.tab` is undefined or is the popup window's own tab, so the worker passes the tab it holds
+as **bound to that panel or window** (the `?tab=` binding it opened it with). `fill_session.tab_id`
+is set at Start by the same rule:
 
 | # | Evidence | Strength |
 |---|---|---|
@@ -633,7 +640,10 @@ no contact details.
   `ext_applied` or `submit_observation`; the panel shows its key, not its value.
 - In the browser a value exists only in the message that writes it, then in the form field.
 - Tests and fixtures use plain canary values (`canaryfirst`, `canary.contact@invalid.test`), never
-  a real-looking address; a test asserts they appear in no model request body, log record or table.
+  a real-looking address; a test sets them only in the `/prefs` contact block and asserts they
+  appear in no model request body, log record or table. The test's resume fixture must not contain
+  them, or the resume (which goes to models as 017 sends it) would make the test fail for the
+  wrong reason.
 
 ### Never-store and "yours" fields
 
@@ -654,7 +664,9 @@ Unchanged from 1e ([017 Local API security](017-assisted-apply.md#local-api-secu
 The buttons, the **Fill** pill, the Submit outline, the ask prompt and the applied notice live in
 the one closed-shadow overlay, answer only `isTrusted` clicks, and show only the job title and
 employer the page already has. Their presence tells a site an extension is installed, as
-Jobright's buttons did. **Show buttons** off removes them; Fill still works from the icon.
+Jobright's buttons did. **Show buttons** off removes the buttons and the **Fill** pill (Fill
+still works from the icon); **Record submits** off removes the ask prompt and the applied notice;
+the Submit outline belongs to an open fill session and shows whatever the switches say.
 
 ## 5. Permissions and manifest
 
