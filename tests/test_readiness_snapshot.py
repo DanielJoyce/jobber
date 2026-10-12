@@ -349,16 +349,33 @@ def test_old_marked_unit_with_no_timer_rows_is_dead(tmp_path, home):
     settings = ready(tmp_path)
     enable_host_timers(home, marked=True)
     unit = schedule.unit_dir(home) / "jobhunter-run.service"
+    link = schedule.unit_dir(home) / "timers.target.wants" / "jobhunter-run.timer"
     old = (NOW - timedelta(hours=40)).timestamp()
     os.utime(unit, (old, old))
+    os.utime(link, (old, old), follow_symlinks=False)
     add_run(settings, NOW - timedelta(hours=1), "manual")
     row = evaluate(settings)["run.schedule"]
     assert row.status == BROKEN and "timers not running" in row.detail
     # a unit installed under 36 hours ago has had no time to fire yet
     recent = (NOW - timedelta(hours=5)).timestamp()
     os.utime(unit, (recent, recent))
+    os.utime(link, (recent, recent), follow_symlinks=False)
     row = evaluate(settings)["run.schedule"]
     assert row.status == OK and "no timer-started run recorded yet" in row.detail
+
+
+def test_old_unit_enabled_recently_is_not_dead(tmp_path, home):
+    settings = ready(tmp_path)
+    enable_host_timers(home, marked=True)
+    unit = schedule.unit_dir(home) / "jobhunter-run.service"
+    link = schedule.unit_dir(home) / "timers.target.wants" / "jobhunter-run.timer"
+    old = (NOW - timedelta(hours=100)).timestamp()
+    os.utime(unit, (old, old))
+    recent = (NOW - timedelta(hours=2)).timestamp()
+    os.utime(link, (recent, recent), follow_symlinks=False)
+    add_run(settings, NOW - timedelta(hours=1), "manual")
+    row = evaluate(settings)["run.schedule"]
+    assert row.status == OK and "timers not running" not in row.detail
 
 
 def test_container_mode_judges_timer_rows_and_falls_back_without_them(tmp_path):

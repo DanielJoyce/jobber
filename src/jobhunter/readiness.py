@@ -1075,21 +1075,32 @@ def _unit_marked(ctx: _Ctx) -> bool | None:
 
 
 def _marked_unit_age(ctx: _Ctx) -> timedelta | None:
-    """How long the marked unit file has existed (its mtime against ``ctx.now``): the oldest
-    marker-bearing file, so a re-install does not hide timers that never fired. None when
-    no marked file can be stat'ed."""
-    from jobhunter.ops import schedule
+    """How long the timers have had to fire: ``ctx.now`` minus the newest of the marked unit
+    file's mtime and the mtime of the run timer's ``*.wants`` enable link (``lstat``, the
+    moment it was enabled). Enabling later than installing, or disable then re-enable, so
+    restarts the clock. None when no marked file can be stat'ed."""
+    from jobhunter.ops import preflight, schedule
 
-    ages: list[timedelta] = []
+    stamps: list[float] = []
     for path in _marker_files(ctx):
         try:
             if schedule.has_trigger(path) is not True:
                 continue
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            stamps.append(path.stat().st_mtime)
         except OSError:
             continue
-        ages.append(ctx.now - mtime)
-    return max(ages) if ages else None
+    if not stamps:
+        return None
+    timer = preflight.CTR_TIMERS[0] if ctx.mode == HOST_MANAGING else schedule.TIMERS[0]
+    try:
+        for link in schedule.unit_dir(ctx.home).glob(f"*.wants/{timer}"):
+            try:
+                stamps.append(link.lstat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return ctx.now - datetime.fromtimestamp(max(stamps), UTC)
 
 
 TIMER_STALE = timedelta(hours=36)
@@ -1101,9 +1112,11 @@ UNMARKED_HINT = (
 
 def _timer_health(ctx: _Ctx, base: Check) -> Check:
     """Timers not running is judged from the newest timer-started run, so a manual run does
-    not hide dead timers, provided the installed run unit carries the marker. Otherwise (no
-    marker, or the unit is not visible and no timer row exists yet) it falls back to the newest
-    run of any trigger and never reports dead timers (019 "What the nightly run sees")."""
+    not hide dead timers, provided the installed run unit carries the marker. A marked unit
+    with no timer row at all is dead once it has been installed and enabled for over 36 hours
+    (``_marked_unit_age``). Otherwise (no marker, or the unit is not visible and no timer row
+    exists yet) it falls back to the newest run of any trigger and does not report dead timers
+    (019 "What the nightly run sees")."""
     marked = _unit_marked(ctx)
     timer = _newest_run(ctx, timer_only=True) if ctx.conn is not None else None
     if marked is True and timer is None and ctx.conn is not None:
