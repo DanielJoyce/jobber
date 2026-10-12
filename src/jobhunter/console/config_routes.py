@@ -105,7 +105,8 @@ def summary(state: cw.State, read_at: datetime, just_applied: bool = False) -> s
     if state.fields:
         n_effect = state.reload_count + state.restart_count
         if just_applied and state.reload_count == 0 and state.restart_count:
-            parts.append(f"{plural(state.restart_count, 'setting')} still need a restart.")
+            verb = "needs" if state.restart_count == 1 else "need"
+            parts.append(f"{plural(state.restart_count, 'setting')} still {verb} a restart.")
         elif n_effect == 0:
             parts.append(
                 f"config.toml changed: {plural(len(state.fields), 'setting')} "

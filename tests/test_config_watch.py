@@ -299,6 +299,8 @@ def env(tmp_path):
         return load_settings(path)
 
     def make(container_mode: bool = False, **kw: Any) -> cw.ConfigWatcher:
+        # Explicit: a CLI test that ran `console` leaves the module-wide snapshot behind.
+        kw.setdefault("start_env", {home_env: {}})
         return cw.ConfigWatcher(
             config_path=lambda: cfg,
             env_candidates=lambda: [home_env],

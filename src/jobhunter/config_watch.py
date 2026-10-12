@@ -398,9 +398,9 @@ class ConfigWatcher:
         self._dismissed: set[str] = set()
         self.applied_at: datetime | None = None
         self.applied_count = 0
-        # Extra files to fingerprint (020 M8 adds models.toml here); each maps to a callable that
-        # reports whether it changed. Not used by S12a itself.
-        self.extra: dict[Path, Callable[[Path], None]] = {}
+        # Hooks for 020 M8 (models.toml): it fingerprints its file next to these, diffs layers
+        # instead of ``self._loader``'s merged result, marks keys set on /models as no effect
+        # (as ``cli_overrides`` does), and takes ``app.state.settings_lock`` like Apply.
 
     # -- public --------------------------------------------------------------------------
 
