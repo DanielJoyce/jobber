@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{# Stub board (specs/021 ticket A2). A3 replaces this with cards, pips and progress. #}
+{% block main %}
+<h1>Achievements</h1>
+{% if not settings.enabled %}
+<p>Achievements are off.</p>
+<form method="post" action="/achievements/settings">
+  <input type="hidden" name="enabled" value="1">
+  <button type="submit">Turn achievements on</button>
+</form>
+{% else %}
+<p class="muted">{{ earned }} earned</p>
+{% if cards %}
+<ul class="achievements-earned">
+  {% for c in cards %}
+  <li>{{ c.a.name }}{% if c.a.tiers > 1 %} (tier {{ c.tier }} of {{ c.a.tiers }}){% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+<details class="achievements-settings">
+  <summary>Settings</summary>
+  <form method="post" action="/achievements/settings">
+    <input type="hidden" name="hidden_set" value="1">
+    <p>
+      <label><input type="radio" name="notify" value="1"{% if settings.notify %} checked{% endif %}> Show unlock notices</label>
+      <label><input type="radio" name="notify" value="0"{% if not settings.notify %} checked{% endif %}> No notices</label>
+    </p>
+    <fieldset>
+      <legend>Hide categories</legend>
+      {% for key, label in categories %}
+      <label><input type="checkbox" name="hidden" value="{{ key }}"{% if key in settings.hidden %} checked{% endif %}> {{ label }}</label>
+      {% endfor %}
+    </fieldset>
+    <button type="submit">Save</button>
+  </form>
+  <form method="post" action="/achievements/settings">
+    <input type="hidden" name="enabled" value="0">
+    <button type="submit">Turn achievements off</button>
+  </form>
+</details>
+{% endif %}
+{% endblock %}

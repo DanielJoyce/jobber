@@ -21,7 +21,9 @@
     <a class="brand" href="/">jobhunter</a>
     <nav aria-label="Main">
       {% for path, label in nav %}
+      {% if path != "/achievements" or achievements_on() %}
       <a href="{{ path }}"{% if path == active %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endif %}
       {% endfor %}
     </nav>
     <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">&#9680; theme</button>
