@@ -47,7 +47,14 @@ from starlette.concurrency import run_in_threadpool
 from jobhunter import model_access as ma
 from jobhunter import model_choices as mc
 from jobhunter import readiness as rd
-from jobhunter.config import BLOCKED_SPEC, Settings, layers_for, relayer, shown_value
+from jobhunter.config import (
+    BLOCKED_SPEC,
+    Settings,
+    layers_for,
+    relayer,
+    shown_value,
+    usable_model_text,
+)
 from jobhunter.console import config_routes as cr
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.console.deep_routes import loopback_peer
@@ -736,7 +743,7 @@ def register(
                 values[name] = str(form.get(name, "") or "").strip()
             if name == "screen" and (other := str(form.get("screen_other", "") or "").strip()):
                 values[name] = other
-            if name in MODEL_FIELDS and values[name] and shown_value(values[name]) is None:
+            if name in MODEL_FIELDS and values[name] and not usable_model_text(values[name]):
                 values.pop(name)
                 refused.append(name)
             if f"shown_{name}" in form:

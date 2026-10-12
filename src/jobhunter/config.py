@@ -24,7 +24,6 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
@@ -210,11 +209,7 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
 
     def q(text: str) -> str:
         # A message never quotes a value that looks like a key (019 B).
-        return (
-            "(value not shown)"
-            if _SECRET_LOOKING.search(text) or _looks_like_bare_key(text)
-            else text
-        )
+        return "(value not shown)" if hidden_value(text) else text
 
     inner, inner_sep, rest = model.partition(":")
     if not sep:
@@ -537,44 +532,55 @@ _SECRET_LOOKING = re.compile(
     + r")|secret|token|password"
 )
 _HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
-_SEGMENT_SPLIT = re.compile(r"[-_+.=]")
+_JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*")
+_SEGMENT_SPLIT = re.compile(r"[:/@_.+=-]")
 
 
-def _class(ch: str) -> int:
-    return 0 if ch.isdigit() else 1 if ch.islower() else 2
-
-
-def _unit_is_key(unit: str) -> bool:
-    alnum = re.sub(r"[^A-Za-z0-9]", "", unit)
-    if _HEX_RUN.fullmatch(alnum):  # plain hex, or a UUID with its dashes
+def is_key_shaped(value: str) -> bool:
+    """A value that is surely a key: a known key prefix (or the words secret, token, password),
+    32 or more hex digits, a UUID, or a JWT. ``models.toml`` refuses these. Quantised model
+    names (``Q4_K_M``, ``W8A8``) never match."""
+    if _SECRET_LOOKING.search(value) or _JWT.search(value):
         return True
-    if any(_HEX_RUN.fullmatch(seg) for seg in _SEGMENT_SPLIT.split(unit)):  # word-<32 hex>
-        return True
-    if re.fullmatch(r"[A-Za-z0-9]{32,}", unit) and any(c.isdigit() for c in unit):
-        return True  # a long unseparated run: no model name is that long without a separator
-    if len(alnum) >= 24:
-        # Random text flips between digit, lower and upper case about every other character;
-        # model names change class at word and number boundaries only.
-        flips = sum(_class(x) != _class(y) for x, y in pairwise(alnum))
-        if flips / (len(alnum) - 1) >= 0.5:
+    for unit in re.split(r"[:/@]", value):
+        if _HEX_RUN.fullmatch(re.sub(r"[^A-Za-z0-9]", "", unit)):  # hex, or a UUID
+            return True
+        if any(_HEX_RUN.fullmatch(seg) for seg in _SEGMENT_SPLIT.split(unit)):  # word-<32 hex>
             return True
     return False
 
 
-def _looks_like_bare_key(value: str) -> bool:
-    """A key with no prefix: hex, a UUID, a long random run, base64 or base64url."""
-    rest = value.partition(":")[2] or value
-    units = {value, rest, *re.split(r"[:/@]", value)}
-    return any(_unit_is_key(u) for u in units)
+def _long_run_segment(value: str) -> bool:
+    """A segment of 32 or more characters with both letters and digits (a bare Mistral-style
+    key). Display only: it hides the value but never makes it invalid."""
+    return any(
+        len(seg) >= 32 and any(c.isdigit() for c in seg) and any(c.isalpha() for c in seg)
+        for seg in _SEGMENT_SPLIT.split(value)
+    )
+
+
+def hidden_value(value: str) -> bool:
+    """Whether a message must not echo ``value``: surely a key, or looks like one."""
+    return is_key_shaped(value) or _long_run_segment(value)
 
 
 def shown_value(value: object) -> str | None:
     """``value`` when it may appear in a message (a scorer spec or model id), else None."""
     if not isinstance(value, str) or not _SHOWABLE.fullmatch(value):
         return None
-    if _SECRET_LOOKING.search(value) or _looks_like_bare_key(value):
+    if hidden_value(value):
         return None
     return value
+
+
+def usable_model_text(value: object) -> bool:
+    """Whether ``models.toml`` and /models may keep ``value``: well-formed and not key-shaped.
+    A value that is merely hidden from display (``_long_run_segment``) is still usable."""
+    return (
+        isinstance(value, str)
+        and _SHOWABLE.fullmatch(value) is not None
+        and not is_key_shaped(value)
+    )
 
 
 def models_file(data_dir: Path) -> Path:
@@ -678,7 +684,7 @@ def check_model_key(section: str, key: str, value: object) -> str | None:
         return "must be one of " + ", ".join(f'"{c}"' for c in choices)
     if not isinstance(value, str):
         return "must be a string"
-    if shown_value(value) is None:  # looks like a key, or has characters no model id has
+    if not usable_model_text(value):  # key-shaped, or has characters no model id has
         return "not a usable model name"
     assert use is not None
     from jobhunter.scoring import catalog  # lazy: catalog imports this module
@@ -686,7 +692,7 @@ def check_model_key(section: str, key: str, value: object) -> str | None:
     reason = catalog.use_rule_problem(use, value, key)
     if reason is None:
         return None
-    if shown_value(value) is None:
+    if not usable_model_text(value):
         return "not a usable model name"
     return reason
 
@@ -726,9 +732,7 @@ def read_models_file(path: Path) -> tuple[bool, str, dict[str, Any] | None, list
 
 def _key_label(name: object) -> str:
     text = str(name)
-    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) and not _SECRET_LOOKING.search(text):
-        if _looks_like_bare_key(text):
-            return "<a key>"
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) and not hidden_value(text):
         return text
     return "<a key>"
 

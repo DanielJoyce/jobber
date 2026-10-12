@@ -100,11 +100,15 @@ The exact messages, and what to do, are in
 ## Model names that look like keys
 
 To keep a pasted API key out of messages and logs, jobhunter never prints a model name that
-looks like a key: a known key prefix (`AIza`, `glpat-`, `gsk_`, `hf_`, `xai-` and the like), a
-long run of hex digits, a UUID, or a long random-looking string. Such a name is shown as
-"(value not shown)", and `/models` and `jobhunter models set` refuse to save it. If a real
-model or deployment name trips this, set it in `config.toml` instead: it still works there, but
-it is never printed.
+looks like a key: a known key prefix (`AIza`, `glpat-`, `gsk_`, `hf_`, `xai-` and the like), 32
+or more hex digits, a UUID, a JWT, or a segment of 32 or more letters and digits. Such a name is
+shown as "(value not shown)".
+
+Only the first group is also **refused**: `/models` and `jobhunter models set` will not save a
+name with a key prefix, a long hex run, a UUID or a JWT. A name that is merely hidden (a long
+unbroken segment) is still saved and still works; it just is not printed. Ordinary quantised
+names such as `DeepSeek-R1-Distill-Qwen-7B-Q4_K_M` or `...-W8A8-FP8` are never hidden. A name
+you cannot save can still be set in `config.toml`; it works there but is never printed.
 
 ## The Models page
 

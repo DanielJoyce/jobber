@@ -24,8 +24,6 @@ KEY_SHAPES = [
     "openrouter:aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o",
     "local:AIza" + "SyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStUvW",
     "pa-aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0oPq2Rs",  # Voyage
-    "aB3dE6gH9jK2-mN5pQ8sT1vW4xY7zLm0oPq2RsT_u8",  # base64url
-    "aB3dE6gH9jK2+mN5pQ8sT1vW4xY7zLm0oPq2RsT=",  # base64
     "0f8fad5b-d9cb-469f-a165-70867728950e",  # UUID
     "mykey-0123456789abcdef0123456789abcdef",  # word-<32 hex>
     "jev:0123456789abcdef0123456789abcdef",
@@ -46,6 +44,17 @@ REAL_IDS = [
     "local:pa-7b-instruct",
     "azure:gpt-4o-2024-08-06-eastus-deployment",
 ]
+
+BASE_NAMES = [
+    "DeepSeek-R1-Distill-Qwen-7B", "DeepSeek-R1-Distill-Llama-70B", "DeepSeek-V2-Lite-Chat",
+    "Qwen2-VL-7B-Instruct", "Qwen2.5-Coder-32B-Instruct", "Llama-3.3-70B-Instruct",
+    "mlx-community/DeepSeek-R1-Distill-Qwen-14B", "mlx-community/Qwen2.5-7B-Instruct",
+    "Mistral-7B-Instruct-v0.3", "gemma-2-27b-it",
+]  # fmt: skip
+SUFFIXES = [
+    "", "-Q4_K_M", "-Q8_0", "-4bit", "-8bit", "-W8A8", "-W8A8-FP8", "-AWQ", "-GPTQ-Int4",
+    "-Q4_K_M.gguf", "-FP8-dynamic", "-bf16",
+]  # fmt: skip
 
 
 def model_id_corpus() -> list[str]:
@@ -73,6 +82,28 @@ def model_id_corpus() -> list[str]:
 @pytest.mark.parametrize("value", KEY_SHAPES)
 def test_shown_value_hides_every_key_shape(value):
     assert shown_value(value) is None
+
+
+@pytest.mark.parametrize("base", BASE_NAMES)
+def test_quantised_model_names_stay_visible_and_valid(base):
+    from jobhunter.config import check_model_key
+
+    for suffix in SUFFIXES:
+        name = base + suffix
+        assert shown_value(name) == name, name
+        for spec in (f"local:{name}", f"openai-compat:{name}"):
+            assert shown_value(spec) == spec, spec
+            assert check_model_key("scoring", "screen_scorer", spec) is None, spec
+
+
+def test_a_hidden_but_not_key_shaped_value_is_still_valid():
+    from jobhunter.config import check_model_key
+
+    value = "local:aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o"  # hidden (looks like a bare key)
+    assert shown_value(value) is None
+    assert check_model_key("scoring", "screen_scorer", value) is None
+    for key in ("local:0123456789abcdef0123456789abcdef", "local:hf_" + "x" * 30):
+        assert check_model_key("scoring", "screen_scorer", key) == "not a usable model name"
 
 
 def test_shown_value_keeps_every_real_model_id():
