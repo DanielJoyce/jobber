@@ -733,3 +733,50 @@ def test_may_resolve_never_for_board_hosts(rows):
         "https://sfbay.craigslist.org/sfc/eng/d/x/123.html",
     ):
         assert may_resolve(url, "generic", rows) is False
+
+
+def _linkedin_variant(extra: str) -> bytes:
+    raw = (FIX / LINKEDIN).read_text()
+    return raw.replace("<p>Your job alert", f"<p>{extra}</p><p>Your job alert").encode()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "Powered by NEOGOV governmentjobs.com",
+        "Geographic Solutions Virtual Recruiter",
+        "Your saved search has new results",
+    ],
+)
+def test_linkedin_alert_pending_whatever_the_body_says(rows, src, settings, conn, web, extra):
+    gmail = FakeGmail()
+    gmail.add("m1", raw=_linkedin_variant(extra))
+    report = run_pipeline(conn, settings, src, gmail, rows, web)
+    assert report.exit_code == 0 and web.requests == []
+    assert conn.execute("SELECT COUNT(*) FROM job").fetchone()[0] == 0
+    row = conn.execute("SELECT family, entries FROM mail_message").fetchone()
+    assert tuple(row) == ("pending-linkedin", 0)
+
+
+@pytest.mark.parametrize("domain", ["craigslist.org", "reply.craigslist.org"])
+def test_craigslist_saved_search_pending(rows, src, settings, conn, web, domain):
+    raw = (
+        _linkedin_variant("Your saved search")
+        .decode()
+        .replace("jobalerts-noreply@linkedin.com", f"job-alerts@{domain}")
+        .replace("www.linkedin.com", "sfbay.craigslist.org")
+        .encode()
+    )
+    gmail = FakeGmail()
+    gmail.add("m1", raw=raw)
+    run_pipeline(conn, settings, src, gmail, rows, web)
+    assert web.requests == []
+    assert conn.execute("SELECT COUNT(*) FROM job").fetchone()[0] == 0
+    row = conn.execute("SELECT family, entries FROM mail_message").fetchone()
+    assert tuple(row) == ("pending-craigslist", 0)
+
+
+def test_lnkd_in_is_a_no_fetch_host(rows):
+    from jobhunter.sources.adapters.mailalerts import may_resolve
+
+    assert may_resolve("https://lnkd.in/abc123", "generic", rows) is False
