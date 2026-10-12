@@ -115,6 +115,48 @@ CHECK_IDS = (
     "containers.deployment",
 )
 
+# The help topic for each check: "topic" or "topic#heading-id" (an id that
+# console/help renders; the test requires it). Only the secrets row differs by mode.
+HELP_LINKS = {
+    "config.file": "troubleshooting#unknown-key-in-configtoml",
+    "db.schema": "troubleshooting#migrations-pending-or-database-newer-than-this-jobhunter",
+    "fetch.contact": "settings-and-secrets#configtoml",
+    "data.permissions": "getting-started#create-the-data-folder",
+    "profile.preferences": "profile-and-resume#preferencesyaml",
+    "profile.resume": "profile-and-resume#the-resume",
+    "profile.completeness": "profile-and-resume#preferencesyaml",
+    "scorer.screen": "scorers",
+    "scorer.caps": "costs-and-credits#the-caps",
+    "scorer.deep": "costs-and-credits#the-deep-pass",
+    "source.usajobs": "troubleshooting#usajobs-credentials-missing",
+    "run.schedule": "nightly-runs",
+    "run.last": "nightly-runs",
+    "mail.client": "email-alerts#step-1-google-client-json",
+    "mail.address": "email-alerts#step-2-alerts-address",
+    "mail.token": "email-alerts#step-3-gmail-token",
+    "mail.label": "email-alerts#step-4-label-and-filter",
+    "mail.subscriptions": "email-alerts#step-5-board-subscriptions",
+    "mail.parsers": "email-alerts",
+    "apply.runner": "drafting#the-cli-runner-log-in-to-claude-code",
+    "apply.cap": "costs-and-credits#the-caps",
+    "ext.pairing": "browser-extension",
+    "pdf.export": "troubleshooting#pdf-export-is-unavailable",
+    "secrets.valid": "settings-and-secrets#where-to-keep-secrets-on-the-host",
+    "backups.auto": "nightly-runs",
+    "console.exposure": "troubleshooting#403-host-is-not-a-loopback-address",
+    "containers.deployment": "containers#first-run-checklist",
+}
+# The secrets row in the two container modes: the podman secret how-to.
+HELP_LINKS_BY_MODE = {
+    (mode, "secrets.valid"): "containers#secrets" for mode in (CONTAINER, HOST_MANAGING)
+}
+
+
+def help_for(check_id: str, mode: str) -> str:
+    """The help path for a check, e.g. ``email-alerts#step-1-google-client-json``."""
+    return HELP_LINKS_BY_MODE.get((mode, check_id)) or HELP_LINKS.get(check_id, "getting-started")
+
+
 RESTART_COMMAND = {
     HOST: "Ctrl-C and `jobhunter console`",
     CONTAINER: "`systemctl --user restart jobhunter-console`",

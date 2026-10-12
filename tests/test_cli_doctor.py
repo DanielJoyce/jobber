@@ -119,6 +119,8 @@ def test_plain_lists_essentials_and_problems_but_verbose_lists_every_row(tmp_pat
     for title in ("PDF export", "Extension pairing"):
         assert title in verbose
     assert "unlocks:" in verbose and "from:" in verbose
+    assert "help: /help/" in verbose
+    assert "help: /help/" not in plain
     assert "jobhunter.db-wal" in verbose  # the WAL sidecar note
     assert len(verbose.splitlines()) > len(plain.splitlines())
 

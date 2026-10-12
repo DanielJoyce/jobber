@@ -309,3 +309,16 @@ def test_every_page_has_theme_tokens_and_no_horizontal_overflow_rules():
     assert re.search(r"\.help-table\s*{[^}]*overflow-x:\s*auto", css)
     assert re.search(r"\.help-page pre\s*{[^}]*overflow-x:\s*auto", css)
     assert not re.search(r"#[0-9a-fA-F]{3,6}\b", css)  # no hard-coded colours: dark mode follows
+
+
+def test_every_check_help_link_names_a_topic_and_an_anchor_that_exists():
+    from jobhunter import readiness
+
+    for check_id in readiness.CHECK_IDS:
+        for mode in readiness.MODES:
+            path = readiness.help_for(check_id, mode)
+            topic, _, anchor = path.partition("#")
+            assert topic in helpdocs.TOPIC_BY_SLUG, (check_id, path)
+            if anchor:
+                ids = {h.id for h in helpdocs.render(topic).headings}
+                assert anchor in ids, (check_id, mode, path)

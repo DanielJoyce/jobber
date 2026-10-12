@@ -291,6 +291,7 @@ def render(report: Report, *, verbose: bool = False) -> list[str]:
                 out.append(f"           unlocks: {c.unlocks}")
                 if c.source:
                     out.append(f"           from: {c.source}")
+                out.append(f"           help: /help/{readiness.help_for(c.id, report.mode)}")
             if c.fix and (verbose or c.status in FAILING or c.due):
                 out += [f"           {line}" for line in _fix_lines(c.fix)]
     if report.preflight_ran:
