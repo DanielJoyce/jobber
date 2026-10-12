@@ -216,12 +216,16 @@ class Preview(Strict):
     method: str
     url: str
     reasons: list[str] = Field(default_factory=list)
+    # Where `description` came from, for the popup: "your selection", "this page", ... or ""
+    # when there is no text yet (an embedded ATS posting not fetched).
+    text_source: str = ""
 
 
 class FetchOffer(Strict):
     url: str
     host: str
     kind: Literal["fetch", "select"]
+    message: str = ""  # replaces the popup's default wording
 
 
 class LinkOffer(Strict):

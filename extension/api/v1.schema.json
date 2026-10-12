@@ -436,6 +436,11 @@
                   "title": "Kind",
                   "type": "string"
                 },
+                "message": {
+                  "default": "",
+                  "title": "Message",
+                  "type": "string"
+                },
                 "url": {
                   "title": "Url",
                   "type": "string"
@@ -771,6 +776,11 @@
                   ],
                   "default": null,
                   "title": "Selection"
+                },
+                "text_source": {
+                  "default": "",
+                  "title": "Text Source",
+                  "type": "string"
                 },
                 "title": {
                   "title": "Title",
@@ -1364,6 +1374,11 @@
                   "title": "Kind",
                   "type": "string"
                 },
+                "message": {
+                  "default": "",
+                  "title": "Message",
+                  "type": "string"
+                },
                 "url": {
                   "title": "Url",
                   "type": "string"
@@ -1699,6 +1714,11 @@
                   ],
                   "default": null,
                   "title": "Selection"
+                },
+                "text_source": {
+                  "default": "",
+                  "title": "Text Source",
+                  "type": "string"
                 },
                 "title": {
                   "title": "Title",

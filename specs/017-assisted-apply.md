@@ -618,14 +618,28 @@ offers **Open New packet** with the tab's URL filled in (`/apply/new?url=...`, a
 pre-fills the form; 1e adds the parameter).
 
 **Embedded forms**: the ATS iframe on an employer page is not read (`activeTab` covers the top
-frame only). When the page gave under 200 characters of description, the console looks at the
-reported iframe sources and, for one that `match_ats` maps to a supported ATS over https, offers
-**Fetch from job-boards.greenhouse.io**: 1a's **Fetch posting text** on the direct board URL,
-through `FetchContext` and robots.txt, on your click (`POST /ext/v1/capture/fetch`, which
-**re-checks `match_ats` and https on the server** and refuses anything else with 422, and gives
-up with "slow; select the text instead" after 15 seconds). For Ashby, whose robots.txt disallows
-the fetch, the popup says **right-click your selection, then Send to jobhunter**, which works
-through `info.selectionText`.
+frame only), but its `src` is reported, and the extractor reads iframes at click time, so a frame
+a script injected after load (or kept in `data-src`) is seen. The console recognizes an embedded
+ATS posting from the reported iframe sources (Greenhouse `embed/job_app?for=&token=`, a
+`embed/job_board?for=` or `/<board>` frame plus a `gh_jid`, a Lever or Ashby posting URL, an
+Ashby `.../embed` or `?ashby_jid=`), or, with no frame, from a `gh_jid` or `ashby_jid` in the
+page URL. **When one is present the page's own text is never the description** (it is the site
+chrome around the posting, however long): the preview starts empty and says why. The console
+offers **Fetch from job-boards.greenhouse.io** (1a's **Fetch posting text** on the direct board
+URL, through `FetchContext` and robots.txt, on your click: `POST /ext/v1/capture/fetch`, which
+**re-checks `match_ats`, https and that the URL is one posting** on the server and refuses
+anything else with 422, and gives up with "slow; select the text instead" after 15 seconds)
+whatever the page text length. For Ashby, whose robots.txt disallows the fetch, and for a bare
+job id whose board is unknown, the popup says **right-click your selection, then Send to
+jobhunter**, which works through `info.selectionText`. Structured data (JSON-LD of at least 200
+characters) still wins and no offer is made; a menu selection wins over the embed.
+
+The preview names the text's source (**Description from this page's structured data**, **from
+your selection**, **from this page**, **from job-boards.greenhouse.io**, or **No description text
+yet**). The ATS posting URL is the group's apply-link candidate: it is stored as `job.apply_url`
+and the group's `apply_link` start, and is looked up by dedupe, so a posting the nightly ingest
+already holds from that board is answered as already in jobhunter. Bug 334d9eb's ranking reads
+it from there (`Analysis.ats_url`).
 
 ### Console side
 

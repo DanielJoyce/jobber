@@ -308,16 +308,16 @@ function offerBox(r) {
 function fetchBox(r) {
   const f = r.fetch;
   if (f.kind === "select") {
-    return el("p", {class: "muted", id: "select-hint"},
-      "The posting is in an embedded " + f.host + " form, which jobhunter may not fetch: " +
-      "select its text, right-click your selection, then Send to jobhunter.");
+    return el("p", {class: "muted", id: "select-hint"}, f.message ||
+      ("The posting is in an embedded " + f.host + " form, which jobhunter may not fetch: " +
+      "select its text, right-click your selection, then Send to jobhunter."));
   }
   return el("p", {}, el("button", {id: "fetch", onclick: async (ev) => {
     ev.target.disabled = true;
     const res = await send({type: "fetch", body: {action_id: aid(), url: f.url}});
     if (res.status === 200) {
       fillPreview({text: res.data.text, title: res.data.title, employer: res.data.employer,
-        source: "fetch"});
+        source: "fetch", from: new URL(res.data.url).hostname});
     } else {
       showError((res.data && res.data.error) || res.message || "Fetch failed");
     }
@@ -347,6 +347,8 @@ function previewForm(r, forceNew) {
   const text = el("textarea", {id: "pv-description"});
   text.value = p.description || "";
   const form = el("section", {class: "card", id: "preview"});
+  const sourceLine = el("p", {class: "muted", id: "pv-source"});
+  setTextSource(sourceLine, p.text_source);
   if (p.reasons && p.reasons.length) {
     form.append(el("ul", {class: "muted"}, p.reasons.map((x) => el("li", {}, x))));
   }
@@ -360,22 +362,25 @@ function previewForm(r, forceNew) {
         title.value = c.title;
         employer.value = c.employer;
         text.value = c.description || text.value;
+        setTextSource(sourceLine, "this page's structured data");
         previewState.index = c.index;
         previewState.source = "structured";
       }
     });
     form.append(el("label", {}, "Posting", picker));
   }
-  form.append(el("label", {}, "Title", title), el("label", {}, "Employer", employer));
+  form.append(sourceLine, el("label", {}, "Title", title), el("label", {}, "Employer", employer));
   if (p.selection && p.page_description) {
     form.append(el("div", {class: "row"},
       el("button", {id: "use-page", onclick: () => {
         text.value = p.page_description;
         previewState.source = "edited";
+        setTextSource(sourceLine, "this page");
       }}, "Use the page's description"),
       el("button", {id: "use-selection", onclick: () => {
         text.value = p.selection;
         previewState.source = "selection";
+        setTextSource(sourceLine, "your selection");
       }}, "Use my selection")));
   }
   form.append(el("label", {}, "Description (check it; remove anything that is not the posting)", text),
@@ -387,7 +392,11 @@ function previewForm(r, forceNew) {
   return form;
 }
 
-function fillPreview({text, title, employer, source}) {
+function setTextSource(node, label) {
+  node.textContent = label ? "Description from " + label : "No description text yet";
+}
+
+function fillPreview({text, title, employer, source, from}) {
   if (!document.getElementById("preview") && current && current.response) {
     main.append(previewForm(current.response, false));
   }
@@ -405,6 +414,10 @@ function fillPreview({text, title, employer, source}) {
   }
   if (previewState) {
     previewState.source = source;
+  }
+  const line = document.getElementById("pv-source");
+  if (line && text) {
+    setTextSource(line, from || (source === "selection" ? "your selection" : "this page"));
   }
 }
 

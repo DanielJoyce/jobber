@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Staff Widget Engineer</title>
+<link rel="canonical" href="https://jobs.example-employer.test/job-detail/4012345/">
+<meta property="og:title" content="Staff Widget Engineer">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Corporation","name":"Example Employer, Inc."}]}</script>
+</head>
+<body>
+<!-- Synthetic. Structure only, modelled on an employer page that renders its Greenhouse
+     posting client-side: a header, a site-wide promo/chat widget outside any main element,
+     a job-detail section holding a loading skeleton, and a script that injects the ATS
+     iframe after load. No real posting text. -->
+<header><nav><a href="/platform/">Platform</a><a href="/pricing/">Pricing</a></nav></header>
+<section data-section="job-detail">
+  <a href="/careers/">Back to Careers</a>
+  <div>Engineering</div><div>Remote - United States</div>
+  <div id="slot" class="animate-pulse"></div>
+</section>
+<div class="chat-widget">
+  <p>Example Employer, the AI Platform for Telemetry, empowers enterprises to manage and analyze telemetry with no lock-in, no data loss, no compromises.</p>
+  <p>A new way to SIEM. Decouple analysis from storage. Learn more</p>
+  <p>Recommended: What does Example Employer do? How can I build apps on the platform?</p>
+</div>
+<footer><p>Terms of Use. Privacy Notice. Cookie Settings.</p></footer>
+<script>
+  window.addEventListener("load", function () {
+    var f = document.createElement("iframe");
+    f.id = "grnhse_iframe";
+    f.src = "https://job-boards.greenhouse.io/embed/job_app?for=exampleboard&token=4012345";
+    document.getElementById("slot").appendChild(f);
+  });
+</script>
+</body>
+</html>
