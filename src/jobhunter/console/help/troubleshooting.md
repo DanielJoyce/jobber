@@ -139,3 +139,57 @@ extension's options page and pair again; `jobhunter ext status` shows the curren
 version, usually a schema mismatch (see the migration entry above). The help pages, including
 this one, keep working. Fix the cause named in the message, then restart the console. Check with
 `jobhunter doctor`, which reads the same state in a terminal.
+
+## config.toml has errors (the console keeps running)
+
+The bar under the nav says "config.toml has errors; the console keeps the settings from
+09:12", with up to three lines such as `scoring.daily_cap_usd: Input should be a valid number`
+or `config.toml line 14, column 9: not valid TOML`. The file you saved does not load, so the
+console carries on with the settings it had. Nothing is lost.
+
+Fix the line it names and save again; the message goes away at the next check. **Details** in
+the console lists every error, and `/setup` in the console shows the settings file row as
+broken until then. In the terminal, `jobhunter doctor` checks the same file. An error never
+shows the value you typed, so a key pasted into the wrong place is not echoed.
+
+```
+jobhunter doctor
+```
+
+## Settings still need a restart
+
+After **Apply now**, the bar may say "2 settings still need a restart". Those settings (paths,
+the console's host and port, `fetch.global_concurrency`, the `api_key_env` names, and any
+`.env` change) are only read when the console starts. Restart it: `Ctrl-C` and
+`jobhunter console` on the host, or on a container host:
+
+```
+systemctl --user restart jobhunter-console
+```
+
+[Settings and secrets](settings-and-secrets.md#config-changes-while-the-console-runs) has the
+full table. `/setup` in the console and `jobhunter doctor` show what the restarted console will
+read.
+
+## config.toml may have been replaced (containers)
+
+In containers, `config.toml` is mounted as a single file. An editor that saves by writing a new
+file and renaming it (many do, and Emacs or vim with backups always do) leaves the running
+console looking at the old file. The bar then says "config.toml may have been replaced on the
+host; this console cannot see the new file until it restarts".
+
+Check the new file first, in a fresh container that sees it, then restart the console:
+
+```
+jobhunter-ctr doctor
+systemctl --user restart jobhunter-console
+```
+
+`/setup` in the console shows the result after the restart.
+
+## No Apply button
+
+**Apply now** appears only when a setting that reloads in place changed, and only in a browser
+on the machine running the console (a browser elsewhere on your network gets the restart
+command instead). A change to `console.host` or `console.port` has no effect when the console
+was started with `--host` or `--port`. See `/setup` in the console, or run `jobhunter doctor`.

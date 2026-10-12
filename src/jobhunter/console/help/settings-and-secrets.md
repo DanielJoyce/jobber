@@ -8,8 +8,9 @@ value, and none of the commands it names prints one.
 ## config.toml
 
 `jobhunter paths` prints where `config.toml` is, where each folder is, and where each value came
-from. The file is never edited from the console: it is read once when the console starts, so
-after you edit it, restart the console. (`/prefs` edits `preferences.yaml`, which is a different
+from. The file is never edited from the console. A running console notices when you save it
+and offers to apply the change, or says it needs a restart (see
+[below](#config-changes-while-the-console-runs)). (`/prefs` edits `preferences.yaml`, which is a different
 file and applies at once.) An unknown key is an error, not ignored: see
 [Troubleshooting](troubleshooting.md#unknown-key-in-configtoml).
 
@@ -119,7 +120,7 @@ the same state as readiness rows.
 
 | You changed | What to do |
 |---|---|
-| `config.toml` | Restart the console. Scheduled runs read the new file at their next start |
+| `config.toml` | Apply now in the console's notice, or restart the console for the settings that need it ([table below](#config-changes-while-the-console-runs)). Scheduled runs read the new file at their next start |
 | A `.env` file, a `NAME_FILE` or a podman secret | Restart the console: it reads them at start and keeps the first value |
 | `preferences.yaml` or the resume | Nothing: the console reads them on use (a re-score may be offered) |
 | A host timer or container unit | Reload systemd as the command that changed it says |
@@ -141,3 +142,46 @@ the same state as readiness rows.
 
 If something is missing, `/setup` in the console names the row and the fix, and
 `jobhunter doctor` prints the same in the terminal.
+
+## Config changes while the console runs
+
+The console notices when you save `config.toml` or a `.env` file. It checks when a page polls
+the bar under the nav (every minute, and at once when you switch back to the browser tab). A
+line appears there: "config.toml changed: 3 settings", with **Apply now**, **Details** and
+**Dismiss**.
+
+- **Apply now** swaps in the settings that reload in place (the table below). A page you open
+  next uses them; a re-score that is already running keeps the settings it started with.
+- Settings that need a restart stay as they were, and the line then says how many still need
+  one, with the command: `Ctrl-C` and `jobhunter console` on the host, or
+  `systemctl --user restart jobhunter-console` in containers.
+- **Details** in the console lists each changed setting and whether it reloads. Values are
+  shown only for caps, scorers, models, rates, timeouts, ports and switches. Anything personal
+  (your contact, alerts address, sender lists), URLs and paths show only "changed".
+- A `.env` change always needs a restart: secrets are read once, at start. Details names the
+  keys that changed only when they are known secret names, never their values.
+- If the new file has an error, the console keeps the settings it has, and the line says
+  what is wrong (the setting and the problem, never the value). Fix the file and save again.
+- `--host` and `--port` given on the command line win over `config.toml`, so a change to
+  `console.host` or `console.port` then has no effect.
+
+Apply works only from a browser on the machine running the console. Other commands
+(`jobhunter run`, the timers) read `config.toml` each time they start and need nothing.
+
+<!-- jh:begin config-reload -->
+
+| Table in config.toml | After you save a change |
+|---|---|
+| `[paths]` | Restart the console |
+| `[fetch]` | Apply now (reloads in place); except `global_concurrency`: restart the console |
+| `[scoring]` | Apply now (reloads in place) |
+| `[scoring.openai_compat]` | Apply now (reloads in place); except `api_key_env`: restart the console |
+| `[scoring.openrouter]` | Apply now (reloads in place); except `api_key_env`, `catalog_cache`: restart the console |
+| `[scoring.local]` | Apply now (reloads in place); except `api_key_env`: restart the console |
+| `[apply]` | Apply now (reloads in place) |
+| `[mail]` | Apply now (reloads in place) |
+| `[console]` | Restart the console |
+| `[capture]` | Apply now (reloads in place) |
+| `.env` files, `*_FILE` and `JOBHUNTER_*` variables | Restart the console |
+
+<!-- jh:end config-reload -->

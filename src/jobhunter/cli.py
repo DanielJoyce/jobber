@@ -15,7 +15,7 @@ import typer
 from typer.core import TyperGroup
 
 from jobhunter import container, secrets
-from jobhunter.config import Settings, load_env_files, load_settings, resolve_path
+from jobhunter.config import Settings, env_files, load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
 from jobhunter.sources.registry import enabled_sources, load_registry, sync_sources_table
@@ -192,6 +192,12 @@ def _load_env(ctx: typer.Context) -> None:
     _SECRETS_REPORT = secrets.startup(
         load_settings, load_env_files, lambda line: typer.echo(line, err=True)
     )
+    if ctx.invoked_subcommand == "console":
+        # The console's config watch compares .env files against what was loaded now
+        # (salted digests, in memory only; specs/019 Addendum B).
+        from jobhunter import config_watch
+
+        config_watch.snapshot_env(env_files())
     if ctx.resilient_parsing or ctx.invoked_subcommand in UNGUARDED_COMMANDS:
         return
     if "--help" in sys.argv[1:]:
@@ -1222,6 +1228,11 @@ def console(
     _warn_essentials(settings, bind_host, bind_port)
     shown = "127.0.0.1" if bind_host in ("0.0.0.0", "::") else bind_host
     typer.echo(f"help: http://{shown}:{bind_port}/help/getting-started", err=True)
+    from jobhunter.config_watch import ConfigWatcher
+
+    # Fields set on the command line win over config: a change to them has no effect (019 B).
+    pinned = [f for f, v in (("console.host", host), ("console.port", port)) if v is not None]
+    app_.state.config_watch = ConfigWatcher(cli_overrides=pinned)
     uvicorn.run(app_, host=bind_host, port=bind_port)
 
 

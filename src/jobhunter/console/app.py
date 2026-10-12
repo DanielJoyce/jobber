@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import sqlite3
+import threading
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ from jobhunter.console import (
     activity_routes,
     alerts_routes,
     capture_routes,
+    config_routes,
     detail_routes,
     ext_routes,
     help_routes,
@@ -269,6 +271,13 @@ def create_app(
         )
 
     app.state.settings = settings
+    # Config watch (specs/019 Addendum B): every read-modify-assign of app.state.settings takes
+    # this lock (Apply here; 020's /models writes adopt it). ``config_watch`` is set by the
+    # console command; None (tests, other callers) means no watching.
+    app.state.settings_lock = threading.Lock()
+    app.state.settings_read_at = now()
+    app.state.settings_applied = False
+    app.state.config_watch = None
     app.state.console_lock = console_lock  # kept alive with the app
     # In-process only (specs/021): the last achievements fingerprint and the cached on/off
     # flag the nav reads; the settings route refreshes it.
@@ -369,7 +378,9 @@ def create_app(
     def kpi_context(
         conn: sqlite3.Connection, range_: int, buckets: tuple[str, ...] = dash.DEFAULT_GROUP
     ) -> dict[str, object]:
-        k = dash.kpis(conn, get_profile(), range_, now(), settings.scoring.weekly_cap_usd, buckets)
+        # app.state.settings, not the create_app argument: Apply swaps it (019 S12a).
+        cap = app.state.settings.scoring.weekly_cap_usd
+        k = dash.kpis(conn, get_profile(), range_, now(), cap, buckets)
         return {
             "k": k,
             "range": range_,
@@ -424,7 +435,7 @@ def create_app(
                 get_profile(),
                 range_,
                 now(),
-                settings.scoring.weekly_cap_usd,
+                app.state.settings.scoring.weekly_cap_usd,
                 dash.clamp_buckets(buckets),
             )
         )
@@ -502,6 +513,7 @@ def create_app(
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     rescore_routes.register(app, templates, get_conn, now)
     activity_routes.register(app, templates, get_conn, now)
+    config_routes.register(app, templates, NAV, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
     proposals_routes.register(app, templates, get_conn, NAV, now)
     rejections_routes.register(app, templates, get_conn, NAV, now)
