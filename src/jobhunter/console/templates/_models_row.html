@@ -1,13 +1,14 @@
 <section class="mo-row su-row{% if r.blocked %} su-missing{% endif %}" id="models-row-{{ r.key }}"{% if oob %} hx-swap-oob="true"{% endif %}>
 <form method="post" action="/models/{{ r.key }}" hx-post="/models/{{ r.key }}"
-      hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids">
+      hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids"
+      hx-sync="this:queue all">
   <input type="hidden" name="page_digest" value="{{ digest }}">
   <header class="mo-head">
     <h2>{{ r.title }}</h2>
     {% if r.source %}<span class="mo-source muted">{{ r.source }}</span>{% endif %}
   </header>
   {% if r.blocked %}<p class="mo-blocked" role="alert"><span aria-hidden="true">✕</span> {{ r.blocked }}</p>{% endif %}
-  <div class="mo-fields" hx-get="/models/{{ r.key }}/preview" hx-trigger="change"
+  <div class="mo-fields" hx-post="/models/{{ r.key }}/preview" hx-trigger="change" hx-sync="closest form:queue all"
        hx-target="#models-{{ r.key }}-preview" hx-swap="innerHTML" hx-include="closest form, #models-local-ids">
     {% for f in r.fields %}
     <input type="hidden" name="shown_{{ f.name }}" value="{{ f.shown }}">

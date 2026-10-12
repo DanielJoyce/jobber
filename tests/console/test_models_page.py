@@ -278,18 +278,19 @@ def test_save_anyway_for_an_uncached_openrouter_slug(client):
     assert "Save anyway" in text and "no known price" in text
     assert not models_path(client).exists()
     assert selected(r.text, "screen") == "openrouter:acme/unlisted-1"  # the candidate stays
-    r = save(client, "screen", page, screen_other="openrouter:acme/unlisted-1", force="1")
+    slug = "openrouter:acme/unlisted-1"
+    r = save(client, "screen", page, screen_other=slug, force_for_screen=slug)
     assert "Saved at" in r.text
     assert client.app.state.settings.scoring.screen_scorer == "openrouter:acme/unlisted-1"
 
 
 def test_preview_prices_the_candidate_not_the_effective_value(client):
-    r = client.get(
+    r = client.post(
         "/models/deep/preview",
-        params={"deep": "anthropic:claude-sonnet-5-5", "shown_deep": "anthropic:claude-opus-5-5"},
+        data={"deep": "anthropic:claude-sonnet-5-5", "shown_deep": "anthropic:claude-opus-5-5"},
     )
     sonnet = float(re.search(r"About \$([0-9.]+) a job", r.text).group(1))
-    r = client.get("/models/deep/preview", params={"deep": "anthropic:claude-opus-5-5"})
+    r = client.post("/models/deep/preview", data={"deep": "anthropic:claude-opus-5-5"})
     opus = float(re.search(r"About \$([0-9.]+) a job", r.text).group(1))
     assert sonnet < opus
     assert not models_path(client).exists()
@@ -413,9 +414,9 @@ def queue_rescore(client: TestClient) -> None:
 def test_screen_change_asks_about_queued_rescores_and_keep_pins_them(client):
     queue_rescore(client)
     page = client.get("/models").text
-    preview = client.get(
+    preview = client.post(
         "/models/screen/preview",
-        params={"screen": "jev:typesafe/jev-1.13", "shown_screen": "anthropic:claude-haiku-5-5"},
+        data={"screen": "jev:typesafe/jev-1.13", "shown_screen": "anthropic:claude-haiku-5-5"},
     )
     assert "queued re-score" in preview.text
     assert "keep queued re-scores on anthropic:claude-haiku-5-5" in preview.text
@@ -429,6 +430,111 @@ def test_screen_change_asks_about_queued_rescores_and_keep_pins_them(client):
         "anthropic:claude-haiku-5-5"
     )
     assert client.app.state.settings.scoring.screen_scorer == "jev:typesafe/jev-1.13"
+
+
+def hidden(text: str, name: str) -> str | None:
+    m = re.search(rf'name="{name}" value="([^"]*)"', text)
+    return unescape(m.group(1)) if m else None
+
+
+def test_save_anyway_approves_only_the_value_it_was_shown(client):
+    """Review blocker: an approval carried through the queued question must not apply to a
+    value edited afterwards (a dearer slug would save with no prompt)."""
+    queue_rescore(client)
+    page = client.get("/models").text
+    first = "openrouter:acme/unlisted-1"
+    r = save(client, "screen", page, screen_other=first)
+    assert "Save anyway" in r.text
+    assert hidden(r.text, "force_for_screen") == first
+    # Save anyway: the approval matches, so the queued question comes next, carrying it.
+    r = save(client, "screen", page, screen_other=first, force_for_screen=first)
+    assert "choose what queued re-scores use" in r.text
+    assert hidden(r.text, "force_for_screen") == first
+    # The value is edited before the queued button is clicked: the approval does not move.
+    other = "openrouter:acme/unlisted-2"
+    r = save(client, "screen", page, screen_other=other, force_for_screen=first, queued="new")
+    assert "Save anyway" in r.text and "Saved at" not in r.text
+    assert not models_path(client).exists()
+    assert hidden(r.text, "force_for_screen") == other
+    r = save(client, "screen", page, screen_other=first, force_for_screen=first, queued="new")
+    assert "Saved at" in r.text
+    assert client.app.state.settings.scoring.screen_scorer == first
+
+
+def test_a_bare_force_flag_approves_nothing(client):
+    page = client.get("/models").text
+    r = save(client, "screen", page, screen_other="openrouter:acme/unlisted-1", force="1")
+    assert "Save anyway" in r.text
+    assert not models_path(client).exists()
+
+
+def test_409_keeps_the_old_digest_so_a_second_click_is_refused_too(client):
+    page = client.get("/models").text
+    old = digest_of(page)
+    models_path(client).write_text('[apply]\neffort = "low"\n')  # another writer
+    r = save(client, "drafting", page, effort="high")
+    assert r.status_code == 409
+    assert 'id="models-digest" name="digest"' not in r.text  # no new digest handed out
+    assert hidden(r.text, "page_digest") == old
+    r = save(client, "drafting", page, effort="high")
+    assert r.status_code == 409
+    assert models_path(client).read_text() == '[apply]\neffort = "low"\n'
+
+
+def test_malformed_config_value_is_shown_with_its_problem_not_as_blocked(tmp_path):
+    cfg = write_config(tmp_path, '[scoring]\nscreen_scorer = "openroute:jev:tiny"\n')
+    client = make_client(settings_from(cfg))
+    text = client.get("/models").text
+    assert selected(text, "screen") == "openroute:jev:tiny"
+    screen = unescape(row_html(text, "screen"))
+    assert "Blocked: the value in models.toml is invalid" not in screen
+    assert "config.toml" in screen and 'class="mo-blocked"' in screen
+
+
+def test_key_shaped_free_text_is_never_echoed_or_saved(client):
+    page = client.get("/models").text
+    r = client.post("/models/screen/preview", data={"screen_other": f"openrouter:{SENTINEL}"})
+    assert SENTINEL not in r.text and "not a usable model name" in r.text
+    r = save(client, "screen", page, screen_other=f"openrouter:{SENTINEL}")
+    assert r.status_code == 422 and SENTINEL not in r.text
+    assert not models_path(client).exists()
+
+
+def test_keep_pins_queued_rescores_to_the_on_disk_value(client):
+    """While a Load is pending, tonight's drain plans with models.toml on disk, so "keep"
+    must pin that value, not this console's running one."""
+    queue_rescore(client)
+    models_path(client).write_text('[scoring]\nscreen_scorer = "jev:typesafe/jev-1.13"\n')
+    page = client.get("/models").text
+    assert "changed outside the console" in page
+    r = save(client, "screen", page, screen_other="local:qwen3-4b", queued="keep")
+    assert "Saved at" in r.text, r.text
+    conn = client.app.state.conn_factory()
+    assert conn.execute("SELECT scorer FROM rescore_request").fetchone()[0] == (
+        "jev:typesafe/jev-1.13"
+    )
+
+
+def test_keep_pins_nothing_when_the_write_is_refused(client):
+    queue_rescore(client)
+    page = client.get("/models").text
+    models_path(client).write_text('[apply]\neffort = "low"\n')
+    r = save(client, "screen", page, screen="jev:typesafe/jev-1.13", queued="keep")
+    assert r.status_code == 409
+    conn = client.app.state.conn_factory()
+    assert conn.execute("SELECT scorer FROM rescore_request").fetchone()[0] is None
+
+
+def test_reset_file_is_recorded_in_history(client):
+    path = models_path(client)
+    path.write_text("this is [not toml\n")
+    page = client.get("/models").text
+    client.post("/models/reset-file", data={"page_digest": digest_of(page)})
+    conn = client.app.state.conn_factory()
+    rows = conn.execute("SELECT field, old_value, new_value, source FROM model_change").fetchall()
+    assert ("scoring.screen_scorer", None, "anthropic:claude-haiku-5-5", "reset") in [
+        tuple(r) for r in rows
+    ]
 
 
 def test_queued_new_leaves_the_requests_unpinned(client):
@@ -474,7 +580,7 @@ def test_network_routes_are_refused_under_allow_remote(cfg, url, monkeypatch):
 def test_get_routes_pass_the_middleware_only(cfg):
     client = make_client(settings_from(cfg), peer=LAN)
     assert client.get("/models").status_code == 200
-    assert client.get("/models/screen/preview", params={"screen": "x"}).status_code == 200
+    assert client.post("/models/screen/preview", data={"screen": "x"}).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -517,7 +623,7 @@ def test_an_invalid_value_never_reaches_the_page(tmp_path):
     assert "Blocked" in page  # the screening row says it is blocked, without the value
     for row in mr.ROWS:
         params = {"shown_screen": "", "screen": "anthropic:claude-haiku-5-5"}
-        assert SENTINEL not in client.get(f"/models/{row}/preview", params=params).text
+        assert SENTINEL not in client.post(f"/models/{row}/preview", data=params).text
     r = save(client, "drafting", page, effort="low")
     assert r.status_code == 200 and SENTINEL not in r.text
     r = save(client, "screen", client.get("/models").text, screen="anthropic:claude-haiku-5-5")
@@ -538,8 +644,9 @@ def test_no_network_on_render_preview_save_reset_revert(client, _no_network_no_m
         ("drafting", {"runner": "api", "draft_api": "claude-sonnet-5-5"}),
         ("check", {"entailment_check": "true", "check_api": "claude-sonnet-5-5"}),
     ]:
-        assert client.get(f"/models/{row}/preview", params=params).status_code == 200
-    save(client, "screen", page, screen="openrouter:acme/tiny-1", force="1")
+        assert client.post(f"/models/{row}/preview", data=params).status_code == 200
+    tiny = "openrouter:acme/tiny-1"
+    save(client, "screen", page, screen=tiny, force_for_screen=tiny)
     page = client.get("/models").text
     client.post("/models/screen/reset", data={"digest": digest_of(page)})
     page = client.get("/models").text

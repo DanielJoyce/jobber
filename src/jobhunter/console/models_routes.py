@@ -185,7 +185,9 @@ class RowState:
     queued_line: str = ""
     queued_old: str = ""  # the model "keep" would keep queued re-scores on
     action: str = ""  # the URL the confirm buttons post to (save, reset or revert)
-    forced: bool = False  # "save anyway" was already pressed
+    # {name: value text} that "save anyway" approves. Sent back as force_for_<name> and
+    # honoured only for exactly that value: a changed value is judged again.
+    approve: dict[str, str] = field(default_factory=dict)
     effect: list[str] = field(default_factory=list)
 
 
@@ -411,11 +413,12 @@ def build_row(ctx: Ctx, row: str, state: RowState | None = None) -> RowView:
     fields: list[FieldView] = []
     values: dict[str, Any] = {}
     for name in names:
-        section, key = mc.NAMES[name]
         eff = effective(settings, name)
         shown = state.shown.get(name, text_of(eff))
         value = state.values.get(name, shown)
-        blocked = section == "scoring" and key in blocked_map and name not in state.values
+        # The placeholder only for the blocked marker: a malformed config.toml value is
+        # still the value in effect, shown with its source and the problem.
+        blocked = eff == BLOCKED_SPEC and name not in state.values
         if name == "runner":
             opts = [Opt(r, RUNNER_LABELS[r]) for r in ("cli", "api")]
             fv = FieldView(name, FIELD_LABELS[name], "radio", value, shown, opts)
@@ -572,6 +575,19 @@ def history_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         return []
 
 
+def reset_file_changes(before: Any, after: Any) -> dict[str, tuple[Any, Any]]:
+    """{name: (old, new)} for each value **Reset file** changes, for the history. A blocked
+    value is recorded as not set (None): the blocked marker is not a value to revert to."""
+    out: dict[str, tuple[Any, Any]] = {}
+    for name, (section, key) in mc.NAMES.items():
+        old = getattr(getattr(before.merged, section), key)
+        new = getattr(getattr(after.merged, section), key)
+        if old == new:
+            continue
+        out[name] = (None if old == BLOCKED_SPEC else old, None if new == BLOCKED_SPEC else new)
+    return out
+
+
 def history_times(conn: sqlite3.Connection) -> dict[str, tuple[str, str]]:
     """{field: (HH:MM local, source)} of the latest write of each field."""
     out: dict[str, tuple[str, str]] = {}
@@ -665,10 +681,15 @@ def register(
         ctx = make_ctx(request, conn)
         return render("models.html", request, page_context(request, ctx, flash=FLASH.get(done, "")))
 
-    def candidate_from(form: Mapping[str, Any], getlist, row: str) -> tuple[dict, dict]:
-        """(values, shown) the row's form posted, as text."""
+    def candidate_from(
+        form: Mapping[str, Any], getlist, row: str
+    ) -> tuple[dict[str, str], dict[str, str], list[str]]:
+        """(values, shown, refused) the row's form posted, as text. A model value that is not
+        a usable model name (key-shaped, or characters no model id has) is dropped, never
+        echoed: ``refused`` names its field."""
         values: dict[str, str] = {}
         shown: dict[str, str] = {}
+        refused: list[str] = []
         for name in ROWS[row][1]:
             if name == "entailment_check":
                 values[name] = "true" if "true" in getlist(name) else "false"
@@ -676,29 +697,61 @@ def register(
                 values[name] = str(form.get(name, "") or "").strip()
             if name == "screen" and (other := str(form.get("screen_other", "") or "").strip()):
                 values[name] = other
+            if name in MODEL_FIELDS and values[name] and shown_value(values[name]) is None:
+                values.pop(name)
+                refused.append(name)
             if f"shown_{name}" in form:
-                shown[name] = str(form.get(f"shown_{name}", ""))
-        return values, shown
+                shown[name] = shown_value(str(form.get(f"shown_{name}", ""))) or ""
+                if name in ("runner", "effort", "entailment_check"):
+                    shown[name] = str(form.get(f"shown_{name}", ""))[:16]
+        return values, shown, refused
 
-    @app.get("/models/{row}/preview", response_class=HTMLResponse)
-    def models_preview(request: Request, row: str, conn: Conn) -> Response:
+    REFUSED_TEXT = "That is not a usable model name, so it was not kept."
+
+    def approved_from(form: Mapping[str, Any]) -> dict[str, str]:
+        return {
+            name: str(form.get(f"force_for_{name}"))
+            for name in mc.NAMES
+            if form.get(f"force_for_{name}") is not None
+        }
+
+    @app.post("/models/{row}/preview", response_class=HTMLResponse)
+    async def models_preview(request: Request, row: str) -> Response:
+        """Price, access and queued lines for a candidate. A POST (the middleware's same-origin
+        rule, no peer gate), so a typed spec never lands in a URL or an access log. Writes
+        nothing but the prefilter catch-up a queued line plans with."""
         if row not in ROWS:
             return PlainTextResponse("unknown row", status_code=404)
-        params = request.query_params
-        values, shown = candidate_from(params, params.getlist, row)
-        local_ids = clean_local_ids(params.getlist("local_id")) or None
-        ctx = make_ctx(request, conn, local_ids)
-        state = RowState(values=values, shown=shown)
-        if row == "screen" and ctx.peer_ok:
-            _queued_preview(ctx, state, values.get("screen", ""), shown.get("screen"))
-        view = build_row(ctx, row, state)
-        return render("_models_preview.html", request, {"r": view, "ctx": ctx})
+        form, getlist = await read_form(request)
+        values, shown, refused = candidate_from(form, getlist, row)
+        local_ids = clean_local_ids(getlist("local_id")) or None
+
+        def work() -> Response:
+            conn = request.app.state.conn_factory()
+            try:
+                ctx = make_ctx(request, conn, local_ids)
+                state = RowState(values=values, shown=shown)
+                if refused:
+                    state.message, state.kind = REFUSED_TEXT, "error"
+                if row == "screen" and ctx.peer_ok:
+                    _queued_preview(ctx, state, values.get("screen", ""), shown.get("screen"))
+                view = build_row(ctx, row, state)
+                return render("_models_preview.html", request, {"r": view, "ctx": ctx})
+            finally:
+                conn.close()
+
+        return await run_in_threadpool(work)
+
+    def disk_screen(layers: Any) -> str | None:
+        """The screening spec models.toml on disk gives (what tonight's drain will plan
+        with), or None when it is blocked."""
+        merged = layers.merged.scoring
+        return None if "screen_scorer" in merged.scorer_problems() else merged.screen_scorer
 
     def _queued_preview(ctx: Ctx, state: RowState, new_spec: str, shown: str | None) -> None:
         """The queued re-score line for a screening change (specs/020 "Queued re-scores")."""
         old = ctx.settings.scoring.screen_scorer
-        blocked = "screen_scorer" in ctx.settings.scoring.scorer_problems()
-        old_spec = None if blocked else old
+        old_spec = disk_screen(ctx.disk)
         if not new_spec or new_spec == (shown if shown is not None else text_of(old)):
             return
         line = queued_line(ctx.conn, ctx.settings, ctx.now, old_spec, new_spec)
@@ -760,7 +813,7 @@ def register(
         digest: str,
         source: str,
         queued: str,
-        force: bool,
+        approved: Mapping[str, str],
         local_ids: list[str] | None,
         state: RowState,
         action: str,
@@ -770,7 +823,17 @@ def register(
         with request.app.state.settings_lock:
             running: Settings = request.app.state.settings
             layers = layers_for(running)
+            disk = relayer(layers)
+            if disk.digest != digest:  # moved under us: refused before anything is written
+                state.message = (
+                    "Not saved: models.toml changed elsewhere since this page was loaded. "
+                    "Reload the page to see what is there now."
+                )
+                state.kind = "error"
+                return Outcome(409, state, stale=True)
             reasons: list[str] = []
+            needs: dict[str, str] = {}
+            ok_approved: dict[str, str] = {}
             for name, value in changes.items():
                 if value is None:
                     continue
@@ -784,16 +847,25 @@ def register(
                 if check.error:
                     state.message, state.kind = f"Not saved: {check.error}", "error"
                     return Outcome(422, state)
-                reasons += list(check.needs_force)
-            if reasons and not force:
+                if not check.needs_force:
+                    continue
+                text = mc.to_text(value) or ""
+                if approved.get(name) == text:
+                    ok_approved[name] = text  # "save anyway" was pressed for this value
+                else:
+                    reasons += list(check.needs_force)
+                    needs[name] = text
+            if reasons:
                 state.reasons = reasons
+                state.approve = {**ok_approved, **needs}
                 state.action = action
                 state.message, state.kind = "Not saved yet: check the reasons below.", "warn"
                 return Outcome(200, state)
             keep_on: str | None = None
             if "screen" in changes:
-                blocked = "screen_scorer" in running.scoring.scorer_problems()
-                old_spec = None if blocked else running.scoring.screen_scorer
+                # What queued re-scores follow tonight is models.toml on disk, not this
+                # console's running value (they differ while a Load is pending).
+                old_spec = disk_screen(disk)
                 new_spec = changes["screen"]
                 if new_spec is None:
                     new_spec = layers.base.scoring.screen_scorer
@@ -802,7 +874,7 @@ def register(
                         state.queued_line = queued_line(conn, running, now(), old_spec, new_spec)
                         state.queued_old = old_spec or ""
                         state.action = action
-                        state.forced = force
+                        state.approve = ok_approved
                         state.message, state.kind = (
                             "Not saved yet: choose what queued re-scores use.",
                             "warn",
@@ -818,15 +890,11 @@ def register(
                             return Outcome(422, state)
                         keep_on = old_spec
             try:
-                # Refused before anything is written when the file moved under us.
-                if mc.current_digest(layers.path) != digest:
-                    raise mc.StaleDigest()
-                if keep_on is not None:
-                    # Before the write, as the CLI does: a drain starting now already finds
-                    # those rows pinned to the old model.
-                    mc.keep_queued(conn, keep_on)
                 result = mc.write_changes(layers.path, changes, digest, conn=conn,
                                           source=source, now=now())  # fmt: skip
+                if keep_on is not None and "screen" in result.changed:
+                    # Only once the write succeeded: a refused write pins nothing.
+                    mc.keep_queued(conn, keep_on)
             except mc.StaleDigest:
                 state.message = (
                     "Not saved: models.toml changed elsewhere since this page was loaded. "
@@ -879,12 +947,19 @@ def register(
         row: str | None,
         history_msg: RowState | None = None,
         local_ids: list[str] | None = None,
+        posted_digest: str = "",
     ) -> Response:
         """htmx: the row (or the history section) plus out-of-band swaps of the digest, the
-        banner, the access list and the history. Otherwise the whole page."""
+        banner, the access list and the history. Otherwise the whole page.
+
+        After a 409 the page keeps the digest it posted: handing out the new one would let a
+        second click overwrite the other writer's change unseen. Only a reload moves it."""
         ctx = make_ctx(request, conn, local_ids)
         states = {row: outcome.state} if row else {}
         context = page_context(request, ctx, states, history_msg=history_msg)
+        context["stale"] = outcome.stale
+        if outcome.stale:
+            context["digest"] = posted_digest
         if not request.headers.get("hx-request"):
             if outcome.stale:
                 context["flash"] = FLASH["stale"]
@@ -899,12 +974,16 @@ def register(
         if not peer_is_loopback(request):
             return refuse_peer()
         form, getlist = await read_form(request)
-        values, shown = candidate_from(form, getlist, row)
+        values, shown, refused = candidate_from(form, getlist, row)
         local_ids = clean_local_ids(getlist("local_id")) or None
 
         def work() -> Response:
             conn = request.app.state.conn_factory()
             try:
+                if refused:
+                    state = RowState(values=values, shown=shown, message=REFUSED_TEXT,
+                                     kind="error")  # fmt: skip
+                    return write_response(request, conn, Outcome(422, state), row=row)
                 changes: dict[str, Any] = {}
                 for name, text in values.items():
                     if name in shown and text == shown[name]:
@@ -919,10 +998,11 @@ def register(
                 else:
                     outcome = apply_write(
                         request, conn, changes, digest=digest_of(form), source="ui",
-                        queued=str(form.get("queued", "")), force=form.get("force") == "1",
+                        queued=str(form.get("queued", "")), approved=approved_from(form),
                         local_ids=local_ids, state=state, action=f"/models/{row}",
                     )  # fmt: skip
-                return write_response(request, conn, outcome, row=row, local_ids=local_ids)
+                return write_response(request, conn, outcome, row=row, local_ids=local_ids,
+                                      posted_digest=digest_of(form))  # fmt: skip
             except mc.ModelsFileError as exc:
                 state = RowState(values=values, shown=shown, message=f"Not saved: {exc}",
                                  kind="error")  # fmt: skip
@@ -946,10 +1026,11 @@ def register(
                 changes = dict.fromkeys(ROWS[row][1])
                 outcome = apply_write(
                     request, conn, changes, digest=digest_of(form), source="reset",
-                    queued=str(form.get("queued", "")), force=True, local_ids=None,
+                    queued=str(form.get("queued", "")), approved={}, local_ids=None,
                     state=RowState(), action=f"/models/{row}/reset",
                 )  # fmt: skip
-                return write_response(request, conn, outcome, row=row)
+                return write_response(request, conn, outcome, row=row,
+                                      posted_digest=digest_of(form))  # fmt: skip
             finally:
                 conn.close()
 
@@ -979,12 +1060,13 @@ def register(
                                           history_msg=state)  # fmt: skip
                 outcome = apply_write(
                     request, conn, {name: value}, digest=digest_of(form), source="revert",
-                    queued=str(form.get("queued", "")), force=form.get("force") == "1",
+                    queued=str(form.get("queued", "")), approved=approved_from(form),
                     local_ids=local_ids, state=state,
                     action=f"/models/history/{change_id}/revert",
                 )  # fmt: skip
                 return write_response(request, conn, outcome, row=None,
-                                      history_msg=outcome.state)  # fmt: skip
+                                      history_msg=outcome.state,
+                                      posted_digest=digest_of(form))  # fmt: skip
             finally:
                 conn.close()
 
@@ -1000,6 +1082,7 @@ def register(
             with request.app.state.settings_lock:
                 running: Settings = request.app.state.settings
                 layers = layers_for(running)
+                before = relayer(layers)
                 try:
                     mc.reset_file(layers.path, digest_of(form), now=now())
                 except mc.StaleDigest:
@@ -1008,6 +1091,13 @@ def register(
                     return RedirectResponse("/models?done=not-broken", status_code=303)
                 fresh = relayer(layers)
                 request.app.state.settings = mc.swap_fields(running, fresh, mc.NAMES)
+                changed = reset_file_changes(before, fresh)
+                if changed:
+                    conn = request.app.state.conn_factory()
+                    try:
+                        mc.record_changes(conn, changed, source="reset", now=now())
+                    finally:
+                        conn.close()
             return RedirectResponse("/models?done=reset-file", status_code=303)
 
         return await run_in_threadpool(work)

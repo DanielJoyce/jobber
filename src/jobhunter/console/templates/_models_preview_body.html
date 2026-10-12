@@ -16,19 +16,19 @@
 {% set action = s.action or ("/models/" ~ r.key) %}
 {% set verb = "Reset" if action.endswith("/reset") else "Save" %}
 <div class="mo-actions">
-  {% if s.forced %}<input type="hidden" name="force" value="1">{% endif %}
+  {% for name, value in s.approve.items() %}<input type="hidden" name="force_for_{{ name }}" value="{{ value }}">{% endfor %}
   {% if s.queued_line %}
-    <button type="submit" name="queued" value="new" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids">{{ verb }}; queued re-scores use the new model</button>
+    <button type="submit" name="queued" value="new" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">{{ verb }}; queued re-scores use the new model</button>
     {% if s.queued_old %}
-    <button type="submit" name="queued" value="keep" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids">{{ verb }}; keep queued re-scores on {{ s.queued_old }}</button>
+    <button type="submit" name="queued" value="keep" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">{{ verb }}; keep queued re-scores on {{ s.queued_old }}</button>
     {% endif %}
   {% elif s.reasons %}
-    <button type="submit" name="force" value="1">Save anyway</button>
+    <button type="submit" class="mo-anyway">Save anyway</button>
   {% else %}
     <button type="submit" class="mo-save">Save</button>
   {% endif %}
   {% if r.can_reset %}
-    <button type="submit" formaction="/models/{{ r.key }}/reset" hx-post="/models/{{ r.key }}/reset" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest">Reset</button>
+    <button type="submit" formaction="/models/{{ r.key }}/reset" hx-post="/models/{{ r.key }}/reset" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest" hx-sync="closest form:queue all">Reset</button>
     <span class="muted mo-reset-hint">Reset removes this row from models.toml: config.toml's value or the default applies.</span>
   {% endif %}
 </div>

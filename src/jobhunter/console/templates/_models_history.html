@@ -9,7 +9,7 @@
   {% if ctx.peer_ok and s.action and (s.queued_line or s.reasons) %}
   <form method="post" action="{{ s.action }}" class="su-form" hx-post="{{ s.action }}" hx-target="#models-history" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids">
     <input type="hidden" name="page_digest" value="{{ digest }}">
-    {% if s.forced or (s.reasons and not s.queued_line) %}<input type="hidden" name="force" value="1">{% endif %}
+    {% for name, value in s.approve.items() %}<input type="hidden" name="force_for_{{ name }}" value="{{ value }}">{% endfor %}
     {% if s.queued_line %}
     <button type="submit" name="queued" value="new">Revert; queued re-scores use the new model</button>
     {% if s.queued_old %}<button type="submit" name="queued" value="keep">Revert; keep queued re-scores on {{ s.queued_old }}</button>{% endif %}
