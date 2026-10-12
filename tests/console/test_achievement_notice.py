@@ -481,9 +481,48 @@ def test_a_write_route_response_carries_the_trigger(client, db_path):
     assert r.status_code < 400, r.text
     assert "jh-activity" in r.headers.get("hx-trigger", "")
     # a refused write (404) carries none
-    r = client.post("/proposals/999999/accept", follow_redirects=False)
-    if r.status_code >= 400:
-        assert "jh-activity" not in r.headers.get("hx-trigger", "")
+    r = client.post("/pipeline/999999/next-action", data={"next_action": "x"})
+    assert r.status_code == 404
+    assert "jh-activity" not in r.headers.get("hx-trigger", "")
+
+
+def test_a_rule_bug_does_not_break_the_band(client, db_path, monkeypatch, caplog):
+    backfill(client)
+    capture(db_path)
+    client.get("/activity")  # Found it yourself stored, unseen
+    capture(db_path, 1)  # a change, so the next poll evaluates
+
+    def boom(*a, **k):
+        raise RuntimeError("rule bug")
+
+    monkeypatch.setattr(engine, "evaluate", boom)
+    r = client.get("/activity")
+    assert r.status_code == 200
+    assert "Found it yourself" in notice(r.text)["text"]  # stored rows still shown
+    assert "rule bug" in caplog.text
+    # A failure past the evaluation: no notice, the rest of the band as usual.
+    monkeypatch.setattr(engine, "unseen", boom)
+    run(
+        db_path,
+        "INSERT INTO rescore_request (requested_at, scope, scoring_version, job_count, "
+        "cost_per_job_usd, estimated_usd, status, done_at, scored, cost_usd) "
+        "VALUES (?, 'recent', 'v', 1, 0, 0, 'done', ?, 1, 0.01)",
+        NOW.isoformat(),
+        NOW.isoformat(),
+    )
+    r = client.get("/activity")
+    assert r.status_code == 200
+    assert notice(r.text) is None and "Re-score done" in r.text
+    assert client.get("/help").status_code == 200
+
+
+def test_notice_keys_carry_detected_at(client, db_path):
+    backfill(client)
+    capture(db_path)
+    r = client.get("/activity")
+    (row,) = run(db_path, "SELECT id, detected_at FROM achievement_unlock WHERE seen_at IS NULL")
+    key = f"{row[0]}@{row[1]}"
+    assert f'data-key="{key}"' in r.text and f'data-keys="{key}"' in r.text
 
 
 def test_no_trigger_while_achievements_are_off(client, db_path):

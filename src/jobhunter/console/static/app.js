@@ -71,7 +71,10 @@
     if (!b) return;
     try { sessionStorage.setItem("jh-activity-dismissed", b.getAttribute("data-dismiss")); } catch (x) {}
     var box = document.getElementById("activity");
-    if (box) box.replaceChildren();
+    // Only this line: the achievement notice beside it stays.
+    var item = b.closest(".activity-item");
+    if (item) item.remove();
+    else if (box) box.replaceChildren();
   });
 
   // Achievement notice (specs/021). Its x (.ach-dismiss) is an htmx POST of the ids it shows
@@ -79,13 +82,13 @@
   // Here we only hide it at once, and keep it hidden if a poll that raced the POST renders
   // the same ids again. It is never removed from the DOM: htmx fires the response's
   // HX-Trigger (jh-activity, which refreshes the band) on the button, so it must stay attached.
-  var dismissedIds = {};
+  var dismissedIds = {};  // keyed by id@detected_at (data-keys), not the bare id
   document.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest(".ach-dismiss");
     if (!b) return;
     var n = b.closest(".ach-notice");
     if (!n) return;
-    (n.getAttribute("data-ids") || "").split(",").forEach(function (id) {
+    (n.getAttribute("data-keys") || "").split(",").forEach(function (id) {
       if (id) dismissedIds[id] = true;
     });
     n.hidden = true;
@@ -100,12 +103,12 @@
   function onBand() {
     var n = document.querySelector("#activity .ach-notice");
     if (!n) return;
-    var ids = (n.getAttribute("data-ids") || "").split(",").filter(Boolean);
+    var ids = (n.getAttribute("data-keys") || "").split(",").filter(Boolean);
     if (ids.length && ids.every(function (id) { return dismissedIds[id]; })) {
       n.hidden = true;
       return;
     }
-    var id = n.getAttribute("data-unlock");
+    var id = n.getAttribute("data-key");  // id plus detected_at: an id can be reused after a revoke
     if (!id || id === lastUnlock()) return;
     lastAnnounced = id;
     try { sessionStorage.setItem("jh-ach-announced", id); } catch (x) {}

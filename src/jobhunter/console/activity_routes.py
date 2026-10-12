@@ -50,8 +50,24 @@ def achievement_notice(
 ) -> dict[str, Any] | None:
     """Evaluate when something changed, then describe the unseen unlocks to show (or None).
 
-    Never raises ``sqlite3.Error``: a busy database means the stored unlocks are shown, or
-    nothing if even the read fails."""
+    Never raises: the band is on every page, so a busy database (``sqlite3.Error``) or a bug
+    in a rule must not take every page down. A failed evaluation still shows the stored
+    unlocks; anything else shows no notice and the rest of the band as usual."""
+    try:
+        return _notice(conn, gate, moment)
+    except Exception:
+        logger.exception("activity: achievement notice skipped")
+        _rollback(conn)
+        return None
+
+
+def _rollback(conn: sqlite3.Connection) -> None:
+    with contextlib.suppress(sqlite3.Error):
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+
+
+def _notice(conn: sqlite3.Connection, gate: engine.Gate, moment: datetime) -> dict[str, Any] | None:
     try:
         settings = engine.read_settings(conn)
     except sqlite3.Error:
@@ -63,8 +79,10 @@ def achievement_notice(
         gate.refresh(conn, moment, wait=False)
     except sqlite3.Error as exc:  # render what is stored; the next poll retries
         logger.info("activity: achievements evaluate skipped: %s", exc)
-        if conn.in_transaction:
-            conn.execute("ROLLBACK")
+        _rollback(conn)
+    except Exception:  # a rule bug: still show what is stored
+        logger.exception("activity: achievements evaluate failed")
+        _rollback(conn)
     if not settings.notify:
         return None
     try:
@@ -77,7 +95,12 @@ def achievement_notice(
     a = catalog.BY_ID[top.achievement_id]
     return {
         "id": top.id,
+        # id plus detected_at: the browser keys announce/dismiss on it, since a row id can be
+        # reused after a revoke (DELETE then a later INSERT).
+        "key": f"{top.id}@{top.detected_at}",
         "ids": ",".join(str(u.id) for u in rows),
+        # Not "keys": Jinja's ach.keys would resolve to dict.keys.
+        "shown_keys": ",".join(f"{u.id}@{u.detected_at}" for u in rows),
         "name": a.name,
         "tier": top.tier if a.tiers > 1 else None,
         "more": len(rows) - 1,
