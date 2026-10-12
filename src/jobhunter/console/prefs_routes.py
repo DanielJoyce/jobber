@@ -72,6 +72,10 @@ def register(
     def profile_dir(request: Request) -> Path:
         return Path(request.app.state.settings.paths.profile_dir).expanduser()
 
+    def scoring_of(request: Request) -> Any:
+        """The live ``[scoring]`` settings: paid-change estimates price its screen_scorer."""
+        return request.app.state.settings.scoring
+
     def mtime_of(request: Request) -> int:
         try:
             return (profile_dir(request) / PREFERENCES_FILE).stat().st_mtime_ns
@@ -245,7 +249,7 @@ def register(
                 conn, profile, after, days=pf.PREVIEW_DAYS, now=now()
             )
         if paid:
-            ctx["estimate"] = pf.rescore_estimate(conn, after, now())
+            ctx["estimate"] = pf.rescore_estimate(conn, after, now(), scoring_of(request))
             choice = pf.form_value(form, "rescore", "none")
             ctx["rescore"] = choice if choice in pf.RESCORE_SCOPES else "none"
         return templates.TemplateResponse(request, "_prefs_preview.html", ctx)
@@ -383,7 +387,9 @@ def register(
             )
         scope = pf.form_value(form, "rescore", "none")
         queued = ""
-        if any(pf.is_paid(p) for p in changes) and pf.record_rescore(conn, scope, new, now()):
+        if any(pf.is_paid(p) for p in changes) and pf.record_rescore(
+            conn, scope, new, now(), scoring_of(request)
+        ):
             queued = f"&rescore={scope}"
         saved = len(changes) + len(answer_writes)
         return RedirectResponse(f"/prefs?saved={saved}{queued}", status_code=303)
@@ -528,7 +534,7 @@ def register(
         paid = any(pf.is_paid(p) for p in changes)
         if paid and pf.form_value(form, "confirm") != "1":
             # The cost and re-score choice come before the write, as with the full Save.
-            estimate = pf.rescore_estimate(conn, after or profile, now())
+            estimate = pf.rescore_estimate(conn, after or profile, now(), scoring_of(request))
             return section_response(
                 request,
                 conn,
@@ -579,7 +585,7 @@ def register(
                 mtime_ns=expected,
             )
         scope = pf.form_value(form, f"rescore_{section}", "none")
-        queued = paid and pf.record_rescore(conn, scope, new, now())
+        queued = paid and pf.record_rescore(conn, scope, new, now(), scoring_of(request))
         return section_response(
             request,
             conn,
@@ -680,7 +686,7 @@ def register(
             "name": dest.name,
             "path": str(dest),
             "sha256": new_hash,
-            "estimate": pf.rescore_estimate(conn, after.profile, now()),
+            "estimate": pf.rescore_estimate(conn, after.profile, now(), scoring_of(request)),
         }
         return render_page(request, conn, after, upload=result)
 

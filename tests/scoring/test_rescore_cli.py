@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from test_rescore import SPEC, FakeScorer, queue
+from test_rescore import SPEC, FakeScorer, priced_test_model, queue  # noqa: F401
 from test_screen import add_group, profile  # noqa: F401
 from typer.testing import CliRunner
 

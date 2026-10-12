@@ -108,7 +108,8 @@ def test_pending_batches_reserve_per_model(conn):
         "'x', 'y')",
         (SONNET,),
     )
-    expected = 100 * 0.002 + 100 * SONNET_TABLE + 5 * 0.002
+    # openrouter:x has no price (no catalog): over the line at the unpriced reserve.
+    expected = 100 * 0.002 + 100 * SONNET_TABLE + 5 * screen.UNPRICED_RESERVE_PER_JOB_USD
     assert screen._pending_batch_usd(conn) == pytest.approx(expected)
     assert screen.remaining_daily_budget(conn, 2.0, NOW) == pytest.approx(2.0 - expected)
 
@@ -132,7 +133,8 @@ def test_measured_history_below_floor_keeps_the_floor(conn, profile):
 def test_rescore_fallback_cost_per_job_is_priced_per_model(conn):
     assert rescore.cost_per_job(conn, SONNET) == (pytest.approx(SONNET_TABLE), "default")
     assert rescore.cost_per_job(conn, HAIKU55) == (0.002, "default")
-    assert rescore.cost_per_job(conn, "openrouter:x/y") == (0.002, "default")
+    # No cached catalog price: priced at the unpriced reserve, not the flat $0.002.
+    assert rescore.cost_per_job(conn, "openrouter:x/y") == (0.04, "default")
     assert rescore.cost_per_job(conn, "jev:x") == (rescore.DECISIONS_FALLBACK_COST, "default")
 
 

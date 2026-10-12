@@ -38,7 +38,7 @@ from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring import buckets as bk
 from jobhunter.scoring import decisions, prefilter, screen
 from jobhunter.scoring.profile import Profile
-from jobhunter.scoring.scorers import FitScorer, scorer_from_string, split_scorer
+from jobhunter.scoring.scorers import FitScorer, ScorerError, scorer_from_string, split_scorer
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,9 @@ def open_scored(conn: sqlite3.Connection, profile: Profile, now: datetime) -> tu
 # ─── Cost ───────────────────────────────────────────────────────────────────
 
 
-def cost_per_job(conn: sqlite3.Connection, spec: str) -> tuple[float, str]:
+def cost_per_job(
+    conn: sqlite3.Connection, spec: str, scoring: Scoring | None = None
+) -> tuple[float, str]:
     """Measured screen cost per job for this scorer, else a per-kind default.
 
     Measured from ``fit_score``, where each row carries that job's share of its request's cost.
@@ -148,11 +150,36 @@ def cost_per_job(conn: sqlite3.Connection, spec: str) -> tuple[float, str]:
         return float(row[0]), "fit_score"
     if is_decisions(spec):
         return DECISIONS_FALLBACK_COST, "default"
-    # Nothing measured: the old flat default, or the model's table price at typical tokens
-    # when that is higher (Sonnet 5.5 is about $0.005 a job), so a plan is never underpriced.
-    return max(
-        screen.ESTIMATED_COST_PER_REQUEST_USD, screen.table_price_per_request_usd(spec)
-    ), "default"
+    # Nothing measured: the old flat default, or the model's list price at typical tokens
+    # when that is higher (Sonnet 5.5 is about $0.005 a job; an OpenRouter slug is priced from
+    # the cached catalog in ``scoring``), so a plan is never underpriced. A model with no known
+    # price is priced at what the spend cap reserves for it (bug df51dff).
+    price = screen.list_price_per_job_usd(spec, scoring, batch=spec.startswith("anthropic:"))
+    if price is None:
+        price = screen.unpriced_reserve_usd(spec, scoring, batch=spec.startswith("anthropic:"))
+    return max(screen.ESTIMATED_COST_PER_REQUEST_USD, price), "default"
+
+
+def refresh_catalog(
+    spec: str, scoring: Scoring, scorer_factory: ScorerFactory | None = None
+) -> None:
+    """Refresh the cached OpenRouter price catalog (at most daily) before planning a run.
+
+    The plan prices an OpenRouter slug from that cache (``cost_per_job``), and nothing else
+    writes it until a scoring run does. Called only where a run is about to be planned and
+    paid for (the CLI, ``run_request``); console pages read the cache and never fetch.
+    """
+    if not spec.startswith("openrouter:"):
+        return
+    make = scorer_factory or (lambda s: scorer_from_string(s, scoring=scoring))
+    try:
+        scorer = make(spec)
+    except ScorerError as exc:
+        logger.warning("price catalog not refreshed: %s", exc)
+        return
+    refresh = getattr(scorer, "catalog", None)
+    if callable(refresh):
+        refresh()  # fetch failures are caught and logged inside; the cache stays as it was
 
 
 # The same caps the daily run checks (screen.remaining_budget: tighter of daily and weekly).
@@ -271,7 +298,7 @@ def make_plan(
     scored_before = {
         int(r[0]) for r in conn.execute("SELECT DISTINCT job_group_id FROM fit_score").fetchall()
     }
-    per_job, source = cost_per_job(conn, spec)
+    per_job, source = cost_per_job(conn, spec, scoring)
     est = len(planned) * per_job
     plan = Plan(
         scope=scope,
@@ -580,6 +607,7 @@ def run_request(
         plan = stored_plan(conn, row, profile, scoring, now())
     else:
         spec = scorer or row["scorer"] or scoring.screen_scorer
+        refresh_catalog(spec, scoring, scorer_factory)
         plan = make_plan(conn, profile, scoring, row["scope"], spec, now())
     if plan.refusal:
         raise RescoreRefused(plan.refusal)

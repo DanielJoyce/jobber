@@ -22,6 +22,7 @@ from urllib.parse import parse_qs
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from jobhunter.config import Scoring
 from jobhunter.console.inbox import BUCKET_TITLES
 from jobhunter.core import db, geo
 from jobhunter.core.models import EmploymentType
@@ -734,12 +735,19 @@ def signed(n: int | float) -> str:
 # ─── estimate (paid changes) ────────────────────────────────────────────────
 
 
-def cost_per_job(conn: sqlite3.Connection) -> tuple[float, str]:
-    """Measured screen cost per job from fit_score.cost_usd, else a default.
+def cost_per_job(conn: sqlite3.Connection, scoring: Scoring | None = None) -> tuple[float, str]:
+    """Screen cost per job for the configured ``scoring.screen_scorer``.
+
+    With ``scoring``, ``rescore.cost_per_job`` for that scorer: measured history for that
+    model, else its list price (catalog for OpenRouter, table for Anthropic), so a dear
+    model is not quoted at the flat $0.002 (bug df51dff). Without it, or when the spec is
+    malformed, the mean over every scorer's measured jobs, else a default.
 
     Not llm_spend: it counts one call per request, and a packed or Jev request scores several
     jobs, so its cost per call overstates the cost per job (about 8x for Jev).
     """
+    if scoring is not None and "screen_scorer" not in scoring.scorer_problems():
+        return rs.cost_per_job(conn, scoring.screen_scorer, scoring)
     row = conn.execute(
         "SELECT avg(cost_usd), count(*) FROM fit_score WHERE tier = 'screen' AND cost_usd > 0"
     ).fetchone()
@@ -756,9 +764,13 @@ class RescoreOption:
     cost_usd: float
 
 
-def rescore_estimate(conn: sqlite3.Connection, profile: Profile, now: datetime) -> dict[str, Any]:
-    """Re-score options for a paid change: none / open A-E in 14 days / all open."""
-    cost, source = cost_per_job(conn)
+def rescore_estimate(
+    conn: sqlite3.Connection, profile: Profile, now: datetime, scoring: Scoring | None = None
+) -> dict[str, Any]:
+    """Re-score options for a paid change: none / open A-E in 14 days / all open.
+
+    Priced for ``scoring.screen_scorer`` when ``scoring`` is given (``cost_per_job``)."""
+    cost, source = cost_per_job(conn, scoring)
     open_total, recent_ids = rs.open_scored(conn, profile, now)
     recent = len(recent_ids)
     options = [
@@ -775,12 +787,16 @@ def rescore_estimate(conn: sqlite3.Connection, profile: Profile, now: datetime) 
 
 
 def record_rescore(
-    conn: sqlite3.Connection, scope: str, profile: Profile, now: datetime
+    conn: sqlite3.Connection,
+    scope: str,
+    profile: Profile,
+    now: datetime,
+    scoring: Scoring | None = None,
 ) -> int | None:
     """Record a re-score request for a later scoring run. Never calls the API."""
     if scope not in ("recent", "all"):
         return None
-    estimate = rescore_estimate(conn, profile, now)
+    estimate = rescore_estimate(conn, profile, now, scoring)
     option = next(o for o in estimate["options"] if o.scope == scope)
     cur = conn.execute(
         "INSERT INTO rescore_request (requested_at, scope, scoring_version, job_count, "

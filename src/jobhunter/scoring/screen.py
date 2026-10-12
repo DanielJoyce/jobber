@@ -42,11 +42,16 @@ from jobhunter.scoring.scorers import (  # noqa: F401  (pricing/cost helpers re-
     PRICING_PER_MTOK,
     AnthropicScorer,
     FitScorer,
+    LocalScorer,
+    OpenAICompatScorer,
+    OpenRouterScorer,
     ScoreRequest,
     ScoreResult,
     Usage,
     _usage_int,
     anthropic_params,
+    cached_openrouter_rates,
+    ceiling_cost,
     compute_cost,
     model_id,
 )
@@ -462,19 +467,126 @@ def measured_cost_per_job_usd(conn: sqlite3.Connection, scorer: str) -> float:
     return float(avg or 0.0)
 
 
-def reserve_per_request_usd(conn: sqlite3.Connection, scorer: str) -> float:
-    """What the spend cap reserves for one batched screen request to ``scorer``.
+# A model with no known price is over the line, not free (bug df51dff). A chat model (an
+# OpenRouter slug missing from the cached catalog, or a router with variable pricing) reserves
+# this per job, or ``scoring.openrouter.est_cost_per_request_usd`` when that is higher; an
+# Anthropic model missing from the price table reserves the table's dearest rates.
+UNPRICED_RESERVE_PER_JOB_USD = 0.04
+# score_sync sends at most this many single-job requests between spend-cap checks (or one
+# wave of ``max_concurrency`` when that is larger), so a run cannot get far past the cap.
+SYNC_CHUNK = 8
+
+
+def chat_price_usd(rates: tuple[float, float], n_jobs: int = 1) -> float:
+    """A chat model's price for ``n_jobs`` typical screens in one request.
+
+    ``rates`` is (input, output) USD per million tokens. Every prompt token is priced at the
+    input rate: OpenRouter and openai-compat usage count cached tokens as prompt tokens, and
+    the scorers' ``cost`` prices them that way. The rubric + profile prefix
+    (``TYPICAL_USAGE.cache_read_input_tokens``) is sent once per request; the posting and the
+    answer once per job.
+    """
+    n = max(int(n_jobs), 1)
+    tokens_in = TYPICAL_USAGE.cache_read_input_tokens + TYPICAL_USAGE.input_tokens * n
+    tokens_out = TYPICAL_USAGE.output_tokens * n
+    return (tokens_in * rates[0] + tokens_out * rates[1]) / 1_000_000
+
+
+def list_price_per_job_usd(
+    spec: str, scoring: Scoring | None = None, *, batch: bool = False
+) -> float | None:
+    """``spec``'s list price for one ``TYPICAL_USAGE`` screen, or None when it has no price.
+
+    Anthropic: the price table. OpenRouter: the cached public catalog at
+    ``scoring.openrouter.catalog_cache``, read from disk at any age and never fetched (the
+    reservation is made before any request goes out). openai-compat: its configured prices
+    (0 when unset, a self-hosted server; its cost is recorded as 0 too). Local models are
+    free; Jev/decisions requests check the cap themselves, per request (decisions.py).
+    """
+    scoring = scoring or Scoring()
+    provider, _, name = spec.partition(":")
+    if not name:
+        provider, name = "anthropic", spec
+    if provider == "anthropic":
+        try:
+            return compute_cost(TYPICAL_USAGE, f"anthropic:{name}", batch=batch)
+        except ValueError:
+            return None
+    if provider == "openrouter":
+        rates = cached_openrouter_rates(scoring.openrouter, name)
+        return None if rates is None else chat_price_usd(rates)
+    if provider == "openai-compat":
+        compat = scoring.openai_compat
+        return chat_price_usd((compat.input_usd_per_mtok, compat.output_usd_per_mtok))
+    return 0.0
+
+
+def unpriced_reserve_usd(spec: str, scoring: Scoring | None = None, *, batch: bool) -> float:
+    """What one job to a model with no known price reserves (``UNPRICED_RESERVE_PER_JOB_USD``)."""
+    if spec.startswith("anthropic:") or ":" not in spec:
+        return ceiling_cost(TYPICAL_USAGE, batch=batch)
+    est = (scoring or Scoring()).openrouter.est_cost_per_request_usd
+    return max(UNPRICED_RESERVE_PER_JOB_USD, est)
+
+
+_LOOK_UP: Any = object()
+
+
+def reserve_per_job_usd(
+    conn: sqlite3.Connection,
+    spec: str,
+    scoring: Scoring | None = None,
+    *,
+    batch: bool = False,
+    price: float | None = _LOOK_UP,
+) -> float:
+    """What the spend cap reserves for one screen job to ``spec`` (bugs 026b50c, df51dff).
 
     The highest of ``ESTIMATED_COST_PER_REQUEST_USD``, the mean measured for that model, and
-    the model's table price at ``TYPICAL_USAGE`` batched. Never below the old flat $0.002, so
-    a cheap model (Haiku 5.5) reserves exactly what it did; a dearer one (Sonnet 5.5, about
-    $0.005) reserves its own price, so a cap is not overrun 2.5x.
+    its list price at ``TYPICAL_USAGE`` (``list_price_per_job_usd``, or ``price`` when the
+    caller already looked it up). Never below the old flat $0.002, so a cheap model reserves
+    exactly what it did; a dearer one reserves its own price. A model with no list price is
+    priced by its measured history when it has some, else by the ``unpriced_reserve_usd``
+    guess: over the line only while nothing at all is known about its price.
     """
-    return max(
-        ESTIMATED_COST_PER_REQUEST_USD,
-        measured_cost_per_job_usd(conn, scorer),
-        table_price_per_request_usd(scorer),
-    )
+    if price is _LOOK_UP:
+        price = list_price_per_job_usd(spec, scoring, batch=batch)
+    measured = measured_cost_per_job_usd(conn, spec)
+    if price is None:
+        price = measured if measured > 0 else unpriced_reserve_usd(spec, scoring, batch=batch)
+    return max(ESTIMATED_COST_PER_REQUEST_USD, measured, price)
+
+
+def scorer_list_price_usd(scorer: Any) -> float | None:
+    """``list_price_per_job_usd`` for a scorer that is about to send requests.
+
+    An OpenRouter scorer reads its catalog through its own ``catalog()``: the disk cache when
+    under a day old, else one fetch of the public, free ``/models`` list, which is then cached
+    on disk for the console's estimates (those only read the cache). Only scoring paths call
+    this; nothing that renders a page does.
+    """
+    if isinstance(scorer, OpenRouterScorer):
+        rates = scorer.catalog_rates()
+        return None if rates is None else chat_price_usd(rates)
+    return list_price_per_job_usd(scorer.name, scoring_for(scorer))
+
+
+def reserve_per_request_usd(conn: sqlite3.Connection, scorer: str) -> float:
+    """What the spend cap reserves for one batched screen request to Anthropic ``scorer``.
+
+    ``reserve_per_job_usd`` at batch prices: Haiku 5.5 reserves the flat $0.002, Sonnet 5.5
+    about $0.005, and a model missing from the price table the table's dearest rates.
+    """
+    return reserve_per_job_usd(conn, scorer, batch=True)
+
+
+def scoring_for(scorer: Any) -> Scoring:
+    """A ``Scoring`` carrying ``scorer``'s own provider config, for pricing a reservation."""
+    if isinstance(scorer, OpenRouterScorer):
+        return Scoring(openrouter=scorer.openrouter)
+    if isinstance(scorer, OpenAICompatScorer) and not isinstance(scorer, LocalScorer):
+        return Scoring(openai_compat=scorer.config)
+    return Scoring()
 
 
 def _pending_batch_usd(conn: sqlite3.Connection) -> float:
@@ -574,7 +686,14 @@ def submit_batch(
 
     ``remaining_usd`` is the spend cap: the batch is cut to what the remaining budget covers
     at ``reserve_per_request_usd`` for ``scorer``; nothing is submitted when that is zero.
+    Raises ``ValueError`` for a model missing from the price table: its spend could not be
+    recorded correctly, so nothing is sent (bug df51dff).
     """
+    if list_price_per_job_usd(scorer, batch=True) is None:
+        raise ValueError(
+            f"no price for {scorer!r}: add it to PRICING_PER_MTOK in scoring/scorers.py, or "
+            "pick a listed model; nothing submitted"
+        )
     if remaining_usd is not None:
         per_request = reserve_per_request_usd(conn, scorer)
         affordable = math.floor(max(remaining_usd(), 0.0) / per_request)
@@ -680,6 +799,16 @@ def collect_batch(
         logger.warning("batch %s was scored with an older profile scoring_version", batch_id)
 
     key = _Key(batch_row["model"], batch_row["prompt_version"], batch_row["scoring_version"])
+    # A model missing from the price table (a batch submitted before unpriced models were
+    # refused) is priced at the table's dearest rates, so the batch is still collected and its
+    # reservation released instead of raising and staying stuck (bug df51dff).
+    unpriced = list_price_per_job_usd(batch_row["model"], batch=True) is None
+    if unpriced:
+        logger.warning(
+            "batch %s: no price for %s; its spend is recorded at the dearest listed rates",
+            batch_id,
+            batch_row["model"],
+        )
     items: dict[str, int] = {}
     revs: dict[str, int] = {}
     for r in conn.execute(
@@ -709,7 +838,7 @@ def collect_batch(
                 continue
 
             usage = entry.usage
-            cost = scorer.cost(usage, batch=True)
+            cost = ceiling_cost(usage, batch=True) if unpriced else scorer.cost(usage, batch=True)
             out.succeeded += 1
             out.cost_usd += cost
             tokens_in += _all_input_tokens(usage)
@@ -960,10 +1089,29 @@ def score_sync(
             group_ids=group_ids,
             new_only=new_only,
         )
+    price = scorer_list_price_usd(scorer)
+    scoring = scoring_for(scorer)
+
+    def per_job_now() -> float:
+        # Re-read before every chunk: the chunks already sent are measured history now.
+        reserve = reserve_per_job_usd(conn, scorer.name, scoring, price=price)
+        if out.submitted:
+            reserve = max(reserve, out.cost_usd / out.submitted)
+        return reserve
+
+    per_job = per_job_now()
+    # Nothing known about this model's price: the first chunk is a single request, so its
+    # real cost is learned before more is sent. The up-front cut is skipped then: the guess
+    # would set the night's volume, and the per-chunk check enforces the cap at measured cost.
+    guessed = price is None and measured_cost_per_job_usd(conn, scorer.name) <= 0
     if remaining_usd is not None:
-        affordable = math.floor(max(remaining_usd(), 0.0) / ESTIMATED_COST_PER_REQUEST_USD)
+        affordable = math.floor(max(remaining_usd(), 0.0) / per_job)
+        if guessed:
+            affordable = limit if affordable > 0 else 0
         if affordable < limit:
-            logger.warning("spend cap: screening limited to %d groups", affordable)
+            logger.warning(
+                "spend cap: screening limited to %d groups at $%.4f a job", affordable, per_job
+            )
         limit = min(limit, affordable)
     if limit <= 0:
         return out
@@ -972,15 +1120,58 @@ def score_sync(
     )
     if not groups:
         return out
+    workers = max(1, int(getattr(getattr(scorer, "config", None), "max_concurrency", 1) or 1))
+    chunk = max(SYNC_CHUNK, workers)
+    key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
+    pos = 0
+    reserved = 0.0  # what this run has reserved for the chunks it sent
+    while pos < len(groups):
+        size = 1 if guessed and pos == 0 else chunk
+        part = groups[pos : pos + size]
+        if remaining_usd is not None:
+            # Recorded spend so far counts here, so a model dearer than its reservation
+            # stops the run within one chunk of the cap. What was reserved for sent chunks
+            # beyond what they recorded still counts: a model that reports no cost cannot
+            # run past the cap at its reservation.
+            per = per_job_now()
+            room = remaining_usd() - max(0.0, reserved - out.cost_usd)
+            fits = math.floor(max(room, 0.0) / per + 1e-9)
+            if fits < len(part):
+                logger.warning(
+                    "spend cap: screening stopped with %d groups not sent",
+                    len(groups) - pos - max(fits, 0),
+                )
+                part = part[: max(fits, 0)]
+            if not part:
+                break
+            reserved += len(part) * per
+        pos += len(part)
+        _score_sync_chunk(conn, scorer, profile, part, key, out, now, rejection_days)
+        if len(part) < size:
+            break
+    return out
+
+
+def _score_sync_chunk(
+    conn: sqlite3.Connection,
+    scorer: FitScorer,
+    profile: Profile,
+    groups: list[sqlite3.Row],
+    key: _Key,
+    out: SyncResult,
+    now: datetime,
+    rejection_days: int,
+) -> None:
+    """Send one chunk of single-job requests and write what comes back, spend included."""
     by_id = {f"g{g['group_id']}": g for g in groups}
     results = scorer.submit(
         _score_requests(conn, groups, profile, now=now, rejection_days=rejection_days)
     )
     if isinstance(results, str):
         raise ValueError(f"scorer {scorer.name} batches; use submit_batch")
-    out.submitted = len(groups)
-    key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
+    out.submitted += len(groups)
     tokens_in = tokens_out = calls = 0
+    chunk_cost = 0.0
     with _txn(conn):
         for res in results:
             g = by_id.get(res.custom_id)
@@ -991,7 +1182,7 @@ def score_sync(
                 logger.warning("%s %s: %s", scorer.name, res.custom_id, res.detail)
                 continue
             cost = scorer.cost(res.usage, batch=False)
-            out.cost_usd += cost
+            chunk_cost += cost
             calls += 1
             tokens_in += _all_input_tokens(res.usage)
             tokens_out += _usage_int(res.usage, "output_tokens")
@@ -1019,8 +1210,8 @@ def score_sync(
             else:
                 out.written += 1
                 out.unverified += int(unverified)
-        _record_spend(conn, key.model, now, calls, tokens_in, tokens_out, out.cost_usd)
-    return out
+        _record_spend(conn, key.model, now, calls, tokens_in, tokens_out, chunk_cost)
+    out.cost_usd += chunk_cost
 
 
 # ─── Packed requests (specs/016 "Packed requests") ──────────────────────────
@@ -1175,11 +1366,23 @@ def estimated_request_cost(
 
     A scorer with a configured ``est_cost_per_request_usd`` (OpenRouter: $0.04) uses the mean
     cost per request measured in ``llm_spend`` (today, else all history), else that default.
-    Any other scorer keeps the batch-era ``ESTIMATED_COST_PER_REQUEST_USD`` per job.
+    Any other scorer keeps the batch-era ``ESTIMATED_COST_PER_REQUEST_USD`` per job. Either
+    way the estimate is never below the model's list price for a pack of ``n_jobs``
+    (``chat_price_usd`` at its cached catalog or configured rates, bug df51dff), so a dear
+    model is not sent on a cheap estimate; a model with no known price keeps the configured
+    per-request estimate.
     """
+    floor = 0.0
+    if (rates := _chat_rates(scorer)) is not None:
+        floor = chat_price_usd(rates, n_jobs)
+    elif (measured := measured_cost_per_job_usd(conn, scorer.name)) > 0:
+        floor = measured * n_jobs  # no list price: the measured cost per job, per pack
+    elif isinstance(scorer, OpenRouterScorer):
+        # Neither a price nor history: the unpriced guess per job, as on the single path.
+        floor = unpriced_reserve_usd(scorer.name, scoring_for(scorer), batch=False) * n_jobs
     default = float(getattr(scorer, "est_cost_per_request_usd", 0.0) or 0.0)
     if default <= 0:
-        return ESTIMATED_COST_PER_REQUEST_USD * n_jobs
+        return max(ESTIMATED_COST_PER_REQUEST_USD * n_jobs, floor)
     for day_clause, args in (("AND day = ?", (to_iso(now)[:10],)), ("", ())):
         row = conn.execute(
             "SELECT sum(cost_usd), sum(calls) FROM llm_spend "
@@ -1187,8 +1390,17 @@ def estimated_request_cost(
             (scorer.name, TIER, *args),
         ).fetchone()
         if row[0] and row[1] and row[0] > 0:
-            return float(row[0]) / float(row[1])
-    return default
+            return max(float(row[0]) / float(row[1]), floor)
+    return max(default, floor)
+
+
+def _chat_rates(scorer: Any) -> tuple[float, float] | None:
+    """A chat scorer's (input, output) USD per Mtok, or None. Called only while scoring."""
+    if isinstance(scorer, OpenRouterScorer):
+        return scorer.catalog_rates()  # a scoring path: refreshed at most daily
+    if isinstance(scorer, OpenAICompatScorer) and not isinstance(scorer, LocalScorer):
+        return (scorer.config.input_usd_per_mtok, scorer.config.output_usd_per_mtok)
+    return None
 
 
 def _share(usage: Any, n: int) -> Usage:
@@ -1248,8 +1460,15 @@ def _score_sync_packed(
     workers = max(1, int(getattr(getattr(scorer, "config", None), "max_concurrency", 1)))
     key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
     pos = 0
+    # Nothing known about the price: one pack goes alone first, so its real cost is measured
+    # before a full wave is sent.
+    guessed = (
+        isinstance(scorer, OpenRouterScorer)
+        and _chat_rates(scorer) is None
+        and measured_cost_per_job_usd(conn, scorer.name) <= 0
+    )
     while pos < len(packs):
-        wave = packs[pos : pos + workers]
+        wave = packs[pos : pos + (1 if guessed and pos == 0 else workers)]
         if remaining_usd is not None:
             remaining = max(remaining_usd(), 0.0)
             affordable = 0

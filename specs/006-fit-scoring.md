@@ -451,12 +451,40 @@ per batched job, the highest of $0.002 (`screen.ESTIMATED_COST_PER_REQUEST_USD`)
 measured for that model, and the model's table price at these typical tokens, batched
 (`screen.reserve_per_request_usd`). For Haiku 5.5 that is the $0.002 floor, deliberately high;
 a dearer model reserves its own price (Sonnet 5.5 about $0.005, Haiku 4.5 about $0.0026 where
-it used to reserve $0.002), so no priced model overruns a cap on an estimate. An Anthropic
-model missing from the price table has no table price and, until it has measured history,
-reserves only the $0.002 floor. Uncollected batches are reserved the same way, by the model
-each was submitted with. A confirmed Anthropic re-score batch is cut to what its confirmed
-ceiling covers at the planned price per job (the table price instead, when higher, for a plan
-confirmed at the old flat $0.002).
+it used to reserve $0.002), so no priced model overruns a cap on an estimate. Uncollected
+batches are reserved the same way, by the model each was submitted with. A confirmed Anthropic
+re-score batch is cut to what its confirmed ceiling covers at the planned price per job (the
+table price instead, when higher, for a plan confirmed at the old flat $0.002).
+
+The same rule covers every provider (`screen.reserve_per_job_usd`, bug `df51dff`). An
+OpenRouter slug is priced from the public catalog with every prompt token at the input rate: a
+$1 / $5 per MTok model reserves about $0.0088 a job, so a $2 cap covers 227 jobs, not 1,000.
+The catalog is cached at `scoring.openrouter.catalog_cache`. Scoring paths (`score_sync`, the
+packed route, `jobhunter score --rescore` and a queued re-score's planning) refresh it through
+the scorer's `catalog()` when it is missing or over a day old (one free, public fetch); console
+pages only read it. openai-compat uses its configured prices; `local:` is free; Jev and other
+decisions models check the cap before each request on their own estimate and are unchanged.
+
+A model with no list price (an OpenRouter router with variable pricing, a slug missing from
+the catalog) is priced by its measured history (`fit_score.cost_usd`, which OpenRouter reports
+per call) once it has some. **With neither a price nor history it is over the line**: it
+reserves $0.04 a job, or `scoring.openrouter.est_cost_per_request_usd` when higher, and
+`score_sync` sends a single request first (one job, or one pack on the packed route) so its
+real cost is measured before more goes out. An Anthropic model missing from the price table is refused as a scorer
+(`check_scorer_spec`, so the nightly run skips with the reason and `submit_batch` sends
+nothing); a batch already submitted under one is collected with its spend recorded at the
+table's dearest rates, and reserved at those rates until then.
+
+`score_sync` re-checks the cap before every chunk of 8 single-job requests (or one
+`max_concurrency` wave, when larger), re-reading the reservation with what the sent chunks
+cost, and counting what it reserved for chunks whose cost was not reported. Packed requests
+are checked per wave as before, their estimate floored at the catalog price of the pack, else
+the measured cost per job times the pack size, else the unpriced guess per job times the pack
+size. The `/prefs` paid-change estimate and the re-score plan price the configured
+`screen_scorer` the same way (`rescore.cost_per_job`). `jobhunter backfill` prices uncollected
+batches per model and a non-batching scorer at no less than its reservation; its synchronous
+route passes its budget to `score_sync` as the spend cap and counts each chunk at the higher
+of what it recorded and its reservation, so a scorer that reports $0 still stops at the budget.
 
 **Stage 3, per job:** 5,000 in + 3,000 cached + 1,500 out ≈ **$0.051**. At 40/week → **$2.02/week**.
 

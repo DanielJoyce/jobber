@@ -10,7 +10,13 @@ import types
 from datetime import timedelta
 
 import pytest
-from test_rescore import SPEC, FakeScorer, queue_raw, score_all_once
+from test_rescore import (  # noqa: F401
+    SPEC,
+    FakeScorer,
+    priced_test_model,
+    queue_raw,
+    score_all_once,
+)
 from test_screen import (
     NOW,
     add_group,
@@ -289,7 +295,8 @@ def test_remaining_budget_is_the_tighter_cap_and_counts_uncollected_batches(conn
     assert screen.remaining_budget(conn, s, NOW) == pytest.approx(1.0)
     conn.execute(
         "INSERT INTO score_batch (id, tier, model, prompt_version, scoring_version, "
-        "request_count, submitted_at) VALUES ('b1', 'screen', 'm', 'p', 'v', 100, 'x')"
+        "request_count, submitted_at) VALUES ('b1', 'screen', 'anthropic:claude-haiku-5-5', "
+        "'p', 'v', 100, 'x')"
     )
     pending = 100 * screen.ESTIMATED_COST_PER_REQUEST_USD
     assert screen.remaining_budget(conn, s, NOW) == pytest.approx(1.0 - pending)

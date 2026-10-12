@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from stray_letters import stray_letters
 
-from jobhunter.config import Paths, Settings
+from jobhunter.config import Paths, Scoring, Settings
 from jobhunter.console import prefs as pf
 from jobhunter.console.app import create_app
 from jobhunter.core import db
@@ -35,6 +35,8 @@ narrative:
 
 NOW = datetime.now(UTC)
 MINUS = "\N{MINUS SIGN}"
+# The configured screen scorer (the default): /prefs prices a paid change for this model.
+SCREEN_MODEL = Scoring().screen_scorer
 
 
 def dims(score=85):
@@ -101,8 +103,8 @@ def add_job(conn, n, *, salary_max=120000, score=85, cost=None, days=2, closes=N
     conn.execute(
         "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
         "verdict, overall, dimensions, evidence, cost_usd, created_at) "
-        "VALUES (?, 'screen', 'm', 'p', 'old-version', 'strong', 80, ?, '[]', ?, ?)",
-        (n, json.dumps(dims(score)), cost, ts),
+        "VALUES (?, 'screen', ?, 'p', 'old-version', 'strong', 80, ?, '[]', ?, ?)",
+        (n, SCREEN_MODEL, json.dumps(dims(score)), cost, ts),
     )
 
 
