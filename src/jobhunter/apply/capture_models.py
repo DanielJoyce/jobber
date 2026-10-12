@@ -10,7 +10,7 @@ is also capped at ``MAX_BODY_BYTES``, answered with 413). ``schema_document`` is
 from __future__ import annotations
 
 import json
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -219,6 +219,10 @@ class VersionRequest(Strict):
     pass
 
 
+class FormsRequest(Strict):
+    pass
+
+
 # ─── responses ──────────────────────────────────────────────────────────────
 
 
@@ -411,6 +415,14 @@ class PickResponse(Strict):
     remembered: bool
 
 
+class FormsResponse(Strict):
+    """Form data for every supported ATS (``apply/ats_forms.forms_payload``), cached by the
+    worker. Selectors and patterns only: no values and no page text."""
+
+    version: str
+    forms: dict[str, Any]
+
+
 class PairResponse(Strict):
     token: str
     extension_id: str
@@ -486,6 +498,7 @@ class DraftStatusResponse(Strict):
 ROUTES: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
     "pair": (PairRequest, (PairResponse,)),
     "version": (VersionRequest, (VersionResponse,)),
+    "forms": (FormsRequest, (FormsResponse,)),
     "capture": (CaptureRequest, (CaptureResponse,)),
     "capture/add": (AddRequest, (CaptureResponse,)),
     "capture/fetch": (FetchRequest, (FetchResponse,)),

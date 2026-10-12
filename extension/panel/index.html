@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jobhunter</title>
+  <link rel="stylesheet" href="../popup/popup.css">
+  <style>
+    body { width: auto; min-width: 0; padding: 12px; }
+  </style>
+</head>
+<body>
+  <h1>jobhunter</h1>
+  <p id="bound" role="status" aria-live="polite" class="muted">Looking for the tab…</p>
+  <div id="detail" class="card" hidden>
+    <p>Site: <strong id="site"></strong></p>
+    <p>Field: <strong id="field"></strong></p>
+  </div>
+  <p class="muted">Resume and cover letter drafting arrive here in a later step. Nothing is
+    drafted, attached or written to the page from this panel yet.</p>
+  <script src="panel.js" type="module"></script>
+</body>
+</html>

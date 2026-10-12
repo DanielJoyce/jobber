@@ -279,7 +279,7 @@ it (A1 checks this on a React fixture). The buttons answer only `isTrusted` clic
 
 **After an extension reload** the worker re-injects the content scripts into open tabs on the
 granted ATS hosts (`chrome.tabs.query` with those URL patterns, allowed by the host permissions,
-then `scripting.executeScript` with `allFrames: true`). **Orphan removal:** each content script
+then `scripting.executeScript` with `allFrames: true`; A2 found that Chrome refuses this when the top frame's host is not granted, so an ATS iframe on an employer page is not re-injected and needs one page reload). **Orphan removal:** each content script
 opens a long-lived `chrome.runtime.connect` port to the worker at start. A reload disconnects
 it; the script's `port.onDisconnect` handler **waits about 250 ms** and then checks
 `chrome.runtime?.id` (A1 found the id is still set inside the handler after a reload and clears

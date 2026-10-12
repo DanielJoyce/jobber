@@ -1963,6 +1963,38 @@
         }
       }
     },
+    "/ext/v1/forms": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "FormsRequest",
+        "type": "object"
+      },
+      "responses": {
+        "FormsResponse": {
+          "additionalProperties": false,
+          "description": "Form data for every supported ATS (``apply/ats_forms.forms_payload``), cached by the\nworker. Selectors and patterns only: no values and no page text.",
+          "properties": {
+            "forms": {
+              "additionalProperties": true,
+              "title": "Forms",
+              "type": "object"
+            },
+            "version": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "version",
+            "forms"
+          ],
+          "title": "FormsResponse",
+          "type": "object"
+        }
+      }
+    },
     "/ext/v1/groups/{id}/describe": {
       "method": "POST",
       "request": {

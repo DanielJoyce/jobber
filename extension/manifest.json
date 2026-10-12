@@ -1,12 +1,44 @@
 {
   "manifest_version": 3,
   "name": "jobhunter",
-  "description": "Send the job posting you are viewing to your local jobhunter console. Reads a page only when you click.",
+  "description": "Send job postings to your local jobhunter console and fill application forms on your click. Never submits.",
   "version": "0.1.0",
   "minimum_chrome_version": "120",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvQ4i2bbsqH0tkYdKDeoGdzMlVdeZP3Ch2Dx6l4wTx4Fvt4dYhS2UngJph4+oX1ge/b2joicNDJWd3T2oERParBLwxKoxPYYaBuZlQYwtDEf6FJiy6rnDdZa0yrINID7aCj1lgS1ED3U9o5jWtP0gFl6a6ycwHmAEU5XfxppWgHYYgmheLbmGtEJct1rH5rCAxjMlXq2xnqXT8ikVwX6N4rlME3gQebhVg0yH6YvfTBCnCA5+a9uF75KxaSf9vrLJlCdFSY3dPZdzCma7YIm7TkhusiN6eKS5ht/YAcHNvHRQFaHxtfXhZCturTEYiFMf6bPz9BE/Vjs/K4nJJdmC2QIDAQAB",
-  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
-  "host_permissions": ["http://127.0.0.1/*"],
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus", "sidePanel"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://boards.greenhouse.io/*",
+    "https://job-boards.greenhouse.io/*",
+    "https://job-boards.eu.greenhouse.io/*",
+    "https://jobs.lever.co/*",
+    "https://jobs.eu.lever.co/*",
+    "https://jobs.ashbyhq.com/*",
+    "https://apply.workable.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*.myworkdayjobs.com/*",
+    "https://*.myworkdaysite.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://boards.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*",
+        "https://job-boards.eu.greenhouse.io/*",
+        "https://jobs.lever.co/*",
+        "https://jobs.eu.lever.co/*",
+        "https://jobs.ashbyhq.com/*",
+        "https://apply.workable.com/*"
+      ],
+      "js": ["content/frame.js"],
+      "all_frames": true,
+      "run_at": "document_idle",
+      "match_about_blank": false,
+      "world": "ISOLATED"
+    }
+  ],
+  "side_panel": {"default_path": "panel/index.html"},
   "background": {"service_worker": "background.js", "type": "module"},
   "action": {"default_title": "Send to jobhunter", "default_popup": "popup/index.html"},
   "options_ui": {"page": "options/index.html", "open_in_tab": true},

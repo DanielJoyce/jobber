@@ -633,11 +633,13 @@ def test_a_script_in_a_web_page_cannot_use_the_worker(paired):
     h.open(url, body)
     tid = h.tab_id(url)
     sw = h.ctx.service_workers[-1]
-    # Code running in this extension's isolated world inside the page: its messages are refused.
+    # Code running in this extension's isolated world inside the page: its messages are refused
+    # (022: with an explicit {state: 'refused'} answer from the sender policy).
     answer = sw.evaluate(
         "(id) => chrome.scripting.executeScript({target: {tabId: id}, func: () => "
-        "chrome.runtime.sendMessage({type: 'pairStatus'}).then((r) => r === undefined ? "
-        "'refused' : 'answered').catch(() => 'refused')}).then((r) => r[0].result)",
+        "chrome.runtime.sendMessage({type: 'pairStatus'}).then((r) => "
+        "(r === undefined || (r && r.state === 'refused')) ? 'refused' : 'answered')"
+        ".catch(() => 'refused')}).then((r) => r[0].result)",
         tid,
     )
     assert answer == "refused"
