@@ -2,8 +2,13 @@
 {% block main %}
 <link rel="stylesheet" href="{{ static_url('detail.css') }}">
 <div class="detail">
+  {% if employer_page is not defined or employer_page %}
   <h1>This posting has closed</h1>
   <p>The employer's page for <strong>{{ job_title }}</strong> no longer looks open, so nothing was opened for you.</p>
+  {% else %}
+  <h1>This link no longer works</h1>
+  <p>The only link found for <strong>{{ job_title }}</strong> ({{ original_host }}) no longer works, so nothing was opened for you. That does not mean the job has closed; the employer's own posting may still be open.</p>
+  {% endif %}
   <p><a href="{{ original }}" target="_blank" rel="noopener noreferrer">Open the original link anyway &#8599;</a></p>
   <p><a href="/job/{{ group_id }}">&larr; back to the job</a> &middot; <a href="/inbox">inbox</a></p>
 </div>

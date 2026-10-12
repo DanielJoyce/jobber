@@ -127,7 +127,9 @@ CREATE TABLE apply_link (
   status        TEXT NOT NULL,     -- live | expired | unresolved | blocked
   resolved_at   TEXT NOT NULL,
   verified_at   TEXT,
-  error         TEXT
+  error         TEXT,
+  chosen_by     TEXT,              -- NULL (ranked) | capture | user   (migration 0036)
+  why           TEXT               -- one line under the button       (migration 0036)
 );
 
 CREATE TABLE apply_click (
@@ -139,8 +141,52 @@ CREATE TABLE apply_click (
 );
 ```
 
-Keyed on `job_group`: when the same opening is posted by several sources, the first chain to
-reach `live` wins, and the button uses it.
+Keyed on `job_group`. ~~When the same opening is posted by several sources, the first chain to
+reach `live` wins.~~ Superseded (bug 334d9eb): a state job bank whose link redirected to a
+single-sign-on page won over copies whose links led to the employer's ATS.
+
+### Choosing among a group's links (bug 334d9eb)
+
+- **Login walls are never the posting.** A hop to a login or single-sign-on page (hosts such as
+  `id.<state>.gov`, `login.*`, `sso.*`, `auth.*`, `accounts.*`; paths such as `/login`,
+  `/signin`, `/sso/`, `oauth2/authorize`, SAML), or a fetched page that is a password form with
+  little else, stops the walk *before* the wall: status `blocked`, error `login wall at <host>`,
+  final URL the page before it. The wall is never requested, and its URL never merges groups.
+  An ATS's own steps are not walls: a login-looking path on the ATS posting path (iCIMS
+  `/jobs/<id>/<slug>/login`), or an ATS page redirecting to the same ATS's sign-in (Taleo
+  `jobapply.ftl` → `login.jsf`), keeps the ATS page as a live link.
+- **Every member's start URL is a candidate** (deduplicated), resolved in this order: links an
+  extension capture supplied, then by where the start points (ATS, employer, other, trackers,
+  boards last), one per host before a second from the same host. At most 6 starts that cost
+  requests per group (`MAX_FETCH_STARTS`); LinkedIn and Indeed starts cost none and are never
+  requested. Each request goes through `FetchContext` (robots.txt, per-host rate limits). A
+  live ATS posting, or a capture of the employer's page, settles it early.
+- **Ranking by final host** (`pipeline/apply_rank.py`; the host lists live in
+  `pipeline/ats_rules.py`): known ATS > the employer's own site (a host naming the employer) >
+  other > a tracker the chain never got past (aplitrak, appcast) > job boards, aggregators and
+  state job banks (`AGGREGATOR_HOSTS`, the one list, which capture also uses for "this page is
+  a board", plus class A sources' entry hosts with and without `www.`). Within a tier: live >
+  expired > blocked > unresolved; then the final URL more members reached; then the most
+  recently seen member. A closed page outranks live links only on an ATS or the employer's
+  site; a dead tracker or board copy ranks after every live link, and when it is all there is,
+  the closed page says the link no longer works rather than that the employer's posting
+  closed. Login walls rank last.
+- **A capture wins**: a linked capture of the employer's page (or a board capture's off-site
+  Apply destination) beats any ranking unless it is closed or a wall. A captured page counts
+  as the employer's only when it is on an ATS or a host naming the employer; a capture made on
+  builtin.com, wellfound.com or any other board is just another copy.
+- **The user's link wins over everything**: **Use a different apply link** on the job page
+  (`POST /job/{id}/apply-link`, same-origin, http(s) only) stores it with `chosen_by = 'user'`;
+  it is never re-resolved, re-verified or replaced by a capture. **Reset** deletes it and the
+  group resolves again.
+- The job page shows one line of why, e.g. `via www.aplitrak.com → jobs.ashbyhq.com ·
+  employer's applicant tracking system · 2 of 9 links checked`, or `set by you`.
+- Rows stored before this change that took a login wall for the posting (`live` with a login
+  final URL or hop) are resolved again by the nightly run's resolve stage, on demand when their
+  job page is opened, and on a click on Apply (`/apply/{id}`, which a packet's Open application
+  uses). The old row is replaced only by an answer (live, expired, or a real login stop); after
+  a fetch failure it stays and is tried again, and meanwhile Apply opens its start URL, never
+  the login page.
 
 ## Milestone placement
 

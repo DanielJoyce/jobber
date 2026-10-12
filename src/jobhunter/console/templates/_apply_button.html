@@ -12,4 +12,21 @@
     {% if b.pending %}<span class="muted">resolving&hellip;</span>{% endif %}
   </div>
   {% if b.chain %}<div class="apply-chain muted">{{ b.chain }}</div>{% endif %}
+  {% if b.why %}<div class="apply-why muted" id="apply-why">{{ b.why }}</div>{% endif %}
+  {% if not b.pending %}
+  {% if b.user_set %}
+  <form method="post" action="/job/{{ b.group_id }}/apply-link" class="apply-override">
+    <input type="hidden" name="reset" value="1">
+    <button type="submit" class="act" id="apply-link-reset" title="forget your link and find one again">Reset to the found link</button>
+  </form>
+  {% else %}
+  <details class="apply-override">
+    <summary class="muted">Use a different apply link</summary>
+    <form method="post" action="/job/{{ b.group_id }}/apply-link" class="apply-override-form">
+      <input type="url" name="url" id="apply-link-url" required placeholder="https://jobs.example.com/acme/12345" autocomplete="off" aria-label="apply link">
+      <button type="submit" class="act" id="apply-link-set">Use this link</button>
+    </form>
+  </details>
+  {% endif %}
+  {% endif %}
 </div>

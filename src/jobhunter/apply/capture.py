@@ -63,8 +63,17 @@ from jobhunter.core import bucketnames, db
 from jobhunter.core.manual_sources import EMAIL_MANUAL, MANUAL_SOURCES, PASTE_MANUAL
 from jobhunter.core.models import EmploymentType
 from jobhunter.core.textnorm import html_to_text
-from jobhunter.pipeline import dedupe_url
-from jobhunter.pipeline.ats_rules import host_of, is_http_url, match_ats, unwrap
+from jobhunter.pipeline import applylink, dedupe_url
+from jobhunter.pipeline.apply_rank import HostClasses
+from jobhunter.pipeline.ats_rules import (
+    AGGREGATOR_HOSTS,
+    SITE_NAMED_HOSTS,
+    host_in,
+    host_of,
+    is_http_url,
+    match_ats,
+    unwrap,
+)
 from jobhunter.pipeline.board_ids import board_id, board_key, board_of, board_of_host
 from jobhunter.pipeline.dedupe import _refresh_group, normalize_employer
 from jobhunter.pipeline.dedupe_url import _identifies_job, normalize_apply_url
@@ -81,11 +90,18 @@ TITLE_AGREE = 92  # rapidfuzz token_set_ratio, as dedupe's near-duplicate test
 OFFER_AGREE = 80  # click-through offer: "roughly agree"
 FETCH_ATS = ("greenhouse", "lever")  # robots.txt allows the direct board URL
 SELECT_ATS = ("ashby",)  # robots.txt disallows its /api/: select the text instead
-# Hosts whose og:site_name names the board, not the employer.
-BOARD_SITE_HOSTS = re.compile(
-    r"(?:^|\.)(?:linkedin|indeed|glassdoor|ziprecruiter|monster|dice|simplyhired|careerbuilder|"
-    r"builtin|wellfound|usajobs|governmentjobs|schooljobs)\.[a-z.]+$"
-)
+
+
+def is_board_site(host: str) -> bool:
+    """A host whose og:site_name names the board, not the employer: LinkedIn and Indeed, the one
+    job-board list (``ats_rules.AGGREGATOR_HOSTS``), and NEOGOV's sites."""
+    return (
+        board_of_host(host) is not None
+        or host_in(host, AGGREGATOR_HOSTS)
+        or host_in(host, SITE_NAMED_HOSTS)
+    )
+
+
 WRITE_OUTCOMES = ("added", "existing", "linked", "description_added", "linked_groups", "not_same")
 _EMPLOYMENT = {
     "FULL_TIME": EmploymentType.full_time,
@@ -547,7 +563,7 @@ def analyse(facts: Facts, posting_index: int | None = None) -> Analysis:
     if ambiguous:
         reasons.append("several postings on the page; pick one")
 
-    on_board = board_of_host(host) is not None or bool(BOARD_SITE_HOSTS.search(host))
+    on_board = is_board_site(host)
     page_title, page_employer = paste.guess_from_page_title(facts.og_title or facts.document_title)
     if not page_employer and facts.og_site_name and not on_board:
         page_employer = _s(facts.og_site_name)
@@ -772,22 +788,31 @@ def record_board_ref(
 
 
 def offer_apply_link(conn: sqlite3.Connection, group_id: int, url: str, now: datetime) -> bool:
-    """Write the decoded destination as the group's apply link when it has none, or only an
-    ``unresolved`` / ``blocked`` one; never over ``live`` or ``expired``. No request is made."""
-    row = conn.execute(
-        "SELECT status FROM apply_link WHERE job_group_id = ?", (group_id,)
-    ).fetchone()
-    if row is not None and row[0] not in ("unresolved", "blocked"):
+    """Write the decoded destination as the group's apply link (``chosen_by = 'capture'``) when
+    it has none, or only an ``unresolved`` / ``blocked`` one, or a resolved one that ended on a
+    job board or a login wall (bug 334d9eb: a capture beats those). Never over a link the user
+    set, nor over a resolved employer or ATS link. No request is made."""
+    row = conn.execute("SELECT * FROM apply_link WHERE job_group_id = ?", (group_id,)).fetchone()
+    if row is not None and row["chosen_by"] == "user":
         return False
+    if row is not None and row["status"] not in ("unresolved", "blocked"):
+        link = applylink.get_apply_link(conn, group_id)
+        classes = HostClasses.load(conn, group_id)
+        on_board = classes.is_aggregator(host_of(row["final_url"] or row["start_url"]))
+        if link is None or not (on_board or applylink.is_login_link(link)):
+            return False
     rule = match_ats(url)
+    why = f"from the Apply button on your capture · {host_of(url)}"
     conn.execute(
         "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, employer_host, "
-        "status, resolved_at) VALUES (?, ?, NULL, '[]', ?, ?, 'unresolved', ?) "
+        "status, resolved_at, chosen_by, why) "
+        "VALUES (?, ?, NULL, '[]', ?, ?, 'unresolved', ?, 'capture', ?) "
         "ON CONFLICT (job_group_id) DO UPDATE SET start_url = excluded.start_url, "
         "final_url = NULL, chain = '[]', ats = excluded.ats, "
         "employer_host = excluded.employer_host, status = 'unresolved', "
-        "resolved_at = excluded.resolved_at, verified_at = NULL, error = NULL",
-        (group_id, url, rule.name if rule else None, host_of(url), to_iso(now)),
+        "resolved_at = excluded.resolved_at, verified_at = NULL, error = NULL, "
+        "chosen_by = 'capture', why = excluded.why",
+        (group_id, url, rule.name if rule else None, host_of(url), to_iso(now), why),
     )
     return True
 
@@ -951,7 +976,25 @@ def _insert(
     assert jid is not None
     if a.board is not None:
         record_board_ref(conn, a.board, jid, a.apply_mode, a.destination, now)
+    _mark_capture_link(conn, gid)
     return gid, jid
+
+
+def _mark_capture_link(conn: sqlite3.Connection, group_id: int) -> None:
+    """A captured employer page's link wins when its group is linked to another (bug 334d9eb):
+    ``dedupe_url._merge_apply_link`` keeps a capture's link over a resolved one. Only for a
+    page on an ATS or a host naming the employer: a capture on builtin.com, wellfound.com or
+    any other board is just another copy and must never replace a verified link."""
+    row = conn.execute(
+        "SELECT start_url FROM apply_link WHERE job_group_id = ? AND chosen_by IS NULL",
+        (group_id,),
+    ).fetchone()
+    if row is None or not HostClasses.load(conn, group_id).employer_or_ats(row[0]):
+        return
+    conn.execute(
+        "UPDATE apply_link SET chosen_by = 'capture', why = ? WHERE job_group_id = ?",
+        (f"from your capture · {host_of(row[0])}", group_id),
+    )
 
 
 def capture(

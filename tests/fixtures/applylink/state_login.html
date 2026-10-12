@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- Modeled on a state identity provider's sign-in page (bug 334d9eb). Synthetic text. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sign In</title>
+  <link rel="stylesheet" href="/login/static/css/app.css">
+  <script src="/login/static/js/app.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header><img src="/login/static/img/logo.svg" alt="State ID"></header>
+    <main>
+      <h1>Sign in</h1>
+      <form method="post" action="/login/authenticate">
+        <label for="username">Username or email</label>
+        <input type="text" id="username" name="username" autocomplete="username">
+        <label for="password">Password</label>
+        <input type="PASSWORD" id="password" name="password" autocomplete="current-password">
+        <button type="submit">Sign in</button>
+      </form>
+      <p><a href="/login/forgot">Forgot your password?</a> <a href="/login/create">Create an account</a></p>
+    </main>
+    <footer>State identity service. Help: <a href="/help">help center</a>.</footer>
+  </div>
+</body>
+</html>

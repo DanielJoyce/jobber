@@ -458,3 +458,102 @@ def test_unscored_job_still_shows_the_employer_rejection_flag(client, conn):
     t = client.get("/job/2").text
     assert "Not scored yet." in t
     assert "employer rejected you for Analyst 1" in t
+
+
+# ─── why this link, Use a different apply link, Reset (bug 334d9eb) ─────────
+
+LOGIN = "https://id.utah.gov/login/?goto=https%3A%2F%2Flogin.dts.utah.gov%2Fsso&realm=/"
+MINE = "https://www.example-employer.com/careers/42"
+
+
+def test_button_shows_why_the_link_was_chosen(client, conn):
+    add_link(conn, 2, "live")
+    why = "via nlx.example → acme.wd5.myworkdayjobs.com · employer's applicant tracking system"
+    conn.execute("UPDATE apply_link SET why = ? WHERE job_group_id = 2", (why,))
+    t = client.get("/job/2").text
+    assert 'id="apply-why"' in t and "via nlx.example → acme.wd5.myworkdayjobs.com" in t
+    assert 'action="/job/2/apply-link"' in t and "Use a different apply link" in t
+
+
+def test_user_link_set_shown_used_and_reset(client, conn, pages):
+    add_link(conn, 2, "live", verified_hours=48)
+    r = client.post("/job/2/apply-link", data={"url": MINE})
+    assert r.status_code == 303 and r.headers["location"] == "/job/2"
+    row = conn.execute("SELECT * FROM apply_link WHERE job_group_id = 2").fetchone()
+    assert (row["final_url"], row["chosen_by"], row["why"]) == (MINE, "user", "set by you")
+    t = client.get("/job/2").text
+    assert "set by you" in t and 'id="apply-link-reset"' in t
+    assert "Use a different apply link" not in t
+    r = client.get("/apply/2")
+    assert r.status_code == 302 and r.headers["location"] == MINE
+    assert pages.hits == []  # the user's link is never re-verified
+    r = client.post("/job/2/apply-link", data={"reset": "1"})
+    assert r.status_code == 303
+    assert conn.execute("SELECT 1 FROM apply_link WHERE job_group_id = 2").fetchone() is None
+    t = client.get("/job/2").text
+    assert 'hx-get="/job/2/apply-button"' in t  # resolves again on demand
+
+
+@pytest.mark.parametrize("bad", ["", "javascript:alert(1)", "mailto:x@example.com", "x y"])
+def test_user_link_rejects_non_http(client, conn, bad):
+    r = client.post("/job/2/apply-link", data={"url": bad})
+    assert r.status_code == 422
+    assert conn.execute("SELECT 1 FROM apply_link WHERE job_group_id = 2").fetchone() is None
+
+
+def test_user_link_refuses_cross_site_and_unknown_job(client, conn):
+    r = client.post(
+        "/job/2/apply-link",
+        data={"url": MINE},
+        headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
+    )
+    assert r.status_code == 403
+    assert conn.execute("SELECT 1 FROM apply_link WHERE job_group_id = 2").fetchone() is None
+    assert client.post("/job/404/apply-link", data={"url": MINE}).status_code == 404
+
+
+def test_legacy_login_wall_row_resolves_again_on_the_job_page(client, conn, pages):
+    """An older row took the state sign-in page for the posting: the page shows it as pending
+    and the fragment resolves the group again, without requesting the login page."""
+    add_link(conn, 1, "live", final=LOGIN, ats="unknown")
+    t = client.get("/job/1").text
+    assert 'hx-get="/job/1/apply-button"' in t and "id.utah.gov" not in t
+    # Nothing answers yet: Apply falls back to the start URL, never the login page, and the
+    # old row is kept to be tried again.
+    r = client.get("/apply/1")
+    assert r.headers["location"] == "https://nlx.example/start"
+    pages.responses["https://example.com/1"] = httpx.Response(302, headers={"Location": WD})
+    pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    frag = client.get("/job/1/apply-button").text
+    assert "Apply on Workday" in frag
+    assert not any("utah.gov" in h for h in pages.hits)
+    row = conn.execute("SELECT final_url, why FROM apply_link WHERE job_group_id = 1").fetchone()
+    assert row["final_url"] == WD + "/apply" and row["why"]
+
+
+def test_open_application_on_a_legacy_login_row_resolves_on_click(client, conn, pages):
+    """The reported path: a packet's Open application is /apply/{id}. Right after the upgrade,
+    with no visit to the job page and no nightly run, it must reach the employer's ATS."""
+    add_link(conn, 1, "live", final=LOGIN, ats="unknown")
+    pages.responses["https://example.com/1"] = httpx.Response(302, headers={"Location": WD})
+    pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    r = client.get("/apply/1")
+    assert r.status_code == 302 and r.headers["location"] == WD + "/apply"
+    assert not any("utah.gov" in h for h in pages.hits)
+    click = conn.execute("SELECT final_url FROM apply_click WHERE job_group_id = 1").fetchone()
+    assert click["final_url"] == WD + "/apply"
+
+
+def test_closed_page_does_not_blame_the_employer_for_a_dead_board_link(client, conn):
+    dead = "https://www.aplitrak.com/?adid=synthetic"
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, status, "
+        "resolved_at) VALUES (3, ?, ?, '[]', 'unknown', 'expired', ?)",
+        (dead, dead, NOW.isoformat()),
+    )
+    t = client.get("/apply/3").text
+    assert "This link no longer works" in t and "www.aplitrak.com" in t
+    assert "employer's page" not in t and "does not mean the job has closed" in t
+    add_link(conn, 4, "expired")  # on the employer's ATS: the posting really closed
+    t = client.get("/apply/4").text
+    assert "This posting has closed" in t and "employer's page" in t
