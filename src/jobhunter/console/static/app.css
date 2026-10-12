@@ -233,6 +233,13 @@ a.activity-item { color: var(--link); }
 .activity-failed { border-left: 3px solid var(--series-2); padding-left: 8px; }
 .activity-done { border-left: 3px solid var(--series-3); padding-left: 8px; }
 .activity-dismiss { font: inherit; color: var(--text-secondary); background: transparent; border: 0; cursor: pointer; padding: 0 6px; }
+/* Achievement notice (specs/021): no animation (a fade would replay on every poll's swap). */
+.activity:not(:has(> :not([hidden]))) { display: none; }
+.ach-notice { border-left: 3px solid var(--series-1); padding-left: 8px; }
+.ach-notice[hidden] { display: none; } /* .activity-item sets display, which beats [hidden] */
+.ach-notice a { color: var(--link); }
+.ach-star { color: var(--series-1); }
+.ach-dismiss { font: inherit; color: var(--text-secondary); background: transparent; border: 0; cursor: pointer; padding: 0 6px; }
 @keyframes activity-pulse { 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) { .activity-dot { animation: none; } }
 

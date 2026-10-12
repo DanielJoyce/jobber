@@ -153,8 +153,11 @@ def test_every_base_page_carries_the_hook(client, path):
 @pytest.mark.parametrize("js", ["tracking.js", "inbox.js"])
 def test_page_scripts_ignore_the_activity_poll(js):
     """The 3s /activity swap fires document-level htmx events; page handlers that consume a
-    pending selection on any event would lose it (bug edb9ba6 review)."""
+    pending selection on any event would lose it (bug edb9ba6 review). The achievement notice's
+    x (POST /achievements/seen, hx-swap none) is a band request too (specs/021 A4)."""
     from jobhunter.console.app import STATIC_DIR
 
     src = (STATIC_DIR / js).read_text(encoding="utf-8")
-    assert 'requestConfig.path === "/activity"' in src
+    assert 'p === "/activity" || p === "/achievements/seen"' in src
+    handlers = src.count('addEventListener("htmx:')
+    assert handlers and src.count("if (bandRequest(ev)) return;") == handlers

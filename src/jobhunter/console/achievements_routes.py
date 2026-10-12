@@ -6,18 +6,27 @@ The board (A3) groups cards by category: earned, then in progress, then locked.
   unlocks on any ``sqlite3.Error`` (a pipeline run holding the write lock), then marks the
   unlocks it rendered as seen, writing only when one of them is unseen, with the same 250 ms
   busy timeout and fallback.
-- ``POST /achievements/seen``: ``ids`` (repeatable) are marked seen; answers 204 with
-  ``HX-Trigger: jh-activity`` so the activity band refreshes.
+- ``POST /achievements/seen``: ``ids`` (repeatable, or comma-separated: the band's x posts
+  exactly the ids its notice shows) are marked seen, waiting at most 250 ms for the write lock;
+  answers 204 with ``HX-Trigger: jh-activity`` so the activity band refreshes, or 503 when the
+  database is busy (the notice stays and the next poll shows it again).
 - ``POST /achievements/settings``: each field is optional and only fields present change:
   ``enabled`` and ``notify`` (``1``/``0``, or ``on``/``off``), and ``hidden`` (repeatable
   category keys) together with ``hidden_set=1`` (so hiding nothing can be submitted).
   Turning achievements back on clears ``backfilled_at`` so the next evaluation is a silent
   backfill. Answers 303 to ``/achievements``.
+
+Prompt feedback (specs/021 "Unlock notice", ticket A4): a successful POST to a console write
+route that can unlock something (``UNLOCK_WRITES``) gets ``HX-Trigger: jh-activity``, merged
+into any trigger the route set itself, so the band (``jh-activity from:body``) refreshes at
+once instead of on its next 3 s or 60 s poll. The write changes the fingerprint, so that
+refresh evaluates.
 """
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
 import json
 import logging
+import re
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
@@ -44,6 +53,51 @@ async def multi_form(request: Request) -> dict[str, list[str]]:
 
 
 MultiForm = Annotated[dict[str, list[str]], Depends(multi_form)]
+
+
+BAND_EVENT = "jh-activity"
+
+# Console write routes whose change can unlock (or, within 24 h, revoke) something.
+UNLOCK_WRITES = tuple(
+    re.compile(p)
+    for p in (
+        r"/pipeline/\d+/(move|event|details|next-action)",
+        r"/pipeline/\d+/contacts(/\d+/delete)?",
+        r"/pipeline/\d+/attachments(/\d+/delete)?",
+        r"/job/\d+/(applied|prepare)",
+        r"/followups/\d+/(done|no-response|applied)",
+        r"/inbox/(\d+/label|\d+/undo|bulk|bulk/undo)",
+        r"/packet/\d+/ready",
+        r"/rejections(/\d+/(confirm|delete))?",
+        r"/proposals/\d+/accept",
+        r"/alerts/[^/]+/(subscribe|unsubscribe)",
+        r"/prefs/(save|section/[^/]+|raw|revert/\d+)",
+        r"/setup/starter-prefs",
+    )
+)
+
+
+def is_unlock_write(method: str, path: str) -> bool:
+    return method == "POST" and any(p.fullmatch(path) for p in UNLOCK_WRITES)
+
+
+def with_band_event(existing: str | None) -> str:
+    """``HX-Trigger`` with ``jh-activity`` added to whatever the route already set (a
+    comma-separated list of names, or a JSON object)."""
+    if not existing or not existing.strip():
+        return BAND_EVENT
+    text = existing.strip()
+    if text.startswith("{"):
+        try:
+            events = json.loads(text)
+        except ValueError:
+            return existing
+        if isinstance(events, dict):
+            events.setdefault(BAND_EVENT, "")
+            return json.dumps(events)
+        return existing
+    names = [n.strip() for n in text.split(",") if n.strip()]
+    return existing if BAND_EVENT in names else ", ".join([*names, BAND_EVENT])
 
 
 def gate(app: FastAPI) -> engine.Gate:
@@ -186,6 +240,17 @@ def register(
 ) -> None:
     Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
 
+    @app.middleware("http")
+    async def band_refresh_trigger(request: Request, call_next):
+        response = await call_next(request)
+        if (
+            response.status_code < 400
+            and gate(app).enabled
+            and is_unlock_write(request.method, request.url.path)
+        ):
+            response.headers["HX-Trigger"] = with_band_event(response.headers.get("HX-Trigger"))
+        return response
+
     @app.get("/achievements", response_class=HTMLResponse)
     def achievements_page(request: Request, conn: Conn) -> HTMLResponse:
         g = gate(app)
@@ -228,9 +293,18 @@ def register(
 
     @app.post("/achievements/seen")
     def achievements_seen(conn: Conn, form: MultiForm) -> Response:
-        ids = [int(x) for v in form.get("ids", []) for x in v.split(",") if x.strip().isdigit()]
-        engine.mark_seen(conn, ids, now())
-        return Response(status_code=204, headers={"HX-Trigger": "jh-activity"})
+        ids = [
+            int(x)
+            for v in form.get("ids", [])
+            for x in v.split(",")
+            if x.strip().isdigit() and len(x.strip()) < 19
+        ]
+        try:
+            engine.mark_seen(conn, ids, now(), busy_ms=engine.WRITE_BUSY_MS)
+        except sqlite3.Error as exc:  # a run holds the write lock: the notice stays for now
+            logger.info("achievements: seen not recorded: %s", exc)
+            return Response(status_code=503, headers={"Retry-After": "3"})
+        return Response(status_code=204, headers={"HX-Trigger": BAND_EVENT})
 
     @app.post("/achievements/settings")
     def achievements_settings(conn: Conn, form: MultiForm) -> Response:

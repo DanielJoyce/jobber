@@ -1,6 +1,13 @@
 (function () {
   "use strict";
 
+  // Requests from the nav activity band are not this page's: its /activity poll and the
+  // achievement x (POST /achievements/seen, hx-swap none) fire the same htmx events.
+  function bandRequest(ev) {
+    var p = ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path;
+    return p === "/activity" || p === "/achievements/seen";
+  }
+
   var undoStack = [];
   var pendingSelect = null;
   var current = null;
@@ -153,8 +160,7 @@
   }
 
   document.addEventListener("htmx:afterSwap", function (ev) {
-    // The nav activity poll (/activity) swaps every few seconds: not our request.
-    if (ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path === "/activity") return;
+    if (bandRequest(ev)) return;
     updateBar();
     if (!pendingSelect) return;
     var el = document.getElementById("row-" + pendingSelect);
@@ -165,8 +171,7 @@
   // A bulk request swaps only out-of-band, so htmx:afterSwap is not the hook; wait for the
   // request to finish, then move focus to the row that followed the selection.
   document.addEventListener("htmx:afterRequest", function (ev) {
-    // The nav activity poll (/activity) swaps every few seconds: not our request.
-    if (ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path === "/activity") return;
+    if (bandRequest(ev)) return;
     updateBar();
     if (!nextAfterBulk) return;
     var n = document.getElementById("row-" + nextAfterBulk.dataset.gid);

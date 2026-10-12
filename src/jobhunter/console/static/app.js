@@ -71,6 +71,50 @@
     if (!b) return;
     try { sessionStorage.setItem("jh-activity-dismissed", b.getAttribute("data-dismiss")); } catch (x) {}
     var box = document.getElementById("activity");
-    if (box) box.replaceChildren();
+    // Only this line: the achievement notice beside it stays.
+    var item = b.closest(".activity-item");
+    if (item) item.remove();
+    else if (box) box.replaceChildren();
   });
+
+  // Achievement notice (specs/021). Its x (.ach-dismiss) is an htmx POST of the ids it shows
+  // to /achievements/seen; seen is server-side, so other tabs drop it on their next poll.
+  // Here we only hide it at once, and keep it hidden if a poll that raced the POST renders
+  // the same ids again. It is never removed from the DOM: htmx fires the response's
+  // HX-Trigger (jh-activity, which refreshes the band) on the button, so it must stay attached.
+  var dismissedIds = {};  // keyed by id@detected_at (data-keys), not the bare id
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest(".ach-dismiss");
+    if (!b) return;
+    var n = b.closest(".ach-notice");
+    if (!n) return;
+    (n.getAttribute("data-keys") || "").split(",").forEach(function (id) {
+      if (id) dismissedIds[id] = true;
+    });
+    n.hidden = true;
+  });
+
+  // Announce a new unlock once, through #ach-announce (outside the band): the notice itself is
+  // aria-live="off" so the band's live region does not re-read it on every 3 s or 60 s swap.
+  var lastAnnounced = null;
+  function lastUnlock() {
+    try { return sessionStorage.getItem("jh-ach-announced"); } catch (x) { return lastAnnounced; }
+  }
+  function onBand() {
+    var n = document.querySelector("#activity .ach-notice");
+    if (!n) return;
+    var ids = (n.getAttribute("data-keys") || "").split(",").filter(Boolean);
+    if (ids.length && ids.every(function (id) { return dismissedIds[id]; })) {
+      n.hidden = true;
+      return;
+    }
+    var id = n.getAttribute("data-key");  // id plus detected_at: an id can be reused after a revoke
+    if (!id || id === lastUnlock()) return;
+    lastAnnounced = id;
+    try { sessionStorage.setItem("jh-ach-announced", id); } catch (x) {}
+    var region = document.getElementById("ach-announce");
+    var text = n.querySelector(".ach-text");
+    if (region && text) region.textContent = text.textContent;
+  }
+  document.addEventListener("htmx:afterSettle", onBand);
 })();
