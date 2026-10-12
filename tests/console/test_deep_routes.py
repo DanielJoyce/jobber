@@ -501,6 +501,28 @@ def test_the_ceiling_stops_a_run_before_its_worst_case(conn, pdir):
     assert conn.execute("SELECT count(*) FROM llm_spend").fetchone()[0] == 0
 
 
+def test_a_failing_report_write_stops_the_run_and_its_call_counts(conn, pdir, monkeypatch):
+    """Bug 6c33b40: the billed call is in llm_spend and in the run's spent_usd."""
+    import sqlite3
+
+    def broken(*a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(deep, "_write", broken)
+    profile = load_profile(pdir)
+    scoring = Scoring(daily_cap_usd=100.0, weekly_cap_usd=100.0)
+    plan = deep_run.make_plan(conn, profile, scoring, mode="next", n=10, now=NOW)
+    rid = deep_run.create_request(conn, plan, NOW)
+    fake = FakeClient()
+    deep_run.run_request(conn, rid, profile, scoring, now=lambda: NOW, client_factory=lambda: fake)
+    row = deep_run.get_request(conn, rid)
+    spent = conn.execute("SELECT sum(calls), sum(cost_usd) FROM llm_spend").fetchone()
+    assert len(fake.calls) == 1 and row["status"] == "failed"
+    assert row["error"] == "DeepWriteError"
+    assert spent[0] == 1 and spent[1] == pytest.approx(PER_JOB)
+    assert row["spent_usd"] == pytest.approx(PER_JOB)
+
+
 def test_an_api_error_stops_the_run_with_a_fixed_reason(pdir, db_path, conn):
     import anthropic
     import httpx

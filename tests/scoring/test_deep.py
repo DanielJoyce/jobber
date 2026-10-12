@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from jobhunter.config import Scoring
 from jobhunter.core import db
 from jobhunter.pipeline.locations import load_locations
-from jobhunter.scoring import deep
+from jobhunter.scoring import deep, screen
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import (
     CurrentFocus,
@@ -403,3 +405,85 @@ def test_a_call_is_admitted_only_when_the_cap_covers_its_worst_case(conn, profil
     assert "one deep call can cost up to $0.83" in res.detail
     ok = deep.deep_score(conn, client, profile, gid, now=NOW, remaining_usd=lambda: worst)
     assert ok.status == "scored"
+
+
+# ─── Spend is recorded before any write (bug 6c33b40) ───────────────────────
+
+OPUS_55_CALL = 0.0506  # 5000 in at $4 + 3000 cache read at $0.20 + 1500 out at $20, per MTok
+
+
+def _break_write(monkeypatch) -> None:
+    def broken(*a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(deep, "_write", broken)
+
+
+def _spend(conn) -> tuple[int, float]:
+    row = conn.execute(
+        "SELECT coalesce(sum(calls), 0), coalesce(sum(cost_usd), 0) FROM llm_spend"
+    ).fetchone()
+    return row[0], row[1]
+
+
+def test_a_failing_report_write_still_records_the_billed_call(conn, profile, monkeypatch):
+    gid = add_group(conn, 1)
+    _break_write(monkeypatch)
+    client = FakeClient(final(report()))
+    with pytest.raises(deep.DeepWriteError) as info:
+        deep.deep_score(conn, client, profile, gid, now=NOW)
+    assert len(client.calls) == 1
+    assert info.value.cost_usd == pytest.approx(OPUS_55_CALL)
+    assert isinstance(info.value.__cause__, sqlite3.OperationalError)
+    # The report write rolled back; the spend, committed on its own before it, did not.
+    assert not conn.in_transaction
+    assert conn.execute("SELECT count(*) FROM fit_score WHERE tier = 'deep'").fetchone()[0] == 0
+    calls, usd = _spend(conn)
+    assert calls == 1 and usd == pytest.approx(OPUS_55_CALL)
+    row = conn.execute("SELECT * FROM llm_spend").fetchone()
+    assert row["tier"] == "deep" and row["model"] == "anthropic:claude-opus-5-5"
+
+
+def test_each_billed_call_is_recorded_exactly_once_across_retries(conn, profile, monkeypatch):
+    gid = add_group(conn, 1)
+    client = FakeClient(final(report()), final(report()))
+    with monkeypatch.context() as m:
+        _break_write(m)
+        with pytest.raises(deep.DeepWriteError):
+            deep.deep_score(conn, client, profile, gid, now=NOW)
+    assert _spend(conn) == (1, pytest.approx(OPUS_55_CALL))
+    # The retry is a second billed call: recorded once, not twice, and not the first again.
+    res = deep.deep_score(conn, client, profile, gid, now=NOW)
+    assert res.status == "scored" and res.cost_usd == pytest.approx(OPUS_55_CALL)
+    assert _spend(conn) == (2, pytest.approx(2 * OPUS_55_CALL))
+    # Stored now: no call, no spend.
+    assert deep.deep_score(conn, client, profile, gid, now=NOW).status == "existing"
+    assert len(client.calls) == 2
+    assert _spend(conn) == (2, pytest.approx(2 * OPUS_55_CALL))
+
+
+@pytest.mark.parametrize("stop", ["refusal", "max_tokens"])
+def test_a_refused_or_cut_off_call_is_recorded_once(conn, profile, stop):
+    gid = add_group(conn, 1)
+    res = deep.deep_score(conn, FakeClient(final("", stop_reason=stop)), profile, gid, now=NOW)
+    assert res.row is None and res.cost_usd == pytest.approx(OPUS_55_CALL)
+    assert _spend(conn) == (1, pytest.approx(OPUS_55_CALL))
+
+
+def test_the_cap_counts_a_call_whose_write_failed(conn, profile, monkeypatch):
+    """The lost spend let the next call in under a cap it no longer fit; it does not now."""
+    worst = deep.worst_case_usd()
+    scoring = Scoring(daily_cap_usd=worst + 0.03, weekly_cap_usd=10.0)
+    g1, g2 = add_group(conn, 1), add_group(conn, 2)
+    client = FakeClient(final(report()), final(report()))
+
+    def left() -> float:
+        return screen.remaining_budget(conn, scoring, NOW)
+
+    with monkeypatch.context() as m:
+        _break_write(m)
+        with pytest.raises(deep.DeepWriteError):
+            deep.deep_score(conn, client, profile, g1, now=NOW, remaining_usd=left)
+    assert left() == pytest.approx(worst + 0.03 - OPUS_55_CALL)
+    res = deep.deep_score(conn, client, profile, g2, now=NOW, remaining_usd=left)
+    assert res.status == "capped" and len(client.calls) == 1

@@ -130,6 +130,13 @@ about $0.83 the deep pass cannot run at all**: raise `[scoring] daily_cap_usd` i
 A console run also has a ceiling, the estimate plus 25% plus one worst-case call, and starts no
 call that could pass it.
 
+**When a call's cost is counted.** A call's cost is written to your spend the moment its answer
+arrives, before anything is parsed or saved. A refused or cut-off answer, output that does not
+parse, or a save that fails all still count against the cap, once each. The one gap: a call
+still in flight when the console or command is stopped (killed, crashed, the machine slept) is
+not counted, because its cost arrives only with its answer. Anthropic may still bill it, up to
+the worst case above for a deep call; the Anthropic Console's usage page shows what was billed.
+
 ## Credits are separate accounts
 
 Anthropic API credits, OpenRouter credits and a claude.ai subscription are three separate

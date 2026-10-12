@@ -134,6 +134,15 @@ class DeepError(Exception):
     """A deep result could not be turned into a DeepReport."""
 
 
+class DeepWriteError(Exception):
+    """A billed deep call whose report could not be stored. Its spend is already recorded."""
+
+    def __init__(self, group_id: int, cost_usd: float) -> None:
+        super().__init__(f"deep report for group {group_id} not stored; the call was recorded")
+        self.group_id = group_id
+        self.cost_usd = cost_usd
+
+
 @dataclass
 class DeepResult:
     """Outcome of one ``deep_score`` call.
@@ -383,9 +392,12 @@ def deep_score(
     """Run the deep pass for one group and store it as ``fit_score`` tier 'deep'.
 
     Re-running returns the stored row without calling the API. A refusal, truncated or
-    malformed output, or an exhausted daily cap writes no row. A refusal still records its
-    spend (the tokens were billed). A paid attempt that wrote nothing is also noted in
-    ``score_failure`` so ``shortlist`` skips the group; asking for it by id still runs it.
+    malformed output, or an exhausted daily cap writes no row. Every billed response records
+    its spend first, committed on its own, so a refusal, bad output or a report write that
+    fails (``DeepWriteError``, carrying the call's cost) still counts. A call cut off by the
+    process dying mid-stream is not recorded: its usage never arrived. A paid attempt that
+    wrote nothing is also noted in ``score_failure`` so ``shortlist`` skips the group; asking
+    for it by id still runs it.
     """
     existing = _stored(conn, group_id, scorer, profile)
     if existing is not None:
@@ -410,18 +422,10 @@ def deep_score(
     usage = message.usage
     # Every attempt a server-side fallback made, each at its own model's rates.
     cost = compute_message_cost(usage, _cost_model(message, scorer), batch=False)
-
-    def spend() -> None:
-        stage2._record_spend(
-            conn,
-            scorer,
-            now,
-            1,
-            stage2._all_input_tokens(usage),
-            stage2._usage_int(usage, "output_tokens"),
-            cost,
-            tier=TIER,
-        )
+    # The call is billed now, whatever happens next: record it in its own committed
+    # transaction before parsing or writing anything, so a refusal, bad output or a failing
+    # report write can never lose it (bug 6c33b40). Exactly once per billed response.
+    record_call_spend(conn, scorer, now, usage, cost)
 
     try:
         report = parse_message(message)
@@ -433,7 +437,6 @@ def deep_score(
             "SELECT description_rev FROM job_group WHERE id = ?", (group_id,)
         ).fetchone()
         with _txn(conn):
-            spend()
             stage2.record_failure(
                 conn,
                 group_id,
@@ -445,22 +448,42 @@ def deep_score(
             )
         return DeepResult(status, cost_usd=cost, detail=str(exc))
 
-    with _txn(conn):
-        result = _write(
-            conn,
-            group_id,
-            report,
-            job_d,
-            usage,
-            cost,
-            scorer,
-            profile,
-            now,
-            served_model=getattr(message, "model", "") or "",
-        )
-        spend()
+    try:
+        with _txn(conn):
+            result = _write(
+                conn,
+                group_id,
+                report,
+                job_d,
+                usage,
+                cost,
+                scorer,
+                profile,
+                now,
+                served_model=getattr(message, "model", "") or "",
+            )
+    except Exception as exc:
+        # The spend is already recorded; the caller learns what the failed call cost.
+        raise DeepWriteError(group_id, cost) from exc
     result.cost_usd = cost
     return result
+
+
+def record_call_spend(
+    conn: sqlite3.Connection, scorer: str, now: datetime, usage: Any, cost: float
+) -> None:
+    """Add one billed deep call to ``llm_spend`` and commit it before anything else runs."""
+    with _txn(conn):
+        stage2._record_spend(
+            conn,
+            scorer,
+            now,
+            1,
+            stage2._all_input_tokens(usage),
+            stage2._usage_int(usage, "output_tokens"),
+            cost,
+            tier=TIER,
+        )
 
 
 def _write(
