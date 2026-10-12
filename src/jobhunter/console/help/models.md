@@ -28,12 +28,14 @@ Prices are in [Costs and credits](costs-and-credits.md). The scorer formats (`an
 **Save**, then open that use's confirm step under the row. Neither runs anything by itself:
 
 - **Save + re-score…** shows the re-score panel for the model you just saved: how many job
-  groups, the estimate, the most the run may spend and what is left of the spend cap. Pick the
-  scope, then press **Re-score now** and confirm. Nothing runs if, by then, new jobs changed the
+  groups, the estimate and what is left of the spend cap, plus the most the run may spend for a
+  model scored right away. An Anthropic model is sent as a batch and billed when the batch is
+  collected, so its panel shows the estimate only. Pick the scope, then press **Re-score now** and confirm. Nothing runs if, by then, new jobs changed the
   plan, the cap no longer covers the estimate, or the screening model was changed again (in
   another tab, say); the panel shows the new numbers instead. One re-score runs at a time, so a
   second click does not start a second run. Cancel in the confirm only cancels the re-score; the
-  model stays saved. Queued re-scores from Prefs stay there to run or dismiss.
+  model stays saved. Queued re-scores from Prefs stay there to run or dismiss; a re-score from
+  here that finishes closes the queued ones it covers, as on Prefs.
 - **Save + deep-score…** opens the deep-pass panel (the same as **Deep-score…** under the Deep
   pass row): pick N and either the next unscored groups or **Re-run my top groups** (those with
   a report from another model), then confirm the estimate. See
@@ -103,8 +105,9 @@ The exact messages, and what to do, are in
   old value back as a new change. It does not rewind anything else.
 - **Queued re-score buttons** appear when re-scores are queued. Save offers
   **Save; queued re-scores use the new model** and **Save; keep queued re-scores on** the old
-  model. Reset and Revert show the same choice. After **Save + re-score…** the same two choices
-  come with "then re-score", and the re-score panel opens once you pick one.
+  model. Reset and Revert show the same choice. The screening row also offers
+  **Save + re-score; queued re-scores use the new model…** and **Save + re-score; keep queued
+  re-scores on** the old model and "…". They save, then open the re-score panel.
 - **Reset file** appears when `models.toml` is broken. It replaces the file with an empty one and
   keeps the old file beside it, named `models.toml.broken-<time>`.
 - **Changed outside the console.** When `models.toml` was changed outside the console (for
@@ -120,7 +123,8 @@ The exact messages, and what to do, are in
   It runs only when you press it.
 
 The page makes no network call and no model call when it opens or when you change a dropdown.
-The only things that contact a service are the two buttons named above.
+The only things that contact a service are the two buttons named above, and a re-score or deep
+pass you confirm, which calls the model.
 
 A browser that is not on the machine running the console sees the page read-only. Each row then
 shows the `jobhunter models` command to run there instead of the buttons.

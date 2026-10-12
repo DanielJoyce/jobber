@@ -96,6 +96,8 @@ def test_rerun_panel_is_themed_in_dark_mode_and_cancel_runs_nothing(page, server
     run.evaluate("e => { e.disabled = true; }")
     assert run.evaluate("e => getComputedStyle(e).cursor") == "not-allowed"
     assert run.evaluate("e => getComputedStyle(e).opacity") == "0.6"
+    # Grey like /prefs (--surface-1 in dark), not the primary blue.
+    assert run.evaluate("e => getComputedStyle(e).backgroundColor") == "rgb(26, 26, 25)"
     # A scope change replans without a dialog (hx-disinherit), on the /models route.
     select.select_option("all")
     expect(row.locator("#rescore-form select[name=scope]")).to_have_value("all")
@@ -107,4 +109,28 @@ def test_rerun_panel_is_themed_in_dark_mode_and_cancel_runs_nothing(page, server
         assert dialogs and "This spends credits." in dialogs[0]
     assert _rescore_rows(server) == 0
     assert server.rows("SELECT count(*) FROM rescore_request")[0][0] == 0
+    assert not page.errors
+
+
+def test_a_plain_button_clears_a_stale_rerun_intent(page, server):
+    posts: list[str] = []
+    page.on(
+        "request",
+        lambda r: (
+            posts.append(r.post_data or "")
+            if r.method == "POST" and r.url.endswith("/models/screen")
+            else None
+        ),
+    )
+    page.goto(f"{server.url}/models")
+    row = page.locator("#models-row-screen")
+    row.locator("#models-screen-other").fill("openrouter:test/other")
+    row.locator(".mo-rerun-button").click()  # asks "save anyway" first, keeping the intent
+    expect(row.locator("input.mo-rerun-intent")).to_have_value("1")
+    row.locator("button.mo-anyway").click()  # the plain answer: save only
+    expect(row.locator(".mo-msg")).to_contain_text("Saved at")
+    assert len(posts) == 2 and "rerun=1" in posts[0]
+    assert "rerun=1" not in posts[1] and "rerun=&" in posts[1] + "&", posts[1]
+    expect(row.locator("#rescore-form")).to_have_count(0)
+    assert server.app.state.settings.scoring.screen_scorer == "openrouter:test/other"
     assert not page.errors

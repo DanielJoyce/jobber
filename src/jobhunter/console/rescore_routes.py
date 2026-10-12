@@ -430,7 +430,9 @@ def register(
                 client_factory=request.app.state.rescore_client_factory,
             )
         except Restarting as exc:
-            return refused(render_panel(request, conn, scope=scope, scorer=spec, message=str(exc)))
+            return refused(
+                render_panel(request, conn, scope=scope, scorer=spec, message=str(exc), **variant)
+            )
         except rs.RescoreBusy as exc:
             return render_panel(
                 request, conn, message=f"{exc} Showing its progress.", active_id=exc.request_id,

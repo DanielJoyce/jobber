@@ -479,3 +479,58 @@ def test_deep_row_has_one_deep_panel_that_loads_after_save_and_deep_score(client
     page = client.get("/models").text
     r = save(client, "deep", page, deep=OPUS, force_for_deep=OPUS)
     assert 'hx-trigger="click from:#deep-open"' in r.text
+
+
+def test_the_run_route_refuses_a_key_shaped_value_even_with_a_valid_token(tmp_path):
+    from jobhunter.scoring import rescore as rs
+
+    secret = "openrouter:sk-or-v1-SENTINEL0123456789abcdef"
+    cfg = setup_data(tmp_path, f'screen_scorer = "{secret}"\n')
+    client = make_client(cfg)
+    settings = client.app.state.settings
+    conn = client.app.state.conn_factory()
+    try:
+        plan = rs.make_plan(
+            conn, load_profile(settings.paths.profile_dir), settings.scoring, "all", secret, NOW
+        )
+    finally:
+        conn.close()
+    assert plan.total == 3 and not plan.refusal  # without the guard, this would run
+    r = confirm(client, plan.token, saved=secret)
+    assert r.status_code == 200
+    assert "SENTINEL" not in r.text and "cannot be shown here" in r.text
+    assert requests_of(client) == [] and client.sent == []
+
+
+def test_a_restart_refusal_keeps_the_models_panel(client):
+    save_rerun(client)
+    token = token_of(client.get("/models/screen/rescore", params={"scope": "all"}).text)
+    assert client.app.state.work.begin_restart() == []
+    r = confirm(client, token)
+    assert r.status_code == 503
+    assert 'id="rescore-heading"' in r.text and "/prefs/rescore/run" not in r.text
+    assert 'id="rescore-queued"' not in r.text
+    assert requests_of(client) == [] and client.sent == []
+
+
+def test_the_reset_question_offers_no_rerun_buttons(client):
+    page = client.get("/models").text
+    saved = save(client, "screen", page, screen=SPEC, force_for_screen=SPEC)
+    assert "Saved at" in saved.text
+    queue_rescore(client)
+    r = client.post(
+        "/models/screen/reset",
+        data={"digest": digest_of(saved.text)},
+        headers={"HX-Request": "true"},
+    )
+    assert "choose what queued re-scores use" in r.text
+    assert "Reset; queued re-scores use the new model" in r.text
+    assert 'data-rerun="1"' not in r.text and "Save + re-score" not in r.text
+
+
+def test_a_save_without_the_intent_opens_no_panel(client):
+    """What a plain button sends once models.js has cleared a stale intent: rerun empty."""
+    page = client.get("/models").text
+    r = save(client, "screen", page, screen=SPEC, force_for_screen=SPEC, rerun="")
+    assert "Saved at" in r.text and 'id="rescore-form"' not in r.text
+    assert 'name="rerun" class="mo-rerun-intent" value=""' in r.text
