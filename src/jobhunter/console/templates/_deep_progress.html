@@ -1,0 +1,17 @@
+{% if r %}
+{% set live = r.status == 'running' %}
+<div id="deep-progress" class="rescore-progress"{% if live %} hx-get="/deep/{{ r.id }}/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %} role="status" aria-live="polite">
+  {% if live %}
+  <p><strong>Deep pass {{ r.done }}/{{ r.total }} with {{ deep_model_label(r.scorer) }}&hellip;</strong> cost so far ${{ "%.2f" | format(r.spent_usd) }} of up to ${{ "%.2f" | format(r.max_usd) }}{% if r.cancel_requested_at %} &middot; stopping after the call in flight{% endif %}</p>
+  <progress max="{{ r.total or 1 }}" value="{{ r.done }}"></progress>
+  {% if not remote and not r.cancel_requested_at %}<button type="button" class="button small" id="deep-cancel" hx-post="/deep/{{ r.id }}/cancel" hx-target="#deep-progress" hx-swap="outerHTML">Cancel</button>{% endif %}
+  {% elif r.status == 'done' %}
+  <p class="rescore-done"><strong>Done.</strong> {{ r.scored }} deep report{{ '' if r.scored == 1 else 's' }}, ${{ "%.2f" | format(r.spent_usd) }} ({{ r.done }} of {{ r.total }} jobs taken). <a href="/inbox">Open the inbox</a></p>
+  {% if r.note %}<p class="hint">{{ r.note }}</p>{% endif %}
+  {% elif r.status == 'canceled' %}
+  <p><strong>Canceled.</strong> {{ r.scored }} deep report{{ '' if r.scored == 1 else 's' }}, ${{ "%.2f" | format(r.spent_usd) }} before it stopped.</p>
+  {% else %}
+  <p class="field-error" role="alert"><strong>Deep pass failed:</strong> {{ r.error or 'unknown error' }} ({{ r.scored }} report{{ '' if r.scored == 1 else 's' }}, ${{ "%.2f" | format(r.spent_usd) }} before it stopped.)</p>
+  {% endif %}
+</div>
+{% endif %}

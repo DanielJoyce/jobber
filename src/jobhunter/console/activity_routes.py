@@ -1,9 +1,10 @@
 """Persistent "work in progress" indicator for the shared nav (bug edb9ba6).
 
 ``GET /activity`` returns a small fragment that base.html loads with htmx on every page. It
-shows a running or queued re-score (progress, link to /prefs#sec-rescore) and a pipeline run
-holding the run lock, then a short done/failed line for a re-score that just ended. It is
-cheap (two indexed queries and one tiny file read) and never takes the run lock:
+shows a running or queued re-score (progress, link to /prefs#sec-rescore), a console deep
+pass (specs/020 M11) and a pipeline run holding the run lock, then a short done/failed line
+for a re-score or deep pass that just ended. It is cheap (a few indexed queries and one tiny
+file read) and never takes the run lock:
 ``runlock.probe`` only looks.
 
 It may write, in two narrow cases: ``rescore.running_request`` marks a stale heartbeat failed
@@ -40,6 +41,7 @@ from jobhunter.console import config_routes
 from jobhunter.console.achievements_routes import essentials_judge
 from jobhunter.core import runlock
 from jobhunter.pipeline.listing import to_iso
+from jobhunter.scoring import deep_run as dr
 from jobhunter.scoring import rescore as rs
 
 RECENT_DONE = timedelta(minutes=10)  # a finished re-score is announced for this long
@@ -134,9 +136,12 @@ def register(
     Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
 
     @app.get("/activity", response_class=HTMLResponse)
-    def activity(request: Request, conn: Conn, dismissed: str = "") -> HTMLResponse:
+    def activity(
+        request: Request, conn: Conn, dismissed: str = "", dismissed_deep: str = ""
+    ) -> HTMLResponse:
         moment = now()
         running = pending = finished = None
+        deep_running = deep_finished = None
         try:
             running = rs.running_request(conn, moment)  # stale heartbeats handled as there
             pending = conn.execute(
@@ -150,17 +155,31 @@ def register(
                 ).fetchone()
         except sqlite3.Error:
             pass  # a busy database must not break every page; show nothing this time
+        try:
+            # The console's deep pass (specs/020 M11): progress, then a done/failed line.
+            deep_running = dr.running_request(conn, moment)
+            if deep_running is None:
+                deep_finished = conn.execute(
+                    "SELECT * FROM deep_request WHERE status IN ('done', 'failed', 'canceled') "
+                    "AND done_at >= ? ORDER BY done_at DESC, id DESC LIMIT 1",
+                    (to_iso(moment - RECENT_DONE),),
+                ).fetchone()
+        except sqlite3.Error:
+            pass
         if finished is not None and str(finished["id"]) == dismissed:
             finished = None
+        if deep_finished is not None and str(deep_finished["id"]) == dismissed_deep:
+            deep_finished = None
         held, holder = False, None
         with contextlib.suppress(OSError):
             held, holder = runlock.probe(resolve_path(request.app.state.settings.paths.db_path))
-        # Our own re-score holds the run lock too; do not say it twice.
+        # Our own re-score or deep pass holds the run lock too; do not say it twice.
+        ours = running is not None or deep_running is not None
         run_label = None
-        if held and running is None:
+        if held and not ours:
             command = holder.command if holder else None
             run_label = command if command and _SAFE_COMMAND.match(command) else None
-        active = running is not None or (held and running is None)
+        active = ours or held
         notice = achievement_notice(
             conn,
             request.app.state.achievements,
@@ -174,7 +193,10 @@ def register(
                 "running": running,
                 "pending": pending,
                 "finished": finished,
-                "run_held": held and running is None,
+                "run_held": held and not ours,
+                "deep_running": deep_running,
+                "deep_finished": deep_finished,
+                "deep_label": dr.model_label,
                 "run_label": run_label,
                 "every": FAST_S if active else SLOW_S,
                 "ach": notice,

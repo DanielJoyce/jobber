@@ -30,6 +30,7 @@ from jobhunter.console import (
     alerts_routes,
     capture_routes,
     config_routes,
+    deep_routes,
     detail_routes,
     ext_routes,
     help_routes,
@@ -515,6 +516,7 @@ def create_app(
     capture_routes.register(app, templates, get_conn, NAV, get_profile, now)
     detail_routes.register(app, templates, get_conn, NAV, get_profile, now)
     rescore_routes.register(app, templates, get_conn, now)
+    deep_routes.register(app, templates, get_conn, now)
     activity_routes.register(app, templates, get_conn, now)
     config_routes.register(app, templates, NAV, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
