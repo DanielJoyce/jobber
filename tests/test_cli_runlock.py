@@ -28,7 +28,10 @@ def env(tmp_path, monkeypatch):
         f'data_dir = "{tmp_path}"\n'
     )
     monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
-    monkeypatch.setattr("jobhunter.scoring.profile.load_profile", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(
+        "jobhunter.scoring.profile.load_profile",
+        lambda *a, **k: SimpleNamespace(filter_version="f", scoring_version="s"),
+    )
     calls = SimpleNamespace(clients=0, submit=0, collect=0, run=0)
 
     def client():

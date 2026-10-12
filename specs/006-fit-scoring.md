@@ -488,3 +488,7 @@ A one-time backfill is affordable: 50,000 historical jobs ≈ $13, run once.
 | **Jobs you can do but are done with** | `current_focus.done_with` → `done_with_hits` + flag |
 | Opaque single score | Deterministic **buckets** with a stated action per bucket |
 | Locked into one model | `FitScorer` interface; `eval --compare` measures alternatives |
+
+## Changelog
+
+- 2026-10-11 (020 M9): plain `jobhunter score --submit` follows the nightly `new_only` rule (only groups with no screen score under any model), so a model change never re-screens scored jobs without a confirmed re-score. It prints "N already scored; use a re-score to score them again" when it skips some. `--scorer SPEC` keeps per-scorer eligibility for comparison runs; `--group` is unchanged.

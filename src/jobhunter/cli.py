@@ -348,7 +348,13 @@ def run(
 @app.command()
 def score(
     submit: Annotated[
-        bool, typer.Option("--submit", help="Submit a screen batch for eligible job groups.")
+        bool,
+        typer.Option(
+            "--submit",
+            help="Submit a screen batch. Without --scorer it scores only new job groups "
+            "(none scored under any model), like the nightly run; --scorer screens every "
+            "group eligible for that scorer. To score already-scored jobs again, use --rescore.",
+        ),
     ] = False,
     collect: Annotated[
         str | None, typer.Option("--collect", metavar="BATCH_ID", help="Collect a batch.")
@@ -564,7 +570,13 @@ def _score_mode(
     # The screen scorer may not be Anthropic; only build its client where it is needed.
     client = None if screening and not scorer.startswith("anthropic:") else anthropic.Anthropic()
     now = datetime.now(UTC)
+    # Plain --submit follows the nightly rule (new groups only), so a model change never
+    # re-screens scored jobs without a confirmed re-score; an explicit --scorer is a
+    # deliberate comparison run and keeps per-scorer eligibility (specs/020 M9).
+    new_only = submit and scorer_override is None
     try:
+        if submit and new_only:
+            _note_already_scored(conn, profile, scorer)
         if deep is not None or deep_group is not None:
             from jobhunter.scoring import deep as stage3
 
@@ -605,6 +617,7 @@ def _score_mode(
                     now=now,
                     remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                     rejection_days=settings.scoring.employer_rejection_days,
+                    new_only=new_only,
                 )
             except ScorerError as exc:
                 typer.echo(f"scorer error: {exc}", err=True)
@@ -620,6 +633,7 @@ def _score_mode(
                 scorer=scorer,
                 remaining_usd=lambda: screen.remaining_budget(conn, settings.scoring, now),
                 rejection_days=settings.scoring.employer_rejection_days,
+                new_only=new_only,
             )
             typer.echo(f"submitted batch {batch_id}" if batch_id else "nothing to submit")
         elif collect_pending:
@@ -640,6 +654,18 @@ def _score_mode(
             typer.echo(json.dumps(result.as_dict(), indent=2))
     finally:
         conn.close()
+
+
+def _note_already_scored(conn, profile, scorer: str) -> None:
+    """One line when ``new_only`` leaves out groups that are eligible under ``scorer`` only
+    because they were scored by another model (or prompt version)."""
+    from jobhunter.scoring import screen
+
+    big = 10**9
+    all_n = len(screen.eligible_groups(conn, profile, scorer=scorer, limit=big))
+    new_n = len(screen.eligible_groups(conn, profile, scorer=scorer, limit=big, new_only=True))
+    if all_n > new_n:
+        typer.echo(f"{all_n - new_n} already scored; use a re-score to score them again", err=True)
 
 
 def _score_group(
