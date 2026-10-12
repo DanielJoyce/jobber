@@ -26,7 +26,9 @@ Install does not run `systemctl` unless you pass `--enable`. Logs for a unit:
 `journalctl --user -u jobhunter-run.service -n 20`.
 
 Optional, to keep the timers running while you are logged out:
-`loginctl enable-linger $USER`.
+`loginctl enable-linger $USER`. Without it, timers that never fire are reported as "timers not
+running" once the installed run unit is more than 36 hours old and no timer-started run has been
+recorded.
 
 If you move the checkout or reinstall the venv, run `jobhunter schedule install` again so the
 units point at the new paths.

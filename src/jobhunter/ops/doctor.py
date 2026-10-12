@@ -314,7 +314,9 @@ def gather(
     checks = readiness.run_checks(
         settings, secrets_report=secrets_report, now=now, mode=mode, home=home,
         use_snapshot=False,
-        # in a container doctor runs through `jobhunter-ctr`, which gets the run's secrets
+        # in a container doctor is assumed to run through `jobhunter-ctr`, which gets the run's
+        # secrets; `podman exec <console> jobhunter doctor` does not, and cannot be told apart
+        # (documented in the help: use `jobhunter-ctr doctor`, not exec, with --snapshot)
         sees_run_secrets=mode == readiness.CONTAINER,
     )  # fmt: skip
     if config_error is not None:

@@ -10,7 +10,8 @@ Every `jobhunter ...` command in a code block here is checked against the real c
 is what the code prints; paths and numbers differ on your machine.
 
 New to jobhunter? Once the `jobhunter-ctr` wrapper is installed (`jobhunter ctr-script --write`, below),
-run `jobhunter-ctr doctor` for the same checks as `/setup` in the console, then open
+run `jobhunter-ctr doctor` (not `podman exec` into the console, which does not get the run's
+secrets and would record them as missing with `--snapshot`) for the same checks as `/setup` in the console, then open
 `http://127.0.0.1:8808/setup`. The [Getting started](getting-started.md) page has the order the steps come in.
 
 Run everything on the **host**, in the checkout, unless a step says otherwise. A line starting

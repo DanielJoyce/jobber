@@ -345,6 +345,22 @@ def test_marked_unit_with_only_migrated_null_rows_falls_back(tmp_path, home):
     assert evaluate(settings)["run.last"].detail.startswith("run at")
 
 
+def test_old_marked_unit_with_no_timer_rows_is_dead(tmp_path, home):
+    settings = ready(tmp_path)
+    enable_host_timers(home, marked=True)
+    unit = schedule.unit_dir(home) / "jobhunter-run.service"
+    old = (NOW - timedelta(hours=40)).timestamp()
+    os.utime(unit, (old, old))
+    add_run(settings, NOW - timedelta(hours=1), "manual")
+    row = evaluate(settings)["run.schedule"]
+    assert row.status == BROKEN and "timers not running" in row.detail
+    # a unit installed under 36 hours ago has had no time to fire yet
+    recent = (NOW - timedelta(hours=5)).timestamp()
+    os.utime(unit, (recent, recent))
+    row = evaluate(settings)["run.schedule"]
+    assert row.status == OK and "no timer-started run recorded yet" in row.detail
+
+
 def test_container_mode_judges_timer_rows_and_falls_back_without_them(tmp_path):
     settings = ready(tmp_path)
     add_run(settings, NOW - timedelta(hours=2), "manual")
