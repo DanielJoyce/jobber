@@ -940,9 +940,11 @@ OPENROUTER_HOST = "openrouter.ai"
 
 
 def is_openrouter_host(base_url: str) -> bool:
-    """True only when ``base_url``'s host is exactly ``openrouter.ai``."""
+    """True only when ``base_url`` is https and its host is exactly ``openrouter.ai`` (the key
+    goes in a header, so plain http would send it in the clear)."""
     try:
-        return (httpx.URL(base_url).host or "").lower() == OPENROUTER_HOST
+        url = httpx.URL(base_url)
+        return url.scheme == "https" and (url.host or "").lower() == OPENROUTER_HOST
     except (httpx.InvalidURL, TypeError, ValueError):
         return False
 

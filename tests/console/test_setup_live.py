@@ -70,6 +70,8 @@ def make_app(settings: Settings, rec: Recorder, *, mode=readiness.HOST, allow_re
     )
     app.state.setup_mode = mode
     app.state.live_deps = deps(rec, settings)
+    ticks = iter(range(100, 100_000, 60))  # each reading is a minute on: no cooldown by default
+    app.state.live_clock = lambda: float(next(ticks))
     return app
 
 
@@ -221,3 +223,38 @@ def test_plain_form_post_renders_the_page_with_the_result(settings, rec):
     r = client(make_app(settings, rec)).post("/setup/live/mail.label")
     assert r.status_code == 200 and "<h1>Setup</h1>" in r.text
     assert "token accepted: yes" in text_of(row(r.text, "mail.label"))
+
+
+def test_a_second_click_inside_the_cooldown_sends_nothing(settings, rec):
+    app = make_app(settings, rec)
+    app.state.live_clock = lambda: 1000.0  # time stands still
+    c = client(app)
+    assert c.post("/setup/live/scorer.screen").status_code == 200
+    seen = list(rec.seen)
+    assert seen  # the first click contacted the service
+    # the same row, and another row sharing the service, are refused without a request
+    assert c.post("/setup/live/scorer.screen").status_code == 429
+    assert c.post("/setup/live/scorer.deep").status_code == 429
+    assert rec.seen == seen
+    # a different service is not held up by it
+    assert c.post("/setup/live/apply.runner").status_code in (200, 404)
+
+
+def test_a_click_while_the_check_is_running_is_refused(settings, rec):
+    from jobhunter.console import setup_routes
+
+    app = make_app(settings, rec)
+    c = client(app)
+    app.state.live_busy = {"anthropic": setup_routes.INFLIGHT}
+    assert c.post("/setup/live/scorer.screen").status_code == 429
+    assert rec.seen == []
+
+
+def test_the_cooldown_ends(settings, rec):
+    app = make_app(settings, rec)
+    now = [1000.0]
+    app.state.live_clock = lambda: now[0]
+    c = client(app)
+    assert c.post("/setup/live/scorer.screen").status_code == 200
+    now[0] += 6
+    assert c.post("/setup/live/scorer.screen").status_code == 200

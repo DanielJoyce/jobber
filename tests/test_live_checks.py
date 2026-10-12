@@ -91,6 +91,13 @@ def test_anthropic_lists_models_only(tmp_path):
     assert rec.model_calls() == []
 
 
+def test_the_default_anthropic_client_does_not_retry(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-placeholder")
+    client = lc._anthropic_client()
+    assert client.max_retries == 0  # one click, one request
+    assert client.timeout == 15.0
+
+
 def test_anthropic_refused_is_fixed_text(tmp_path):
     rec, s = Recorder(), settings_for(tmp_path)
     d = deps(rec, s, anthropic_client=anthropic_factory(rec, status=401))
@@ -161,6 +168,19 @@ def test_openrouter_only_on_openrouter_ai(tmp_path, base_url):
     assert rec.seen == []
 
 
+def test_openrouter_key_is_never_sent_over_plain_http(tmp_path):
+    rec = Recorder()
+    s = settings_for(
+        tmp_path,
+        scoring={
+            "screen_scorer": "openrouter:x/y",
+            "openrouter": {"base_url": "http://openrouter.ai/api/v1"},
+        },
+    )
+    result = run("scorer.screen", s, deps(rec, s))
+    assert result.outcome == lc.NOT_RUN and rec.seen == []
+
+
 def test_openai_compat_has_no_free_check(tmp_path):
     rec = Recorder()
     s = settings_for(tmp_path, scoring={"screen_scorer": "openai-compat:llama"})
@@ -221,6 +241,17 @@ def test_gmail_missing_filter_and_expired_token(tmp_path):
     assert expired.outcome == lc.FAILED
     assert expired.facts[0] == lc.Fact("token accepted", False)
     assert expired.notes == (auth.TOKEN_EXPIRED_MESSAGE,)
+
+
+def test_gmail_missing_label_is_reported_never_created(tmp_path):
+    rec = Recorder()
+    s = settings_for(tmp_path)
+    service = FakeGmail(rec, labels=[{"id": "L2", "name": "Other"}], filters=[])
+    result = run("mail.label", s, deps(rec, s, gmail=service))
+    assert result.facts[1] == lc.Fact("label present", False)
+    assert result.outcome == lc.FAILED
+    # reads only: a create-if-missing (like `mail setup`) would show up here
+    assert rec.seen == ["gmail.googleapis.com labels.list", "gmail.googleapis.com filters.list"]
 
 
 def test_gmail_without_a_token_sends_nothing(tmp_path):
@@ -414,3 +445,42 @@ def test_preamble_names_the_anthropic_base_url_host(tmp_path, monkeypatch):
     out = preamble(s)
     assert "the Anthropic API (https://proxy.example.test:8443): list models" in out
     assert "api.anthropic.com" not in out and LEAK not in out
+
+
+def test_group_limits_the_live_plan(doctor_env):
+    from jobhunter.ops import doctor
+
+    everything = doctor.gather()
+    assert {k for p in doctor.live_plan(everything) for k in p.rows} >= {
+        "mail.token",
+        "scorer.screen",
+    }
+    email = doctor.gather(group="Email alerts")
+    rows = {r for p in doctor.live_plan(email) for r in p.rows}
+    assert rows and rows <= {c.id for c in email.checks}
+    assert "scorer.screen" not in rows
+    out = runner.invoke(app, ["doctor", "--live", "--group", "email-alerts"]).output
+    assert "Anthropic API" not in out and "Google" in out
+
+
+def test_summary_counts_a_failing_live_check(doctor_env, monkeypatch):
+    monkeypatch.setattr(lc, "_anthropic_client", anthropic_factory(doctor_env, status=401))
+    out = runner.invoke(app, ["doctor", "--live"])
+    assert out.exit_code == 1
+    last = out.output.strip().splitlines()[-1]
+    assert "1 essential failing" in last and "all essentials ok" not in last
+    plain = runner.invoke(app, ["doctor"]).output.strip().splitlines()[-1]
+    assert "all essentials ok" in plain
+
+
+def test_terminal_doctor_never_names_the_setup_button(doctor_env):
+    out = runner.invoke(app, ["doctor", "-v"]).output
+    assert "Test (free)" not in out
+
+
+def test_host_managing_gmail_row_names_jobhunter_ctr():
+    from jobhunter.ops import doctor
+
+    assert "jobhunter-ctr doctor --live" in doctor.terminal_detail(
+        "use Test (free), or run `jobhunter-ctr mail status`", readiness.HOST_MANAGING
+    )

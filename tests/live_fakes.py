@@ -133,6 +133,10 @@ class FakeGmail:
             def list(self, userId):
                 return outer._run("labels.list", {"labels": outer.labels_})
 
+            def create(self, userId, body):
+                outer.rec.seen.append("gmail.googleapis.com labels.create")
+                raise AssertionError("a live check must never create a label")
+
         return Labels()
 
     def settings(self):
@@ -143,6 +147,10 @@ class FakeGmail:
                 class Filters:
                     def list(self, userId):
                         return outer._run("filters.list", {"filter": outer.filters_})
+
+                    def create(self, userId, body):
+                        outer.rec.seen.append("gmail.googleapis.com filters.create")
+                        raise AssertionError("a live check must never create a filter")
 
                 return Filters()
 
