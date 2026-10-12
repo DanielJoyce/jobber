@@ -27,7 +27,7 @@ from jobhunter.core.fetch import (
 )
 from jobhunter.core.models import JobStub, Policy, Query, SourceRow
 from jobhunter.pipeline.dedupe import group_pending
-from jobhunter.pipeline.dedupe_url import merge_by_apply_url
+from jobhunter.pipeline.dedupe_url import merge_by_apply_url, normalize_apply_url
 from jobhunter.pipeline.dedupe_xstate import merge_cross_state
 from jobhunter.pipeline.listing import (
     compute_watermark,
@@ -36,7 +36,7 @@ from jobhunter.pipeline.listing import (
     to_iso,
     upsert_stubs,
 )
-from jobhunter.pipeline.normalize import normalize_pending
+from jobhunter.pipeline.normalize import normalize_job, normalize_pending
 from jobhunter.scoring.prefilter import run_prefilter
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 from jobhunter.sources.adapters.base import SourceAdapter
@@ -85,6 +85,7 @@ class SourceResult:
     queries_run: int = 0
     stubs_found: int = 0
     resolved: int = 0
+    skipped: int = 0  # resolve: detail already pulled for this URL, stored copy reused
     error: str | None = None
     duration_ms: int = 0
     max_posted: datetime | None = None
@@ -336,8 +337,21 @@ def _volume_floor_breach(conn: sqlite3.Connection, src: SourceRow, now: datetime
 
 
 def _resolve_candidates(
-    conn: sqlite3.Connection, key: str, now: datetime, limit: int
+    conn: sqlite3.Connection, key: str, now: datetime, limit: int, refetch: bool = False
 ) -> list[sqlite3.Row]:
+    if refetch:
+        # Every open posting that has a detail page: still waiting for one, or fetched before
+        # (resolve_attempts > 0). Rows whose listing carried the full text are left alone.
+        return conn.execute(
+            """
+            SELECT * FROM job
+            WHERE source_key = ? AND (needs_resolve = 1 OR resolve_attempts > 0)
+              AND (closes_at IS NULL OR closes_at > ?)
+            ORDER BY posted_at DESC, id
+            LIMIT ?
+            """,
+            (key, to_iso(now), limit),
+        ).fetchall()
     return conn.execute(
         """
         SELECT * FROM job
@@ -369,6 +383,49 @@ def _stub_from_row(row: sqlite3.Row) -> JobStub:
     )
 
 
+# A detail page counts as pulled once a fetch stored its full text: resolve succeeded
+# (needs_resolve = 0 after at least one attempt) with a non-empty, non-partial description.
+# A failed fetch leaves needs_resolve = 1; a partial or empty one is not reused.
+_PULLED_SQL = """
+SELECT id, url FROM job
+WHERE resolve_attempts > 0 AND needs_resolve = 0 AND url IS NOT NULL
+  AND description_raw IS NOT NULL AND description_raw != ''
+  AND description_completeness = 'full'
+ORDER BY id
+"""
+
+
+def pulled_details(conn: sqlite3.Connection) -> dict[str, int]:
+    """Normalized detail URL -> id of a job row holding that page's stored detail (0cd0320)."""
+    out: dict[str, int] = {}
+    for job_id, url in conn.execute(_PULLED_SQL):
+        k = normalize_apply_url(url)
+        if k and k not in out:
+            out[k] = job_id
+    return out
+
+
+def _reuse_pulled(conn: sqlite3.Connection, row: sqlite3.Row, donor_id: int) -> bool:
+    """Copy a stored detail onto ``row`` instead of fetching its page again."""
+    cur = conn.execute(
+        """
+        UPDATE job SET needs_resolve = 0, stage = 'resolved',
+          description_raw = (SELECT d.description_raw FROM job d WHERE d.id = :donor),
+          description_completeness =
+            (SELECT d.description_completeness FROM job d WHERE d.id = :donor),
+          employment_type = (SELECT d.employment_type FROM job d WHERE d.id = :donor),
+          apply_url = COALESCE((SELECT d.apply_url FROM job d WHERE d.id = :donor), apply_url)
+        WHERE id = :id AND EXISTS (
+          SELECT 1 FROM job d WHERE d.id = :donor AND d.needs_resolve = 0
+            AND d.description_raw IS NOT NULL AND d.description_raw != ''
+            AND d.description_completeness = 'full')
+        """,
+        {"id": row["id"], "donor": donor_id},
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
 def _resolve_source(
     conn: sqlite3.Connection,
     src: SourceRow,
@@ -377,9 +434,24 @@ def _resolve_source(
     res: SourceResult,
     now: datetime,
     budget: int,
+    *,
+    pulled: dict[str, int] | None = None,
+    refetch: bool = False,
 ) -> int:
+    """Fetch detail pages for this source's stubs; returns how many pages were fetched.
+
+    A stub whose normalized URL already has a stored detail (``pulled``) reuses it and is
+    counted in ``res.skipped`` without a request, unless ``refetch`` forces a fresh fetch.
+    """
+    if pulled is None:
+        pulled = {} if refetch else pulled_details(conn)
     done = 0
-    for row in _resolve_candidates(conn, src.key, now, budget):
+    for row in _resolve_candidates(conn, src.key, now, budget, refetch):
+        key = normalize_apply_url(row["url"])
+        donor = pulled.get(key) if key and not refetch else None
+        if donor is not None and donor != row["id"] and _reuse_pulled(conn, row, donor):
+            res.skipped += 1
+            continue
         conn.execute(
             "UPDATE job SET resolve_attempts = resolve_attempts + 1 WHERE id = ?", (row["id"],)
         )
@@ -392,9 +464,15 @@ def _resolve_source(
             logger.warning("resolve failed for %s/%s: %s", src.key, row["external_id"], exc)
             conn.commit()
             continue
+        if refetch and not detail.description_raw and row["description_raw"]:
+            # A forced refetch that found no text never wipes the text already stored.
+            logger.warning("refetch found no description for %s/%s", src.key, row["external_id"])
+            conn.commit()
+            continue
         conn.execute(
             """
-            UPDATE job SET description_raw = ?, needs_resolve = 0, stage = 'resolved',
+            UPDATE job SET description_raw = ?, needs_resolve = 0,
+              stage = CASE WHEN stage = 'listed' THEN 'resolved' ELSE stage END,
               description_completeness = ?, employment_type = ?,
               apply_url = COALESCE(?, apply_url)
             WHERE id = ?
@@ -407,9 +485,19 @@ def _resolve_source(
                 row["id"],
             ),
         )
+        if refetch and row["stage"] not in ("listed", "resolved"):
+            # Past normalize already: re-parse the refreshed text in place, stage kept.
+            normalize_job(conn, row["id"], str(src.config.get("timezone", "UTC")))
         conn.commit()
         done += 1
         res.resolved += 1
+        if (
+            key
+            and detail.description_raw
+            and detail.description_completeness.value == "full"
+            and not refetch
+        ):
+            pulled.setdefault(key, row["id"])
     return done
 
 
@@ -541,7 +629,10 @@ def run_pipeline(
     now: datetime | None = None,
     apply_ctx_factory: Callable[[str], Any] | None = None,
     trigger: str = "manual",
+    refetch_details: bool | Iterable[str] = False,
 ) -> RunReport:
+    """``refetch_details``: True fetches every source's detail pages again, even those already
+    pulled; a collection of source keys limits that to those sources (0cd0320)."""
     adapters = ADAPTERS if adapters is None else adapters
     stages = list(stages) if stages is not None else list(STAGES)
     now = now or datetime.now(UTC)
@@ -616,7 +707,15 @@ def run_pipeline(
                 report.messages.append(f"list: {e.source.key} skipped ({e.skip_reason})")
 
     if "resolve" in stages:
-        budget, total = max_resolve, 0
+        budget, total, skipped = max_resolve, 0, 0
+        refetch_keys = (
+            set(entries)
+            if refetch_details is True
+            else set(refetch_details or ())
+            if refetch_details is not False
+            else set()
+        )
+        pulled = pulled_details(conn)
         for key, entry in entries.items():
             if budget <= 0:
                 break
@@ -626,7 +725,15 @@ def run_pipeline(
             try:
                 with ctx_factory(entry.source) as ctx:
                     n = _resolve_source(
-                        conn, entry.source, adapter_cache[key], ctx, results[key], now, budget
+                        conn,
+                        entry.source,
+                        adapter_cache[key],
+                        ctx,
+                        results[key],
+                        now,
+                        budget,
+                        pulled=pulled,
+                        refetch=key in refetch_keys,
                     )
             except Exception as exc:
                 fail(key, exc)
@@ -634,7 +741,16 @@ def run_pipeline(
             timed(key, t0)
             budget -= n
             total += n
-        report.counts["resolve"] = {"resolved": total}
+            skipped += results[key].skipped
+            if n or results[key].skipped:
+                logger.info(
+                    "resolve %s: %d detail pages fetched, %d skipped (already pulled)%s",
+                    key,
+                    n,
+                    results[key].skipped,
+                    " [refetch]" if key in refetch_keys else "",
+                )
+        report.counts["resolve"] = {"resolved": total, "skipped": skipped}
         # Apply links stored before login walls were recognized (bug 334d9eb): resolve those
         # groups again. Requests only through FetchContext; nothing paid.
         from jobhunter.pipeline import applylink

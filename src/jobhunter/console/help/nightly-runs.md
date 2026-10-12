@@ -30,5 +30,27 @@ Optional, to keep the timers running while you are logged out:
 running" once the run unit was installed and its timer enabled more than 36 hours ago and no
 timer-started run has been recorded.
 
+## Detail pages are fetched once
+
+Many boards list only a title and link, so the run opens each posting's detail page to get the
+full description. That is the slow part of a run (one page at a time, a few seconds per site),
+so a detail page is fetched once. A later run that lists the same posting, even under a new id
+or from another source with the same link (tracking parameters such as `utm_*` are ignored),
+reuses the stored description and sends no request. A fetch that failed, or that stored only
+part of the text, is not reused; the next run tries again.
+
+Each run logs, per source, how many detail pages it fetched and how many it skipped, and
+stores the totals in the run's counts (`resolve: resolved, skipped`).
+
+To fetch detail pages again anyway, for example after a board changed its page layout:
+
+```bash
+jobhunter run --refetch-details                       # every source
+jobhunter run --refetch-details --source <source-key> # one source (repeatable)
+```
+
+This refetches open postings that have a detail page, up to `--max-resolve` pages. Postings
+already scored keep their stage and score; their parsed fields are refreshed in place.
+
 If you move the checkout or reinstall the venv, run `jobhunter schedule install` again so the
 units point at the new paths.

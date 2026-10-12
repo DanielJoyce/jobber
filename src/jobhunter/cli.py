@@ -316,9 +316,30 @@ def run(
     max_resolve: Annotated[
         int, typer.Option(help="Cap on detail-page fetches per run.")
     ] = runner.DEFAULT_MAX_RESOLVE,
+    refetch_details: Annotated[
+        bool,
+        typer.Option(
+            "--refetch-details",
+            help="Fetch detail pages again even for postings already pulled.",
+        ),
+    ] = False,
+    source: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--source",
+            help="With --refetch-details: refetch only this source key (repeatable).",
+        ),
+    ] = None,
     wait: WaitOption = None,
 ) -> None:
     """Run the ingest pipeline."""
+    if source and not refetch_details:
+        typer.echo("error: --source needs --refetch-details", err=True)
+        raise typer.Exit(2)
+    known = {r.key for r in load_registry()} if source else set()
+    if unknown := sorted(set(source or ()) - known):
+        typer.echo(f"error: unknown source key(s): {', '.join(unknown)}", err=True)
+        raise typer.Exit(2)
     try:
         stages = runner.parse_stages(stage)
         since_dt = datetime.fromisoformat(since).replace(tzinfo=UTC) if since else None
@@ -381,6 +402,7 @@ def run(
                 full=full,
                 max_resolve=max_resolve,
                 trigger=trigger,
+                refetch_details=set(source) if source else refetch_details,
             )
         finally:
             conn.close()
