@@ -211,3 +211,17 @@ def test_duplicate_migration_versions_name_the_colliding_files(monkeypatch, tmp_
     msg = str(err.value)
     assert "0002_rejection_state.sql" in msg and "0002_rescore_plan.sql" in msg
     assert "0001_base.sql" not in msg
+
+
+def test_connect_carries_a_cross_thread_lock():
+    import sqlite3
+
+    c = db.connect(":memory:")
+    lock = db.connection_lock(c)
+    assert lock is not None and lock is db.connection_lock(c)
+    with lock, lock:  # reentrant: a holder may run helpers that take it again
+        pass
+    c.close()
+    plain = sqlite3.connect(":memory:")
+    assert db.connection_lock(plain) is None
+    plain.close()

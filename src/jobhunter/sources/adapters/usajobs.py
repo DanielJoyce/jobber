@@ -221,6 +221,7 @@ def stub_from_item(src: SourceRow, item: dict[str, Any]) -> JobStub:
 
 class UsajobsAdapter:
     family = "usajobs"
+    parallel_safe = True  # fetches only through ctx; never uses the DB connection (50320dc)
 
     @staticmethod
     def unavailable(settings: Any) -> str | None:

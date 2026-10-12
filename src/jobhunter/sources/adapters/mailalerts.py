@@ -283,6 +283,7 @@ class SyncStats:
 
 class MailAlertsAdapter:
     family = "mailalerts"
+    parallel_safe = False  # reads and writes ctx.conn: runs alone, on the run thread
 
     def __init__(
         self,

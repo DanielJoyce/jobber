@@ -241,6 +241,7 @@ def stub_from_item(src: SourceRow, site: str, item: dict[str, Any]) -> JobStub:
 
 class NlxAdapter:
     family = "nlx"
+    parallel_safe = True  # fetches only through ctx; never uses the DB connection (50320dc)
 
     def search(
         self, src: SourceRow, query: Query, since: datetime, ctx: FetchContext

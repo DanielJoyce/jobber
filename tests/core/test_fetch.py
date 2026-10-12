@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Callable
 from datetime import timedelta
 
@@ -716,3 +718,165 @@ def test_robots_wildcard_and_end_anchor():
     assert rules.allows("https://usnlx.com/a/b.pdf?page=2")
     assert rules.allows("https://usnlx.com/jobs/?q=feed")
     assert rules.allows("https://usnlx.com/lincoln-ne/x/ABC/job/")
+
+
+# ─── host holds (429 / Retry-After) shared across sources and threads ──────
+
+
+class SteppedClock:
+    """Shared clock the test moves by hand; sleep() blocks a thread until the clock gets there."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleepers = 0
+        self.naps = 0  # sleep() calls so far
+        self._cond = threading.Condition()
+
+    def __call__(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        with self._cond:
+            target = self.t + seconds
+            self.sleepers += 1
+            self.naps += 1
+            self._cond.notify_all()
+            assert self._cond.wait_for(lambda: self.t >= target - 1e-9, timeout=10)
+            self.sleepers -= 1
+            self._cond.notify_all()
+
+    def advance_to(self, t: float) -> None:
+        with self._cond:
+            self.t = t
+            self._cond.notify_all()
+
+    def wait_for_sleepers(self, n: int) -> None:
+        with self._cond:
+            assert self._cond.wait_for(lambda: self.sleepers == n, timeout=10)
+
+
+def test_hold_landing_while_a_request_waits_moves_that_request():
+    """Thread b has a slot at 1 s and is asleep when a hold to 3 s lands: it must not fire
+    inside the hold."""
+    limiter = HostRateLimiter()
+    clock = SteppedClock()
+    fired: dict[str, float] = {}
+
+    def go(name: str) -> None:
+        limiter.acquire("h", 1.0, clock=clock, sleep=clock.sleep)
+        fired[name] = clock()
+
+    go("a")  # t=0, no wait
+    b = threading.Thread(target=go, args=("b",))
+    b.start()
+    clock.wait_for_sleepers(1)  # b reserved its slot at 1 s and sleeps
+    limiter.hold("h", 3.0, clock=clock)
+    clock.advance_to(1.0)
+    deadline = time.monotonic() + 10
+    while b.is_alive() and clock.naps < 2 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert "b" not in fired  # b did not fire at its old 1 s slot
+    assert b.is_alive() and clock.naps == 2  # it woke, saw the hold and sleeps again
+    clock.advance_to(3.0)
+    b.join(timeout=10)
+    assert fired == {"a": 0.0, "b": 3.0}
+
+
+def test_long_retry_after_holds_the_host_and_others_fail_fast(settings, conn, server, clock):
+    """Retry-After over MAX_RETRY_AFTER_S: held in full; another source on the host sends
+    nothing and parks nothing, it fails at once (suspect, retried next run)."""
+    server.route(f"{HOST}/jobs", httpx.Response(429, headers={"Retry-After": "3600"}))
+    server.route(f"{HOST}/other", httpx.Response(200, text="ok"))
+    limiter = HostRateLimiter()
+
+    def ctx(key: str) -> FetchContext:
+        return FetchContext(
+            make_source(key=key),
+            settings,
+            conn,
+            transport=server.transport,
+            clock=clock,
+            sleep=clock.sleep,
+            limiter=limiter,
+        )
+
+    with ctx("s1") as first, pytest.raises(TransientFetchError):
+        first.get(f"{HOST}/jobs")
+    host = HOST.removeprefix("https://")
+    assert limiter.remaining_hold(host, clock=clock) == pytest.approx(3600.0)
+    slept = sum(clock.sleeps)
+    with ctx("s2") as second, pytest.raises(TransientFetchError, match="pause"):
+        second.get(f"{HOST}/other")
+    assert server.hits("/other") == 0
+    assert sum(clock.sleeps) == slept  # nobody waited out the hour
+
+
+def test_long_hold_landing_while_another_source_waits_fails_it_fast(tmp_path, conn, server):
+    """s2 sleeps in per-host spacing when s1 gets 429 Retry-After 3600: s2 wakes at its slot,
+    sees the long hold and fails at once instead of sleeping out the hour."""
+    clock = SteppedClock()
+    limiter = HostRateLimiter()
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "cache")}, "fetch": {"max_retries": 0}}
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_429(_request: httpx.Request) -> httpx.Response:
+        entered.set()
+        assert release.wait(10)
+        return httpx.Response(429, headers={"Retry-After": "3600"})
+
+    server.route(f"{HOST}/jobs", slow_429)
+    server.route(f"{HOST}/b", httpx.Response(200, text="ok"))
+    errors: dict[str, BaseException] = {}
+
+    def fetch(key: str, path: str) -> None:
+        ctx = FetchContext(
+            make_source(key=key),
+            s,
+            conn,
+            transport=server.transport,
+            clock=clock,
+            sleep=clock.sleep,
+            limiter=limiter,
+        )
+        try:
+            ctx.get(f"{HOST}{path}")
+        except BaseException as exc:
+            errors[key] = exc
+        finally:
+            ctx.close()
+
+    s1 = threading.Thread(target=fetch, args=("s1", "/jobs"))
+    s1.start()  # robots.txt at 0 s, then /jobs waits for its 1 s slot
+    clock.wait_for_sleepers(1)
+    clock.advance_to(1.0)
+    assert entered.wait(10)  # s1's request is in flight
+    s2 = threading.Thread(target=fetch, args=("s2", "/b"))
+    s2.start()
+    clock.wait_for_sleepers(1)  # s2 sleeps until its 2 s slot
+    release.set()  # s1 gets the 429: the host is held for an hour
+    s1.join(timeout=10)
+    assert "3600" in str(errors["s1"])
+    clock.advance_to(2.0)
+    t0 = time.monotonic()
+    s2.join(timeout=5)
+    assert not s2.is_alive() and time.monotonic() - t0 < 1.0
+    assert isinstance(errors["s2"], TransientFetchError)
+    assert "pause" in str(errors["s2"])
+    assert server.hits("/b") == 0
+
+
+def test_long_retry_after_is_named_with_no_retries_left(tmp_path, conn, server, clock):
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "cache")}, "fetch": {"max_retries": 0}}
+    )
+    server.route(f"{HOST}/jobs", httpx.Response(429, headers={"Retry-After": "86400"}))
+    with (
+        FetchContext(
+            make_source(), s, conn, transport=server.transport, clock=clock, sleep=clock.sleep
+        ) as ctx,
+        pytest.raises(TransientFetchError) as info,
+    ):
+        ctx.get(f"{HOST}/jobs")
+    assert "Retry-After 86400s exceeds" in str(info.value)

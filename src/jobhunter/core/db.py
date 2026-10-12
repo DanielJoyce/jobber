@@ -34,12 +34,14 @@ import functools
 import os
 import re
 import sqlite3
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
+from typing import Any
 
 from jobhunter.xdg import mkdir_private
 
@@ -161,6 +163,24 @@ def owning_data_dir(db_path: Path, data_dir: Path) -> Path:
     return owner if db_dir.is_relative_to(owner) else db_dir
 
 
+class LockedConnection(sqlite3.Connection):
+    """A connection that carries the lock serializing its use across threads (bug 50320dc).
+
+    ``jobhunter run`` fetches several sources at once; every thread that touches the run's
+    connection (fetch_log rows, job writes) holds ``lock`` for the statement or transaction,
+    so there is one writer at a time and no thread's statement lands in another's transaction.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.lock = threading.RLock()
+
+
+def connection_lock(conn: sqlite3.Connection) -> threading.RLock | None:
+    """The cross-thread lock of a connection from :func:`connect`; None for any other."""
+    return getattr(conn, "lock", None) if isinstance(conn, LockedConnection) else None
+
+
 def connect(path: Path | str, *, check_schema: bool = True) -> sqlite3.Connection:
     """Open a connection with the project's PRAGMAs. Accepts ``":memory:"``.
 
@@ -179,8 +199,10 @@ def connect(path: Path | str, *, check_schema: bool = True) -> sqlite3.Connectio
     # isolation_level=None: autocommit; transactions are explicit via transaction().
     # check_same_thread=False: FastAPI opens a request's connection in one threadpool
     # thread and may run the endpoint in another. Each connection is still owned by a
-    # single request or CLI process and never used concurrently.
-    conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
+    # single request or CLI process; the run's parallel fetch shares it under ``conn.lock``.
+    conn = sqlite3.connect(
+        str(path), isolation_level=None, check_same_thread=False, factory=LockedConnection
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=5000")
     try:

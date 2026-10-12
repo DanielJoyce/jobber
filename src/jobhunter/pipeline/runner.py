@@ -3,6 +3,12 @@
 Stages run in a fixed order; each source is isolated so one broken source never aborts a
 run. Everything that touches the world is injectable (registry, adapter map, fetch context
 factory, profile loader) so tests need no network.
+
+List and resolve fetch up to ``fetch.parallel_sources`` sources at once (bug 50320dc, see
+``pipeline/fanout.py``). FetchContext keeps every per-host limit, Crawl-delay, Retry-After and
+the global cap across threads; database use is serialized on the connection's lock, and the
+list stage writes each source's stubs on this thread in plan order, so the rows match a serial
+run. Adapters that use the database themselves run alone, after the others.
 """
 
 from __future__ import annotations
@@ -10,15 +16,17 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jobhunter import logsetup
 from jobhunter.config import Settings, resolve_path
+from jobhunter.core.db import connection_lock
 from jobhunter.core.fetch import (
     AccessDenied,
     FetchContext,
@@ -30,6 +38,7 @@ from jobhunter.core.models import JobStub, Policy, Query, SourceRow
 from jobhunter.pipeline.dedupe import group_pending
 from jobhunter.pipeline.dedupe_url import merge_by_apply_url
 from jobhunter.pipeline.dedupe_xstate import merge_cross_state
+from jobhunter.pipeline.fanout import Outcome, Stopper, run_ordered
 from jobhunter.pipeline.listing import (
     compute_watermark,
     from_iso,
@@ -298,24 +307,28 @@ def classify(exc: BaseException) -> str:
 
 
 def _list_source(
-    conn: sqlite3.Connection,
+    sink: Callable[[list[JobStub]], None],
     src: SourceRow,
     adapter: SourceAdapter,
     queries: list[Query],
     since: datetime,
     ctx: Any,
     res: SourceResult,
-    now: datetime,
+    stopper: Stopper | None = None,
 ) -> None:
+    """Run the source's queries, handing stubs to ``sink`` in batches of FLUSH_EVERY (and the
+    rest on the way out, also when a query raised)."""
     buf: list[JobStub] = []
 
     def flush() -> None:
         if buf:
-            upsert_stubs(conn, buf, now)
+            sink(list(buf))
             buf.clear()
 
     try:
         for query in queries:
+            if stopper is not None:
+                stopper.check()
             res.queries_run += 1
             for stub in adapter.search(src, query, since, ctx):
                 res.stubs_found += 1
@@ -379,11 +392,15 @@ def _resolve_source(
     adapter: SourceAdapter,
     ctx: Any,
     res: SourceResult,
-    now: datetime,
-    budget: int,
+    candidates: Sequence[sqlite3.Row],
+    *,
+    db_lock: AbstractContextManager[Any] | None = None,
+    stopper: Stopper | None = None,
 ) -> int:
+    """Resolve ``candidates`` (from :func:`_resolve_candidates`). May run on a fan-out thread:
+    every statement holds ``db_lock``; the fetch itself never does."""
+    lock = db_lock if db_lock is not None else nullcontext()
     done = 0
-    candidates = _resolve_candidates(conn, src.key, now, budget)
     total = len(candidates)
     if total:
         spacing = getattr(ctx, "spacing", None)
@@ -402,38 +419,46 @@ def _resolve_source(
         ):
             last_log, last_done = time.monotonic(), done
             logger.info("resolve %s: %d of %d postings tried, %d resolved", src.key, i, total, done)
-        conn.execute(
-            "UPDATE job SET resolve_attempts = resolve_attempts + 1 WHERE id = ?", (row["id"],)
-        )
+        if stopper is not None:
+            stopper.check()
+        with lock:
+            conn.execute(
+                "UPDATE job SET resolve_attempts = resolve_attempts + 1 WHERE id = ?",
+                (row["id"],),
+            )
+            conn.commit()
         try:
             detail = adapter.resolve(_stub_from_row(row), ctx)
         except (TransientFetchError, AccessDenied, RobotsDisallowed, SourceBlocked):
-            conn.commit()
             raise
         except Exception as exc:  # one bad posting never fails a source
             logger.warning("resolve failed for %s/%s: %s", src.key, row["external_id"], exc)
             res.errors += 1
-            conn.commit()
             continue
-        conn.execute(
-            """
+        with lock:
+            _store_detail(conn, row["id"], detail)
+        done += 1
+        res.resolved += 1
+    return done
+
+
+def _store_detail(conn: sqlite3.Connection, job_id: int, detail: Any) -> None:
+    conn.execute(
+        """
             UPDATE job SET description_raw = ?, needs_resolve = 0, stage = 'resolved',
               description_completeness = ?, employment_type = ?,
               apply_url = COALESCE(?, apply_url)
             WHERE id = ?
             """,
-            (
-                detail.description_raw,
-                detail.description_completeness.value,
-                detail.employment_type.value,
-                detail.apply_url,
-                row["id"],
-            ),
-        )
-        conn.commit()
-        done += 1
-        res.resolved += 1
-    return done
+        (
+            detail.description_raw,
+            detail.description_completeness.value,
+            detail.employment_type.value,
+            detail.apply_url,
+            job_id,
+        ),
+    )
+    conn.commit()
 
 
 def _score_stage(
@@ -556,6 +581,27 @@ def _score_stage(
 # ─── orchestration ──────────────────────────────────────────────────────────
 
 
+@dataclass
+class _Listed:
+    """One source's list-stage result from a fan-out thread."""
+
+    stubs: list[JobStub] = field(default_factory=list)
+    error: Exception | None = None
+    seconds: float = 0.0
+    stats: dict[str, int] = field(default_factory=dict)
+
+
+def fetch_workers(settings: Settings) -> int:
+    """Sources fetched at once: ``fetch.parallel_sources``, never above the global cap."""
+    return max(1, min(settings.fetch.parallel_sources, settings.fetch.global_concurrency))
+
+
+def parallel_safe(adapter: Any) -> bool:
+    """Opt-in: only an adapter that declares ``parallel_safe = True`` (it never touches
+    ``ctx.conn``) runs on a fan-out thread; any other runs alone on the run's own thread."""
+    return getattr(adapter, "parallel_safe", False) is True
+
+
 def run_pipeline(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -576,10 +622,13 @@ def run_pipeline(
     adapters = ADAPTERS if adapters is None else adapters
     stages = list(stages) if stages is not None else list(STAGES)
     now = now or datetime.now(UTC)
+    stopper = Stopper()
     if ctx_factory is None:
 
         def ctx_factory(src: SourceRow) -> AbstractContextManager[Any]:
-            return FetchContext(src, settings, conn)
+            # Ctrl-C: waits (rate limit, Crawl-delay, Retry-After, backoff) end at once and no
+            # new request attempt starts.
+            return FetchContext(src, settings, conn, sleep=stopper.sleep, cancel=stopper.check)
 
     profile = (profile_loader or default_profile_loader(settings))()
     report = RunReport(stages=stages, trigger="timer" if trigger == "timer" else "manual")
@@ -626,41 +675,102 @@ def run_pipeline(
         _mark_source(conn, key, res.status, res.error)
         _record_failure(conn, key, now)
 
-    def timed(key: str, t0: float) -> None:
-        results[key].duration_ms += int((time.monotonic() - t0) * 1000)
-
     def stage_done(name: str, t0: float, detail: str = "") -> None:
         logger.info("stage %s done in %.1fs%s", name, time.monotonic() - t0, detail)
+
+    shared_lock = connection_lock(conn)
+    # Only a connection from db.connect carries the lock that lets threads share it.
+    workers = fetch_workers(settings) if shared_lock is not None else 1
+    db_lock: AbstractContextManager[Any] = shared_lock or threading.RLock()
+
+    def inline(entry: PlanEntry) -> bool:
+        return not parallel_safe(adapter_cache[entry.source.key])
+
+    # Sources that run alone go after the others, so they never hold up the pool (and the mail
+    # adapter dedupes against this run's listings). Same order in a serial run.
+    ordered = [e for e in entries.values() if not inline(e)]
+    ordered += [e for e in entries.values() if inline(e)]
 
     if "list" in stages:
         total = 0
         stage_t0 = time.monotonic()
-        logger.info("stage list: %d sources", len(entries))
-        for key, entry in entries.items():
-            src, res = entry.source, results[key]
-            queries = queries_for(src, profile) or []
+        logger.info(
+            "stage list: %d sources, %d at a time", len(entries), min(workers, len(entries))
+        )
+
+        def list_work(entry: PlanEntry) -> _Listed:
+            key, src = entry.source.key, entry.source
+            res = results[key]
+            # Fanned-out sources keep their stubs; this thread writes them in plan order.
+            # Sources that run alone (and a serial run) write as they go.
+            out = _Listed()
+            if workers > 1 and not inline(entry):
+                sink: Callable[[list[JobStub]], None] = out.stubs.extend
+            else:
+
+                def sink(batch: list[JobStub]) -> None:
+                    with db_lock:
+                        upsert_stubs(conn, batch, now)
+
             t0 = time.monotonic()
-            stats: dict[str, int] = {}
             try:
                 with ctx_factory(src) as ctx:
                     try:
                         _list_source(
-                            conn, src, adapter_cache[key], queries, entry.watermark, ctx, res, now
+                            sink,
+                            src,
+                            adapter_cache[key],
+                            queries_for(src, profile) or [],
+                            entry.watermark,
+                            ctx,
+                            res,
+                            stopper,
                         )
                     finally:
-                        stats = dict(getattr(ctx, "stats", None) or {})
+                        out.stats = dict(getattr(ctx, "stats", None) or {})
             except Exception as exc:
-                fail(key, exc)
-            else:
-                record_run_watermark(conn, key, res.max_posted, now)
-                if _volume_floor_breach(conn, src, now):
-                    res.status = "suspect"
-                    res.error = "below expect.min_jobs_per_week"
-                    _mark_source(conn, key, "suspect", res.error)
-                else:
-                    _mark_source(conn, key, "ok", None)
-            timed(key, t0)
-            total += res.stubs_found
+                out.error = exc
+            out.seconds = time.monotonic() - t0
+            # Logged as it happens, from the worker; the status line follows once the stubs
+            # are written, which is in plan order and may wait for a slower earlier source.
+            logger.info(
+                "fetched %s: %d stubs from %d queries in %.1fs%s",
+                key,
+                res.stubs_found,
+                res.queries_run,
+                out.seconds,
+                f" ({type(out.error).__name__})" if out.error else "",
+            )
+            return out
+
+        def list_done(entry: PlanEntry, outcome: Outcome[_Listed]) -> None:
+            key, src = entry.source.key, entry.source
+            res = results[key]
+            listed = outcome.value or _Listed(error=outcome.error)
+            with db_lock:
+                try:
+                    # Each batch is its own transaction: a failure keeps the batches before it.
+                    for i in range(0, len(listed.stubs), FLUSH_EVERY):
+                        upsert_stubs(conn, listed.stubs[i : i + FLUSH_EVERY], now)
+                    if listed.error is not None:
+                        fail(key, listed.error)
+                    else:
+                        record_run_watermark(conn, key, res.max_posted, now)
+                        if _volume_floor_breach(conn, src, now):
+                            res.status = "suspect"
+                            res.error = "below expect.min_jobs_per_week"
+                            _mark_source(conn, key, "suspect", res.error)
+                        else:
+                            _mark_source(conn, key, "ok", None)
+                except Exception as exc:  # e.g. "database is locked": this source only
+                    try:
+                        fail(key, exc)
+                    except Exception as again:
+                        res.status = "broken"
+                        res.error = f"{type(exc).__name__}: {exc}"
+                        logger.warning("source %s: could not record failure: %s", key, again)
+            res.duration_ms += int(listed.seconds * 1000)
+            stats = listed.stats
             logger.info(
                 "list %s: status=%s queries=%d pages=%d (cached %d) stubs=%d robots_skips=%d "
                 "errors=%d in %.1fs",
@@ -672,8 +782,11 @@ def run_pipeline(
                 res.stubs_found,
                 stats.get("robots_skips", 0),
                 1 if res.failed and res.status != "suspect" else 0,
-                time.monotonic() - t0,
+                listed.seconds,
             )
+
+        run_ordered(ordered, list_work, list_done, workers=workers, stopper=stopper, inline=inline)
+        total = sum(results[k].stubs_found for k in entries)
         report.counts["list"] = {"stubs": total}
         stage_done("list", stage_t0, f": {total} stubs from {len(entries)} sources")
         for e in report.plan:
@@ -681,34 +794,79 @@ def run_pipeline(
                 report.messages.append(f"list: {e.source.key} skipped ({e.skip_reason})")
 
     if "resolve" in stages:
+        # The budget is shared out in plan order before any fetch, so it does not depend on
+        # which source finishes first: each source gets up to what is left of max_resolve.
         budget, total = max_resolve, 0
         stage_t0 = time.monotonic()
         logger.info("stage resolve: budget %d", max_resolve)
+        todo: list[tuple[PlanEntry, list[sqlite3.Row]]] = []
         for key, entry in entries.items():
             if budget <= 0:
                 break
             if results[key].failed and results[key].status != "suspect":
                 continue
+            candidates = _resolve_candidates(conn, key, now, budget)
+            if candidates:
+                todo.append((entry, candidates))
+                budget -= len(candidates)
+        todo = [t for t in todo if not inline(t[0])] + [t for t in todo if inline(t[0])]
+        logger.info(
+            "stage resolve: %d postings from %d sources, %d at a time",
+            sum(len(c) for _, c in todo),
+            len(todo),
+            min(workers, len(todo)),
+        )
+
+        def resolve_work(item: tuple[PlanEntry, list[sqlite3.Row]]) -> int:
+            entry, candidates = item
+            key = entry.source.key
             t0 = time.monotonic()
+            n = 0
             try:
                 with ctx_factory(entry.source) as ctx:
                     n = _resolve_source(
-                        conn, entry.source, adapter_cache[key], ctx, results[key], now, budget
+                        conn,
+                        entry.source,
+                        adapter_cache[key],
+                        ctx,
+                        results[key],
+                        candidates,
+                        db_lock=db_lock,
+                        stopper=stopper,
                     )
-            except Exception as exc:
-                fail(key, exc)
-                n = 0
-            timed(key, t0)
-            budget -= n
-            total += n
-            if n or results[key].errors:
+            finally:
+                seconds = time.monotonic() - t0
+                results[key].duration_ms += int(seconds * 1000)
                 logger.info(
                     "resolve %s: %d resolved, %d errors in %.1fs",
                     key,
-                    n,
+                    results[key].resolved,
                     results[key].errors,
-                    time.monotonic() - t0,
+                    seconds,
                 )
+            return n
+
+        def resolve_done(item: tuple[PlanEntry, list[sqlite3.Row]], outcome: Outcome[int]) -> None:
+            if outcome.error is None:
+                return
+            key = item[0].source.key
+            with db_lock:
+                try:
+                    fail(key, outcome.error)
+                except Exception as again:
+                    results[key].status = "broken"
+                    results[key].error = f"{type(outcome.error).__name__}: {outcome.error}"
+                    logger.warning("source %s: could not record failure: %s", key, again)
+
+        run_ordered(
+            todo,
+            resolve_work,
+            resolve_done,
+            workers=workers,
+            stopper=stopper,
+            inline=lambda item: inline(item[0]),
+        )
+        total = sum(results[e.source.key].resolved for e, _ in todo)
         report.counts["resolve"] = {"resolved": total}
         # Apply links stored before login walls were recognized (bug 334d9eb): resolve those
         # groups again. Requests only through FetchContext; nothing paid.

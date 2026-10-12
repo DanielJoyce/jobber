@@ -34,3 +34,30 @@ timer-started run has been recorded.
 
 If you move the checkout or reinstall the venv, run `jobhunter schedule install` again so the
 units point at the new paths.
+
+## How long a run takes
+
+The fetch stages (list and resolve) work on several sources at once: up to
+`fetch.parallel_sources` (default 6, never more than `fetch.global_concurrency`) in
+`config.toml`. Politeness does not change with it. Each host still gets at most one request per
+its rate limit (default one every 5 seconds) or its robots.txt `Crawl-delay`, whichever is
+slower, and two sources on the same host share that host's limit. So a run takes about as long
+as its slowest source rather than the sum of all of them. Set `parallel_sources = 1` to fetch
+one source at a time as before.
+
+If a host answers 429 or sends `Retry-After`, every source on that host waits it out, not just
+the one that was told, including requests already waiting their turn. When the pause asked for
+is longer than 10 minutes, sources on that host stop for this run (marked `suspect`) and try
+again next run, rather than sit idle for it.
+
+The email-alert source reads and writes the database itself, so it runs on its own after the
+other sources. Each source logs to the journal as soon as its fetching ends, for example
+`fetched <source>: 41 stubs from 3 queries in 62.0s`. A second line with its status
+follows once its stubs are saved, for example `list <source>: status=ok queries=3 pages=9
+(cached 2) stubs=41 robots_skips=0 errors=0 in 62.0s`. Stubs are saved in a fixed order, so
+that second line can wait for a slower source ahead of it. Lines from different sources
+interleave.
+
+Ctrl-C stops the run within about one request. Sources waiting on a rate limit give up at once,
+no source starts a new request, and queued sources never start. A request already in flight
+can take up to `fetch.timeout_s` (default 20 seconds) to finish or time out.
