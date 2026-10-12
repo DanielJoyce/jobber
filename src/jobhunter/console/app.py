@@ -20,9 +20,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from jobhunter import container
+from jobhunter.achievements import engine as achievements
 from jobhunter.apply import cli_runner, ext_pairing
 from jobhunter.config import Settings, resolve_path
 from jobhunter.console import (
+    achievements_routes,
     activity_routes,
     alerts_routes,
     capture_routes,
@@ -87,6 +89,8 @@ PAGES: list[tuple[str, str | None, str]] = [
     ("/prefs", "Prefs", "Preferences"),
     ("/setup", "Setup", "Setup"),
     ("/alerts", None, "Alerts"),
+    # Hidden from the nav while achievements are off (base.html asks achievements_on()).
+    ("/achievements", "Achievements", "Achievements"),
     ("/help", "Help", "Help"),
 ]
 NAV = [(path, label) for path, label, _ in PAGES if label]
@@ -228,6 +232,7 @@ def create_app(
             on_backup=lambda p: logger.warning("console: backed up %s before migrating", p),
             on_wait=lambda p: logger.warning("console: waiting for another migration (%s)", p),
         )
+        achievements_on = achievements.read_settings(boot).enabled
     except BaseException:
         if console_lock is not None:
             console_lock.release()
@@ -265,11 +270,15 @@ def create_app(
 
     app.state.settings = settings
     app.state.console_lock = console_lock  # kept alive with the app
+    # In-process only (specs/021): the last achievements fingerprint and the cached on/off
+    # flag the nav reads; the settings route refreshes it.
+    app.state.achievements = achievements.Gate(enabled=achievements_on)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["sparkline"] = sparkline
     templates.env.globals["static_url"] = static_url
     templates.env.globals["bucket_name"] = bucketnames.bucket_name
     templates.env.globals["group_name"] = bucketnames.group_name
+    templates.env.globals["achievements_on"] = lambda: app.state.achievements.enabled
     templates.env.globals["bucket_names_json"] = json.dumps(
         {b: bucketnames.bucket_name(b) for b in bucketnames.LETTERS}
     )
@@ -489,6 +498,7 @@ def create_app(
     rejections_routes.register(app, templates, get_conn, NAV, now)
     alerts_routes.register(app, templates, get_conn, NAV, now)
     setup_routes.register(app, templates, get_conn, NAV, now)
+    achievements_routes.register(app, templates, get_conn, NAV, now)
     ext_routes.register(app, get_profile, now)
 
     # Placeholders last, only for nav pages no module has claimed yet. New pages need no
