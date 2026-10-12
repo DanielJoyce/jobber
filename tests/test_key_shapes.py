@@ -40,6 +40,20 @@ NEW_REAL_NAMES = [
     "pplx-70b-online", "key_value_store_model", "AKIAlike-7b", "local:Aizawa-Llama-3-8B-JP",
     "openrouter:pplx-70b-online", "glpat-style-model-v2",
 ]  # fmt: skip
+# Real names that look like some key shape: hidden on screen, but main accepted them.
+HEXY_NAMES = [
+    "local:/models/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/" + "a1b2c3d4e5" * 4,
+    "openai-compat:0f8fad5b-d9cb-469f-a165-70867728950e",
+    "owner/model:" + "0123456789abcdef" * 4,
+    "ft:gpt-4o-mini:org-0123456789abcdef0123456789abcdef::AbC123",
+    "local:hf_TheBlokeLlama2SevenBChatGPTQv2Model",
+    "openai-compat:AKIAEXAMPLEMODEL1234",
+    "local:" + "0123456789abcdef" * 2,
+    "org/model@" + "0123456789abcdef" * 2 + "01234567",
+    "sha256:" + "0123456789abcdef" * 4,
+    "local:glpat" + "-abcdefghijklmnopqrstuvwxyz",
+    "local:AIza" + "SyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStUvW",
+]
 # Hidden for display, never refused: commit pins, digests and an AWS-secret-shaped run.
 PINNED = [
     "org/model@0123456789abcdef0123456789abcdef01234567",
@@ -120,8 +134,9 @@ def test_a_hidden_but_not_key_shaped_value_is_still_valid():
     value = "local:aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o"  # hidden (looks like a bare key)
     assert shown_value(value) is None
     assert check_model_key("scoring", "screen_scorer", value) is None
-    for key in ("local:0123456789abcdef0123456789abcdef", "local:hf_" + "x" * 30):
-        assert check_model_key("scoring", "screen_scorer", key) == "not a usable model name"
+    assert check_model_key("scoring", "screen_scorer", "local:sk-abcdef") == (
+        "not a usable model name"
+    )
 
 
 def test_shown_value_keeps_every_real_model_id():
@@ -188,7 +203,7 @@ def main_refuses(value: str) -> bool:
 def test_nothing_main_accepted_is_refused_now():
     from jobhunter.config import usable_model_text
 
-    corpus = set(model_id_corpus()) | set(NEW_REAL_NAMES) | set(REAL_IDS)
+    corpus = set(model_id_corpus()) | set(NEW_REAL_NAMES) | set(REAL_IDS) | set(HEXY_NAMES)
     for base in BASE_NAMES:
         corpus |= {base + suffix for suffix in SUFFIXES}
     corpus |= {f"{p}:{n}" for n in list(corpus) for p in ("local", "openai-compat")}
@@ -205,8 +220,18 @@ def test_hidden_for_display_but_not_refused(value):
     assert usable_model_text(value)
 
 
-@pytest.mark.parametrize("value", [k for k in KEY_SHAPES if k not in HIDDEN_ONLY])
-def test_exact_key_shapes_are_refused(value):
+@pytest.mark.parametrize("value", [*KEY_SHAPES, *HEXY_NAMES])
+def test_key_shapes_are_hidden(value):
+    assert shown_value(value) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["sk-or-v1-0123456789abcdef", "local:sk-abc", "openrouter:x/ghp_abc", "bearerabc", "key-abc",
+     "xoxb-1234", "local:my-token-model", "password-model", "my_secret_model"],
+)  # fmt: skip
+def test_main_prefixes_and_words_are_refused(value):
     from jobhunter.config import usable_model_text
 
     assert not usable_model_text(value)
+    assert shown_value(value) is None

@@ -527,7 +527,6 @@ _EXACT_KEY_SHAPES = re.compile(
     + r"|ya29\.[A-Za-z0-9_-]{30,})(?![A-Za-z0-9_-])"
 )
 _HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
-_PINNED_HEX = re.compile(r"(?:@|sha\d+:)[0-9a-fA-F]{32,}")  # a commit pin or digest: legitimate
 _JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*")
 _SEGMENT_SPLIT = re.compile(r"[:/@_.+=-]")
 _LONG_BASE64 = re.compile(r"[A-Za-z0-9+/]{40,}")
@@ -543,12 +542,11 @@ def _hex_shaped(value: str) -> bool:
 
 
 def is_key_shaped(value: str) -> bool:
-    """A value that is surely a key: a known key prefix (or the words secret, token, password),
-    an exact key shape, 32 or more hex digits (not a commit pin or digest), a UUID, or a JWT.
-    ``models.toml`` refuses these. Quantised model names (``Q4_K_M``, ``W8A8``) never match."""
-    if _SECRET_LOOKING.search(value) or _EXACT_KEY_SHAPES.search(value) or _JWT.search(value):
-        return True
-    return _hex_shaped(_PINNED_HEX.sub("", value))
+    """What ``models.toml`` refuses: exactly the rule main always had (a pasted-key prefix at the
+    start or after ``:`` or ``/``, or the words secret, token, password). Never widened, so a
+    file that loaded before an upgrade still loads. Other key shapes are only hidden
+    (``hidden_value``)."""
+    return bool(_SECRET_LOOKING.search(value))
 
 
 def _long_run_segment(value: str) -> bool:
@@ -568,8 +566,14 @@ def _long_run_segment(value: str) -> bool:
 
 
 def hidden_value(value: str) -> bool:
-    """Whether a message must not echo ``value``: surely a key, or looks like one."""
-    return is_key_shaped(value) or _hex_shaped(value) or _long_run_segment(value)
+    """Whether a message must not echo ``value``: a refused prefix, or any key shape (exact
+    shapes, hex, UUID, JWT, long segments). Hiding never makes a value invalid."""
+    return (
+        is_key_shaped(value)
+        or bool(_EXACT_KEY_SHAPES.search(value) or _JWT.search(value))
+        or _hex_shaped(value)
+        or _long_run_segment(value)
+    )
 
 
 def shown_value(value: object) -> str | None:
