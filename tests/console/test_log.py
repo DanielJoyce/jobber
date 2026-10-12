@@ -147,6 +147,7 @@ def test_every_kind_renders_and_nothing_secret_leaks(client, conn):
         "Captured from boards.example.org",
         "Drafted cover_letter (cli)",
         "$0.50",
+        "subscription",
     ):
         assert text in r.text, text
     for secret in (EMAIL, KEY, "abc123", "A1b2C3d4"):
@@ -188,53 +189,137 @@ def test_unfinished_run_is_interrupted_when_the_lock_is_free(client, conn):
     assert "interrupted" in r.text and "running" not in r.text
 
 
-def test_unfinished_run_is_running_when_the_lock_is_held(client, conn, monkeypatch):
-    conn.execute("INSERT INTO run (started_at, stages) VALUES (?, 'list')", (ago(hours=9),))
-    conn.execute("INSERT INTO run (started_at, stages) VALUES (?, 'list')", (ago(hours=1),))
-    from jobhunter.console import log_routes
+def _hold(db_path, command):
+    from jobhunter.core import runlock
 
-    monkeypatch.setattr(log_routes.runlock, "probe", lambda _p: (True, None))
-    r = client.get("/log?kind=run")
-    # Only the newest unfinished run can hold the lock.
+    lock = runlock.RunLock(db_path, command)
+    lock.acquire()
+    return lock
+
+
+def test_unfinished_run_is_running_only_when_run_holds_the_lock(client, conn, db_path):
+    real_now = to_iso(datetime.now(UTC))
+    conn.execute("INSERT INTO run (started_at, stages) VALUES (?, 'list')", (ago(hours=9),))
+    conn.execute("INSERT INTO run (started_at, stages) VALUES (?, 'list')", (real_now,))
+    lock = _hold(db_path, "run")
+    try:
+        r = client.get("/log?kind=run")
+    finally:
+        lock.release()
+    # Only the newest unfinished run can be the holder.
     assert r.text.count(">running<") == 1 and r.text.count(">interrupted<") == 1
 
 
+def test_a_dead_run_is_interrupted_while_another_job_holds_the_lock(client, conn, db_path):
+    conn.execute("INSERT INTO run (started_at, stages) VALUES (?, 'list')", (ago(hours=1),))
+    for command in ("console re-score", "score --submit", "run"):
+        lock = _hold(db_path, command)
+        try:
+            r = client.get("/log?kind=run")
+        finally:
+            lock.release()
+        # Even a "run" holder that started an hour after this row is not this row's process.
+        assert ">interrupted<" in r.text and ">running<" not in r.text, command
+
+
+def test_degraded_run_is_partial_not_failed(client, conn):
+    conn.execute(
+        "INSERT INTO run (started_at, ended_at, stages, exit_status) "
+        "VALUES (?, ?, 'list', 'degraded')",
+        (ago(hours=1), ago(minutes=50)),
+    )
+    r = client.get("/log?kind=run")
+    assert ">partial<" in r.text and ">failed<" not in r.text
+
+
 def test_window_boundary(conn):
+    from jobhunter.scoring.profile import Profile
+
+    prof = Profile()
     edge = ago(hours=24)
     for i, t in enumerate((edge, ago(hours=24, seconds=1), ago(hours=23, minutes=59))):
         job = add_job(conn, f"j{i}", t)
         gid = add_group(conn, job, t)
         add_score(conn, gid, t, cost=1.0, model=f"m{i}")
-        conn.execute("INSERT INTO prefilter_result VALUES (?, 1, '[]', 'fv', ?)", (job, t))
+        conn.execute(
+            "INSERT INTO prefilter_result VALUES (?, 1, '[]', ?, ?)", (job, prof.filter_version, t)
+        )
         conn.execute(
             "INSERT INTO score_failure (job_group_id, tier, model, prompt_version, "
             "scoring_version, reason, created_at) VALUES (?, 'screen', 'm', 'p', 'v', 'x', ?)",
             (gid, t),
         )
-    got = al.since_yesterday(conn, NOW, "fv")
+    got = al.since_yesterday(conn, NOW, prof, "m0")
     # The row exactly 24 h old and the newer one count; the row a second older does not.
     assert got["jobs"] == got["groups"] == got["passed"] == got["scored"] == 2
-    assert got["failed"] == 2
+    assert got["refused"] == 2
     assert got["spend"] == pytest.approx(2.0)
 
 
-def test_backlog_counts_only_unscored_groups_that_passed(conn):
+def test_passed_counts_new_jobs_not_reevaluations(conn):
+    from jobhunter.scoring.profile import Profile
+
+    prof = Profile()
+    old = add_job(conn, "old", ago(days=5))
+    new = add_job(conn, "new", ago(hours=1))
+    for job in (old, new):  # a profile change re-evaluated both just now
+        conn.execute(
+            "INSERT INTO prefilter_result VALUES (?, 1, '[]', ?, ?)",
+            (job, prof.filter_version, ago(minutes=1)),
+        )
+    assert al.since_yesterday(conn, NOW, prof, "m")["passed"] == 1
+    assert al.since_yesterday(conn, NOW, None, "m")["passed"] is None
+
+
+def test_failures_include_rescore_and_batch_errors(conn):
+    conn.execute(
+        "INSERT INTO rescore_request (requested_at, scope, scoring_version, job_count, "
+        "cost_per_job_usd, estimated_usd, status, errored, done_at) "
+        "VALUES (?, 'recent', 'v', 5, 0, 0, 'failed', 5, ?)",
+        (ago(hours=3), ago(hours=3)),
+    )
+    conn.execute(
+        "INSERT INTO rescore_request (requested_at, scope, scoring_version, job_count, "
+        "cost_per_job_usd, estimated_usd, status, errored, done_at) "
+        "VALUES (?, 'recent', 'v', 5, 0, 0, 'failed', 9, ?)",
+        (ago(days=4), ago(days=4)),
+    )
+    conn.execute(
+        "INSERT INTO score_batch (id, tier, model, prompt_version, scoring_version, "
+        "request_count, submitted_at, collected_at, counts) "
+        "VALUES ('b', 'screen', 'm', 'p', 'v', 9, ?, ?, ?)",
+        (ago(hours=5), ago(hours=4), json.dumps({"succeeded": 6, "errored": 2, "expired": 1})),
+    )
+    got = al.since_yesterday(conn, NOW)
+    assert got["rescore_errored"] == 5 and got["rescore_failed"] == 1
+    assert got["batch_errored"] == 3 and got["refused"] == 0
+
+
+def test_backlog_is_the_daily_runs_own_eligibility(conn):
+    from jobhunter.scoring import screen
+    from jobhunter.scoring.profile import Profile
+
+    prof = Profile()
     t = ago(days=3)
     ids = []
     for i in range(4):
         job = add_job(conn, f"b{i}", t)
         ids.append((job, add_group(conn, job, t)))
-        conn.execute("INSERT INTO prefilter_result VALUES (?, ?, '[]', 'fv', ?)", (job, i != 3, t))
+        conn.execute(
+            "INSERT INTO prefilter_result VALUES (?, ?, '[]', ?, ?)",
+            (job, i != 3, prof.filter_version, t),
+        )
     add_score(conn, ids[0][1], t)  # scored: not backlog
     conn.execute(
         "INSERT INTO score_failure (job_group_id, tier, model, prompt_version, scoring_version,"
-        " reason, created_at) VALUES (?, 'screen', 'm', 'p', 'v', 'refusal', ?)",
-        (ids[1][1], t),
-    )  # failed: not backlog
+        " reason, created_at) VALUES (?, 'screen', 'm', ?, ?, 'refusal', ?)",
+        (ids[1][1], screen.PROMPT_VERSION, prof.scoring_version, t),
+    )  # failed under the daily run's key: not backlog
     # ids[2] passed and is unscored; ids[3] did not pass.
-    assert al.since_yesterday(conn, NOW, "fv")["backlog"] == 1
-    assert al.since_yesterday(conn, NOW, "other")["backlog"] == 0
-    assert al.since_yesterday(conn, NOW, None)["backlog"] is None
+    got = al.since_yesterday(conn, NOW, prof, "m")["backlog"]
+    assert got == 1
+    assert got == len(screen.eligible_groups(conn, prof, scorer="m", limit=100, new_only=True))
+    assert al.since_yesterday(conn, NOW, None, "m")["backlog"] is None
 
 
 def test_today_card_renders_and_links_to_the_log(tmp_path, db_path, conn):
@@ -274,3 +359,25 @@ def test_safe_error():
 
 def test_safe_error_hides_angle_bracket_addresses():
     assert "@" not in al.safe_error("sent to <you>@example.com and Bob <bob@example.org>.")
+
+
+def test_safe_error_more_shapes():
+    # The number is split so the secret scanner does not flag the test file itself.
+    out = al.safe_error(
+        "call +1 (555) " + "123-" + "4567 or 555-" + "123-" + "4567; "
+        "Authorization: Bearer abc123def; "
+        "API_KEY=short1 token=xyz at example.com/path?user=bob&x=1 mail bob%40example.org"
+    )
+    for leaked in ("555", "abc123def", "short1", "xyz", "user=bob", "bob", "example.org"):
+        assert leaked not in out, (leaked, out)
+
+
+def test_draft_with_no_outcome_is_stopped_when_nothing_holds_its_claim(client, conn):
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(
+        "INSERT INTO draft_run (packet_id, kind, runner, started_at) "
+        "VALUES (1, 'resume', 'api', ?)",
+        (ago(hours=1),),
+    )
+    r = client.get("/log?kind=draft")
+    assert ">stopped<" in r.text and ">running<" not in r.text

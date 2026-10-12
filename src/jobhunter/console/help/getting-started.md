@@ -111,13 +111,18 @@ containers the timers come from the Quadlet units instead; do not turn on both.
 Two places answer "did it run, and what did it do?":
 
 - The **Last 24 hours** card on Today (`/`): when the last run happened and how it ended
-  (or "running since ..."), how many jobs were pulled in, grouped, passed the prefilter and
-  scored since this time yesterday, how many failed to score, how many passed jobs are still
-  waiting for a score, and what scoring cost in that window.
+  (or "running since ..."), how many jobs were pulled in and grouped since this time
+  yesterday, how many of those new jobs passed the prefilter (a preferences change re-checks
+  old jobs, and those are not counted), and how many were scored. Failures are listed
+  separately: refused or cut off by the scorer, errors in re-score requests, and errors in
+  score batches. Then the unscored backlog (what the next nightly run will score), the scoring
+  spend in the window, and all spend for today and yesterday. The card links to
+  the Costs page (`/costs`) and the log.
 - The **Log** page (`/log`, in the nav): every run, re-score, score batch, deep pass, mail
   fetch, extension capture and drafting run, newest first, in your local time. Pick a kind to
-  filter. A run that never finished shows "running" while it still holds the run lock and
-  "interrupted" when it does not. Error text is shortened and stripped of email addresses
+  filter. A run that never finished shows "running" only while the nightly `run` itself holds the
+  run lock (a re-score or other job holding it does not count) and "interrupted" otherwise;
+  a run that finished with some sources failing is "partial". Error text is shortened and stripped of email addresses
   and anything that looks like a key.
 
 ## When something is wrong

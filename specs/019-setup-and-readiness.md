@@ -1126,10 +1126,14 @@ large the database is.
 | `capture` | `capture_log` | extension captures: host, method, outcome |
 | `draft` | `draft_run` | packet drafting runs: kind, runner, outcome, duration, error, and the document's API-equivalent cost when known |
 
-A `run` with no `ended_at` is **running** when the run lock is held (`runlock.probe`, the
-same read-only look the band uses) and **interrupted** when it is free. Only the newest such
-row can be running; older ones are interrupted. Likewise an in-flight `rescore`, `deep` or
-`draft` row whose heartbeat is stale is shown with its stored status, never recomputed.
+A `run` with no `ended_at` is **running** only when it is the newest `run` row, the run
+lock is held (`runlock.probe`, the read-only look the band uses), the holder's command is
+`run`, and the holder's start time is within 5 minutes of the row's `started_at`. Every other
+job (console re-score, deep pass, `score`, `backfill`) takes the same lock, so a held lock alone
+proves nothing. Anything else unfinished is **interrupted**. A run that ended `degraded` is
+**partial**; any other non-`ok` exit is **failed**. A drafting row with no outcome is
+**running** or **stopped** by `draft_runs`' own rule (its claim is held or free). A subscription
+(CLI) drafting run shows "subscription" in the cost column, not a price.
 
 ### Privacy
 
@@ -1137,7 +1141,9 @@ Nothing that is a secret, an email address, or a key-shaped scorer spec is rende
 specs go through `config.shown_value` / `hidden_label` (the `scorer_label` filter). Stored
 error text is shown through one redaction: email addresses become `(email)`, any token that
 `config.hidden_value` calls key-shaped becomes `(hidden)`, URL query strings are dropped, and
-the result is cut to 200 characters. Capture hosts and stage counts are shown as stored.
+phone numbers become `(number)`, `Bearer`/`Basic` credentials and `key=`/`token=`-style
+assignments are masked, `%40` is read as `@`, query strings (with or without a scheme) are
+dropped, and the result is cut to 200 characters. Capture hosts and stage counts are shown as stored.
 
 ### Today card
 
@@ -1145,19 +1151,25 @@ A "Last 24 hours" panel on `/`, with a link to `/log`:
 
 - **Last run:** when, result and duration, or "running since ...", or "interrupted".
 - **Since yesterday** (the last 24 hours from now): jobs pulled in (`job.first_seen_at`), new
-  groups (`job_group.created_at`), passed the prefilter (`prefilter_result.evaluated_at` with
-  `passed = 1`), scored (`fit_score.created_at`), failed scores (`score_failure.created_at`).
-  A row exactly 24 h old counts; an older one does not.
-- **Unscored backlog:** groups whose canonical job passed the current prefilter with no screen
-  score for the group's current description revision, no uncollected batch holding it, and no
-  recorded failure for it; groups scored only on request are not counted. Shown as "unknown"
-  when the profile cannot load.
-- **Spend:** the sum of `fit_score.cost_usd` created in the window (screening and deep).
-  `llm_spend` has only a day, so it cannot answer "since yesterday".
+  groups (`job_group.created_at`), **new jobs that passed the prefilter** (`first_seen_at` in
+  the window and a `passed = 1` result under the current `filter_version`; a profile change
+  rewrites `evaluated_at` for every job, so evaluations are never counted), and scored
+  (`fit_score.created_at`). A row exactly 24 h old counts; an older one does not.
+- **Failures, shown separately** because they overlap and are never summed: refused or cut off
+  (`score_failure.created_at`), re-score errors (`rescore_request.errored` summed over requests
+  finished in the window, with the number of failed requests), and batch errors (`errored` plus
+  `expired` in the `counts` of batches collected in the window).
+- **Unscored backlog:** `screen.count_eligible(..., new_only=True)`, the same rule the daily
+  run uses to pick groups. Shown as "?" when the profile cannot load.
+- **Scoring spend:** the sum of `fit_score.cost_usd` created in the window. Next to it,
+  **spend today and yesterday (all calls)** from `llm_spend`, which has only a day, so it also
+  counts drafting and refused calls. Links to `/costs`. A query that fails shows "?".
 
 ### Testing (C)
 
-Each event kind renders; running versus interrupted; the window at the 24 h boundary; a
+Each event kind renders; running versus interrupted (a real `RunLock` held by `run` and by
+`console re-score`); partial; subscription cost; new-jobs-only prefilter count; failures from
+re-scores and batches; the window at the 24 h boundary; a
 sentinel email, key-shaped scorer and key-shaped error text never appear; an empty database;
 the kind filter; `/log` in the nav and linked from `/setup`.
 

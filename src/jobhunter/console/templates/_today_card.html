@@ -12,13 +12,18 @@
       No run yet.
     {% endif %}
   </p>
+  {% macro n(v) %}{{ v if v is not none else "?" }}{% endmacro %}
   <dl class="lg-stats">
-    <div><dt>Jobs pulled in</dt><dd>{{ card.jobs if card.jobs is not none else "?" }}</dd></div>
-    <div><dt>New groups</dt><dd>{{ card.groups if card.groups is not none else "?" }}</dd></div>
-    <div><dt>Passed prefilter</dt><dd>{{ card.passed if card.passed is not none else "?" }}</dd></div>
-    <div><dt>Scored</dt><dd>{{ card.scored if card.scored is not none else "?" }}</dd></div>
-    <div><dt>Failed to score</dt><dd>{{ card.failed if card.failed is not none else "?" }}</dd></div>
-    <div><dt>Unscored backlog</dt><dd>{{ card.backlog if card.backlog is not none else "?" }}</dd></div>
-    <div><dt>Spend</dt><dd>${{ "%.2f"|format(card.spend or 0) }}</dd></div>
+    <div><dt>Jobs pulled in</dt><dd>{{ n(card.jobs) }}</dd></div>
+    <div><dt>New groups</dt><dd>{{ n(card.groups) }}</dd></div>
+    <div><dt>New jobs that passed prefilter</dt><dd>{{ n(card.passed) }}</dd></div>
+    <div><dt>Scored</dt><dd>{{ n(card.scored) }}</dd></div>
+    <div><dt>Refused or cut off</dt><dd>{{ n(card.refused) }}</dd></div>
+    <div><dt>Re-score errors{% if card.rescore_failed %} ({{ card.rescore_failed }} failed request{{ "" if card.rescore_failed == 1 else "s" }}){% endif %}</dt><dd>{{ n(card.rescore_errored) }}</dd></div>
+    <div><dt>Batch errors</dt><dd>{{ n(card.batch_errored) }}</dd></div>
+    <div><dt>Unscored backlog</dt><dd>{{ n(card.backlog) }}</dd></div>
+    <div><dt>Scoring spend</dt><dd>{% if card.spend is none %}?{% else %}${{ "%.2f"|format(card.spend) }}{% endif %}</dd></div>
+    <div><dt>Spend, UTC today and yesterday (all calls)</dt><dd>{% if card.spend_days is none %}?{% else %}${{ "%.2f"|format(card.spend_days) }}{% endif %}</dd></div>
   </dl>
+  <p class="muted lg-detail"><a href="/costs">Costs</a> has the full breakdown.</p>
 </section>

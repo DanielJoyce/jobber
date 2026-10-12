@@ -21,11 +21,12 @@ from jobhunter.core import runlock
 from jobhunter.scoring.profile import Profile, ProfileError
 
 
-def lock_held(request: Request) -> bool:
-    held = False
+def lock_holder(request: Request) -> runlock.Holder | None:
+    """The current run-lock holder (advisory), or None when the lock is free."""
+    held, holder = False, None
     with contextlib.suppress(OSError):
-        held, _ = runlock.probe(resolve_path(request.app.state.settings.paths.db_path))
-    return held
+        held, holder = runlock.probe(resolve_path(request.app.state.settings.paths.db_path))
+    return holder if held else None
 
 
 def today_card(
@@ -36,12 +37,12 @@ def today_card(
 ) -> dict[str, Any]:
     """Context for the Today dashboard's last-24-hours card. Never raises."""
     try:
-        fv: str | None = get_profile().filter_version
+        profile: Profile | None = get_profile()
     except (ProfileError, OSError, ValueError):
-        fv = None
-    held = lock_held(request)
-    card = al.since_yesterday(conn, moment, fv)
-    card["last_run"] = al.last_run(conn, held)
+        profile = None
+    scorer = request.app.state.settings.scoring.screen_scorer
+    card = al.since_yesterday(conn, moment, profile, scorer)
+    card["last_run"] = al.last_run(conn, lock_holder(request))
     return card
 
 
@@ -58,7 +59,6 @@ def register(
     @app.get("/log", response_class=HTMLResponse)
     def log_page(request: Request, conn: Conn, kind: str = "all") -> HTMLResponse:
         kind = kind if kind in al.KINDS else "all"
-        held = lock_held(request)
         response = templates.TemplateResponse(
             request,
             "log.html",
@@ -68,7 +68,12 @@ def register(
                 "nav": nav,
                 "kind": kind,
                 "kinds": al.KINDS,
-                "events": al.events(conn, kind, lock_held=held),
+                "events": al.events(
+                    conn,
+                    kind,
+                    holder=lock_holder(request),
+                    data_dir=resolve_path(request.app.state.settings.paths.data_dir),
+                ),
                 "limit": al.TOTAL,
             },
         )

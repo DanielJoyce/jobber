@@ -112,6 +112,11 @@ def _row_run(row: sqlite3.Row, state: str) -> Run:
     )
 
 
+def row_state(row: sqlite3.Row, data_dir: Path) -> str:
+    """``done``, ``failed``, ``drafting`` or ``stopped`` for a ``draft_run`` row."""
+    return _state(row, data_dir, None)
+
+
 def _state(row: sqlite3.Row, data_dir: Path, live: Callable[[int], bool] | None) -> str:
     if row["outcome"] is not None:
         return row["outcome"]

@@ -481,6 +481,27 @@ def eligible_groups(
     ).fetchall()
 
 
+def count_eligible(
+    conn: sqlite3.Connection, profile: Profile, *, scorer: str, new_only: bool = False
+) -> int:
+    """How many groups ``eligible_groups`` would return with no limit, without loading them
+    (the Today card's backlog: the daily run's own rule)."""
+    sql = _ELIGIBLE.rsplit("ORDER BY", 1)[0]
+    return conn.execute(
+        f"SELECT COUNT(*) FROM ({sql})",
+        {
+            "filter_version": profile.filter_version,
+            "tier": TIER,
+            "model": scorer,
+            "prompt_version": PROMPT_VERSION,
+            "scoring_version": profile.scoring_version,
+            "rejected": rejections.rejected_json(conn),
+            "only": None,
+            "new_only": int(new_only),
+        },
+    ).fetchone()[0]
+
+
 def only_json(group_ids: Sequence[int] | None) -> str | None:
     """The ``:only`` parameter of ``_ELIGIBLE``: None means every group."""
     return None if group_ids is None else json.dumps([int(g) for g in group_ids])

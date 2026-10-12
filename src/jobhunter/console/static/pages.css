@@ -50,3 +50,5 @@
   .lg-table td:empty { display: none; }
   .lg-table td::before { content: attr(data-label) ": "; color: var(--text-secondary); font-size: 0.75rem; }
 }
+.lg-running, .lg-partial, .lg-stopped { border-bottom: 2px solid var(--series-4); }
+.lg-running { border-bottom-color: var(--series-3); }
