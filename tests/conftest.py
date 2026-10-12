@@ -295,6 +295,14 @@ def _loopback_test_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(TestClient, "__init__", init)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_secrets_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    # secrets.startup() stores its report module-wide; reset it so tests don't depend on order.
+    from jobhunter import secrets
+
+    monkeypatch.setattr(secrets, "LAST_REPORT", None)
+
+
 class RealClaudeBlocked(RuntimeError):
     """Raised when a test tries to launch a `claude` that is not the test's fake."""
 
