@@ -559,7 +559,10 @@ def _save(conn: sqlite3.Connection, link: ApplyLink) -> None:
             "final_url = excluded.final_url, chain = excluded.chain, ats = excluded.ats, "
             "employer_host = excluded.employer_host, status = excluded.status, "
             "resolved_at = excluded.resolved_at, verified_at = excluded.verified_at, "
-            "error = excluded.error, chosen_by = excluded.chosen_by, why = excluded.why",
+            "error = excluded.error, chosen_by = excluded.chosen_by, why = excluded.why "
+            # A link the user set is never replaced automatically, even by a resolve or
+            # re-verify that read the row before the user set it (bug e0d047b, review N1).
+            "WHERE apply_link.chosen_by IS NOT 'user' OR excluded.chosen_by IS 'user'",
             (
                 link.job_group_id,
                 link.start_url,

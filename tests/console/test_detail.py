@@ -514,7 +514,7 @@ def test_user_link_refuses_cross_site_and_unknown_job(client, conn):
     assert client.post("/job/404/apply-link", data={"url": MINE}).status_code == 404
 
 
-def test_legacy_login_wall_row_resolves_again_on_the_job_page(client, conn, pages):
+def test_legacy_login_wall_row_resolves_again_on_the_job_page(client, conn, pages, monkeypatch):
     """An older row took the state sign-in page for the posting: the page shows it as pending
     and the fragment resolves the group again, without requesting the login page."""
     add_link(conn, 1, "live", final=LOGIN, ats="unknown")
@@ -526,6 +526,12 @@ def test_legacy_login_wall_row_resolves_again_on_the_job_page(client, conn, page
     assert r.headers["location"] == "https://nlx.example/start"
     pages.responses["https://example.com/1"] = httpx.Response(302, headers={"Location": WD})
     pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    # A walk that found no answer is not repeated within the day (e0d047b review N6)...
+    hits = len(pages.hits)
+    frag = client.get("/job/1/apply-button").text
+    assert len(pages.hits) == hits and "Apply on Workday" not in frag and "hx-get" not in frag
+    # ...and is once the day is over.
+    monkeypatch.setattr(apply_bg, "WALK_BACKOFF_S", 0.0)
     frag = client.get("/job/1/apply-button").text
     assert "Apply on Workday" in frag
     assert not any("utah.gov" in h for h in pages.hits)
@@ -581,6 +587,7 @@ class SlowSites(Pages):
 @pytest.fixture
 def slow(client, monkeypatch):
     monkeypatch.setattr(apply_bg, "WAIT_S", 0.3)
+    monkeypatch.setattr(apply_bg, "REVERIFY_WAIT_S", 0.3)
     monkeypatch.setattr(apply_bg, "CLICK_RETRY_GAP_S", 0.05)
     app = client.app
     settings = app.state.settings
@@ -669,3 +676,104 @@ def test_apply_click_survives_a_run_holding_the_write_lock(client, conn, db_path
         time.sleep(0.05)
     click = conn.execute("SELECT outcome, final_url FROM apply_click").fetchone()
     assert click["outcome"] == "redirected" and click["final_url"] == WD
+
+
+def test_click_reverify_has_its_own_longer_budget(client, conn, slow, monkeypatch):
+    """A re-verify slower than a walk's budget (the first request to a host also fetches
+    robots.txt and waits a rate interval) still decides this click (review F2b)."""
+    monkeypatch.setattr(apply_bg, "REVERIFY_WAIT_S", 7.0)
+    add_link(conn, 2, "live", verified_hours=48)
+    slow.responses[WD] = httpx.Response(404)
+    timer = threading.Timer(0.8, slow.gate.set)
+    timer.start()
+    r, took = timed_get(client, "/apply/2")
+    timer.join()
+    assert r.status_code == 200 and "posting has closed" in r.text
+    assert 0.8 <= took < 5.0
+
+
+@pytest.mark.parametrize("path", ["/job/2", "/job/2/apply-button"])
+def test_showing_a_stale_link_reverifies_it_in_the_background(client, conn, slow, path):
+    """The job page (or its fragment) starts a re-verify without waiting, so the next click
+    finds the link fresh (review F2c)."""
+    add_link(conn, 2, "live", verified_hours=48)
+    slow.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    r, took = timed_get(client, path)
+    assert r.status_code == 200 and "Apply on Workday" in r.text and took < 1.0
+    assert client.app.state.apply_link_worker.in_flight() == 1
+    slow.gate.set()
+    assert client.app.state.apply_link_worker.wait_idle(10)
+    assert slow.hits == [WD]
+    row = conn.execute("SELECT verified_at FROM apply_link WHERE job_group_id = 2").fetchone()
+    assert row["verified_at"].startswith("2026-10-09T12:00")
+
+
+def test_background_save_never_replaces_the_users_link(client, conn, slow):
+    """A re-verify read the row, then the user set a link: the re-verify's save must not
+    overwrite it (review N1)."""
+    add_link(conn, 2, "live", verified_hours=48)
+    slow.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    client.get("/job/2")  # starts the re-verify, which blocks on the site
+    assert client.post("/job/2/apply-link", data={"url": MINE}).status_code == 303
+    slow.gate.set()
+    assert client.app.state.apply_link_worker.wait_idle(10)
+    assert slow.hits == [WD]  # the re-verify did run and save
+    row = conn.execute("SELECT final_url, chosen_by FROM apply_link WHERE job_group_id = 2")
+    row = row.fetchone()
+    assert row["final_url"] == MINE and row["chosen_by"] == "user"
+
+
+def test_save_keeps_a_user_link_but_the_user_can_replace_it(conn):
+    from jobhunter.pipeline import applylink
+
+    applylink.set_user_link(conn, 2, MINE, NOW)
+    auto = applylink.get_apply_link(conn, 2).model_copy(
+        update={"final_url": WD, "chosen_by": None, "why": "ranked"}
+    )
+    applylink._save(conn, auto)
+    assert applylink.get_apply_link(conn, 2).final_url == MINE
+    applylink.set_user_link(conn, 2, MINE + "/v2", NOW)
+    assert applylink.get_apply_link(conn, 2).final_url == MINE + "/v2"
+
+
+def test_walks_in_flight_are_capped(client, conn, slow, monkeypatch):
+    """Past the cap a request starts nothing and answers with the stored link (review N2)."""
+    monkeypatch.setattr(apply_bg, "MAX_IN_FLIGHT", 3)
+    for gid in range(1, 7):
+        add_link(conn, gid, "live", final=LOGIN, ats="unknown")
+    frags = {}
+    for gid in range(1, 7):
+        r, took = timed_get(client, f"/job/{gid}/apply-button")
+        assert r.status_code == 200 and took < 2.0
+        frags[gid] = r.text
+    worker = client.app.state.apply_link_worker
+    assert worker.in_flight() == 3
+    for gid in (1, 2, 3):
+        assert "resolving" in frags[gid]  # still walking: the fragment asks again
+    for gid in (4, 5, 6):
+        assert "resolving" not in frags[gid] and "hx-get" not in frags[gid]
+    r, took = timed_get(client, "/apply/5")
+    assert r.status_code == 302 and r.headers["location"] == "https://nlx.example/start"
+    assert took < 1.0 and worker.in_flight() == 3
+
+
+def test_a_thread_that_cannot_start_leaves_nothing_behind(monkeypatch):
+    """No thread could start: nothing is left in flight and a later request runs (review N3)."""
+
+    class NoThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    worker = apply_bg.ApplyLinkWorker(lambda: db.connect(":memory:"), lambda c: None)
+    ran = []
+    real = apply_bg.threading
+    fake = type("T", (), {"Thread": NoThread, "Event": real.Event, "Lock": real.Lock})
+    monkeypatch.setattr(apply_bg, "threading", fake)
+    assert worker.run(7, lambda c, cf: ran.append(1), wait_s=1) == "skipped"
+    assert worker.in_flight() == 0
+    monkeypatch.setattr(apply_bg, "threading", real)
+    assert worker.run(7, lambda c, cf: ran.append(1), wait_s=5) == "done"
+    assert ran == [1]
