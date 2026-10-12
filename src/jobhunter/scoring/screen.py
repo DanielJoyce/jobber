@@ -1001,18 +1001,12 @@ def score_with(
     result = scorer.score_one(request)
     if result.status != "succeeded":
         raise ScreenError(f"{result.status}: {result.detail}")
-    screen = parse_result(result)
     usage = result.usage
     cost = scorer.cost(usage, batch=False)
     scorer_name = scorer.name
-    key = _Key(scorer_name, PROMPT_VERSION, profile.scoring_version)
-    rev = conn.execute(
-        "SELECT description_rev FROM job_group WHERE id = ?", (group_id,)
-    ).fetchone()[0]
+    # Billed: record it, committed on its own, before parsing or writing (bug 6c33b40), so
+    # unparsable output or a failing write still counts against the cap.
     with _txn(conn):
-        row_id, _ = _write_fit_score(
-            conn, group_id, screen, _row(job), usage, cost, key, None, now, result.model, rev
-        )
         _record_spend(
             conn,
             scorer_name,
@@ -1021,6 +1015,15 @@ def score_with(
             _all_input_tokens(usage),
             _usage_int(usage, "output_tokens"),
             cost,
+        )
+    screen = parse_result(result)
+    key = _Key(scorer_name, PROMPT_VERSION, profile.scoring_version)
+    rev = conn.execute(
+        "SELECT description_rev FROM job_group WHERE id = ?", (group_id,)
+    ).fetchone()[0]
+    with _txn(conn):
+        row_id, _ = _write_fit_score(
+            conn, group_id, screen, _row(job), usage, cost, key, None, now, result.model, rev
         )
     return row_id
 
@@ -1172,20 +1175,28 @@ def _score_sync_chunk(
     out.submitted += len(groups)
     tokens_in = tokens_out = calls = 0
     chunk_cost = 0.0
+    billed: list[tuple[Any, sqlite3.Row, float]] = []
+    for res in results:
+        g = by_id.get(res.custom_id)
+        if g is None:
+            continue
+        if res.status != "succeeded":
+            out.errored += 1
+            logger.warning("%s %s: %s", scorer.name, res.custom_id, res.detail)
+            continue
+        cost = scorer.cost(res.usage, batch=False)
+        chunk_cost += cost
+        calls += 1
+        tokens_in += _all_input_tokens(res.usage)
+        tokens_out += _usage_int(res.usage, "output_tokens")
+        billed.append((res, g, cost))
+    # The chunk's billed calls are recorded, committed on their own, before any row is
+    # written (bug 6c33b40): a failing write must not roll the spend back.
     with _txn(conn):
-        for res in results:
-            g = by_id.get(res.custom_id)
-            if g is None:
-                continue
-            if res.status != "succeeded":
-                out.errored += 1
-                logger.warning("%s %s: %s", scorer.name, res.custom_id, res.detail)
-                continue
-            cost = scorer.cost(res.usage, batch=False)
-            chunk_cost += cost
-            calls += 1
-            tokens_in += _all_input_tokens(res.usage)
-            tokens_out += _usage_int(res.usage, "output_tokens")
+        _record_spend(conn, key.model, now, calls, tokens_in, tokens_out, chunk_cost)
+    out.cost_usd += chunk_cost
+    with _txn(conn):
+        for res, g, cost in billed:
             try:
                 screen = parse_result(res)
             except ScreenError as exc:
@@ -1210,8 +1221,6 @@ def _score_sync_chunk(
             else:
                 out.written += 1
                 out.unverified += int(unverified)
-        _record_spend(conn, key.model, now, calls, tokens_in, tokens_out, chunk_cost)
-    out.cost_usd += chunk_cost
 
 
 # ─── Packed requests (specs/016 "Packed requests") ──────────────────────────
@@ -1493,21 +1502,36 @@ def _score_sync_packed(
             raise ValueError(f"scorer {scorer.name} batches; use submit_batch")
         by_pack = {r.custom_id: r for r in results}
         out.requests += len(wave)
+        billed: list[tuple[list[str], Any, float]] = []
+        for pack, request in zip(wave, requests, strict=True):
+            ids = [cid for cid, _ in pack]
+            out.submitted += len(ids)
+            res = by_pack.get(request.custom_id)
+            if res is None or res.status != "succeeded":
+                out.errored += len(ids)
+                detail = res.detail if res else "no result"
+                logger.warning("%s %s: %s", scorer.name, request.custom_id, detail)
+                continue
+            billed.append((ids, res, scorer.cost(res.usage, batch=False)))
+        # Every billed request is recorded, committed on its own, before any row is written
+        # (bug 6c33b40): a failing write or a bad pack must not roll the spend back.
         with _txn(conn):
-            for pack, request in zip(wave, requests, strict=True):
-                ids = [cid for cid, _ in pack]
-                out.submitted += len(ids)
-                res = by_pack.get(request.custom_id)
-                if res is None or res.status != "succeeded":
-                    out.errored += len(ids)
-                    detail = res.detail if res else "no result"
-                    logger.warning("%s %s: %s", scorer.name, request.custom_id, detail)
-                    continue
-                cost = scorer.cost(res.usage, batch=False)
-                out.cost_usd += cost
+            for _ids, res, cost in billed:
+                _record_spend(
+                    conn,
+                    key.model,
+                    now,
+                    1,
+                    _all_input_tokens(res.usage),
+                    _usage_int(res.usage, "output_tokens"),
+                    cost,
+                )
+        out.cost_usd += sum(cost for _ids, _res, cost in billed)
+        with _txn(conn):
+            for ids, res, cost in billed:
                 parsed = parse_packed(res, ids)
                 for cid in parsed.unknown:
-                    logger.warning("%s %s: unknown id %r", scorer.name, request.custom_id, cid)
+                    logger.warning("%s %s: unknown id %r", scorer.name, res.custom_id, cid)
                 share = _share(res.usage, len(ids))
                 for cid in ids:
                     g = by_id[cid]
@@ -1534,13 +1558,4 @@ def _score_sync_packed(
                     else:
                         out.written += 1
                         out.unverified += int(unverified)
-                _record_spend(
-                    conn,
-                    key.model,
-                    now,
-                    1,
-                    _all_input_tokens(res.usage),
-                    _usage_int(res.usage, "output_tokens"),
-                    cost,
-                )
     return out

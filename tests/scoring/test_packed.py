@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 
 import httpx
@@ -471,3 +472,73 @@ def test_unpriced_pack_goes_alone_first(conn, profile, tmp_path):  # noqa: F811
     scorer.submit = lambda reqs: sizes.append(len(reqs)) or real_submit(reqs)
     screen.score_sync(conn, scorer, profile, limit=10, now=NOW, remaining_usd=lambda: 5.0)
     assert sizes[0] == 1 and sum(sizes) == 4
+
+
+# ─── Spend is recorded before any write (bug 6c33b40) ───────────────────────
+
+
+def _break_writes(monkeypatch) -> None:
+    def broken(*a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(screen, "_write_fit_score", broken)
+
+
+def _single_mode_handler(log: list):
+    def handler(req):
+        body = json.loads(req.content)
+        log.append(body)
+        n = int(re.search(r"Systems Engineer (\d+)", body["messages"][1]["content"]).group(1))
+        r = reply([], cost=0.01)
+        r["choices"][0]["message"]["content"] = screen_json([quote(n)])
+        return httpx.Response(200, json=r)
+
+    return handler
+
+
+@pytest.mark.parametrize("per_request", [1, 4])
+def test_a_failing_write_still_records_the_billed_requests(
+    conn,  # noqa: F811
+    profile,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+    per_request,
+):
+    seed(conn, profile, 2)
+    cheap_catalog(tmp_path)  # priced: both single requests go in one chunk
+    log: list = []
+    handler = _single_mode_handler(log) if per_request == 1 else serve(log, all_valid)
+    scorer = make(handler, tmp_path, jobs_per_request=per_request)
+    with monkeypatch.context() as m:
+        _break_writes(m)
+        with pytest.raises(sqlite3.OperationalError):
+            screen.score_sync(conn, scorer, profile, limit=5, now=NOW)
+    assert not conn.in_transaction
+    assert conn.execute("SELECT count(*) FROM fit_score").fetchone()[0] == 0
+    calls, usd = conn.execute("SELECT sum(calls), sum(cost_usd) FROM llm_spend").fetchone()
+    want = (2, 0.02) if per_request == 1 else (1, 0.04)  # two single calls, or one pack
+    assert len(log) == want[0] and calls == want[0] and usd == pytest.approx(want[1])
+    # The retry pays again, and that is recorded once more; nothing is counted twice.
+    res = screen.score_sync(conn, scorer, profile, limit=5, now=NOW)
+    assert res.written == 2
+    calls, usd = conn.execute("SELECT sum(calls), sum(cost_usd) FROM llm_spend").fetchone()
+    assert calls == 2 * want[0] and usd == pytest.approx(2 * want[1])
+
+
+def test_score_with_records_a_billed_call_whose_output_does_not_parse(
+    conn,  # noqa: F811
+    profile,  # noqa: F811
+    tmp_path,
+):
+    (gid,) = seed(conn, profile, 1)
+
+    def handler(req):
+        r = reply([], cost=0.01)
+        r["choices"][0]["message"]["content"] = "not json"
+        return httpx.Response(200, json=r)
+
+    scorer = make(handler, tmp_path, jobs_per_request=1)
+    with pytest.raises(screen.ScreenError):
+        screen.score_with(conn, scorer, profile, gid, now=NOW)
+    calls, usd = conn.execute("SELECT sum(calls), sum(cost_usd) FROM llm_spend").fetchone()
+    assert calls == 1 and usd == pytest.approx(0.01)

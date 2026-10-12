@@ -447,6 +447,10 @@ def run_request(
                 break
             except Exception as exc:
                 status, error = "failed", type(exc).__name__
+                # A billed call whose report could not be stored: its spend is in llm_spend
+                # already, and counts here too (bug 6c33b40).
+                if isinstance(exc, deep.DeepWriteError):
+                    pr.spent += exc.cost_usd
                 logger.exception("deep pass #%s group %s failed", request_id, gid)
                 break
             if res.status == "capped":
