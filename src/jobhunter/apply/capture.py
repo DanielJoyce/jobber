@@ -29,7 +29,7 @@ import sqlite3
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from rapidfuzz import fuzz
@@ -397,6 +397,7 @@ class Analysis:
     apply_mode: str
     destination: str | None
     fetch: FetchOffer | None
+    embed: AtsEmbed | None = None
     reasons: list[str] = field(default_factory=list)
 
     @property
@@ -410,6 +411,24 @@ class Analysis:
     @property
     def add_at_once(self) -> bool:
         return not self.reasons
+
+    @property
+    def ats_url(self) -> str | None:
+        """The ATS posting URL an embed named: the apply-link candidate for the group (bug
+        334d9eb's ranking reads it from ``job.apply_url`` / ``apply_link``). None for a page
+        with no embedded posting, or one whose board could not be told."""
+        return self.embed.url if self.embed and self.embed.url else None
+
+    @property
+    def text_source(self) -> str:
+        """Where the preview's description came from, in words for the popup."""
+        if not self.description:
+            return ""
+        if self.desc_source == "selection":
+            return "your selection"
+        if self.desc_source == "page":
+            return "this page"
+        return "this page's structured data"
 
 
 def page_board_id(url: str) -> tuple[str, str] | None:
@@ -504,24 +523,120 @@ def decode_apply(facts: Facts) -> tuple[str, str | None]:
     return mode, strip_tracking(href)
 
 
-def _fetch_offer(facts: Facts, destination: str | None, description: str) -> FetchOffer | None:
-    """A supported ATS to fetch from (or select on), for a page with little description."""
-    if len(description) >= MIN_DESCRIPTION:
+@dataclass
+class AtsEmbed:
+    """A posting hosted on a supported ATS and shown on the employer's page in a frame (or
+    named by the page URL's job id). ``url`` is the direct posting URL, or None when only the
+    job id is known and the board is not."""
+
+    rule: str
+    host: str
+    url: str | None
+    job_id: str | None
+    kind: Literal["fetch", "select"]
+    via: Literal["iframe", "param"]
+
+
+_GH_JID = re.compile(r"^\d{4,}$")
+_ASHBY_JID = re.compile(r"^[0-9a-f-]{20,}$", re.I)
+
+
+def _query(url: str) -> dict[str, str]:
+    try:
+        return dict(parse_qsl(urlsplit(url).query))
+    except ValueError:
+        return {}
+
+
+def _embed_from_frame(src: str, parent_q: dict[str, str]) -> AtsEmbed | None:
+    """One iframe source: a supported ATS posting (direct, embed or board-with-job-id)."""
+    if urlsplit(src).scheme != "https":
         return None
-    for url in [*(u for u in facts.iframes), *([destination] if destination else [])]:
-        if not url or urlsplit(url).scheme != "https":
-            continue
-        rule = match_ats(url)
-        if rule is None:
-            continue
-        try:
-            direct = paste.direct_board_url(url)
-        except paste.PasteError:
-            continue
-        if rule.name in FETCH_ATS:
-            return FetchOffer(url=direct, host=host_of(direct), kind="fetch")
-        if rule.name in SELECT_ATS:
-            return FetchOffer(url=direct, host=host_of(direct), kind="select")
+    rule = match_ats(src)
+    if rule is None or rule.name not in FETCH_ATS + SELECT_ATS:
+        return None
+    try:
+        direct = paste.direct_board_url(src)
+    except paste.PasteError:
+        return None
+    q = {**parent_q, **_query(src)}
+    parts = [x for x in urlsplit(src).path.split("/") if x]
+    jid: str | None = None
+    if rule.name == "greenhouse":
+        # /embed/job_board?for=<board> (+ gh_jid on the frame or the parent), or /<board>?gh_jid=
+        jid = q.get("token") or q.get("gh_jid")
+        board = q.get("for") or (parts[0] if parts and parts[0] != "embed" else None)
+        if not rule.is_posting(direct) and board and jid and _GH_JID.match(jid):
+            direct = f"https://{host_of(src)}/{board}/jobs/{jid}"
+    elif rule.name == "ashby":
+        jid = q.get("ashby_jid")
+        if not rule.is_posting(direct) and parts and jid and _ASHBY_JID.match(jid):
+            direct = f"https://{host_of(src)}/{parts[0]}/{jid}"
+    if not rule.is_posting(direct):
+        return None
+    kind: Literal["fetch", "select"] = "fetch" if rule.name in FETCH_ATS else "select"
+    return AtsEmbed(rule.name, host_of(direct), direct, jid, kind, "iframe")
+
+
+def ats_embed(facts: Facts) -> AtsEmbed | None:
+    """The ATS posting this employer page embeds, from the reported iframe sources, or only
+    from a job id in the page URL (Greenhouse ``gh_jid``, Ashby ``ashby_jid``): recognised
+    from raw facts, so a frame injected after load is seen as long as it exists at click time."""
+    parent_q = _query(facts.url)
+    for src in facts.iframes:
+        if (found := _embed_from_frame(src, parent_q)) is not None:
+            return found
+    gh = parent_q.get("gh_jid", "")
+    if _GH_JID.match(gh):
+        return AtsEmbed("greenhouse", "greenhouse.io", None, gh, "select", "param")
+    ashby = parent_q.get("ashby_jid", "")
+    if _ASHBY_JID.match(ashby):
+        return AtsEmbed("ashby", "ashbyhq.com", None, ashby, "select", "param")
+    return None
+
+
+def _fetch_offer(
+    facts: Facts,
+    destination: str | None,
+    description: str,
+    embed: AtsEmbed | None,
+    desc_source: str,
+) -> FetchOffer | None:
+    """A supported ATS to fetch from (or select on). With an embedded posting it is offered
+    whatever the page text was (the page text is not the posting); otherwise only for a page
+    with little description."""
+    if embed is not None:
+        if desc_source == "selection" or (
+            desc_source in ("jsonld", "microdata", "site") and len(description) >= MIN_DESCRIPTION
+        ):
+            return None
+        if embed.url is None:
+            return FetchOffer(
+                url="",
+                host=embed.host,
+                kind="select",
+                message=(
+                    f"This page shows a {embed.rule.title()} posting (job {embed.job_id}) "
+                    "but jobhunter cannot tell which board: select the posting's text, "
+                    "right-click your selection, then Send to jobhunter."
+                ),
+            )
+        return FetchOffer(url=embed.url, host=embed.host, kind=embed.kind)
+    if len(description) >= MIN_DESCRIPTION or not destination:
+        return None
+    if urlsplit(destination).scheme != "https":
+        return None
+    rule = match_ats(destination)
+    if rule is None:
+        return None
+    try:
+        direct = paste.direct_board_url(destination)
+    except paste.PasteError:
+        return None
+    if rule.name in FETCH_ATS:
+        return FetchOffer(url=direct, host=host_of(direct), kind="fetch")
+    if rule.name in SELECT_ATS:
+        return FetchOffer(url=direct, host=host_of(direct), kind="select")
     return None
 
 
@@ -559,15 +674,23 @@ def analyse(facts: Facts, posting_index: int | None = None) -> Analysis:
     if len(selection) < MIN_SELECTION:
         selection = ""
     structured_desc = mapped.description if mapped else ""
-    page_description = structured_desc or _plain(facts.page_text)
+    embed = ats_embed(facts)
+    # With an embedded ATS posting the page's own text is the site chrome around it, never the
+    # description: it is not offered (not even as "the page's description").
+    page_description = structured_desc or ("" if embed else _plain(facts.page_text))
     if facts.trigger == "menu-selection" and selection:
         description, desc_source = selection, "selection"
     elif structured_desc:
         description, desc_source = structured_desc, mapped.source  # type: ignore[union-attr]
     else:
-        description, desc_source = _plain(facts.page_text), "page"
+        description, desc_source = page_description, "page"
 
-    if desc_source == "page":
+    if desc_source == "page" and embed is not None:
+        reasons.append(
+            f"the posting is in an embedded {embed.rule.title()} form, not in this page's text: "
+            "fetch it or select its text"
+        )
+    elif desc_source == "page":
         reasons.append("no structured posting data; check the page text")
     elif desc_source != "selection" and len(description) < MIN_DESCRIPTION:
         reasons.append("the structured description is short; check it")
@@ -598,7 +721,8 @@ def analyse(facts: Facts, posting_index: int | None = None) -> Analysis:
         board=board,
         apply_mode=apply_mode,
         destination=destination,
-        fetch=_fetch_offer(facts, destination, description),
+        fetch=_fetch_offer(facts, destination, description, embed, desc_source),
+        embed=embed,
         reasons=reasons,
     )
 
@@ -850,6 +974,7 @@ def _preview(a: Analysis) -> Preview:
         method=a.method,
         url=a.url,
         reasons=a.reasons,
+        text_source=a.text_source,
     )
 
 
@@ -942,7 +1067,7 @@ def _insert(
             closes_at=(m.closes_at or None) if m else None,
             employment_type=m.employment_type if m else None,
             page_url=a.page_url,
-            apply_url=a.destination,
+            apply_url=a.destination or a.ats_url,
             locate=True,
         )
     except paste.PasteError as exc:
@@ -1003,7 +1128,7 @@ def _decide(
         a.url,
         a.employer,
         a.title,
-        urls=() if separate else (a.page_url,),
+        urls=((() if separate else (a.page_url,)) + ((a.ats_url,) if a.ats_url else ())),
         board_keys=(a.board_key,) if a.board_key else (),
     )
     if separate:
@@ -1521,6 +1646,8 @@ def check_fetch_url(url: str) -> str:
         raise CaptureError(str(exc)) from exc
     if urlsplit(direct).scheme != "https" or match_ats(direct) is not rule:
         raise CaptureError("only https URLs on a supported ATS can be fetched")
+    if not rule.is_posting(direct):
+        raise CaptureError("that is a job board page, not one posting; select the text instead")
     return direct
 
 

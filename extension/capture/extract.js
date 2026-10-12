@@ -218,11 +218,13 @@
   const canonicalEl = document.querySelector('link[rel="canonical"]');
   const canonical = canonicalEl ? httpUrl(canonicalEl.getAttribute("href"), "canonical") : null;
   const iframes = [];
-  for (const frame of document.querySelectorAll("iframe[src]")) {
+  // Read at click time, so a frame a script injected after load is seen. A lazy loader may
+  // keep the address in data-src until the frame scrolls into view.
+  for (const frame of document.querySelectorAll("iframe[src], iframe[data-src]")) {
     if (iframes.length >= MAX_IFRAMES) {
       break;
     }
-    const src = httpUrl(frame.getAttribute("src"), "iframes");
+    const src = httpUrl(frame.getAttribute("src") || frame.getAttribute("data-src"), "iframes");
     if (src && !iframes.includes(src)) {
       iframes.push(src);
     }

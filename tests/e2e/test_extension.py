@@ -27,7 +27,7 @@ import pytest
 import uvicorn
 from playwright.sync_api import expect
 
-from jobhunter.apply import capture, ext_pairing
+from jobhunter.apply import capture, ext_pairing, paste
 from jobhunter.config import Settings
 from jobhunter.console.app import create_app
 from jobhunter.core import db
@@ -420,6 +420,46 @@ def test_preview_with_an_edited_description(paired):
     stored = h.rows("SELECT description_text FROM job WHERE url = ?", (url,))[0][0]
     assert "a little Go" not in stored and "Keep the synthetic services" in stored
     p.close()
+
+
+def test_injected_ats_iframe_offers_fetch_and_labels_the_text_source(paired):
+    """A page that injects its Greenhouse frame after load and holds only marketing text
+    outside any main element (bug b8a0b7c): the popup never shows the page text, offers the
+    ATS fetch, labels where the description came from, and records the ATS posting."""
+    h = paired
+    url = f"{EMP}/job-detail/4012345/"
+    embed = "https://job-boards.greenhouse.io/embed/job_app?for=exampleboard&token=4012345"
+    direct = "https://job-boards.greenhouse.io/exampleboard/jobs/4012345"
+    h.served[embed] = "<p>IFRAME-SECRET-TEXT from the embedded form</p>"
+    fetched: list[str] = []
+    posting = "Run the synthetic fleet and write Terraform modules. " * 6
+    h.app.state.ext_fetcher = lambda u: (
+        fetched.append(u) or paste.Fetched(posting, "Staff Widget Engineer", "Example Employer")
+    )
+    try:
+        page = h.open(url, html("iframe_injected.html"))
+        expect(page.locator("iframe#grnhse_iframe")).to_have_count(1)
+        p = h.popup(url)
+        expect(p.locator("#status")).to_have_text("Check this, then Add")
+        assert p.locator("#pv-description").input_value() == ""
+        body = p.locator("body").inner_text()
+        for marketing in ("AI Platform for Telemetry", "SIEM", "IFRAME-SECRET"):
+            assert marketing not in body
+        assert "embedded Greenhouse form" in body
+        expect(p.locator("#pv-source")).to_have_text("No description text yet")
+        expect(p.locator("#fetch")).to_have_text("Fetch from job-boards.greenhouse.io")
+        p.click("#fetch")
+        expect(p.locator("#pv-source")).to_have_text("Description from job-boards.greenhouse.io")
+        assert fetched == [direct]
+        assert p.locator("#pv-description").input_value().startswith("Run the synthetic fleet")
+        expect(p.locator("#pv-employer")).to_have_value("Example Employer")
+        p.click("#add")
+        expect(p.locator("#status")).to_have_text("Added")
+        rows = h.rows("SELECT apply_url FROM job WHERE page_url = ? OR url = ?", (url, url))
+        assert [r[0] for r in rows] == [direct]
+        p.close()
+    finally:
+        h.app.state.ext_fetcher = lambda u: (_ for _ in ()).throw(AssertionError("no fetch"))
 
 
 def test_score_it_with_confirm_202_and_status(paired):

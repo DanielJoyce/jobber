@@ -959,3 +959,151 @@ def test_embedded_greenhouse_iframe_offers_fetch():
         )
     )
     assert ashby.fetch is not None and ashby.fetch.kind == "select"
+
+
+# ─── ATS embeds: never the page text, always the ATS offer (bug b8a0b7c) ────
+
+MARKETING = "The AI Platform for Telemetry empowers enterprises. A new way to SIEM. " * 8
+EMP_PAGE = "https://jobs.example-employer.test/job-detail/4012345/"
+GH_EMBED = "https://job-boards.greenhouse.io/embed/job_app?for=exampleboard&token=4012345"
+GH_DIRECT = "https://job-boards.greenhouse.io/exampleboard/jobs/4012345"
+LEVER_ID = "0b6f0ae1-9d1b-4b55-9c4b-2f0f2f0f2f0f"
+
+
+def embed_facts(**kw):
+    base = {"url": EMP_PAGE, "og_title": "Staff Widget Engineer", "page_text": MARKETING}
+    base.update(kw)
+    return Facts(**base)
+
+
+def test_long_marketing_page_with_an_ats_iframe_is_not_the_description():
+    a = capture.analyse(embed_facts(iframes=[GH_EMBED]))
+    assert a.description == "" and a.page_description == ""
+    assert not a.add_at_once and "embedded Greenhouse" in " ".join(a.reasons)
+    assert a.fetch is not None and a.fetch.kind == "fetch" and a.fetch.url == GH_DIRECT
+    assert a.ats_url == GH_DIRECT and a.text_source == ""
+
+
+@pytest.mark.parametrize(
+    ("iframes", "url", "direct", "kind"),
+    [
+        (
+            ["https://boards.greenhouse.io/embed/job_board?for=exampleboard"],
+            EMP_PAGE + "?gh_jid=4012345",
+            "https://boards.greenhouse.io/exampleboard/jobs/4012345",
+            "fetch",
+        ),
+        (
+            ["https://boards.greenhouse.io/exampleboard?gh_jid=4012345"],
+            EMP_PAGE,
+            "https://boards.greenhouse.io/exampleboard/jobs/4012345",
+            "fetch",
+        ),
+        (
+            [f"https://jobs.lever.co/exampleboard/{LEVER_ID}"],
+            EMP_PAGE,
+            f"https://jobs.lever.co/exampleboard/{LEVER_ID}",
+            "fetch",
+        ),
+        (
+            [f"https://jobs.ashbyhq.com/exampleboard/{LEVER_ID}/embed"],
+            EMP_PAGE,
+            f"https://jobs.ashbyhq.com/exampleboard/{LEVER_ID}",
+            "select",
+        ),
+        (
+            [f"https://jobs.ashbyhq.com/exampleboard?ashby_jid={LEVER_ID}"],
+            EMP_PAGE,
+            f"https://jobs.ashbyhq.com/exampleboard/{LEVER_ID}",
+            "select",
+        ),
+    ],
+)
+def test_ats_embed_url_forms(iframes, url, direct, kind):
+    a = capture.analyse(embed_facts(iframes=iframes, url=url))
+    assert a.fetch is not None and (a.fetch.url, a.fetch.kind) == (direct, kind)
+    assert a.description == ""
+
+
+def test_a_board_iframe_with_no_job_is_not_an_embedded_posting():
+    a = capture.analyse(
+        embed_facts(iframes=["https://boards.greenhouse.io/embed/job_board?for=exampleboard"])
+    )
+    assert a.embed is None and a.fetch is None and a.description  # page text, as before
+
+
+def test_gh_jid_alone_asks_for_a_selection_never_page_text():
+    a = capture.analyse(embed_facts(url=EMP_PAGE + "?gh_jid=4012345"))
+    assert a.description == "" and a.ats_url is None
+    assert a.fetch is not None and a.fetch.kind == "select" and "4012345" in a.fetch.message
+
+
+def test_a_selection_beats_the_embed_and_needs_no_offer():
+    a = capture.analyse(embed_facts(iframes=[GH_EMBED], selection=LONG, trigger="menu-selection"))
+    assert a.description == LONG and a.text_source == "your selection" and a.fetch is None
+
+
+def test_structured_posting_data_still_wins_over_an_embed():
+    a = capture.analyse(embed_facts(iframes=[GH_EMBED], jsonld=[json.dumps(posting(url=None))]))
+    assert a.desc_source == "jsonld" and a.fetch is None and a.add_at_once is True
+
+
+def test_a_page_with_no_embed_keeps_its_page_text():
+    a = capture.analyse(embed_facts())
+    assert a.description and a.text_source == "this page" and a.embed is None
+
+
+def test_preview_carries_the_text_source(conn):
+    r = cap(conn, embed_facts(iframes=[GH_EMBED], selection=LONG))
+    assert r.outcome == "previewed" and r.preview is not None
+    assert r.preview.text_source == "" and r.preview.description == ""
+    assert r.fetch is not None and r.fetch.url == GH_DIRECT
+    r2 = cap(conn, embed_facts(selection=LONG))
+    assert r2.preview is not None and r2.preview.text_source == "this page"
+
+
+def test_adding_a_fetched_ats_posting_records_it_as_the_apply_link_candidate(conn):
+    r = capture.add(
+        conn,
+        AddRequest(
+            action_id=aid(),
+            facts=embed_facts(iframes=[GH_EMBED]),
+            title="Staff Widget Engineer",
+            employer="Example Employer",
+            description=LONG,
+            source="fetch",
+        ),
+        PROFILE,
+        now=NOW,
+    )
+    assert r.outcome == "added" and r.group is not None
+    job = conn.execute("SELECT url, apply_url, page_url FROM job").fetchone()
+    assert job["apply_url"] == GH_DIRECT
+    link = conn.execute("SELECT start_url, ats, status FROM apply_link").fetchone()
+    assert tuple(link) == (GH_DIRECT, "greenhouse", "unresolved")
+    assert conn.execute("SELECT method FROM capture_log").fetchone()[0] == "fetch"
+    never_scored(conn)
+
+
+def test_an_ingested_ats_posting_is_found_through_the_embed(conn):
+    gid = ingested(conn, 1, url=GH_DIRECT, title="Staff Widget Engineer", employer="Example")
+    r = cap(conn, embed_facts(iframes=[GH_EMBED]))
+    assert r.outcome == "existing" and r.group is not None and r.group.group_id == gid
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://boards.greenhouse.io/embed/job_board?for=exampleboard",
+        "https://boards.greenhouse.io/exampleboard",
+        "https://jobs.lever.co/exampleboard",
+    ],
+)
+def test_fetch_refuses_a_board_page_that_is_not_one_posting(conn, url):
+    with pytest.raises(capture.CaptureError):
+        capture.fetch(
+            conn,
+            capture.FetchRequest(action_id=aid(), url=url),
+            lambda u: paste.Fetched("x"),
+            now=NOW,
+        )

@@ -69,7 +69,7 @@ def site(pw):
         seen.append(url)
         if url in served:
             route.fulfill(status=200, content_type="text/html", body=served[url])
-        elif urlparse(url).hostname == "boards.greenhouse.io":
+        elif urlparse(url).hostname in ("boards.greenhouse.io", "job-boards.greenhouse.io"):
             route.fulfill(status=200, content_type="text/html",
                           body="<p>IFRAME-SECRET-TEXT from the embedded form</p>")  # fmt: skip
         else:
@@ -173,6 +173,31 @@ def test_embedded_greenhouse_iframe_is_reported_not_read(site):
         offer is not None
         and offer.url == "https://boards.greenhouse.io/embedsynthetic/jobs/4012345"
     )
+
+
+def test_iframe_injected_after_load_is_reported_and_page_text_is_not_the_description(site):
+    """Bug b8a0b7c: marketing text outside any main element plus a script-injected ATS frame."""
+    url = f"{EMP}/job-detail/4012345/"
+    page = site.open(url, page_html("iframe_injected.html"))
+    page.wait_for_load_state("load")
+    result, facts = site.extract(page)
+    assert result["iframes"] == [
+        "https://job-boards.greenhouse.io/embed/job_app?for=exampleboard&token=4012345"
+    ]
+    assert "AI Platform for Telemetry" in result["page_text"]  # the extractor reports it ...
+    a = capture.analyse(facts)
+    assert a.description == "" and "Telemetry" not in a.page_description  # ... the console drops it
+    assert a.fetch is not None and a.fetch.url == (
+        "https://job-boards.greenhouse.io/exampleboard/jobs/4012345"
+    )
+
+
+def test_gh_jid_in_the_page_url_alone_is_an_ats_posting_without_page_text(site):
+    page = site.open(f"{EMP}/careers/widget?gh_jid=4012345", page_html("gh_jid_only.html"))
+    result, facts = site.extract(page)
+    assert result["iframes"] == []
+    a = capture.analyse(facts)
+    assert a.description == "" and a.fetch is not None and a.fetch.kind == "select"
 
 
 def test_a_2_mb_description_is_truncated(site):
