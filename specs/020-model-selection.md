@@ -248,7 +248,7 @@ twice its hold. So an Anthropic model with **no measured history** is held at no
 price with the cached prefix sized from the real rubric, schema and profile (three characters
 a token) and **all of it priced as cache writes** (`screen.cold_price_per_job_usd`); once a
 collect records its real cost, the measured mean takes over (006 "Cost"). Each batch stores the
-hold it was admitted at (`score_batch.reserve_per_request_usd`, migration 0040) and stays held
+hold it was admitted at (`score_batch.reserve_per_request_usd`, migration 0042) and stays held
 at that until collected. The 1-hour cache TTL was considered and not adopted here: it would
 double the write price for a hit rate the batch service still does not promise.
 
