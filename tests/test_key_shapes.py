@@ -23,6 +23,28 @@ KEY_SHAPES = [
     "aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o",  # Mistral
     "openrouter:aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o",
     "local:AIza" + "SyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStUvW",
+    "pa-aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0oPq2Rs",  # Voyage
+    "aB3dE6gH9jK2-mN5pQ8sT1vW4xY7zLm0oPq2RsT_u8",  # base64url
+    "aB3dE6gH9jK2+mN5pQ8sT1vW4xY7zLm0oPq2RsT=",  # base64
+    "0f8fad5b-d9cb-469f-a165-70867728950e",  # UUID
+    "mykey-0123456789abcdef0123456789abcdef",  # word-<32 hex>
+    "jev:0123456789abcdef0123456789abcdef",
+    "openrouter:pa-aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0oPq2Rs",
+    "local:sk-or-v1-0123456789abcdef",
+]
+
+REAL_IDS = [
+    "openai-compat:my_gpt4o_deployment_2024",
+    "local:Qwen2_5_Coder_32B_Instruct_AWQ",
+    "Llama3_1_70BInstructTurbo",
+    "local:hf_tiny",
+    "pat-7b",
+    "rk_model",
+    "sess-chat",
+    "eyjafjalla-7b",
+    "openrouter:pk_lab/some-model-7b",
+    "local:pa-7b-instruct",
+    "azure:gpt-4o-2024-08-06-eastus-deployment",
 ]
 
 
@@ -39,6 +61,7 @@ def model_id_corpus() -> list[str]:
         "Qwen/Qwen2.5-72B-Instruct-Turbo", "mistralai/Mixtral-8x22B-Instruct-v0.1",
         "gpt-4o-mini-2024-07-18", "decisions:acme/model-v2",
     }  # fmt: skip
+    ids |= set(REAL_IDS)
     ids |= set(catalog.ANTHROPIC_MODELS) | set(catalog.CLI_ALIASES)
     for name in dir(spend):
         table = getattr(spend, name)
@@ -78,12 +101,24 @@ def test_access_rows_are_informational_and_never_change_the_exit_code(tmp_path, 
     assert bad.exit_code == (1 if failing else 0)
 
 
-@pytest.mark.parametrize("key", KEY_SHAPES[:5] + KEY_SHAPES[7:9])
+def test_scorer_messages_never_quote_a_key_shaped_spec():
+    from jobhunter.config import check_scorer_spec
+
+    for key in KEY_SHAPES:
+        for spec in (key, f"local:{key}", f"nope:{key}", f"anthropic:{key}"):
+            try:
+                check_scorer_spec(spec, "screen_scorer")
+            except ValueError as err:  # a local: spec is valid; the others must not echo
+                assert key not in str(err)
+
+
+@pytest.mark.parametrize("key", KEY_SHAPES[:5] + KEY_SHAPES[7:])
 def test_verbose_doctor_never_prints_a_key_shaped_model_value(tmp_path, monkeypatch, key):
     settings = complete_setup(tmp_path, monkeypatch)
     cfg = tmp_path / "config.toml"
     cfg.write_text(
-        cfg.read_text() + f'[scoring]\nscreen_scorer = "{key}"\n[apply]\napi_model = "{key}"\n'
+        cfg.read_text()
+        + f'[scoring]\nscreen_scorer = "local:{key}"\n[apply]\napi_model = "{key}"\n'
     )
     (Path(settings.paths.data_dir) / "models.toml").write_text(
         f'[apply]\ncli_model = "{key}"\n[scoring]\ndeep_scorer = "{key}"\n'

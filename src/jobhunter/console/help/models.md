@@ -97,6 +97,15 @@ The exact messages, and what to do, are in
 [Troubleshooting](troubleshooting.md#a-model-use-is-blocked-by-the-saved-choice) and
 [the broken file entry](troubleshooting.md#the-models-file-is-broken).
 
+## Model names that look like keys
+
+To keep a pasted API key out of messages and logs, jobhunter never prints a model name that
+looks like a key: a known key prefix (`AIza`, `glpat-`, `gsk_`, `hf_`, `xai-` and the like), a
+long run of hex digits, a UUID, or a long random-looking string. Such a name is shown as
+"(value not shown)", and `/models` and `jobhunter models set` refuse to save it. If a real
+model or deployment name trips this, set it in `config.toml` instead: it still works there, but
+it is never printed.
+
 ## The Models page
 
 - **Save** writes the changed fields and records the change in the history.

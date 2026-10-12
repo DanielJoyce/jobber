@@ -175,10 +175,16 @@ def model_access_checks(settings: Settings, mode: str, now: datetime) -> list[Ch
             unlocks = "Whether this use can run"
             cid = f"models.access.{use}"
             if field_name in blocked:
+                from_models = field_name in settings.scoring._blocked
+                where = "models.toml" if from_models else "config.toml"
+                fix = (
+                    Fix("command", "jobhunter models show")
+                    if from_models
+                    else Fix("command", "edit [scoring] in config.toml")
+                )
                 rows.append(Check(cid, SCORING, INFO, MISSING, False, title,
                                   "blocked: this scorer setting is invalid",
-                                  unlocks, Fix("command", "jobhunter models show"),
-                                  "models.toml"))  # fmt: skip
+                                  unlocks, fix, where))  # fmt: skip
                 continue
             try:
                 choice = model_access.choice_for(use, settings)

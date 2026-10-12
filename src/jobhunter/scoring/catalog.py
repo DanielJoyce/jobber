@@ -31,7 +31,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from jobhunter.config import DECISIONS_PROVIDERS, OpenRouter, Scoring, check_scorer_spec
+from jobhunter.config import (
+    DECISIONS_PROVIDERS,
+    OpenRouter,
+    Scoring,
+    check_scorer_spec,
+    shown_value,
+)
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.scoring import decisions, screen
 from jobhunter.scoring.scorers import (
@@ -717,7 +723,7 @@ def options(
                 label = info.name if info and info.name else slug
                 out.options.append(Option(spec, label, "openrouter", note=verdict.note))
     local_values: list[str] = []
-    if scoring.screen_scorer.startswith("local:"):
+    if scoring.screen_scorer.startswith("local:") and shown_value(scoring.screen_scorer):
         local_values.append(scoring.screen_scorer.partition(":")[2])
     for model_id in local_ids or ():
         if model_id not in local_values:

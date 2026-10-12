@@ -24,6 +24,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
@@ -206,23 +207,34 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
     """
     provider, sep, model = spec.partition(":")
     known = ", ".join(SCORER_PROVIDERS)
+
+    def q(text: str) -> str:
+        # A message never quotes a value that looks like a key (019 B).
+        return (
+            "(value not shown)"
+            if _SECRET_LOOKING.search(text) or _looks_like_bare_key(text)
+            else text
+        )
+
     inner, inner_sep, rest = model.partition(":")
     if not sep:
         raise ValueError(
-            f'{field} "{spec}": no provider; write "anthropic:{spec}" (known: {known})'
+            f'{field} "{q(spec)}": no provider; write "anthropic:{q(spec)}" (known: {known})'
         )
     if provider not in SCORER_PROVIDERS:
         if inner_sep and inner in DECISIONS_PROVIDERS and rest:
-            hint = f'; use "{inner}:{rest}"'
+            hint = f'; use "{q(inner)}:{q(rest)}"'
         elif near := difflib.get_close_matches(provider, SCORER_PROVIDERS, n=1):
             hint = f"; did you mean {near[0]!r}?"
         else:
             hint = ""
-        raise ValueError(f'{field} "{spec}": unknown provider {provider!r}{hint} (known: {known})')
+        raise ValueError(
+            f'{field} "{q(spec)}": unknown provider {q(provider)!r}{hint} (known: {known})'
+        )
     if not model.strip():
-        raise ValueError(f'{field} "{spec}": no model after "{provider}:"')
+        raise ValueError(f'{field} "{q(spec)}": no model after "{q(provider)}:"')
     if anthropic_only and provider != "anthropic":
-        raise ValueError(f'{field} "{spec}": the deep pass needs "anthropic:<model>"')
+        raise ValueError(f'{field} "{q(spec)}": the deep pass needs "anthropic:<model>"')
     if provider == "anthropic":
         # Lazy: scorers imports this module. A model missing from the price table would be
         # reserved and recorded at the wrong price, so it is refused up front (bug df51dff).
@@ -231,18 +243,20 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
         if model not in PRICING_PER_MTOK:
             listed = ", ".join(sorted(PRICING_PER_MTOK))
             raise ValueError(
-                f'{field} "{spec}": no price for {model!r}, so spend caps cannot see its cost '
-                f"(priced: {listed})"
+                f'{field} "{q(spec)}": no price for {q(model)!r}, '
+                f"so spend caps cannot see its cost (priced: {listed})"
             )
     # OpenRouter slugs are author/model, so a leading provider name is a mistake. Local and
     # openai-compat model names are free-form ("jev:latest" can be legitimate).
     if provider == "openrouter" and inner_sep and inner in SCORER_PROVIDERS:
         if inner in DECISIONS_PROVIDERS and rest:
             raise ValueError(
-                f'{field} "{spec}": {inner.capitalize()} is its own provider; use '
-                f'"{inner}:{rest}" (it still uses OPENROUTER_API_KEY)'
+                f'{field} "{q(spec)}": {q(inner).capitalize()} is its own provider; use '
+                f'"{q(inner)}:{q(rest)}" (it still uses OPENROUTER_API_KEY)'
             )
-        raise ValueError(f'{field} "{spec}": the model name starts with the provider {inner!r}')
+        raise ValueError(
+            f'{field} "{q(spec)}": the model name starts with the provider {q(inner)!r}'
+        )
 
 
 # The value an invalid ``models.toml`` spending key leaves in its field. It is not a usable spec
@@ -496,37 +510,62 @@ _CHOICES = {"runner": ("cli", "api"), "effort": ("low", "medium", "high")}
 # A value may be echoed in a message only when it looks like a scorer spec or model id
 # (019 B: never a value except SHOWN_VALUES), and never when it looks like a key.
 _SHOWABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
-# A key prefix at the start or after a provider or path separator ("openrouter:sk-or-...").
-_KEY_PREFIXES = (
-    "sk-", "sk_", "key-", "key_", "ghp_", "gho_", "ghs_", "github_pat_", "glpat-", "xox",
-    "xai-", "gsk_", "hf_", "aiza", "bearer", "pplx-", "r8_", "fw_", "fireworks_", "csk-",
-    "nvapi-", "ya29.", "akia", "asia", "eyj", "pat-", "tgp_", "rk_", "pk_", "sess-",
+# A key prefix at the start or after a provider or path separator ("openrouter:sk-or-..."), with
+# enough characters after it to be a key: the long, distinctive prefixes need 8, the short ones
+# that a model name could begin with ("hf_tiny", "pat-7b", "rk_model") need 20.
+_ORIGINAL_PREFIXES = ("sk-", "sk_", "key-", "ghp_", "xox", "bearer")  # always hidden, as before
+_STRONG_PREFIXES = (
+    "gho_", "ghs_", "github_pat_", "glpat-", "aiza",
+    "pplx-", "fireworks_", "csk-", "nvapi-", "ya29.", "akia", "asia", "xai-", "gsk_",
 )  # fmt: skip
+_WEAK_PREFIXES = (
+    "key_", "hf_", "r8_", "fw_", "eyj", "pat-", "pa-", "tgp_", "rk_", "pk_", "sess-",
+)  # fmt: skip
+
+
+def _prefix_alt(prefixes: tuple[str, ...], tail: int) -> str:
+    return "(?:" + "|".join(re.escape(p) for p in prefixes) + f")[A-Za-z0-9_.+=-]{{{tail},}}"
+
+
 _SECRET_LOOKING = re.compile(
     r"(?i)(?:^|[:/])(?:"
-    + "|".join(re.escape(p) for p in _KEY_PREFIXES)
+    + "|".join(re.escape(p) for p in _ORIGINAL_PREFIXES)
+    + "|"
+    + _prefix_alt(_STRONG_PREFIXES, 8)
+    + "|"
+    + _prefix_alt(_WEAK_PREFIXES, 20)
     + r")|secret|token|password"
 )
-# A bare key has no prefix: 32 or more hex digits, or a long run of letters and digits with
-# both cases and digits mixed and no separator. Real model ids carry '-', '.', ':' or '/' between
-# short words, so they never form such a run.
-_BARE_HEX = re.compile(r"[0-9a-fA-F]{32,}")
-_BARE_ALNUM = re.compile(r"[A-Za-z0-9_]{24,}")
+_HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
+_SEGMENT_SPLIT = re.compile(r"[-_+.=]")
+
+
+def _class(ch: str) -> int:
+    return 0 if ch.isdigit() else 1 if ch.islower() else 2
+
+
+def _unit_is_key(unit: str) -> bool:
+    alnum = re.sub(r"[^A-Za-z0-9]", "", unit)
+    if _HEX_RUN.fullmatch(alnum):  # plain hex, or a UUID with its dashes
+        return True
+    if any(_HEX_RUN.fullmatch(seg) for seg in _SEGMENT_SPLIT.split(unit)):  # word-<32 hex>
+        return True
+    if re.fullmatch(r"[A-Za-z0-9]{32,}", unit) and any(c.isdigit() for c in unit):
+        return True  # a long unseparated run: no model name is that long without a separator
+    if len(alnum) >= 24:
+        # Random text flips between digit, lower and upper case about every other character;
+        # model names change class at word and number boundaries only.
+        flips = sum(_class(x) != _class(y) for x, y in pairwise(alnum))
+        if flips / (len(alnum) - 1) >= 0.5:
+            return True
+    return False
 
 
 def _looks_like_bare_key(value: str) -> bool:
-    for part in re.split(r"[:/@]", value):
-        if _BARE_HEX.fullmatch(part):
-            return True
-        if _BARE_ALNUM.fullmatch(part):
-            classes = (
-                any(c.isdigit() for c in part),
-                any(c.islower() for c in part),
-                any(c.isupper() for c in part),
-            )
-            if sum(classes) >= 2 and len(set(part)) >= 12:
-                return True
-    return False
+    """A key with no prefix: hex, a UUID, a long random run, base64 or base64url."""
+    rest = value.partition(":")[2] or value
+    units = {value, rest, *re.split(r"[:/@]", value)}
+    return any(_unit_is_key(u) for u in units)
 
 
 def shown_value(value: object) -> str | None:
