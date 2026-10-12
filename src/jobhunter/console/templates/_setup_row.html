@@ -61,6 +61,17 @@
     </form>
   {% endif %}
   {% if r.upload_error %}<p class="su-error" role="alert">{{ r.upload_error }}</p>{% endif %}
+  {% set live_id = "live-" ~ (c.id | replace('.', '-')) %}
+  {% if r.live %}
+  <form method="post" action="/setup/live/{{ c.id }}" class="su-form su-live"
+        hx-post="/setup/live/{{ c.id }}" hx-target="#{{ live_id }}" hx-swap="innerHTML" hx-disabled-elt="find button">
+    <button type="submit">Test (free)</button>
+    <span class="muted">Calls no model and spends nothing; the result is shown once, not saved.</span>
+  </form>
+  <div id="{{ live_id }}" class="su-live-out" aria-live="polite">{% if r.live_result %}{% with res = r.live_result %}{% include "_setup_live.html" %}{% endwith %}{% endif %}</div>
+  {% elif r.live_hint %}
+  <p class="su-live-hint muted">Free live check: {{ cmd(r.live_hint) }}</p>
+  {% endif %}
   {% if r.dismissible %}
   <form method="post" action="/setup/dismiss" class="su-form su-hide">
     <input type="hidden" name="check_id" value="{{ c.id }}">

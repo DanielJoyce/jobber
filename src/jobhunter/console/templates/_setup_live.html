@@ -1,0 +1,11 @@
+{# One live check's result (specs/019 "Live checks"): fixed text only, shown once, never stored. #}
+<div class="su-live-result su-live-{{ res.outcome | replace(' ', '-') }}" role="status">
+  <p><strong>{{ res.title }}</strong> <span class="su-word">{{ res.outcome }}</span>{% if res.at %} <span class="muted">at {{ res.at.isoformat() | localtime }}</span>{% endif %}</p>
+  {% if res.facts or res.notes %}
+  <ul class="su-live-facts">
+    {% for f in res.facts %}<li>{{ f.label }}: <strong>{{ {True: "yes", False: "no"}.get(f.value, "unknown") }}</strong></li>{% endfor %}
+    {% for n in res.notes %}<li>{{ n | replace("`", "") }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if res.instead %}<p>Run instead: <code>{{ res.instead }}</code></p>{% endif %}
+</div>

@@ -2,9 +2,10 @@
 
 ``GET /setup`` renders ``readiness.run_checks`` grouped by section. Three writes, none of
 which takes a secret: ``POST /setup/starter-prefs``, ``POST /setup/resume`` and
-``POST /setup/dismiss``. The live checks (S6) and the help
-links (S11e) are other tickets. No check value is ever rendered here: the rows are the fixed
-wording ``readiness`` builds.
+``POST /setup/dismiss``. ``POST /setup/live/{check_id}`` runs one free live check (S6,
+``live_checks``): only for a loopback peer address, and never under ``--allow-remote``. No
+check value is ever rendered here: the rows are the fixed wording ``readiness`` builds, and a
+live result is booleans mapped to fixed text, shown once and never stored or logged.
 """
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local annotations.
@@ -24,6 +25,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from jobhunter import live_checks as lc
 from jobhunter import readiness as rd
 from jobhunter.config import Settings, resolve_path
 from jobhunter.console import help as helpdocs
@@ -42,8 +44,9 @@ from jobhunter.xdg import mkdir_private
 DISMISSED_FILE = "setup-dismissed.json"
 # Rows only the CLI shows (019 "/setup": rows 1-3 are doctor-only).
 DOCTOR_ONLY = frozenset({"config.file", "db.schema"})
-# The live "Test (free)" button is S6; until it lands the row points at the command only.
-TEST_BUTTON_TEXT = re.compile(r"use Test \(free\),? or (?:run )?(`[^`]+`)")
+# Readiness wording names the live button ("use Test (free), or run `x`"). Where the row
+# shows no button, the button's part becomes the command that runs the same check.
+TEST_BUTTON_TEXT = re.compile(r"use Test \(free\)(,? or (?:run )?)(`[^`]+`)")
 CLIENT_SECRET = "jobhunter_google_client"
 # Rows whose value comes only from settings that Apply reloads (config.RELOADABLE), so after an
 # Apply their rule-6 note says "read at HH:MM (applied)". Every other row is read at start:
@@ -85,6 +88,9 @@ class Row:
     upload_error: str = ""
     hidden: bool = False
     detail: str = ""
+    live: bool = False  # shows the "Test (free)" button
+    live_hint: str = ""  # the command that runs this row's live check instead
+    live_result: lc.LiveResult | None = None
 
 
 @dataclass
@@ -142,6 +148,33 @@ def help_title(path: str) -> str:
     return entry.title if entry else ""
 
 
+def live_detail(detail: str, button: bool, hint: str) -> str:
+    """The row text: with a button it names it; without, the command that does the same."""
+    if button:
+        return detail
+    if not hint:
+        return TEST_BUTTON_TEXT.sub(r"run \2", detail)
+    if hint.startswith("jobhunter-ctr mail status"):  # the command already is the live check
+        return TEST_BUTTON_TEXT.sub(f"run `{hint}`", detail)
+    return TEST_BUTTON_TEXT.sub(rf"run `{hint}`\1\2", detail)
+
+
+def live_controls(
+    check_id: str, settings: Settings, mode: str, peer_ok: bool, environ: Any = None
+) -> tuple[bool, str]:
+    """(button shown, command instead) for one row. The button needs a loopback peer and a
+    check that can run in this mode; otherwise the row names the command."""
+    kind = lc.kind_for(check_id, settings, mode)
+    if kind is None:
+        return False, ""
+    instead = lc.instead_for(check_id, kind, mode, environ)
+    if instead:
+        return False, instead
+    if not peer_ok:
+        return False, lc.doctor_live_command(mode)
+    return True, ""
+
+
 def build_groups(
     checks: list[rd.Check],
     settings: Settings,
@@ -150,6 +183,9 @@ def build_groups(
     *,
     errors: dict[str, str] | None = None,
     dismissed: dict[str, Any] | None = None,
+    peer_ok: bool = False,
+    environ: Any = None,
+    live_results: dict[str, lc.LiveResult] | None = None,
 ) -> list[Group]:
     by_step = {c.step: c for c in checks if c.step}
     rows_by_group: dict[str, list[Row]] = {g: [] for g in rd.GROUPS}
@@ -168,6 +204,7 @@ def build_groups(
             and dismissed[c.id].get("status") == effective
         )
         word = "due soon" if due_ok else c.status
+        button, hint = live_controls(c.id, settings, mode, peer_ok, environ)
         row = Row(
             check=c,
             icon="!" if due_ok else STATUS_ICON.get(c.status, "?"),
@@ -181,7 +218,10 @@ def build_groups(
             dismissible=can_dismiss(c) and (failing or c.due) and not hidden,
             upload_error=(errors or {}).get(c.id, ""),
             hidden=hidden,
-            detail=TEST_BUTTON_TEXT.sub(r"run \1", c.detail).replace("`", ""),
+            detail=live_detail(c.detail, button, hint).replace("`", ""),
+            live=button,
+            live_hint=hint,
+            live_result=(live_results or {}).get(c.id),
             help="/help/" + rd.help_for(c.id, mode),
             help_title=help_title(rd.help_for(c.id, mode)),
         )
@@ -249,6 +289,16 @@ def register(
     def home_of(request: Request) -> Path | None:
         return getattr(request.app.state, "setup_home", None)
 
+    def live_allowed(request: Request) -> bool:
+        """Live checks use your credentials, so they need the TCP peer to be this machine.
+        ``Host`` is client-supplied and proves nothing; ``--allow-remote`` refuses them all."""
+        if getattr(request.app.state, "allow_remote", False):
+            return False
+        from jobhunter.console.app import is_loopback  # app imports this module
+
+        peer = request.client.host if request.client else ""
+        return is_loopback(peer)
+
     def compute(request: Request) -> list[rd.Check]:
         return rd.run_checks(
             settings_of(request),
@@ -276,7 +326,11 @@ def register(
             rd.Fix("route", "/config/changes"), "config.toml", reads_at_start=True,
         )  # fmt: skip
 
-    def view_of(request: Request, errors: dict[str, str] | None = None) -> dict[str, Any]:
+    def view_of(
+        request: Request,
+        errors: dict[str, str] | None = None,
+        live_results: dict[str, lc.LiveResult] | None = None,
+    ) -> dict[str, Any]:
         """Groups plus the summary numbers. Essentials are judged on every check, including
         the doctor-only rows the page does not list."""
         checks = compute(request)
@@ -293,6 +347,9 @@ def register(
             home_of(request),
             errors=errors,
             dismissed=read_dismissed(dismissed_path(settings_of(request))),
+            peer_ok=live_allowed(request),
+            environ=getattr(request.app.state, "setup_environ", None),
+            live_results=live_results,
         )
         return {
             "groups": groups,
@@ -344,6 +401,7 @@ def register(
         errors: dict[str, str] | None = None,
         flash: str = "",
         status: int = 200,
+        live_results: dict[str, lc.LiveResult] | None = None,
     ) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
@@ -355,7 +413,7 @@ def register(
                 "show_all": show_all,
                 "flash": flash,
                 "oob": False,
-                **view_of(request, errors),
+                **view_of(request, errors, live_results),
             },
             status_code=status,
         )
@@ -445,6 +503,24 @@ def register(
                         require_resume=False,
                     )
         return resume_row_response(request, "", 200)
+
+    @app.post("/setup/live/{check_id}")
+    async def live_check(request: Request, check_id: str) -> Response:
+        if not live_allowed(request):
+            raise HTTPException(403, "live checks run only from this machine; run doctor --live")
+        if check_id not in rd.CHECK_IDS:
+            raise HTTPException(404, "unknown check id")
+        settings = settings_of(request)
+        mode = mode_of(request)
+        deps = getattr(request.app.state, "live_deps", None) or lc.Deps(
+            environ=getattr(request.app.state, "setup_environ", None), home=home_of(request)
+        )
+        result = await run_in_threadpool(lc.run_row, check_id, settings, mode, now=now(), deps=deps)
+        if result is None:
+            raise HTTPException(404, "this row has no live check")
+        if request.headers.get("hx-request") == "true":
+            return templates.TemplateResponse(request, "_setup_live.html", {"res": result})
+        return page(request, show_all=True, live_results={check_id: result})
 
     @app.post("/setup/dismiss")
     async def dismiss(request: Request) -> Response:
