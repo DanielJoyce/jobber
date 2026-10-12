@@ -4,7 +4,7 @@ Static data only. The rules that decide each one live in ``rules.py``; this modu
 the board shows. Descriptions and hints never mention scoring, generating, or sending more
 applications (a test checks every string against a deny list).
 
-``setup.ready`` is not here yet: A6 adds it once 019's ``essentials_ok`` lands.
+``setup.ready`` (All set) takes 019's ``essentials_ok`` from the caller; see ``engine.evaluate``.
 """
 
 from __future__ import annotations
@@ -65,6 +65,13 @@ CATALOG: tuple[Achievement, ...] = (
         "setup",
         "You connected your mailbox with jobhunter mail setup.",
         "Run jobhunter mail setup to connect your mailbox.",
+    ),
+    Achievement(
+        "setup.ready",
+        "All set",
+        "setup",
+        "The essentials for jobhunter are in place: nothing required is missing.",
+        "Finish the checklist on the Setup page.",
     ),
     # --- Search
     Achievement(

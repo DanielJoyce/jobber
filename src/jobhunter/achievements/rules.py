@@ -199,6 +199,13 @@ class Rules:
             return Series()
         return Series([Item(at, ())])
 
+    def setup_ready(self) -> Series:
+        """All set: 019's ``essentials_ok`` as the caller reported it. Unknown (None) or not
+        ok counts nothing; the engine never revokes a row whose input is unknown."""
+        if not self.f.essentials:
+            return Series()
+        return Series([Item(self.f.now, ())])
+
     # --- Search
 
     def _labels(self, where: str = "") -> list[Item]:

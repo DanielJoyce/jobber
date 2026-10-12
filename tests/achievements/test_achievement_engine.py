@@ -234,11 +234,73 @@ def test_rows_of_unknown_ids_are_never_touched(world):
     world.evaluate()
     world.conn.execute(
         "INSERT INTO achievement_unlock (achievement_id, tier, unlocked_at, detected_at, "
-        "evidence, catalog_version) VALUES ('setup.ready', 1, ?, ?, '{}', 1)",
+        "evidence, catalog_version) VALUES ('setup.future', 1, ?, ?, '{}', 1)",
         (iso(NOW), iso(NOW)),
     )
     world.evaluate(NOW + timedelta(hours=1))
+    assert ("setup.future", 1) in world.unlocks()
+
+
+# --- setup.ready (All set): 019's essentials_ok, judged by the caller
+
+
+def test_all_set_unlocks_when_essentials_are_ok(world):
+    world.evaluate()  # the silent backfill, with the essentials not yet judged
+    (u,) = engine.evaluate(world.conn, NOW + timedelta(hours=1), TZ, essentials=True)
+    assert (u.achievement_id, u.tier) == ("setup.ready", 1)
+    assert u.seen_at is None  # a later unlock notifies
+
+
+def test_all_set_is_not_granted_while_an_essential_is_missing(world):
+    world.evaluate()
+    assert engine.evaluate(world.conn, NOW + timedelta(hours=1), TZ, essentials=False) == []
+    assert ("setup.ready", 1) not in world.unlocks()
+
+
+def test_all_set_is_kept_when_the_essentials_are_unknown(world):
+    engine.evaluate(world.conn, NOW, TZ, essentials=True)  # backfill
+    assert engine.evaluate(world.conn, NOW + timedelta(hours=1), TZ) == []
     assert ("setup.ready", 1) in world.unlocks()
+
+
+def test_all_set_revokes_within_24_hours_when_an_essential_breaks(world):
+    engine.evaluate(world.conn, NOW, TZ, essentials=True)
+    engine.evaluate(world.conn, NOW + timedelta(hours=1), TZ, essentials=False)
+    assert ("setup.ready", 1) not in world.unlocks()
+
+
+def test_all_set_is_permanent_after_24_hours(world):
+    engine.evaluate(world.conn, NOW, TZ, essentials=True)
+    engine.evaluate(world.conn, NOW + timedelta(hours=25), TZ, essentials=False)
+    assert ("setup.ready", 1) in world.unlocks()
+
+
+def test_essentials_are_judged_once_per_fingerprint(world):
+    gate = engine.Gate(tz=TZ)
+    judged = []
+
+    def essentials():
+        judged.append(1)
+        return True
+
+    gate.refresh(world.conn, NOW, essentials=essentials)
+    gate.refresh(world.conn, NOW, essentials=essentials)  # same fingerprint: no evaluation
+    gate.refresh(world.conn, NOW, force=True, essentials=essentials)  # forced, same fingerprint
+    assert len(judged) == 1
+    world.prefs_save("2026-10-10 10:00")
+    gate.refresh(world.conn, NOW, essentials=essentials)
+    assert len(judged) == 2
+    assert ("setup.ready", 1) in world.unlocks()
+
+
+def test_a_failing_essentials_check_means_unknown(world):
+    gate = engine.Gate(tz=TZ)
+
+    def broken():
+        raise RuntimeError("readiness broke")
+
+    gate.refresh(world.conn, NOW, essentials=broken)  # no exception reaches the caller
+    assert ("setup.ready", 1) not in world.unlocks()
 
 
 def test_a_run_that_ends_never_revokes(world):
