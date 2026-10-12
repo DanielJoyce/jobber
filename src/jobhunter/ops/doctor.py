@@ -23,17 +23,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from jobhunter import container, legacy_data, readiness
-from jobhunter.config import Settings, load_settings
+from jobhunter import container, legacy_data, model_access, readiness
+from jobhunter.config import MODEL_KEYS, Settings, load_settings, resolve_path, shown_value
 from jobhunter.ops import preflight
 from jobhunter.readiness import (
     BASICS,
     BROKEN,
     ESSENTIAL,
     FAILING,
+    INFO,
+    MISSING,
     OK,
     RECOMMENDED,
     RUNNING,
+    SCORING,
     UNKNOWN,
     Check,
     Fix,
@@ -85,6 +88,7 @@ class Report:
     preflight_lines: list[preflight.Line] = field(default_factory=list)
     preflight_ran: bool = False
     group: str | None = None
+    model_sources: list[tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
@@ -132,6 +136,74 @@ def layout_check(settings: Settings, home: Path) -> Check:
         "an old database is still on disk; see `jobhunter paths`" if notes else "current layout"
     )
     return Check("data.layout", BASICS, ESSENTIAL, OK, False, title, detail, unlocks)
+
+
+_ACCESS_STATUS = {
+    model_access.OK: readiness.OK,
+    model_access.LIKELY: readiness.OK,
+    model_access.MISSING: MISSING,
+    model_access.UNKNOWN: UNKNOWN,
+}
+
+
+def model_access_checks(settings: Settings, mode: str, now: datetime) -> list[Check]:
+    """Doctor-only rows ``models.access.<use>``: can each model use run, and on what.
+
+    Local and free (``model_access`` makes no call). Informational level, so a missing key is
+    not counted twice next to the ``scorer.*`` rows. A blocked use (models.toml holds an
+    invalid scorer) says so instead of naming a credential. Detail is fixed wording and
+    variable names; the model value shown is a scorer spec or model id only."""
+    layers = settings.models_layers
+    blocked = layers.blocked if layers is not None else {}
+    conn = readiness._open_ro(resolve_path(settings.paths.db_path))
+    rows = []
+    try:
+        for use in model_access.USES:
+            title = f"{model_access.USE_LABELS[use]} access"
+            field_name = {"screen": "screen_scorer", "deep": "deep_scorer"}.get(use)
+            unlocks = "Whether this use can run"
+            cid = f"models.access.{use}"
+            if field_name in blocked:
+                rows.append(Check(cid, SCORING, INFO, MISSING, False, title,
+                                  "blocked: models.toml holds an invalid value for it",
+                                  unlocks, Fix("command", "jobhunter models show"),
+                                  "models.toml"))  # fmt: skip
+                continue
+            try:
+                choice = model_access.choice_for(use, settings)
+                access = model_access.access_for(
+                    use, choice, settings, mode=mode, now=now, conn=conn
+                )
+            except Exception as exc:  # never a traceback: a message could echo a value
+                detail = f"could not be checked ({type(exc).__name__})"
+                rows.append(Check(cid, SCORING, INFO, UNKNOWN, False, title, detail, unlocks))
+                continue
+            shown = shown_value(choice.model)
+            on = f"{shown}: " if shown else ""
+            if access.status == model_access.LIKELY:
+                detail = f"{on}{access.detail} (likely)"
+            else:
+                detail = f"{on}{access.detail}"
+            fix = Fix("route", "/models") if access.status == model_access.MISSING else None
+            rows.append(Check(cid, SCORING, INFO, _ACCESS_STATUS[access.status], False, title,
+                              detail, unlocks, fix, access.provider))  # fmt: skip
+    finally:
+        if conn is not None:
+            conn.close()
+    return rows
+
+
+def model_sources(settings: Settings) -> list[tuple[str, str, str]]:
+    """(``section.key``, shown value, source) for every model setting, for ``doctor -v``."""
+    layers = settings.models_layers
+    out = []
+    for section, keys in MODEL_KEYS.items():
+        for key in keys:
+            value = getattr(getattr(settings, section), key)
+            text = str(value).lower() if isinstance(value, bool) else value
+            where = layers.source(section, key) if layers is not None else "unknown"
+            out.append((f"{section}.{key}", shown_value(text) or "(not shown)", where))
+    return out
 
 
 def _config_failed(exc: Exception) -> Check:
@@ -212,8 +284,13 @@ def gather(
     if config_error is not None:
         checks = [_config_failed(config_error) if c.id == "config.file" else c for c in checks]
     checks.insert(1, layout_check(settings, home))
+    at = next((i for i, c in enumerate(checks) if c.id == "models.choices"), None)
+    if at is not None:
+        checks[at + 1 : at + 1] = model_access_checks(settings, mode, now)
 
     report = Report(checks, mode, group=wanted)
+    if config_error is None:
+        report.model_sources = model_sources(settings)
     if containers:
         if context_builder is None:
             raise RuntimeError("--containers needs a preflight context builder")
@@ -297,6 +374,10 @@ def render(report: Report, *, verbose: bool = False) -> list[str]:
     if report.preflight_ran:
         out.append("Container preflight (dry run)")
         out += [f"  {line.render()}" for line in report.preflight_lines]
+    if verbose and report.model_sources:
+        out.append("Model settings (where each value comes from)")
+        width = max(len(k) for k, _, _ in report.model_sources)
+        out += [f"  {k:<{width}}  {v}  [{src}]" for k, v, src in report.model_sources]
     if verbose:
         out.append(f"mode: {report.mode}")
         out.append(WAL_NOTE)
