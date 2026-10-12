@@ -16,11 +16,18 @@ async function tabId() {
 
 async function render(id) {
   const st = await chrome.runtime.sendMessage({type: "panel/state", tab: id});
+  if (st && st.state === "gone") {
+    bound.textContent = "That tab no longer exists.";
+    detail.hidden = true;
+    return;
+  }
   if (!st || st.state !== "ok") {
     bound.textContent = "Could not read this tab.";
     return;
   }
-  bound.textContent = st.ats ? "Bound to this " + st.ats + " tab." : "Bound to this tab.";
+  bound.textContent = st.ats
+    ? "Bound to this " + st.ats + " tab."
+    : "Bound to this tab. No supported application form has been seen on it.";
   document.getElementById("site").textContent = st.host || "unknown";
   document.getElementById("field").textContent = st.field || "none chosen";
   detail.hidden = false;

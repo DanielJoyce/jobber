@@ -28,15 +28,17 @@ GENERIC_ALLOWED = {"frame/hello", "forms/get", "frame/bye"}
 
 
 def policy() -> dict[str, list[str]]:
-    block = SOURCE.split("const MESSAGE_POLICY = {", 1)[1].split("\n};", 1)[0]
+    block = SOURCE.split("const MESSAGE_POLICY = deepFreeze({", 1)[1].split("\n});", 1)[0]
     return json.loads("{" + block + "}")
 
 
 def handler_types() -> set[str]:
-    names = set(re.findall(r'HANDLERS\["([^"]+)"\]\s*=', SOURCE))
-    loops = re.findall(r"for \(const name of \[([^\]]*)\]\)", SOURCE)
-    for body in loops:
-        names |= set(re.findall(r'"([^"]+)"', body))
+    """Real registrations only: statements at the start of a line (a comment or a string that
+    merely mentions ``HANDLERS["x"] =`` does not count)."""
+    names = set(re.findall(r'^HANDLERS\["([^"]+)"\]\s*=', SOURCE, re.M))
+    for body, after in re.findall(r"^for \(const name of \[([^\]]*)\]\) \{\n(.*)", SOURCE, re.M):
+        if after.lstrip().startswith("HANDLERS[name] ="):
+            names |= set(re.findall(r'"([^"]+)"', body))
     return names
 
 
@@ -82,3 +84,25 @@ def test_the_listener_refuses_a_type_outside_the_table():
     # the first thing the onMessage listener does is the own-property check on the table
     listener = SOURCE.split("chrome.runtime.onMessage.addListener(", 1)[1]
     assert "Object.hasOwn(MESSAGE_POLICY, msg.type)" in listener.split("allowed", 1)[0]
+
+
+def code_without_comments() -> str:
+    text = re.sub(r"/\*.*?\*/", "", SOURCE, flags=re.S)
+    return "\n".join(ln for ln in text.split("\n") if not ln.lstrip().startswith("//"))
+
+
+def test_the_table_is_frozen_and_read_only_by_the_listener():
+    assert "const MESSAGE_POLICY = deepFreeze({" in SOURCE
+    code = code_without_comments()
+    start = code.index("chrome.runtime.onMessage.addListener(")
+    end = code.index("\nfunction onMenu")
+    definition = code.index("const MESSAGE_POLICY = ") + len("const ")
+    uses = [m.start() for m in re.finditer(r"\bMESSAGE_POLICY\b", code)]
+    outside = [u for u in uses if u != definition and not start < u < end]
+    assert outside == [], "MESSAGE_POLICY is used outside its definition and the listener"
+
+
+def test_the_handler_registry_counts_only_real_registrations():
+    found = handler_types()
+    assert {"forms/get", "pair", "draft/generate", "estimate"} <= found
+    assert "bogus/type" not in found

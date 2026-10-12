@@ -338,18 +338,72 @@ def test_panel_open_calls_the_side_panel_before_any_await():
     assert "openPanel(" in branch and "await" not in branch
 
 
+USER_EVENTS = (
+    "click|dblclick|auxclick|contextmenu|pointerdown|pointerup|mousedown|mouseup|touchstart"
+    "|touchend|keydown|keyup|keypress"
+)
+LISTENER = re.compile(
+    r'(?:addEventListener\(|\bon\(\s*[\w.]+\s*,\s*)"(?:' + USER_EVENTS + r')"\s*,\s*'
+    r"(?P<arg>function\b[^{]*\{|\([^)]*\)\s*=>\s*\{|\w+\s*=>\s*\{|\w+)"
+)
+
+
+def body_from(text: str, brace: int) -> str:
+    depth = 0
+    for i in range(brace, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace : i + 1]
+    raise AssertionError("unbalanced braces")
+
+
+def user_event_handlers(text: str) -> list[str]:
+    """The bodies of every handler for a click, pointer, mouse, touch or key event: inline
+    functions, arrows, and named functions or constants."""
+    bodies = []
+    for m in LISTENER.finditer(text):
+        arg = m.group("arg")
+        if arg.endswith("{"):
+            bodies.append(body_from(text, m.end() - 1))
+            continue
+        name = arg.strip()
+        d = re.search(
+            rf"function\s+{name}\s*\([^)]*\)\s*\{{|(?:const|let)\s+{name}\s*=\s*(?:async\s*)?(?:function[^{{]*|\([^)]*\)\s*=>\s*)\{{",
+            text,
+        )
+        assert d, f"handler {name} is not defined where the lint can read it"
+        bodies.append(body_from(text, d.end() - 1))
+    return bodies
+
+
+def test_user_event_lint_reads_named_and_pointer_handlers():
+    src = (
+        "function onDown(ev) { if (!ev.isTrusted) return; }\n"
+        'b.addEventListener("pointerdown", onDown);\n'
+        "const press = (ev) => { go(); };\n"
+        'on(window, "keydown", press);\n'
+        'b.addEventListener("click", function (ev) { x(); });\n'
+    )
+    bodies = user_event_handlers(src)
+    assert len(bodies) == 3
+    assert ["isTrusted" in b for b in bodies] == [True, False, False]
+
+
 def test_content_scripts_use_no_network_and_trust_only_real_clicks():
     for path in sorted((EXT / "content").rglob("*.js")):
-        code = strip_js(path.read_text(encoding="utf-8"))
-        assert violations(code, CONTENT_DENY) == [], path.name
-        # every click handler checks isTrusted before it does anything (read from the source:
-        # the lexer blanks strings)
         text = path.read_text(encoding="utf-8")
-        clicks = list(re.finditer(r'addEventListener\("click",\s*\(?\w*\)?\s*=>\s*\{', text))
-        assert clicks, "the overlay button handler was not found"
-        for m in clicks:
-            assert "isTrusted" in text[m.end() : m.end() + 200], path.name
-        assert "isTrusted" in text
+        assert violations(strip_js(text), CONTENT_DENY) == [], path.name
+        # every click, pointer, mouse, touch or key handler checks isTrusted (read from the
+        # source: the lexer blanks strings)
+        handlers = user_event_handlers(text)
+        if path.name == "frame.js":
+            assert handlers, "the overlay button handler was not found"
+        for body in handlers:
+            assert "isTrusted" in body, path.name
+        assert not re.search(r"\.on(?:click|pointer\w+|mouse\w+|key\w+|touch\w+)\s*=", text)
 
 
 def test_manifest_pins_the_extension_id():

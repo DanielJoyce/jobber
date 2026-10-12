@@ -441,7 +441,9 @@ async function openConsole(path) {
 // a non-ATS site), "page" (the extension's own pages). Anything not here, or from a kind not
 // listed, is refused. No spend or write type, and no mode or pairing type, lists a content
 // script (tests/test_extension_message_policy.py keeps it so).
-const MESSAGE_POLICY = {
+const deepFreeze = (table) => Object.freeze(Object.fromEntries(
+  Object.entries(table).map(([type, kinds]) => [type, Object.freeze(kinds)])));
+const MESSAGE_POLICY = deepFreeze({
   "frame/hello": ["ats", "generic"],
   "forms/get": ["ats", "generic"],
   "frame/bye": ["ats", "generic"],
@@ -477,7 +479,7 @@ const MESSAGE_POLICY = {
   "file/attach": ["page"],
   "text/insert": ["page"],
   "ats/mode": ["page"]
-};
+});
 
 // The required ATS hosts, from pipeline/ats_rules.py (a test keeps this and the manifest equal
 // to it). Workday joins when you grant it (ticket A11).
@@ -716,6 +718,11 @@ HANDLERS["panel/state"] = async (msg) => {
   if (!Number.isInteger(tab)) {
     throw new ApiError("error", "no tab");
   }
+  try {
+    await chrome.tabs.get(tab);
+  } catch (e) {
+    return {state: "gone", tab};
+  }
   const frames = Object.entries(await sessionMap("frames"))
     .filter(([key]) => key.startsWith(tab + ":"))
     .map(([key, f]) => ({frameId: Number(key.split(":")[1]), host: f.host, ats: f.ats}));
@@ -868,6 +875,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   const allowed = MESSAGE_POLICY[msg.type];
+  // The quick check first: a sender whose kind the type does not list is refused (and logged)
+  // whether or not it announced itself; "unannounced" is only for a kind that could send it.
+  const quick = syncKind(sender);
+  if (!allowed.includes(quick === "other" ? "generic" : quick)) {
+    refused(msg.type, quick);
+    sendResponse({state: "refused", message: "not allowed from here"});
+    return false;
+  }
   if (msg.type === "panel/open") {
     // Synchronously, before any await, so the click's gesture is still there (the registry
     // check would need an await; the facts checked here are the sender's own).

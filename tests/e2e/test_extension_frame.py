@@ -59,7 +59,22 @@ EMPLOYER_PAGE = f"""<!doctype html><meta charset="utf-8"><title>Careers</title>
 GENERIC_BODY = (
     '<!doctype html><meta charset="utf-8"><title>Generic</title><input id="resume" type="file">'
 )
-SERVED = {GH_EMBED: FORM, EMPLOYER: EMPLOYER_PAGE, GENERIC_PAGE: GENERIC_BODY}
+# A styled-away file input in a full-width box, inside the page's own scroll container.
+GH_HIDDEN = "https://boards.greenhouse.io/embed/job_app?for=boardsynthetic&token=7002"
+HIDDEN_FORM = """<!doctype html><meta charset="utf-8"><title>Apply</title>
+<style>body{margin:0;font:14px sans-serif}
+#scroller{height:180px;overflow:auto;border:1px solid #888}
+#s3_upload_for_resume{display:block;width:100%;height:40px;background:#eee}
+#resume{position:absolute;width:0;height:0;opacity:0}</style>
+<div id="scroller"><div style="height:300px">spacer</div>
+ <div id="s3_upload_for_resume"><input id="resume" type="file"></div>
+ <div style="height:300px">more</div></div>"""
+SERVED = {
+    GH_EMBED: FORM,
+    GH_HIDDEN: HIDDEN_FORM,
+    EMPLOYER: EMPLOYER_PAGE,
+    GENERIC_PAGE: GENERIC_BODY,
+}
 
 
 def free_port() -> int:
@@ -348,6 +363,29 @@ def test_a_real_click_on_a_button_opens_the_panel_bound_to_the_tab(rig):
     expect(shell.locator("#site")).to_have_text("boards.greenhouse.io")
     expect(shell.locator("#field")).to_have_text("resume")
     shell.close()
+    gone = rig.ctx.new_page()
+    gone.goto(f"chrome-extension://{rig.ext_id}/panel/index.html?tab=987654321")
+    expect(gone.locator("#bound")).to_have_text("That tab no longer exists.")
+    gone.close()
+    page.close()
+
+
+def test_a_button_for_a_hidden_input_stays_in_the_viewport_and_follows_inner_scrolling(rig):
+    switches(rig, show_buttons=True)
+    page = rig.open(GH_HIDDEN)
+    tab = rig.tab_id(GH_HIDDEN)
+    rig.wait_for(lambda: rig.buttons(tab, 0), "the button")
+    page.evaluate("document.getElementById('scroller').scrollTop = 250")
+    width = page.evaluate("document.documentElement.clientWidth")
+    rig.wait_for(lambda: rig.buttons(tab, 0)[0]["y"] < 250, "the button to follow the scroll")
+    b = rig.buttons(tab, 0)[0]
+    assert b["x"] + b["w"] <= width  # inside the viewport, not hanging past the edge
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    before = b["y"]
+    page.evaluate("document.getElementById('scroller').scrollTop = 0")
+    rig.wait_for(lambda: rig.buttons(tab, 0)[0]["y"] > before + 100, "the button to follow back")
     page.close()
 
 
@@ -397,6 +435,8 @@ def test_a_frame_that_never_announced_itself_is_not_trusted(rig):
     tab = rig.tab_id(GH_EMBED)
     learned(rig, tab)
     assert rig.send_from_frame(tab, 0, {"type": "frame/bye"})["state"] == "ok"
+    # a page-only type from an unannounced frame is refused, not "unannounced"
+    assert refused(rig.send_from_frame(tab, 0, {"type": "draft/generate"}))
     assert rig.send_from_frame(tab, 0, {"type": "forms/get"})["state"] == "unannounced"
     assert rig.send_from_frame(tab, 0, {"type": "ask/answer"})["state"] == "unannounced"
     assert rig.send_from_frame(tab, 0, {"type": "frame/hello"})["state"] == "ok"

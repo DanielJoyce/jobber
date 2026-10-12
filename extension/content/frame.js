@@ -247,7 +247,10 @@
         b = makeButton(key, role);
         root.appendChild(b);
       }
-      b.style.left = Math.max(0, rect.right + dx + 6) + "px";
+      // Beside the field, but never past the right edge of the viewport: a field whose box
+      // spans the page puts the button inside that box instead of adding a scrollbar.
+      const room = document.documentElement.clientWidth - b.offsetWidth - 4;
+      b.style.left = Math.max(0, Math.min(rect.right + 6, room) + dx) + "px";
       b.style.top = Math.max(0, rect.top + dy) + "px";
     }
   }
@@ -350,7 +353,8 @@
     const ro = new ResizeObserver(schedule);
     ro.observe(document.documentElement);
     observers.push(ro);
-    on(window, "scroll", schedule, {passive: true});
+    // capture: scrolling inside a page's own scroll container does not bubble to the window
+    on(document, "scroll", schedule, {capture: true, passive: true});
     on(window, "resize", schedule);
     on(window, "pagehide", () => {
       if (alive() && !state.orphaned) {
