@@ -61,6 +61,40 @@ values. Check with `/setup` or `jobhunter doctor`.
 Fix `[scoring] screen_scorer` or `[scoring] deep_scorer` in `config.toml`; the accepted forms
 are in [Choosing a scorer](scorers.md). Check with `/setup` or `jobhunter doctor`.
 
+## A model use is blocked by the saved choice
+
+A choice saved on the Models page or with `jobhunter models set` is not a value jobhunter can
+use, so that use is blocked. It does not fall back to `config.toml` or the default, because that
+could send jobs to a provider you switched away from. The message depends on where the use ran:
+
+```text
+score: skipped (models.toml screen_scorer is invalid ... (see /models or jobhunter models show)); survivors stay queued
+scorer error: models.toml screen_scorer is invalid ... (see /models or jobhunter models show)
+models.toml screen_scorer is invalid ... (see /models or jobhunter models show); the re-score stays queued
+```
+
+The first line is the run stage (and Score now). The second is `jobhunter score`, which stops
+with exit code 2. The third is a queued re-score, which is left queued. Jobs and re-scores stay
+queued in every case. The same wording with `deep_scorer` means the deep pass is blocked.
+
+Run `jobhunter models show`. The line for the blocked use gives the problem. Then either pick a
+valid model with `jobhunter models set USE VALUE`, or remove the saved choice with `jobhunter
+models reset USE`. The use runs again on the next run or the next click. A blocked
+drafting or fact-check choice does not stop drafting: the `config.toml` value or the default
+applies, with a notice on the packet page. See [Choosing models](models.md#what-fail-closed-means).
+
+## The models file is broken
+
+`models.toml is not valid TOML` means the file in your data folder cannot be read at all. Both
+screening and the deep pass are blocked, because what the file set cannot be known (see the
+entry above). The Models page shows a Reset file button for this case. Run `jobhunter models
+show` to see which file and which keys. To keep the file and start over, run `jobhunter models
+reset-file`: it replaces the file with an empty one and keeps the old file beside it, named
+`models.toml.broken-<time>`. Then choose the models again. If the file is valid TOML but holds a
+value that is not allowed, `jobhunter models reset USE` removes just that key. Use `jobhunter
+models reset-file --force` only to empty a file that is valid TOML. See [Choosing
+models](models.md#where-choices-are-saved).
+
 ## Spend cap reached
 
 `score: daily or weekly spend cap reached`. The scorer stopped because `[scoring] daily_cap_usd`
