@@ -598,6 +598,7 @@ def test_done_is_not_shown_beside_a_running_line(pdir, db_path, conn):
     rid = conn.execute("SELECT id FROM deep_request").fetchone()[0]
     done = c.get(f"/deep/{rid}/progress").text
     assert "Done." in done and "You can leave this page" not in done
+    assert 'id="deep-again" hx-get="/deep/panel?mode=next"' in done
     assert "A deep pass is running" not in done
 
 

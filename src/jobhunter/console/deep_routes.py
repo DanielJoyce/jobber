@@ -9,6 +9,7 @@ without waiting. The run happens on one background thread with its own connectio
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
 import ipaddress
+import json
 import logging
 import sqlite3
 import threading
@@ -184,6 +185,16 @@ class DeepManager:
                 fresh.close()
 
 
+def again_url(row: Any) -> str:
+    """The panel for a finished run's own mode (and group), to plan another."""
+    if row["mode"] == "group":
+        ids = json.loads(row["group_ids"] or "[]")
+        if ids:
+            return f"/deep/panel?group={int(ids[0])}"
+    mode = row["mode"] if row["mode"] in ("next", "rerun") else "next"
+    return f"/deep/panel?mode={mode}"
+
+
 def _int(value: Any, default: int | None) -> int | None:
     text = str(value or "").strip()
     return int(text) if text.isdigit() else default
@@ -199,6 +210,7 @@ def register(
     app.state.deep = DeepManager()
     app.state.deep_client_factory = None  # tests inject a fake; None builds anthropic.Anthropic
     templates.env.globals["deep_model_label"] = dr.model_label
+    templates.env.globals["deep_again_url"] = again_url
 
     def panel_ctx(
         request: Request,
