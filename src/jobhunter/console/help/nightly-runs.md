@@ -46,11 +46,18 @@ as its slowest source rather than the sum of all of them. Set `parallel_sources 
 one source at a time as before.
 
 If a host answers 429 or sends `Retry-After`, every source on that host waits it out, not just
-the one that was told.
+the one that was told, including requests already waiting their turn. When the pause asked for
+is longer than 10 minutes, sources on that host stop for this run (marked `suspect`) and try
+again next run, rather than sit idle for it.
 
 The email-alert source reads and writes the database itself, so it runs on its own after the
-other sources. The journal gets a line per source as it finishes, for example
-`list <source>: status=ok queries=3 pages=9 (cached 2) stubs=41 robots_skips=0 errors=0 in
-62.0s`, and lines per stage. Lines from different sources interleave. Ctrl-C stops the run
-within about one request: sources waiting on a rate limit give up at once, no source starts a
-new request, and queued sources never start.
+other sources. Each source logs to the journal as soon as its fetching ends, for example
+`fetched <source>: 41 stubs from 3 queries in 62.0s`. A second line with its status
+follows once its stubs are saved, for example `list <source>: status=ok queries=3 pages=9
+(cached 2) stubs=41 robots_skips=0 errors=0 in 62.0s`. Stubs are saved in a fixed order, so
+that second line can wait for a slower source ahead of it. Lines from different sources
+interleave.
+
+Ctrl-C stops the run within about one request. Sources waiting on a rate limit give up at once,
+no source starts a new request, and queued sources never start. A request already in flight
+can take up to `fetch.timeout_s` (default 20 seconds) to finish or time out.

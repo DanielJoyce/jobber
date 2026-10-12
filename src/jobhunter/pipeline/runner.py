@@ -731,6 +731,16 @@ def run_pipeline(
             except Exception as exc:
                 out.error = exc
             out.seconds = time.monotonic() - t0
+            # Logged as it happens, from the worker; the status line follows once the stubs
+            # are written, which is in plan order and may wait for a slower earlier source.
+            logger.info(
+                "fetched %s: %d stubs from %d queries in %.1fs%s",
+                key,
+                res.stubs_found,
+                res.queries_run,
+                out.seconds,
+                f" ({type(out.error).__name__})" if out.error else "",
+            )
             return out
 
         def list_done(entry: PlanEntry, outcome: Outcome[_Listed]) -> None:

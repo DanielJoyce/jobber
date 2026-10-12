@@ -410,6 +410,13 @@ class FetchContext:
         for attempt in range(attempts):
             if self._cancel is not None:
                 self._cancel()
+            # A host that asked for a long pause (Retry-After over MAX_RETRY_AFTER_S) gets no
+            # request and parks no worker: fail now, the source is retried next run.
+            held = self._limiter.remaining_hold(host, clock=self._clock)
+            if held > MAX_RETRY_AFTER_S:
+                raise TransientFetchError(
+                    url, f"host {host} asked for a {held:.0f}s pause (Retry-After)", status=None
+                )
             self._limiter.acquire(
                 host,
                 interval,
@@ -448,12 +455,12 @@ class FetchContext:
                     )
                     retry_after = _retry_after_seconds(response.headers.get("retry-after"))
             # The host asked us to slow down (429, Retry-After): every context on it waits, not
-            # just this one, since sources share hosts. Held even when this context gives up,
-            # capped at MAX_RETRY_AFTER_S. A retry's own acquire() then does the waiting.
+            # just this one, since sources share hosts. Held for the full time even when this
+            # context gives up; a retry's own acquire() then does the waiting.
             host_wait: float | None = None
             if retry_after is not None or status == 429:
                 host_wait = retry_after if retry_after is not None else self._backoff(attempt)
-                self._limiter.hold(host, min(host_wait, MAX_RETRY_AFTER_S), clock=self._clock)
+                self._limiter.hold(host, host_wait, clock=self._clock)
             if attempt == attempts - 1:
                 break
             if retry_after is not None and retry_after > MAX_RETRY_AFTER_S:
