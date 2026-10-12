@@ -54,11 +54,18 @@ def test_rescore_now_confirms_runs_and_links_to_the_inbox(page, server):
     page.goto(f"{server.url}/prefs")
     panel = page.locator("#sec-rescore")
     expect(panel).to_contain_text("Re-score now")
-    # Changing the scope swaps the whole panel (hx-get on the select). "Will score" is already
-    # on screen from the first render, so waiting for it proves nothing: wait for the swap
-    # itself, or the click can hit the old form while it is replaced and the run never starts.
-    with page.expect_response(lambda r: "/prefs/rescore/panel" in r.url and "scope=all" in r.url):
-        panel.locator("select[name=scope]").select_option("all")
+    # Changing the scope swaps the whole panel (hx-get on the select), and htmx binds the new
+    # form's hx-post only after the swap settles. Wait for the old button to leave the DOM and
+    # for afterSettle, or the click can hit the old form (or an unbound new one) and no run starts.
+    page.evaluate(
+        "() => { window.__settled = false;"
+        " document.querySelector('#rescore-panel').addEventListener("
+        "'htmx:afterSettle', () => { window.__settled = true; }, { once: true }); }"
+    )
+    old_run = panel.locator("#rescore-run").element_handle()
+    panel.locator("select[name=scope]").select_option("all")
+    page.wait_for_function("old => !old.isConnected", arg=old_run)
+    page.wait_for_function("() => window.__settled === true")
     expect(panel.locator("select[name=scope]")).to_have_value("all")
     expect(panel.locator("#rescore-estimate")).to_contain_text("Will score")
     expect(panel.locator("#rescore-run")).to_be_enabled()
