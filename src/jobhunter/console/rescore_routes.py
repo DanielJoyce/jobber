@@ -30,7 +30,7 @@ from jobhunter.pipeline.listing import to_iso
 from jobhunter.scoring import rescore as rs
 from jobhunter.scoring.decisions import JEV_DEFAULT_MODEL
 from jobhunter.scoring.profile import Profile
-from jobhunter.scoring.scorers import ScorerError, privacy_notice
+from jobhunter.scoring.scorers import PRESENT, ScorerError, credential_for, privacy_notice
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +52,11 @@ def available_scorers(scoring: Any, env: Mapping[str, str] | None = None) -> lis
             "configured default, INVALID: see message" if problem else "configured default",
         )
     ]
-    if env.get(scoring.openrouter.api_key_env):
-        out.append((f"jev:{JEV_DEFAULT_MODEL}", "Jev, synchronous"))
-    if env.get("ANTHROPIC_API_KEY"):
+    # credential_for (specs/019 S1): ANTHROPIC_AUTH_TOKEN and an SDK profile count too.
+    jev = f"jev:{JEV_DEFAULT_MODEL}"
+    if credential_for(jev, scoring, environ=env).status == PRESENT:
+        out.append((jev, "Jev, synchronous"))
+    if credential_for(ANTHROPIC_HAIKU, scoring, environ=env).status == PRESENT:
         out.append((ANTHROPIC_HAIKU, "Anthropic batch, collected later"))
     seen: set[str] = set()
     return [(s, label) for s, label in out if not (s in seen or seen.add(s))]

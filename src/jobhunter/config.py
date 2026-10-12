@@ -310,7 +310,8 @@ class Apply(BaseModel):
     """Assisted apply drafting (specs/017 "Targeted resume", "CLI runner").
 
     ``runner`` picks what a Generate click runs: ``cli`` (the Claude Code CLI on the user's
-    subscription, the default) or ``api`` (the ``anthropic`` SDK on ``ANTHROPIC_API_KEY``).
+    subscription, the default) or ``api`` (the ``anthropic`` SDK on any credential it accepts:
+    ``ANTHROPIC_API_KEY``, ``ANTHROPIC_AUTH_TOKEN``, a profile; see ``scorers.credential_for``).
     With ``cli``, a failed run only *offers* the API run; it never switches by itself.
     Two model keys because a CLI alias and an API model id are different names.
     ``daily_cap_usd`` caps packet API spend only and is separate from ``[scoring]``'s caps.

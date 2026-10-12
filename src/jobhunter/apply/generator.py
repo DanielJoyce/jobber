@@ -51,7 +51,14 @@ from jobhunter.core.spend import PACKET_CLI_TIER, PACKET_TIER
 from jobhunter.scoring import catalog
 from jobhunter.scoring import screen as stage2
 from jobhunter.scoring.profile import Profile
-from jobhunter.scoring.scorers import PRICING_PER_MTOK, Usage, compute_cost, thinking_off
+from jobhunter.scoring.scorers import (
+    PRESENT,
+    PRICING_PER_MTOK,
+    Usage,
+    compute_cost,
+    credential_for,
+    thinking_off,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -505,7 +512,18 @@ def _run_api(
     now: datetime,
     client_factory: Callable[[], Any] | None,
 ) -> Call:
-    client = client_factory() if client_factory is not None else _default_client()
+    try:
+        client = client_factory() if client_factory is not None else _default_client()
+    except Exception as exc:
+        import anthropic
+
+        if not isinstance(exc, anthropic.AnthropicError):
+            raise
+        # anthropic.CredentialsError and kin: nothing was sent. A profile or config dir that
+        # credential_for counted (stat only) but the SDK cannot load fails here. Fixed
+        # wording: the SDK's message can name files or accounts.
+        logger.warning("packet %s API client failed: %s", req.kind, type(exc).__name__)
+        raise GenerateFailed(CLIENT_FAILED) from exc
     params = api_params(req, model, effort=effort, max_tokens=MAX_TOKENS[req.kind])
     try:
         with client.messages.stream(**params) as stream:
@@ -537,6 +555,9 @@ def _run_api(
         raise GenerateFailed("the output did not match the expected structure") from exc
     call.model = served
     return call
+
+
+CLIENT_FAILED = "the Anthropic SDK could not load its credentials; check them with jobhunter doctor"
 
 
 def _default_client() -> Any:
@@ -692,6 +713,17 @@ def _cli_call(res: cli_runner.CliResult, model: str) -> Call:
     )
 
 
+NO_API_CREDENTIAL = "no ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or Anthropic SDK profile is set"
+
+
+def api_credential_present(settings: Settings, environ: Mapping[str, str] | None = None) -> bool:
+    """Can the ``api`` runner find an Anthropic credential? ``credential_for`` (specs/019 S1),
+    so ``ANTHROPIC_AUTH_TOKEN``, a profile and workload identity count as the SDK does. Local:
+    environment variables and stats only."""
+    spec = f"anthropic:{settings.apply.api_model}"
+    return credential_for(spec, settings.scoring, environ=environ).status == PRESENT
+
+
 def _preflight(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -705,8 +737,8 @@ def _preflight(
     """Every refusal that must happen before anything runs or is spent."""
     env = os.environ if environ is None else environ
     if runner == "api":
-        if not env.get("ANTHROPIC_API_KEY"):
-            raise ApplyRefused("no ANTHROPIC_API_KEY is set, so the API run is not available")
+        if not api_credential_present(settings, env):
+            raise ApplyRefused(f"{NO_API_CREDENTIAL}, so the API run is not available")
         left = remaining_cap(conn, settings, now)
         if left < estimate_usd:
             raise ApplyRefused(

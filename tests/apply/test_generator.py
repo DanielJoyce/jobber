@@ -810,3 +810,36 @@ def test_long_question_claims_differing_past_120_characters_do_not_collide(tmp_p
             pass
         with pytest.raises(inflight.Busy), inflight.claim(tmp_path, stem + "led a migration"):
             pass
+
+
+def _unloadable_profile():
+    import anthropic
+
+    raise anthropic.CredentialsError("profile /home/<you>/secret-profile.json is unusable")
+
+
+def test_an_sdk_profile_the_sdk_cannot_load_fails_cleanly(env, monkeypatch):
+    # credential_for counts ANTHROPIC_PROFILE by presence; the SDK only finds out at
+    # construction. That must be a GenerateFailed with fixed wording, never a traceback.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "nonexistent")
+    with pytest.raises(generator.GenerateFailed) as info:
+        gen(env, runner="api", client_factory=_unloadable_profile)
+    assert info.value.reason == generator.CLIENT_FAILED
+    assert "secret-profile" not in info.value.reason
+    assert spend(env) == {}
+
+
+def test_a_client_failure_in_the_fact_check_is_recorded_and_the_draft_stands(env, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-synthetic")
+    made = []
+
+    def factory():
+        if made:
+            _unloadable_profile()
+        made.append(1)
+        return FakeClient([RESUME_OUT])
+
+    out = gen(env, runner="api", client_factory=factory)
+    assert out.version == 1  # the draft is saved; the check failed, advisory only
+    assert out.entailment == "failed"

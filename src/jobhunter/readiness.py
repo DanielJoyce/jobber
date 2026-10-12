@@ -379,9 +379,13 @@ def _secret_state(ctx: _Ctx, name: str) -> secrets.SecretState:
 def _dropin_present(ctx: _Ctx, secret: str, unit: str | None = None) -> bool:
     """Preflight's drop-in for the unit exists (a stat). It exists only when the podman secret
     did at the last preflight (019 "Modes")."""
+    return _dropin_exists(ctx.unit_dir(), secret, unit)
+
+
+def _dropin_exists(unit_dir: Path, secret: str, unit: str | None = None) -> bool:
     from jobhunter.ops import preflight
 
-    path = preflight.dropin_path(ctx.unit_dir(), unit or preflight.RUN, secret)
+    path = preflight.dropin_path(unit_dir, unit or preflight.RUN, secret)
     try:
         return path.is_file()
     except OSError:
@@ -463,20 +467,41 @@ def _provider(spec: str) -> str:
     return provider if sep else "anthropic"
 
 
-def _credential(ctx: _Ctx, spec: str) -> scorers.Credential:
+def scorer_credential(
+    spec: str,
+    scoring: Any,
+    *,
+    mode: str,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> scorers.Credential:
     """``credential_for``, except in host-managing mode where the containers' secrets decide,
-    not this shell's environment."""
-    cred = scorers.credential_for(spec, ctx.settings.scoring, environ=ctx.environ, home=ctx.home)
-    if ctx.mode != HOST_MANAGING or cred.status == scorers.UNKNOWN:
+    not this shell's environment: a secret counts when preflight's drop-in exists (a stat).
+    Shared with ``model_access`` so the setup rows and the model rows cannot disagree."""
+    cred = scorers.credential_for(spec, scoring, environ=environ, home=home)
+    if mode != HOST_MANAGING or cred.status == scorers.UNKNOWN:
         return cred
     secret = _SECRET_FOR_PROVIDER.get(_provider(spec))
     if secret is None:
         return cred
     if not cred.names and cred.status == scorers.PRESENT:
         return cred  # openai-compat with an empty api_key_env: nothing to look up
-    if _dropin_present(ctx, secret):
+    from jobhunter.ops import preflight
+
+    if _dropin_exists(preflight.default_unit_dir(home), secret):
         return scorers.Credential(scorers.PRESENT, cred.names or (secret,))
     return scorers.Credential(scorers.MISSING, cred.names)
+
+
+def secret_for_provider(spec: str) -> str | None:
+    """The podman secret that carries ``spec``'s credential to the containers."""
+    return _SECRET_FOR_PROVIDER.get(_provider(spec))
+
+
+def _credential(ctx: _Ctx, spec: str) -> scorers.Credential:
+    return scorer_credential(
+        spec, ctx.settings.scoring, mode=ctx.mode, environ=ctx.environ, home=ctx.home
+    )
 
 
 def _scorer_row(

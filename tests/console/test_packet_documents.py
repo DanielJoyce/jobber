@@ -710,3 +710,17 @@ def test_host_mode_still_shows_the_generate_buttons(env, fake_claude):
     page = env.client.get(f"/packet/{env.pid}")
     assert "Generate resume (subscription)" in page.text
     assert "jobhunter apply draft" not in page.text
+
+
+def test_an_sdk_profile_the_sdk_cannot_load_is_a_message_not_a_500(env, monkeypatch):
+    import anthropic
+
+    def factory():
+        raise anthropic.CredentialsError("profile /home/<you>/secret-profile.json is unusable")
+
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "nonexistent")  # counted by presence, not loadable
+    env.app.state.packet_api_client_factory = factory
+    r = generate(env, runner="api")
+    assert r.status_code == 409
+    assert "could not load its credentials" in r.text and "secret-profile" not in r.text
+    assert docs(env) == []
