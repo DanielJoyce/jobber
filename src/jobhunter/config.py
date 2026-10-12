@@ -497,16 +497,43 @@ _CHOICES = {"runner": ("cli", "api"), "effort": ("low", "medium", "high")}
 # (019 B: never a value except SHOWN_VALUES), and never when it looks like a key.
 _SHOWABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
 # A key prefix at the start or after a provider or path separator ("openrouter:sk-or-...").
+_KEY_PREFIXES = (
+    "sk-", "sk_", "key-", "key_", "ghp_", "gho_", "ghs_", "github_pat_", "glpat-", "xox",
+    "xai-", "gsk_", "hf_", "aiza", "bearer", "pplx-", "r8_", "fw_", "fireworks_", "csk-",
+    "nvapi-", "ya29.", "akia", "asia", "eyj", "pat-", "tgp_", "rk_", "pk_", "sess-",
+)  # fmt: skip
 _SECRET_LOOKING = re.compile(
-    r"(?i)(?:^|[:/])(?:sk-|sk_|key-|ghp_|xox|bearer)|secret|token|password"
+    r"(?i)(?:^|[:/])(?:"
+    + "|".join(re.escape(p) for p in _KEY_PREFIXES)
+    + r")|secret|token|password"
 )
+# A bare key has no prefix: 32 or more hex digits, or a long run of letters and digits with
+# both cases and digits mixed and no separator. Real model ids carry '-', '.', ':' or '/' between
+# short words, so they never form such a run.
+_BARE_HEX = re.compile(r"[0-9a-fA-F]{32,}")
+_BARE_ALNUM = re.compile(r"[A-Za-z0-9_]{24,}")
+
+
+def _looks_like_bare_key(value: str) -> bool:
+    for part in re.split(r"[:/@]", value):
+        if _BARE_HEX.fullmatch(part):
+            return True
+        if _BARE_ALNUM.fullmatch(part):
+            classes = (
+                any(c.isdigit() for c in part),
+                any(c.islower() for c in part),
+                any(c.isupper() for c in part),
+            )
+            if sum(classes) >= 2 and len(set(part)) >= 12:
+                return True
+    return False
 
 
 def shown_value(value: object) -> str | None:
     """``value`` when it may appear in a message (a scorer spec or model id), else None."""
     if not isinstance(value, str) or not _SHOWABLE.fullmatch(value):
         return None
-    if _SECRET_LOOKING.search(value):
+    if _SECRET_LOOKING.search(value) or _looks_like_bare_key(value):
         return None
     return value
 
@@ -578,13 +605,18 @@ class Layers:
 
     def source(self, section: str, key: str) -> str:
         """Where the effective value of ``section.key`` came from: "override", "models.toml",
-        "models.toml (invalid)", "config.toml" or "default"."""
+        "models.toml (invalid)" (a blocked spending key), "config.toml" or "default"; an invalid
+        key that falls back says so: "default (models.toml value invalid)"."""
         if (section, key) in self.override_keys:
             return "override"
         if key in self.layer.get(section, {}):
             return "models.toml"
-        if key in self.invalid.get(section, {}) or (section == "scoring" and key in self.blocked):
+        if section == "scoring" and key in self.blocked:
             return "models.toml (invalid)"
+        if key in self.invalid.get(section, {}):
+            if (section, key) in self.config_keys:
+                return "config.toml (models.toml value invalid)"
+            return "default (models.toml value invalid)"
         if (section, key) in self.config_keys:
             return "config.toml"
         return "default"
@@ -656,6 +688,8 @@ def read_models_file(path: Path) -> tuple[bool, str, dict[str, Any] | None, list
 def _key_label(name: object) -> str:
     text = str(name)
     if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) and not _SECRET_LOOKING.search(text):
+        if _looks_like_bare_key(text):
+            return "<a key>"
         return text
     return "<a key>"
 

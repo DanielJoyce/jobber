@@ -164,19 +164,19 @@ def model_access_checks(settings: Settings, mode: str, now: datetime) -> list[Ch
     not counted twice next to the ``scorer.*`` rows. A blocked use (models.toml holds an
     invalid scorer) says so instead of naming a credential. Detail is fixed wording and
     variable names; the model value shown is a scorer spec or model id only."""
-    layers = settings.models_layers
-    blocked = layers.blocked if layers is not None else {}
+    blocked = settings.scoring.scorer_problems()  # models.toml blocks and malformed specs
     conn = readiness._open_ro(resolve_path(settings.paths.db_path))
     rows = []
     try:
         for use in model_access.USES:
-            title = f"{model_access.USE_LABELS[use]} access"
+            label = model_access.USE_LABELS[use]
+            title = f"Access for {label[0].lower()}{label[1:]}"
             field_name = {"screen": "screen_scorer", "deep": "deep_scorer"}.get(use)
             unlocks = "Whether this use can run"
             cid = f"models.access.{use}"
             if field_name in blocked:
                 rows.append(Check(cid, SCORING, INFO, MISSING, False, title,
-                                  "blocked: models.toml holds an invalid value for it",
+                                  "blocked: this scorer setting is invalid",
                                   unlocks, Fix("command", "jobhunter models show"),
                                   "models.toml"))  # fmt: skip
                 continue

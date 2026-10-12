@@ -231,6 +231,16 @@ def test_invalid_drafting_key_falls_back_with_a_notice(dirs, key, value, fallbac
     assert notice == [f"models.toml's apply.{key} is invalid; using {fallback} from the default"]
     if key != "effort":
         assert layers.merged.apply.effort == "high"  # the valid key beside it still applies
+    assert layers.source("apply", key) == "default (models.toml value invalid)"
+
+
+def test_fallen_back_key_names_config_toml_when_it_supplied_the_value(dirs):
+    cfg, mfile = dirs
+    write_config(cfg, '[apply]\neffort = "high"\n')
+    mfile.write_text('[apply]\neffort = "max"\n')
+    layers = load_layers()
+    assert layers.merged.apply.effort == "high"
+    assert layers.source("apply", "effort") == "config.toml (models.toml value invalid)"
 
 
 def test_unknown_keys_warn_and_are_ignored(dirs, caplog):

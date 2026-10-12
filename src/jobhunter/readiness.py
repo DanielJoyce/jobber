@@ -924,7 +924,7 @@ def _models_choices(ctx: _Ctx) -> Check:
     unknown = [p.message for p in layers.problems if p.kind == "unknown"]
     if unknown:
         return Check("models.choices", SCORING, RECOMMENDED, OK, False, title,
-                     "; ".join(unknown) + " (ignored)", unlocks, None, "models.toml",
+                     "; ".join(unknown), unlocks, None, "models.toml",
                      reads_at_start=True)  # fmt: skip
     count = sum(len(v) for v in layers.layer.values())
     return Check("models.choices", SCORING, RECOMMENDED, OK, False, title,
