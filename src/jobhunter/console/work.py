@@ -3,7 +3,8 @@
 A restart must not cut off paid or long work. Every place the console starts such work enters
 this registry first and leaves it in a ``finally``: the re-score thread
 (``RescoreManager.start``), each extension Score now thread, the in-request Score now on the job
-and packet pages, and drafting (``generator.generate``).
+and packet pages, drafting on the packet page (``generator.generate``), and the extension's
+background drafts (``ext_routes``, entered before the claim and left when the thread ends).
 
 ``POST /config/restart`` calls :meth:`WorkRegistry.begin_restart` under the same lock: it sets
 ``restarting`` only when nothing is registered, and from then on :meth:`enter` raises

@@ -164,6 +164,14 @@
   </div>
 
   {% if doc_message %}<div class="banner banner-error" role="alert" id="doc-message">{{ doc_message }}</div>{% endif %}
+  {% for run in draft_runs or [] %}
+  {% set what = {"resume": "The resume", "cover_letter": "The cover letter"}.get(run.kind, "A question draft") %}
+  {% if run.state == "drafting" %}
+  <div class="banner" role="status" id="draft-running-{{ run.id }}"><p><strong>{{ what }} is being drafted</strong> on your {{ "subscription" if run.runner == "cli" else "API key" }}, started {{ run.started_at[11:16] }} UTC. Reload this page when it finishes.</p></div>
+  {% else %}
+  <div class="banner" role="status" id="draft-stopped-{{ run.id }}"><p><strong>{{ what }} draft did not finish</strong> (the console restarted, started {{ run.started_at[11:16] }} UTC). {{ "Nothing was charged on the subscription." if run.runner == "cli" else "Any API charge already logged shows on the Costs page." }} Generate again when ready.</p></div>
+  {% endif %}
+  {% endfor %}
 
   {# ─── resume ─────────────────────────────────────────────────────────── #}
   {% set slot = resume %}

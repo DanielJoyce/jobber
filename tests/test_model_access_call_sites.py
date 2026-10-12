@@ -1,6 +1,7 @@
 """The three places that once checked only ANTHROPIC_API_KEY (specs/020 "Every model use"): the
 re-score panel's scorer list, the packet page's runner status and the drafting API pre-check.
-Each now goes through credential_for, so every source the SDK accepts counts. Fake values only;
+Each now goes through credential_for, so every source the SDK accepts counts. The extension's
+draft card line (specs/022 "Runner and cost") is registered here too. Fake values only;
 nothing here calls the SDK, the network or claude."""
 
 from __future__ import annotations
@@ -134,3 +135,32 @@ def test_preflight_still_checks_the_cap_after_the_credential(conn, settings):
     capped = settings.model_copy(update={"apply": Apply(runner="api", daily_cap_usd=0.0)})
     with pytest.raises(generator.ApplyRefused, match="daily cap"):
         preflight(conn, capped, {"ANTHROPIC_AUTH_TOKEN": "fake-bearer"})
+
+
+# --- the extension's draft card line (specs/022 "Runner and cost") ---------------------------
+
+
+def card_line(conn, settings, env):
+    est = generator.Estimate(0.12, "token estimate")
+    return packet_docs.draft_line(
+        conn, settings, "resume", est, packet_id=1, runner="api", now=NOW, environ=env
+    )
+
+
+@pytest.mark.parametrize("env", SOURCES)
+def test_card_line_offers_the_api_for_each_source(conn, settings, env):
+    line = card_line(conn, settings, env)
+    assert line.refusal is None and line.charged
+    assert line.confirm_label == "Generate, spend ≈ $0.12"
+
+
+def test_card_line_offers_the_api_for_a_profile_file(conn, settings):
+    profile_file(Path.home())
+    assert card_line(conn, settings, {}).refusal is None
+
+
+def test_card_line_without_any_source(conn, settings):
+    line = card_line(conn, settings, {})
+    assert line.confirm_label is None and line.help == "/help/scorers"
+    assert line.refusal is not None and line.refusal.startswith("No Anthropic API credential")
+    assert line.refusal.endswith("Drafting cannot run.")

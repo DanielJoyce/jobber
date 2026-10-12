@@ -3212,6 +3212,984 @@
         }
       }
     },
+    "/ext/v1/packets/{id}/draft-status": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "Draft estimate and status (specs/022): one document of a packet. ``question`` names\nthe question of a ``question_draft``; ``notes`` are employer notes typed beside a letter\n(one to three lines), estimated as if saved.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "resume",
+              "cover_letter",
+              "question_draft"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          },
+          "question": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Question",
+            "type": "string"
+          },
+          "runner": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cli",
+                  "api"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runner"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "DraftRequest",
+        "type": "object"
+      },
+      "responses": {
+        "DraftError": {
+          "$defs": {
+            "DraftEstimateResponse": {
+              "additionalProperties": false,
+              "description": "The runner line before **Generate**: what runs, on what, and what it costs.",
+              "properties": {
+                "cap_left_usd": {
+                  "title": "Cap Left Usd",
+                  "type": "number"
+                },
+                "cap_usd": {
+                  "title": "Cap Usd",
+                  "type": "number"
+                },
+                "charged": {
+                  "title": "Charged",
+                  "type": "boolean"
+                },
+                "confirm_label": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Confirm Label"
+                },
+                "estimate_source": {
+                  "title": "Estimate Source",
+                  "type": "string"
+                },
+                "estimated_usd": {
+                  "title": "Estimated Usd",
+                  "type": "number"
+                },
+                "help": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Help"
+                },
+                "kind": {
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "line": {
+                  "title": "Line",
+                  "type": "string"
+                },
+                "model": {
+                  "title": "Model",
+                  "type": "string"
+                },
+                "notices": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Notices",
+                  "type": "array"
+                },
+                "packet_id": {
+                  "title": "Packet Id",
+                  "type": "integer"
+                },
+                "question_key": {
+                  "title": "Question Key",
+                  "type": "string"
+                },
+                "refusal": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Refusal"
+                },
+                "runner": {
+                  "title": "Runner",
+                  "type": "string"
+                },
+                "token": {
+                  "title": "Token",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "packet_id",
+                "kind",
+                "question_key",
+                "runner",
+                "model",
+                "line",
+                "notices",
+                "estimated_usd",
+                "estimate_source",
+                "charged",
+                "cap_usd",
+                "cap_left_usd",
+                "token"
+              ],
+              "title": "DraftEstimateResponse",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "estimate": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DraftEstimateResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "needs_packet": {
+              "default": false,
+              "title": "Needs Packet",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "title": "DraftError",
+          "type": "object"
+        },
+        "DraftStatusResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "api_estimated_usd": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Api Estimated Usd"
+            },
+            "check_ok": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Check Ok"
+            },
+            "doc_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Doc Id"
+            },
+            "entail_no": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Entail No"
+            },
+            "entail_partly": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Entail Partly"
+            },
+            "entailment": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Entailment"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Finished At"
+            },
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "offer_api": {
+              "default": false,
+              "title": "Offer Api",
+              "type": "boolean"
+            },
+            "packet_id": {
+              "title": "Packet Id",
+              "type": "integer"
+            },
+            "question_key": {
+              "title": "Question Key",
+              "type": "string"
+            },
+            "run_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Run Id"
+            },
+            "runner": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Runner"
+            },
+            "started_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Started At"
+            },
+            "state": {
+              "enum": [
+                "none",
+                "drafting",
+                "done",
+                "failed",
+                "stopped"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "unsupported": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unsupported"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Version"
+            }
+          },
+          "required": [
+            "packet_id",
+            "kind",
+            "question_key",
+            "state",
+            "message"
+          ],
+          "title": "DraftStatusResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/packets/{id}/estimate": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "Draft estimate and status (specs/022): one document of a packet. ``question`` names\nthe question of a ``question_draft``; ``notes`` are employer notes typed beside a letter\n(one to three lines), estimated as if saved.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "resume",
+              "cover_letter",
+              "question_draft"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          },
+          "question": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Question",
+            "type": "string"
+          },
+          "runner": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cli",
+                  "api"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runner"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "DraftRequest",
+        "type": "object"
+      },
+      "responses": {
+        "DraftError": {
+          "$defs": {
+            "DraftEstimateResponse": {
+              "additionalProperties": false,
+              "description": "The runner line before **Generate**: what runs, on what, and what it costs.",
+              "properties": {
+                "cap_left_usd": {
+                  "title": "Cap Left Usd",
+                  "type": "number"
+                },
+                "cap_usd": {
+                  "title": "Cap Usd",
+                  "type": "number"
+                },
+                "charged": {
+                  "title": "Charged",
+                  "type": "boolean"
+                },
+                "confirm_label": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Confirm Label"
+                },
+                "estimate_source": {
+                  "title": "Estimate Source",
+                  "type": "string"
+                },
+                "estimated_usd": {
+                  "title": "Estimated Usd",
+                  "type": "number"
+                },
+                "help": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Help"
+                },
+                "kind": {
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "line": {
+                  "title": "Line",
+                  "type": "string"
+                },
+                "model": {
+                  "title": "Model",
+                  "type": "string"
+                },
+                "notices": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Notices",
+                  "type": "array"
+                },
+                "packet_id": {
+                  "title": "Packet Id",
+                  "type": "integer"
+                },
+                "question_key": {
+                  "title": "Question Key",
+                  "type": "string"
+                },
+                "refusal": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Refusal"
+                },
+                "runner": {
+                  "title": "Runner",
+                  "type": "string"
+                },
+                "token": {
+                  "title": "Token",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "packet_id",
+                "kind",
+                "question_key",
+                "runner",
+                "model",
+                "line",
+                "notices",
+                "estimated_usd",
+                "estimate_source",
+                "charged",
+                "cap_usd",
+                "cap_left_usd",
+                "token"
+              ],
+              "title": "DraftEstimateResponse",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "estimate": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DraftEstimateResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "needs_packet": {
+              "default": false,
+              "title": "Needs Packet",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "title": "DraftError",
+          "type": "object"
+        },
+        "DraftEstimateResponse": {
+          "additionalProperties": false,
+          "description": "The runner line before **Generate**: what runs, on what, and what it costs.",
+          "properties": {
+            "cap_left_usd": {
+              "title": "Cap Left Usd",
+              "type": "number"
+            },
+            "cap_usd": {
+              "title": "Cap Usd",
+              "type": "number"
+            },
+            "charged": {
+              "title": "Charged",
+              "type": "boolean"
+            },
+            "confirm_label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Confirm Label"
+            },
+            "estimate_source": {
+              "title": "Estimate Source",
+              "type": "string"
+            },
+            "estimated_usd": {
+              "title": "Estimated Usd",
+              "type": "number"
+            },
+            "help": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Help"
+            },
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "line": {
+              "title": "Line",
+              "type": "string"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "notices": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Notices",
+              "type": "array"
+            },
+            "packet_id": {
+              "title": "Packet Id",
+              "type": "integer"
+            },
+            "question_key": {
+              "title": "Question Key",
+              "type": "string"
+            },
+            "refusal": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Refusal"
+            },
+            "runner": {
+              "title": "Runner",
+              "type": "string"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "packet_id",
+            "kind",
+            "question_key",
+            "runner",
+            "model",
+            "line",
+            "notices",
+            "estimated_usd",
+            "estimate_source",
+            "charged",
+            "cap_usd",
+            "cap_left_usd",
+            "token"
+          ],
+          "title": "DraftEstimateResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/packets/{id}/generate": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "confirm_paid": {
+            "default": false,
+            "title": "Confirm Paid",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "resume",
+              "cover_letter",
+              "question_draft"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          },
+          "question": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Question",
+            "type": "string"
+          },
+          "runner": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cli",
+                  "api"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runner"
+          },
+          "token": {
+            "maxLength": 100,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "kind",
+          "token"
+        ],
+        "title": "DraftGenerateRequest",
+        "type": "object"
+      },
+      "responses": {
+        "DraftAccepted": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "packet_id": {
+              "title": "Packet Id",
+              "type": "integer"
+            },
+            "question_key": {
+              "title": "Question Key",
+              "type": "string"
+            },
+            "run_id": {
+              "title": "Run Id",
+              "type": "integer"
+            },
+            "started_at": {
+              "title": "Started At",
+              "type": "string"
+            },
+            "status": {
+              "const": "drafting",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "packet_id",
+            "kind",
+            "question_key",
+            "run_id",
+            "started_at"
+          ],
+          "title": "DraftAccepted",
+          "type": "object"
+        },
+        "DraftError": {
+          "$defs": {
+            "DraftEstimateResponse": {
+              "additionalProperties": false,
+              "description": "The runner line before **Generate**: what runs, on what, and what it costs.",
+              "properties": {
+                "cap_left_usd": {
+                  "title": "Cap Left Usd",
+                  "type": "number"
+                },
+                "cap_usd": {
+                  "title": "Cap Usd",
+                  "type": "number"
+                },
+                "charged": {
+                  "title": "Charged",
+                  "type": "boolean"
+                },
+                "confirm_label": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Confirm Label"
+                },
+                "estimate_source": {
+                  "title": "Estimate Source",
+                  "type": "string"
+                },
+                "estimated_usd": {
+                  "title": "Estimated Usd",
+                  "type": "number"
+                },
+                "help": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Help"
+                },
+                "kind": {
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "line": {
+                  "title": "Line",
+                  "type": "string"
+                },
+                "model": {
+                  "title": "Model",
+                  "type": "string"
+                },
+                "notices": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Notices",
+                  "type": "array"
+                },
+                "packet_id": {
+                  "title": "Packet Id",
+                  "type": "integer"
+                },
+                "question_key": {
+                  "title": "Question Key",
+                  "type": "string"
+                },
+                "refusal": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Refusal"
+                },
+                "runner": {
+                  "title": "Runner",
+                  "type": "string"
+                },
+                "token": {
+                  "title": "Token",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "packet_id",
+                "kind",
+                "question_key",
+                "runner",
+                "model",
+                "line",
+                "notices",
+                "estimated_usd",
+                "estimate_source",
+                "charged",
+                "cap_usd",
+                "cap_left_usd",
+                "token"
+              ],
+              "title": "DraftEstimateResponse",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "estimate": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DraftEstimateResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "needs_packet": {
+              "default": false,
+              "title": "Needs Packet",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "title": "DraftError",
+          "type": "object"
+        }
+      }
+    },
     "/ext/v1/pair": {
       "method": "POST",
       "request": {

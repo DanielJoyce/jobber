@@ -159,6 +159,31 @@ class ScoreRequest(Strict):
     job_id: GroupId | None = None
 
 
+DraftKind = Literal["resume", "cover_letter", "question_draft"]
+Runner = Literal["cli", "api"]
+
+
+class DraftRequest(Strict):
+    """Draft estimate and status (specs/022): one document of a packet. ``question`` names
+    the question of a ``question_draft``; ``notes`` are employer notes typed beside a letter
+    (one to three lines), estimated as if saved."""
+
+    kind: DraftKind
+    question: Str = ""
+    notes: Str | None = None
+    runner: Runner | None = None  # None: the effective [apply] runner
+
+
+class DraftGenerateRequest(Strict):
+    action_id: ActionId
+    kind: DraftKind
+    question: Str = ""
+    notes: Str | None = None
+    runner: Runner | None = None
+    token: Short
+    confirm_paid: bool = False
+
+
 class PairRequest(Strict):
     code: Short
 
@@ -346,6 +371,63 @@ class ErrorResponse(Strict):
     estimate: EstimateResponse | None = None
 
 
+class DraftEstimateResponse(Strict):
+    """The runner line before **Generate**: what runs, on what, and what it costs."""
+
+    packet_id: int
+    kind: str
+    question_key: str
+    runner: str
+    model: str
+    line: str
+    notices: list[str]  # 020's fallback notices (an invalid models.toml drafting value)
+    estimated_usd: float  # at API prices; what a charged run is held to
+    estimate_source: str
+    charged: bool  # an API run, or the subscription on paid extra usage
+    cap_usd: float
+    cap_left_usd: float
+    confirm_label: str | None = None  # None: refused, no Generate
+    refusal: str | None = None
+    help: str | None = None  # a console path, e.g. /help/drafting
+    token: str
+
+
+class DraftAccepted(Strict):
+    status: Literal["drafting"]
+    packet_id: int
+    kind: str
+    question_key: str
+    run_id: int
+    started_at: str
+
+
+class DraftError(Strict):
+    error: str
+    estimate: DraftEstimateResponse | None = None
+    needs_packet: bool = False  # no such packet: offer Prepare
+
+
+class DraftStatusResponse(Strict):
+    packet_id: int
+    kind: str
+    question_key: str
+    state: Literal["none", "drafting", "done", "failed", "stopped"]
+    message: str
+    run_id: int | None = None
+    runner: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    doc_id: int | None = None
+    version: int | None = None
+    check_ok: bool | None = None
+    unsupported: int | None = None  # checker items without support
+    entailment: str | None = None  # done, skipped, failed or off
+    entail_no: int | None = None
+    entail_partly: int | None = None
+    offer_api: bool = False
+    api_estimated_usd: float | None = None
+
+
 ROUTES: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
     "pair": (PairRequest, (PairResponse,)),
     "version": (VersionRequest, (VersionResponse,)),
@@ -358,6 +440,9 @@ ROUTES: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
     "groups/{id}/score": (ScoreRequest, (ScoreAccepted, ErrorResponse, GoneResponse)),
     "groups/{id}/status": (GroupRequest, (StatusResponse, GoneResponse)),
     "groups/{id}/prepare": (GroupRequest, (PrepareResponse, GoneResponse)),
+    "packets/{id}/estimate": (DraftRequest, (DraftEstimateResponse, DraftError)),
+    "packets/{id}/generate": (DraftGenerateRequest, (DraftAccepted, DraftError)),
+    "packets/{id}/draft-status": (DraftRequest, (DraftStatusResponse, DraftError)),
 }
 
 

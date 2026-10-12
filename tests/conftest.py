@@ -585,3 +585,31 @@ def run_lock_holder(tmp_path):
     for holder in started:
         if holder.proc.poll() is None:
             holder.kill()
+
+
+# --- background drafts (specs/022 "Drafting in the background") ------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_leftover_draft_threads():
+    """Fail any test that ends with an ``ext-draft-*`` thread it started still alive. Such a
+    thread holds a document's claim and the work registry, and with a real runner it could go
+    on to run ``claude`` or the API after the test's fakes are gone. Release the fake runner and
+    join the thread before the test ends. Do not weaken this guard."""
+    import threading
+
+    def live() -> set[threading.Thread]:
+        return {t for t in threading.enumerate() if t.name.startswith("ext-draft-")}
+
+    before = live()
+    yield
+    left = live() - before
+    for t in left:
+        t.join(2.0)  # a run that is just finishing (it leaves the registry last)
+    left = {t for t in left if t.is_alive()}
+    if left:
+        pytest.fail(
+            "test left background draft threads running: "
+            + ", ".join(sorted(t.name for t in left))
+            + "; release the fake runner and join them (tests/conftest.py)"
+        )

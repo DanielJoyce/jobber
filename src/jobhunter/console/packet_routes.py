@@ -24,6 +24,7 @@ from jobhunter.apply import (
     checklists,
     cli_runner,
     documents,
+    draft_runs,
     export,
     generator,
     labels,
@@ -59,6 +60,12 @@ def register(
     app.state.packet_client_factory = None
     # The drafting API client (Generate on the API runner); tests inject a fake.
     app.state.packet_api_client_factory = None
+    # The drafting CLI runner (``claude -p``): the cli_runner module; tests inject a fake.
+    app.state.packet_runner = cli_runner
+
+    def live_draft(run_id: int) -> bool:
+        thread = getattr(app.state, "ext_draft_live", {}).get(run_id)
+        return thread is not None and thread.is_alive()
 
     def ctx_factory(conn: sqlite3.Connection) -> applylink.CtxFactory:
         injected = getattr(app.state, "ctx_factory", None)
@@ -237,6 +244,11 @@ def register(
             "notes": answers.employer_notes(conn, p.id),
             "blockers": review.ready_blockers(conn, p.id),
             "drafts": [(v, packet_docs.draft_view(v)) for v in review.question_drafts(conn, p.id)],
+            # A draft running in the background (the extension's Generate, or apply draft),
+            # or one a console restart stopped (specs/022 "Drafting in the background").
+            "draft_runs": draft_runs.unfinished(
+                conn, settings.paths.data_dir, p.id, live=live_draft
+            ),
         }
         for kind, viewer in (
             ("resume", packet_docs.resume_view),
@@ -469,6 +481,7 @@ def register(
                     instruction=form.get("instruction", ""),
                     confirm_paid=form.get("confirm_paid") == "1",
                     client_factory=request.app.state.packet_api_client_factory,
+                    cli=request.app.state.packet_runner,
                 )
         except Restarting as exc:
             gen.update(message=str(exc), offer_api=False, paid=False)
