@@ -1,4 +1,5 @@
 {% set p = rs.plan %}
+{% with mb_uses=["screen"], mb_scorer=rs.scorer %}{% include "_model_access.html" %}{% endwith %}
 {% if rs.message %}<div class="banner banner-error" role="alert" id="rescore-message">{{ rs.message }}</div>{% endif %}
 {% if rs.shown %}{% with r = rs.shown %}{% include "_rescore_progress.html" %}{% endwith %}{% endif %}
 {% if not rs.ok %}

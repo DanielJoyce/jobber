@@ -75,3 +75,14 @@ jobhunter llm bench --scorer local:<model> --n 10
 Config changes need a console restart. After you change `screen_scorer`, jobs already scored
 under the old one stay as they are; the console's re-score panel shows what moving them would
 cost. Prices and caps are in [Costs and credits](costs-and-credits.md).
+
+## When a page says a model has no access
+
+The re-score panel, the Captured page, a job's or packet's "Fit score" panel and the packet
+page show a one-line banner when the model they would use cannot run: no Anthropic or OpenRouter
+key found, the `claude` command not installed (drafting with the subscription), or a model
+setting blocked because `models.toml` holds an invalid value. The line names what cannot run and
+links the help for the fix. It never appears for a state the console cannot judge from here (a
+local server, drafting from inside a container) or for a credential that is only likely. Nothing
+is sent anywhere to decide this. **Hide** puts a banner away for this browser tab until its
+wording changes; fix the cause and it goes by itself.

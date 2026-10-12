@@ -1,0 +1,11 @@
+{# specs/020 "Banners elsewhere". Set `mb_uses` (and optionally `mb_scorer`) before including. #}
+{% for b in model_banner(request, mb_uses, mb_scorer | default(none)) %}
+<div class="setup-banner model-banner" role="status" data-model-banner="{{ b.key }}">
+  <div class="sb-text">{{ b.text }}</div>
+  <div class="sb-actions">
+    {% if b.fix.href %}<a class="act" href="{{ b.fix.href }}">{{ b.fix.text }}</a>{% else %}<span class="muted">Fix: <code>{{ b.fix.text }}</code></span>{% endif %}
+    <a class="act" href="{{ b.help_href }}">{{ b.help_label }}</a>
+    <button type="button" class="act" data-model-banner-hide>Hide</button>
+  </div>
+</div>
+{% endfor %}

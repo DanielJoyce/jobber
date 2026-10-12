@@ -118,3 +118,27 @@
   }
   document.addEventListener("htmx:afterSettle", onBand);
 })();
+
+// No-model-access banners (specs/020): Hide is per viewer and per banner text, so a changed
+// reason comes back. sessionStorage may throw (private window); then Hide lasts for the page.
+(function () {
+  var mem = {};
+  function hidden(k) {
+    try { return sessionStorage.getItem("jh-mb:" + k) === "1"; } catch (x) { return !!mem[k]; }
+  }
+  function apply(root) {
+    (root || document).querySelectorAll("[data-model-banner]").forEach(function (el) {
+      if (hidden(el.getAttribute("data-model-banner"))) el.hidden = true;
+    });
+  }
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest && e.target.closest("[data-model-banner-hide]");
+    if (!btn) return;
+    var el = btn.closest("[data-model-banner]");
+    var k = el.getAttribute("data-model-banner");
+    try { sessionStorage.setItem("jh-mb:" + k, "1"); } catch (x) { mem[k] = true; }
+    el.hidden = true;
+  });
+  document.addEventListener("DOMContentLoaded", function () { apply(); });
+  document.addEventListener("htmx:afterSettle", function (e) { apply(e.target); });
+})();

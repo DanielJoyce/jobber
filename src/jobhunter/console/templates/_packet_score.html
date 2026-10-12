@@ -1,5 +1,6 @@
 <section class="card" id="score-panel">
   <h2>Fit score</h2>
+  {% if est %}{% with mb_uses=["screen"], mb_scorer=est.scorer %}{% include "_model_access.html" %}{% endwith %}{% endif %}
   {% if score_message %}<div class="banner banner-error" role="alert" id="score-message">{{ score_message }}</div>{% endif %}
   {% if score_ok %}<div class="banner banner-ok" role="status" id="score-ok">{{ score_ok }}</div>{% endif %}
   {% if d and d.scored %}
