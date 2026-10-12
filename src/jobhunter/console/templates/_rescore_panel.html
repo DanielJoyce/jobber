@@ -1,30 +1,38 @@
 {% set p = rs.plan %}
+{% if rs.fixed %}<h3 id="rescore-heading">Re-score with {{ rs.scorer_shown or "the saved model" }}</h3>
+<p class="muted">Nothing runs until you press Re-score now and confirm. The model stays saved either way.</p>{% endif %}
 {% with mb_uses=["screen"], mb_scorer=rs.scorer %}{% include "_model_access.html" %}{% endwith %}
 {% if rs.message %}<div class="banner banner-error" role="alert" id="rescore-message">{{ rs.message }}</div>{% endif %}
-{% if rs.shown %}{% with r = rs.shown %}{% include "_rescore_progress.html" %}{% endwith %}{% endif %}
+{% if rs.shown %}{% with r = rs.shown, via = rs.via %}{% include "_rescore_progress.html" %}{% endwith %}{% endif %}
 {% if not rs.ok %}
 <p class="muted">Fix the preferences file and resume above first; nothing can be scored without a valid profile.</p>
 {% elif rs.running %}
 <p class="muted">A re-score is running; you can leave this page, it keeps going while the console is open.</p>
 {% elif p %}
 {% if p.batch %}{% set spend = "Estimated cost $%.2f, billed when the batch is collected." | format(p.estimated_usd) %}{% else %}{% set spend = "Estimated cost $%.2f; the run stops before it spends more than $%.2f." | format(p.estimated_usd, p.max_usd) %}{% endif %}
-<form id="rescore-form" class="rescore-form" hx-disinherit="hx-confirm" hx-post="/prefs/rescore/run" hx-target="#rescore-panel" hx-swap="innerHTML"
-      hx-confirm="{% if rs.queued %}Run queued re-score #{{ rs.queued.id }}: re-score{% else %}Re-score{% endif %} {{ p.total }} job groups with {{ p.scorer }}? {{ spend }} This spends credits.">
+<form id="rescore-form" class="rescore-form" hx-disinherit="hx-confirm" hx-post="{{ rs.run_url }}" hx-target="#rescore-panel" hx-swap="innerHTML" hx-disabled-elt="#rescore-run"
+      hx-confirm="{% if rs.queued %}Run queued re-score #{{ rs.queued.id }}: re-score{% else %}Re-score{% endif %} {{ p.total }} job groups with {{ rs.scorer_shown or "the configured scorer" }}? {{ spend }} This spends credits.">
   <input type="hidden" name="plan" value="{{ p.token }}">
+  {% if rs.fixed %}<input type="hidden" name="saved" value="{{ rs.scorer_shown }}">
+  <p class="hint" id="rescore-saved-note">The model is saved; Cancel only cancels the re-score.</p>{% endif %}
   {% if rs.queued %}<input type="hidden" name="request_id" value="{{ rs.queued.id }}">
   <p id="rescore-queued-run"><strong>Running queued re-score #{{ rs.queued.id }}</strong> (requested {{ rs.queued.requested_at | localtime }}). <a href="#" hx-get="/prefs/rescore/panel" hx-target="#rescore-panel" hx-swap="innerHTML">Back</a></p>{% endif %}
   <p id="rescore-stale"><strong>{{ p.waiting }}</strong> job group{{ "" if p.waiting == 1 else "s" }} waiting to be scored under your current preferences ({{ p.rescored }} already scored before, {{ p.waiting - p.rescored }} new).</p>
   <div class="grid2">
+    {% if rs.fixed %}
+    <label>Scorer <span class="rescore-scorer"><code>{{ rs.scorer_shown }}</code> (the screening model saved now)</span></label>
+    {% else %}
     <label>Scorer
       <select name="scorer" hx-get="/prefs/rescore/panel" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
         {% for spec, label in rs.scorers %}<option value="{{ spec }}"{% if spec == rs.scorer %} selected{% endif %}>{{ spec }} ({{ label }})</option>{% endfor %}
       </select>
     </label>
+    {% endif %}
     {% if rs.queued %}
     <label>Scope <input type="hidden" name="scope" value="{{ rs.scope }}"><span class="rescore-scope">{{ rs.scope_labels[rs.scope] }}</span></label>
     {% else %}
     <label>Scope
-      <select name="scope" hx-get="/prefs/rescore/panel" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
+      <select name="scope" hx-get="{{ rs.panel_url }}" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
         {% for k, label in rs.scope_labels.items() %}<option value="{{ k }}"{% if k == rs.scope %} selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
     </label>
@@ -36,7 +44,7 @@
   {% if p.refusal %}<p class="field-error" role="alert">{{ p.refusal }}</p>{% endif %}
   <div class="actions"><button type="submit" class="button primary" id="rescore-run"{% if p.total == 0 or p.refusal %} disabled{% endif %}>{% if rs.queued %}Run queued re-score{% else %}Re-score now{% endif %}</button></div>
 </form>
-{% elif rs.problem %}
+{% elif rs.problem and not rs.fixed %}
 <form id="rescore-form" class="rescore-form">
   <label>Scorer
     <select name="scorer" hx-get="/prefs/rescore/panel" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
@@ -45,7 +53,9 @@
   </label>
 </form>
 {% endif %}
-{% if rs.pending %}
+{% if rs.pending and rs.fixed %}
+<p class="hint" id="rescore-queued-elsewhere">{{ rs.pending | length }} queued re-score{{ "" if rs.pending | length == 1 else "s" }} can be run or dismissed on <a href="/prefs#sec-rescore">Prefs</a>.</p>
+{% elif rs.pending %}
 <div id="rescore-queued">
   <h3>Queued re-scores</h3>
   <ul class="plain">

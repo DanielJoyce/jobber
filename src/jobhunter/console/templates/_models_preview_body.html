@@ -17,18 +17,31 @@
 {% set verb = "Reset" if action.endswith("/reset") else "Save" %}
 <div class="mo-actions">
   {% for name, value in s.approve.items() %}<input type="hidden" name="force_for_{{ name }}" value="{{ value }}">{% endfor %}
+  {#- Save + re-run (M5): each submit button says whether it re-runs (data-rerun); models.js
+      copies that into the row form's rerun field, which sits outside this swapped region, so a
+      click queued behind a preview still carries it. -#}
+  {% set rerun_here = ctx.rerun_ok and r.key in ("screen", "deep") and action == "/models/" ~ r.key %}
+  {% set rerun_word = "re-score" if r.key == "screen" else "deep-score" %}
   {% if s.queued_line %}
-    <button type="submit" name="queued" value="new" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">{{ verb }}; queued re-scores use the new model</button>
+    <button type="submit" name="queued" value="new" data-rerun="0" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">{{ verb }}; queued re-scores use the new model</button>
     {% if s.queued_old %}
-    <button type="submit" name="queued" value="keep" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">{{ verb }}; keep queued re-scores on {{ s.queued_old }}</button>
+    <button type="submit" name="queued" value="keep" data-rerun="0" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">{{ verb }}; keep queued re-scores on {{ s.queued_old }}</button>
+    {% endif %}
+    {% if rerun_here %}
+    <button type="submit" name="queued" value="new" data-rerun="1" class="mo-rerun-button" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">Save + {{ rerun_word }}; queued re-scores use the new model&hellip;</button>
+    {% if s.queued_old %}
+    <button type="submit" name="queued" value="keep" data-rerun="1" class="mo-rerun-button" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">Save + {{ rerun_word }}; keep queued re-scores on {{ s.queued_old }}&hellip;</button>
+    {% endif %}
     {% endif %}
   {% elif s.reasons %}
-    <button type="submit" class="mo-anyway">Save anyway</button>
+    <button type="submit" class="mo-anyway" data-rerun="0">Save anyway</button>
+    {% if rerun_here %}<button type="submit" class="mo-rerun-button" data-rerun="1">Save anyway + {{ rerun_word }}&hellip;</button>{% endif %}
   {% else %}
-    <button type="submit" class="mo-save">Save</button>
+    <button type="submit" class="mo-save" data-rerun="0">Save</button>
+    {% if rerun_here %}<button type="submit" class="mo-rerun-button" data-rerun="1">Save + {{ rerun_word }}&hellip;</button>{% endif %}
   {% endif %}
   {% if r.can_reset %}
-    <button type="submit" formaction="/models/{{ r.key }}/reset" hx-post="/models/{{ r.key }}/reset" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest" hx-sync="closest form:queue all">Reset</button>
+    <button type="submit" data-rerun="0" formaction="/models/{{ r.key }}/reset" hx-post="/models/{{ r.key }}/reset" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest" hx-sync="closest form:queue all">Reset</button>
     <span class="muted mo-reset-hint">Reset removes this row from models.toml: config.toml's value or the default applies.</span>
   {% endif %}
 </div>

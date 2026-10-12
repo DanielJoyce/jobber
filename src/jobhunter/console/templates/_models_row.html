@@ -3,6 +3,7 @@
       hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids"
       hx-sync="this:queue all">
   <input type="hidden" name="page_digest" value="{{ digest }}">
+  <input type="hidden" name="rerun" class="mo-rerun-intent" value="{{ '1' if r.state.rerun else '' }}">
   <header class="mo-head">
     <h2>{{ r.title }}</h2>
     {% if r.source %}<span class="mo-source muted">{{ r.source }}</span>{% endif %}
@@ -51,10 +52,22 @@
   </div>
   {% endif %}
 </form>
+{% set s = r.state %}
+{% if s.rerun_open == "screen" %}
+<div class="mo-rerun" id="models-rerun-screen">
+  <div id="rescore-panel">
+  {% if s.rescore %}{% with rs = s.rescore %}{% include "_rescore_panel.html" %}{% endwith %}
+  {% else %}
+  <p class="mo-msg mo-error" role="alert">The model is saved, but the re-score panel could not be opened.</p>
+  <button type="button" class="button" hx-get="/models/screen/rescore" hx-target="#rescore-panel" hx-swap="innerHTML">Try again</button>
+  {% endif %}
+  </div>
+</div>
+{% endif %}
 {% if r.key == "deep" %}
-{#- The deep pass panel (specs/020 M11): loads on click and only plans; a run needs its own confirm. -#}
+{#- The deep pass panel (specs/020 M11): loads on click, or right after Save + deep-score (M5), and only plans; a run needs its own confirm. -#}
 <div class="deep-section" id="models-deep-run">
-  <div id="deep-panel" hx-get="/deep/panel?mode=next" hx-trigger="click from:#deep-open" hx-swap="innerHTML">
+  <div id="deep-panel" hx-get="/deep/panel?mode=next" hx-trigger="{% if s.rerun_open == 'deep' %}load, {% endif %}click from:#deep-open" hx-swap="innerHTML">
     <p class="muted">Run the deep pass with the saved model. It may use more money than screening, and runs only when you confirm.</p>
     <button type="button" class="button" id="deep-open">Deep-score&hellip;</button>
   </div>

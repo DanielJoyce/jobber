@@ -9,7 +9,8 @@ how much of each cap is left.
 Spends API credits (or OpenRouter credits):
 
 - the nightly score stage of `jobhunter run`
-- a re-score you confirm in the console (`/prefs`), or `jobhunter score --rescore`
+- a re-score you confirm in the console (`/prefs`, or **Save + re-score** on `/models`), or
+  `jobhunter score --rescore`
 - **Score this group now** on a single job in the console, and scoring a group from the
   browser extension
 - `jobhunter score --submit` and `--group`
@@ -18,10 +19,27 @@ Spends API credits (or OpenRouter credits):
   `jobhunter score --deep 10` and `--deep-group`
 - a draft made with the `api` runner (see [Drafting](drafting.md))
 
-Never spends: opening `/setup`, `jobhunter doctor`, the free live checks (`doctor --live`
+Never spends: opening `/setup`, saving a model on `/models`, `jobhunter doctor`, the free live checks (`doctor --live`
 and the **Test (free)** buttons), reading this help, browsing the inbox,
 editing free preferences (see [Profile and resume](profile-and-resume.md)), and drafting with
 the `cli` runner on your subscription. A paid `llm bench` is the exception, below.
+
+### Changing a model and re-running
+
+Saving a new screening or deep model on `/models` spends nothing: new jobs from the next run use
+it, and jobs already scored keep their scores. To score them again with the new model now, use
+**Save + re-score** on the screening row. It saves, then shows the re-score panel for that model
+(how many job groups, the estimate, what is left of the cap) and runs nothing until you press
+**Re-score now** and confirm. The run is the plan you confirmed: if new jobs arrived, the cap
+no longer covers the estimate, or the screening model was changed again in the meantime, nothing
+runs and the panel shows the new numbers. The cap applies as for any re-score, and one re-score runs at a time, so
+a second click does not start a second run. Cancel in the confirm only cancels the re-score; the
+model stays saved.
+
+**Save + deep-score** on the deep row saves and then opens the deep-pass panel with its
+estimate and confirm (below). Both buttons work only in a browser on the machine running the
+console, and are off under `jobhunter console --allow-remote`; there, run
+`jobhunter score --rescore recent` or `jobhunter score --deep N` instead.
 
 ## The caps
 
