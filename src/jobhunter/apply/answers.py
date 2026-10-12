@@ -289,6 +289,9 @@ class Links(_Strict):
     _blank = field_validator("*", mode="before")(_blank_to_none)
 
 
+_EMAIL_SHAPE = re.compile(r"^[^@\s]+@(?:[^@\s.]+\.)+[^@\s.]{2,}$")
+
+
 class Contact(_Strict):
     """The contact block: filled into forms by the extension, never sent to a model, never
     logged. Street address and postal code are not here, by design (the never-store list)."""
@@ -307,16 +310,14 @@ class Contact(_Strict):
     @field_validator("*", mode="after")
     @classmethod
     def _one_line(cls, value: str | None) -> str | None:
-        if value is not None and "\n" in value:
+        if value is not None and ("\n" in value or "\r" in value):
             raise ValueError("must be one line")
         return value
 
     @field_validator("email")
     @classmethod
     def _email_shape(cls, value: str | None) -> str | None:
-        if value is not None and (
-            value.count("@") != 1 or any(c.isspace() for c in value) or value.startswith("@")
-        ):
+        if value is not None and not _EMAIL_SHAPE.match(value):
             raise ValueError("does not look like an email address")
         return value
 

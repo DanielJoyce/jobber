@@ -77,6 +77,34 @@ def test_a_bad_email_is_refused_with_nothing_written(client, pdir):
     assert text_of(pdir) == before
 
 
+@pytest.mark.parametrize(
+    "email", ["canary@", "canary@x", "x@.", "@x.test", "a@b@c.test", "a b@c.test"]
+)
+def test_email_shape_is_local_at_domain_dot_tld(email):
+    with pytest.raises(ValueError):
+        answers.Contact(email=email)
+    assert answers.Contact(email="canary.contact@invalid.test").email
+
+
+def test_a_carriage_return_in_a_contact_value_is_refused():
+    with pytest.raises(ValueError):
+        answers.Contact.model_validate({"city": "a\rb"})
+
+
+def test_the_contact_help_button_points_at_its_help_body(client):
+    page = client.get("/prefs").text
+    assert 'aria-controls="help-ans-contact"' in page and 'id="help-ans-contact"' in page
+    assert 'id="help-contact"' not in page
+
+
+def test_email_and_tel_inputs_are_styled_for_dark_mode():
+    from pathlib import Path
+
+    css = Path(answers.__file__).parents[1] / "console" / "static" / "prefs.css"
+    text = css.read_text(encoding="utf-8")
+    assert 'input[type="email"]' in text and 'input[type="tel"]' in text
+
+
 def test_a_multi_line_contact_value_is_refused(client, pdir):
     before = text_of(pdir)
     r = post(client, "/prefs/save", form_with(pdir, {"city": "line one\nline two"}))
@@ -140,7 +168,7 @@ def test_raw_yaml_save_refuses_a_never_store_key_in_the_contact_block(client, pd
 
 def test_copy_from_header_proposes_and_never_saves(client, pdir):
     (pdir / "resume.md").write_text(
-        "# Alex Q. Example\nDenver, CO 80202 | alex@example.com | (555) 010 0199\n\n"
+        "# Alex Q. Example\nDenver, CO 80202 | alex.canary@invalid.test | (555) 010 0199\n\n"
         "## Experience\nSynthetic Corp\n",
         encoding="utf-8",
     )
@@ -149,7 +177,7 @@ def test_copy_from_header_proposes_and_never_saves(client, pdir):
     assert r.status_code == 200 and r.headers["HX-Retarget"] == "#sec-answers"
     body = r.text
     assert 'value="Alex"' in body and 'value="Example"' in body
-    assert 'value="alex@example.com"' in body and 'value="(555) 010 0199"' in body
+    assert 'value="alex.canary@invalid.test"' in body and 'value="(555) 010 0199"' in body
     assert 'value="Denver"' in body and 'value="CO"' in body
     assert "80202" not in body  # a postal code is never proposed
     assert "nothing is saved yet" in body
@@ -158,10 +186,10 @@ def test_copy_from_header_proposes_and_never_saves(client, pdir):
 
 
 def test_copy_from_header_keeps_what_you_typed_in_other_boxes(client, pdir):
-    (pdir / "resume.md").write_text("Alex Example\nalex@example.com\n", encoding="utf-8")
+    (pdir / "resume.md").write_text("Alex Example\nalex.canary@invalid.test\n", encoding="utf-8")
     form = form_with(pdir, {"preferred_name": "canarypreferred"}, "yes")
     body = post(client, "/prefs/contact/from-resume", form).text
-    assert 'value="canarypreferred"' in body and 'value="alex@example.com"' in body
+    assert 'value="canarypreferred"' in body and 'value="alex.canary@invalid.test"' in body
     assert '<option value="yes" selected>' in body
 
 
@@ -178,34 +206,36 @@ def test_copy_from_header_with_nothing_recognizable_says_so(client, pdir):
     ("text", "expected"),
     [
         (
-            "Jane Public\nSpringfield, IL | jane@example.com | 555-010-0123\n\nSummary\nx\n",
+            "Jane Public\nSpringfield, IL | jane.canary@invalid.test | 555-010-0123\n\n"
+            "Summary\nx\n",
             {
                 "first_name": "Jane",
                 "last_name": "Public",
                 "city": "Springfield",
                 "region": "IL",
-                "email": "jane@example.com",
+                "email": "jane.canary@invalid.test",
                 "phone": "555-010-0123",
             },
         ),
         (
-            "# Jane Q. Public, PhD\n\n**Email:** [jane@example.com](mailto:jane@example.com)  \n"
+            "# Jane Q. Public, PhD\n\n"
+            "**Email:** [jane.canary@invalid.test](mailto:jane.canary@invalid.test)  \n"
             "**Phone:** +1 555 010 0123\nPortland, OR 97201\n## Experience\nOther, TX\n",
             {
                 "first_name": "Jane",
                 "last_name": "Public",
-                "email": "jane@example.com",
+                "email": "jane.canary@invalid.test",
                 "phone": "+1 555 010 0123",
                 "city": "Portland",
                 "region": "OR",
             },
         ),
         (
-            "JANE PUBLIC JR.\njane@example.com · (555) 010 0123 · Berlin, BE, Germany\n",
+            "JANE PUBLIC JR.\njane.canary@invalid.test · (555) 010 0123 · Berlin, BE, Germany\n",
             {
                 "first_name": "JANE",
                 "last_name": "PUBLIC",
-                "email": "jane@example.com",
+                "email": "jane.canary@invalid.test",
                 "phone": "(555) 010 0123",
                 "city": "Berlin",
                 "region": "BE",
@@ -213,6 +243,25 @@ def test_copy_from_header_with_nothing_recognizable_says_so(client, pdir):
             },
         ),
         ("Jane Public\nhttps://example.com/jane\n", {"first_name": "Jane", "last_name": "Public"}),
+        # postal codes and ids are not phones
+        (
+            "Jane Public\nPortland, OR 97201-1234\n",
+            {"first_name": "Jane", "last_name": "Public", "city": "Portland", "region": "OR"},
+        ),
+        (
+            "Jane Public\nAustin, TX 78701 555 010 0123\n",
+            {
+                "first_name": "Jane",
+                "last_name": "Public",
+                "phone": "555 010 0123",
+            },
+        ),
+        ("Jane Public\nID 1234-5678-9012\n", {"first_name": "Jane", "last_name": "Public"}),
+        ("Jane Public\n123456789\n", {"first_name": "Jane", "last_name": "Public"}),
+        (
+            "Jane Public\n+44 20 7946 0958\n",
+            {"first_name": "Jane", "last_name": "Public", "phone": "+44 20 7946 0958"},
+        ),
         ("", {}),
         ("Summary\nSystems engineer with 10 years of experience.\n", {}),
     ],
@@ -222,7 +271,7 @@ def test_the_header_parser_handles_common_shapes(text, expected):
 
 
 def test_the_header_parser_reads_only_the_header():
-    text = "Jane Public\n\n## Experience\nContact me at boss@example.com or 555-010-0123\n"
+    text = "Jane Public\n\n## Experience\nContact me at boss.canary@invalid.test or 555-010-0123\n"
     assert propose_contact(text) == {"first_name": "Jane", "last_name": "Public"}
 
 
@@ -239,6 +288,21 @@ def test_the_header_parser_reads_only_the_header():
         ("Can you work without sponsorship?", "without"),
         ("Are you authorized to work in the United States without visa sponsorship?", "without"),
         ("Able to work without requiring sponsorship", "without"),
+        # combined questions
+        ("Are you authorized to work in the US? Will you require sponsorship?", None),
+        ("Will you require sponsorship, or are you authorized to work in the US?", None),
+        ("Do you have a valid work permit, or will you require sponsorship?", None),
+        ("Will you require sponsorship (and authorized to work)?", None),
+        ("Can you work without sponsorship and are you 18 or older?", None),
+        ("Can you work without sponsorship? Are you 18 or older?", None),
+        # past or other tense, visa status
+        ("Have you ever required sponsorship?", None),
+        ("Did you require sponsorship at your last job?", None),
+        ("Are you currently on a visa that requires sponsorship?", None),
+        ("Does your current visa require sponsorship?", None),
+        # answer hints are not negations
+        ("Will you require visa sponsorship? (Yes/No)", "require"),
+        ("Can you work without sponsorship? [Yes/No]", "without"),
         # ambiguous or not about sponsorship: no polarity
         ("Do you not require sponsorship?", None),
         ("Are you legally authorized to work in the US and not require sponsorship?", None),

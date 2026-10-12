@@ -14,9 +14,12 @@ import re
 HEADER_LINES = 8
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")
-_PHONE = re.compile(
-    r"(?<![\w.])(?:\+\d{1,3}[\s.\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.\-]?\d{3,4}[\s.\-]?\d{3,4}(?![\w])"
+_NANP = re.compile(
+    r"(?<![\w.\-])(?:\+?1[\s.\-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.\-]?)\d{3}[\s.\-]?\d{4}(?![\w\-])"
 )
+_INTL = re.compile(r"(?<![\w.\-])\+\d{1,3}(?:[\s.\-]?(?:\(\d{1,4}\)|\d{1,4})){2,5}(?![\w\-])")
+# A postal code, with or without its state, is never part of a phone number.
+_POSTAL = re.compile(r"\b(?:[A-Z]{2}\s+)?\d{5}(?:-\d{4})?\b(?=\s|,|$|\|)")
 _LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _SEPARATORS = re.compile(r"\s*(?:\||\u00b7|\u2022|\u2014|\u2013|\s/\s|;|\t|\s-\s)\s*|\s{3,}")
 _CREDENTIAL = re.compile(r"^[A-Z][A-Za-z.]{1,8}$")
@@ -35,6 +38,15 @@ def _clean(line: str) -> str:
     line = _LINK.sub(lambda m: m.group(1), line)
     line = line.replace("mailto:", " ")
     return line.strip().strip("#*_ \t").strip()
+
+
+def _phone(line: str) -> str | None:
+    text = _POSTAL.sub(" ", _EMAIL.sub(" ", line))
+    if m := _NANP.search(text):
+        return m.group(0).strip()
+    if (m := _INTL.search(text)) and 8 <= sum(c.isdigit() for c in m.group(0)) <= 15:
+        return m.group(0).strip()
+    return None
 
 
 def _split_name(name: str) -> dict[str, str]:
@@ -97,17 +109,12 @@ def propose_contact(resume_text: str) -> dict[str, str]:
             continue
         if "email" not in found and (m := _EMAIL.search(line)):
             found["email"] = m.group(0)
-        if "phone" not in found and (m := _PHONE.search(_EMAIL.sub(" ", line))):
-            found["phone"] = m.group(0).strip()
+        if "phone" not in found and (phone := _phone(line)):
+            found["phone"] = phone
         if "city" not in found:
             for seg in _SEPARATORS.split(line):
                 seg = seg.strip().removeprefix("Location:").strip()
-                if (
-                    seg
-                    and not _EMAIL.search(seg)
-                    and not _PHONE.search(seg)
-                    and (loc := _location(seg))
-                ):
+                if seg and not _EMAIL.search(seg) and not _phone(seg) and (loc := _location(seg)):
                     found.update(loc)
                     break
     return found

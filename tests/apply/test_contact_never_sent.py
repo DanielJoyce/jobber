@@ -32,6 +32,8 @@ CANARIES = (
     "canarycity",
     "canaryregion",
     "canarycountry",
+    "requires_sponsorship",  # the sponsorship answer (a bool): its key must not travel either
+    "sponsorship: ",
 )
 PREFS = """\
 resume_path: resume.md

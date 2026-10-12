@@ -42,7 +42,7 @@
   </div>
 
   <h3 class="sub" id="ans-contact">Contact {{ ahelp('contact', 'Contact') }}</h3>
-  {% call help_body('contact', 'Contact') %}<p class="hint">Your name, email, phone and city, filled into application forms by the browser extension when you click Fill. They are stored only in this file, never sent to a model, never written to a log or the history. The street address and postal code are never stored.</p>{% endcall %}
+  {% call help_body('ans-contact', 'Contact') %}<p class="hint">Your name, email, phone and city, filled into application forms by the browser extension when you click Fill. They are stored only in this file, never sent to a model, never written to a log or the history. The street address and postal code are never stored.</p>{% endcall %}
   {% if ans_note %}<div class="banner" role="status" id="contact-note">{{ ans_note }}</div>{% endif %}
   <div class="grid2">
     {% for k, label, maxlen in ans_contact_fields %}
