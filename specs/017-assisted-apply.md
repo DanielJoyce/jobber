@@ -1137,6 +1137,8 @@ only, and is built alongside 1b (your decision, 2026-10-10).
 
 ## Phase 2 gate
 
+> **Changed by [022](022-extension-apply-assist.md#decisions) (2026-10-11): the gate is waived.** Phase 2 is built without the use and spike conditions below. The offline spike stays, as 022's ticket A1.
+
 Phase 2 is built only when both hold:
 
 1. **Use.** After 4 weeks of phase 1, `jobhunter apply stats` shows at least **8 packets marked
@@ -1190,6 +1192,8 @@ page reads to Anthropic. A small extension of our own replaces all of that:
 | Setup | Profile, launch flags, settings, hook, userscript | Load unpacked once, pair once |
 
 ### Architecture
+
+> **Changed by [022](022-extension-apply-assist.md#what-changes-in-017) (2026-10-12):** on the supported ATS hosts, content scripts draw their buttons on page load, and with **Record submits** on they add passive submit listeners. They still write no field and send nothing to the console without your click or your submit. The table's "act on page load" rule is superseded for those hosts.
 
 ```
  Chrome (your profile)                                        Console (127.0.0.1:8808)
@@ -1316,6 +1320,8 @@ Drafted (2)     "Why Acme?" draft ready [Insert] · "Kubernetes in production?" 
 ```
 
 ### Field classification
+
+> **Changed by [022](022-extension-apply-assist.md#the-answer-bank) (2026-10-12):** row 6 also fills the contact block and the sponsorship answer from `/prefs`, and row 7 also uses `/prefs` custom answers and earlier answers. The other rows are unchanged.
 
 `POST .../snapshot` with `phase = after` runs `apply/fill_classify.py`. First matching row wins:
 
@@ -1484,6 +1490,8 @@ is refused. `/ext/v1/` adds an authenticated door for one client:
 
 ### Coexisting with Jobright
 
+> **Superseded by [022](022-extension-apply-assist.md#decisions) (2026-10-11):** Jobright is turned off, so there is nothing to coexist with. jobhunter's extension is the only apply helper and fills from your saved answers on your click. Nothing below applies.
+
 Your fill helper is **Jobright** (2026-10-10). It fills only when you click **Autofill** in its
 sidebar, reuses your answers to earlier questions, and puts a **Customize** button in the corner
 of resume and cover-letter upload widgets. jobhunter's extension is built to sit beside it:
@@ -1508,6 +1516,8 @@ of resume and cover-letter upload widgets. jobhunter's extension is built to sit
   jobhunter never overwrites its values and that the two corner buttons do not overlap.
 
 ### Multi-step forms (prerequisite for Workday and NEOGOV)
+
+> **Changed by [022](022-extension-apply-assist.md#workday-and-multi-step-forms) (2026-10-12):** Workday's multi-step design is in 022 instead of a separate bug. NEOGOV stays checklist-only, as below.
 
 The four public ATSs are single-page forms. Workday and NEOGOV spread the application over
 several steps behind **Next**, which the extension never clicks. Before their optional hosts are
@@ -1563,6 +1573,8 @@ the tab is yours. If confirmations from one ATS stop arriving after helped appli
 `[apply.ats.<name>] fill = false` and use the checklist for it.
 
 ### Phase 2 data
+
+> **Changed by [022](022-extension-apply-assist.md#data) (2026-10-12):** `fill_session.application_id` is NOT NULL and `packet_id` is optional. A confirmed submit records `applied`, with undo, and `submit_seen` is no longer only a hint. The SQL below is superseded for those columns; 022 has the migration.
 
 `NNNN_fill_session.sql`, for the cap, the one-at-a-time rule, stats and the report view:
 
