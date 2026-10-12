@@ -206,10 +206,16 @@ class _Ctx:
 
 
 def _show(path: Path | str, ctx: _Ctx) -> str:
+    """A path as the user sees it (see ``display_path``)."""
+    return display_path(path, ctx.mode, ctx.home)
+
+
+def display_path(path: Path | str, mode: str, home: Path | None = None) -> str:
     """A path as the user sees it: ``$HOME`` as ``~``; in container mode the host path with the
     container path in brackets (019 "Modes")."""
     text = str(path)
-    if ctx.mode == CONTAINER:
+    home = home if home is not None else Path.home()
+    if mode == CONTAINER:
         from jobhunter.ops import preflight
 
         for inside, outside in (
@@ -219,11 +225,11 @@ def _show(path: Path | str, ctx: _Ctx) -> str:
         ):
             if text == inside or text.startswith(inside + "/"):
                 return f"~/{outside}{text[len(inside) :]} [{text}]"
-    for home in dict.fromkeys((str(ctx.home), os.path.realpath(ctx.home))):
-        if text == home:
+    for prefix in dict.fromkeys((str(home), os.path.realpath(home))):
+        if text == prefix:
             return "~"
-        if text.startswith(home + "/"):
-            return "~" + text[len(home) :]
+        if text.startswith(prefix + "/"):
+            return "~" + text[len(prefix) :]
     return text
 
 

@@ -1,0 +1,35 @@
+.su-group { margin: 0 0 8px; }
+.su-group > details > summary { cursor: pointer; display: flex; align-items: baseline; gap: 8px; }
+.su-group > details > summary h2 { display: inline; margin: 18px 0 6px; }
+.su-row { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: var(--text-primary); padding: 8px 12px; margin: 0 0 8px; }
+.su-row p { margin: 4px 0; }
+.su-row summary { cursor: pointer; }
+.su-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.su-icon { font-weight: 700; display: inline-block; min-width: 1.1em; }
+.su-word { font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.su-title { font-weight: 600; }
+.su-brief { font-size: 0.85rem; }
+.su-missing, .su-broken { border-left: 4px solid var(--status-critical); }
+.su-due, .su-unknown { border-left: 4px solid var(--status-warning); }
+.su-ok { border-left: 4px solid var(--status-good); }
+.su-unlocks { color: var(--text-secondary); }
+.su-source { font-size: 0.82rem; }
+.su-wait { font-style: italic; }
+.su-error { border: 2px solid var(--text-primary); border-radius: 6px; padding: 4px 8px; }
+.su-fix { margin: 6px 0; }
+.su-alt { margin: 4px 0 0 12px; }
+.su-steps { margin: 4px 0 4px 1.2rem; padding: 0; }
+.su-steps li { margin: 3px 0; overflow-wrap: anywhere; }
+.su-cmd { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%; }
+.su-cmd code { background: var(--page); border: 1px solid var(--grid); border-radius: 4px; padding: 1px 6px; overflow-wrap: anywhere; user-select: all; }
+.su-copy, .su-form button { font: inherit; font-size: 0.8rem; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--axis); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
+.su-form { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 6px 0; }
+.su-form label { font-size: 0.85rem; color: var(--text-secondary); max-width: 100%; }
+.su-form input[type="file"] { max-width: 100%; }
+.su-hide { margin-top: 2px; }
+.su .su-form button.linklike { border: 0; background: none; color: var(--link); text-decoration: underline; padding: 0; font-size: 0.82rem; }
+.su-cloud { margin: 8px 0; }
+@media (max-width: 600px) {
+  .su-row { padding: 8px; }
+  .su-head { flex-direction: column; align-items: flex-start; }
+}

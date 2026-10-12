@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('pages.css') }}">
+<link rel="stylesheet" href="{{ static_url('setup.css') }}">
+<script src="{{ static_url('setup.js') }}" defer></script>
+{% endblock %}
+{% block main %}
+<div class="pg su">
+  <h1>Setup</h1>
+  {% if flash %}<p class="callout" role="status">{{ flash }}</p>{% endif %}
+  <p class="muted">
+    {% if not essentials_ok %}Something essential is missing; rows marked missing or broken need action.
+    {% elif todo_count %}Everything essential is in place. {{ todo_count }} item{{ "" if todo_count == 1 else "s" }} could still use attention.
+    {% else %}Everything checks out.{% endif %}
+    {% if mode == "container" %}Paths show the host path with the container path in brackets.{% endif %}
+    {% if show_all %}<a href="/setup">Collapse finished items</a>{% else %}<a href="/setup?all=1">Show everything</a>{% endif %}
+  </p>
+  {% for g in groups %}
+  <section class="su-group" id="group-{{ g.name | lower | replace(' ', '-') }}">
+    {% if g.quiet and not show_all %}
+    <details>
+      <summary><h2>{{ g.name }}</h2> <span class="su-icon" aria-hidden="true">&#10003;</span> <span class="muted">all ok</span></summary>
+      {% for r in g.rows %}{% include "_setup_row.html" %}{% endfor %}
+    </details>
+    {% else %}
+    <h2>{{ g.name }}</h2>
+    {% if g.name == "Email alerts" %}<p class="muted">A numbered guide: work through the steps in order.</p>{% endif %}
+    {% for r in g.rows %}{% include "_setup_row.html" %}{% endfor %}
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

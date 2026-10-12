@@ -1168,6 +1168,7 @@ def console(
     except ConsoleBusy as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
+    app_.state.secrets_report = _SECRETS_REPORT  # the secret rows on /setup
     uvicorn.run(app_, host=bind_host, port=bind_port)
 
 
