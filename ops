@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791778908,"nonce":"Y6KZ68dg5JHGWCNZmHgtAl41D70=","message":"Decision: the S3a test that refused any /help link on the cloud-steps row now asserts the step-1 link instead. Reason: S11e lifts that restriction on purpose, so the old guard had to change with it.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791779431,"nonce":"dxaQ1SacuAbesfMi7E8j7r+6IqE=","status":2}]}
