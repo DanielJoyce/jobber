@@ -345,13 +345,20 @@ def test_a_real_click_on_a_button_opens_the_panel_bound_to_the_tab(rig):
     rig.wait_for(lambda: rig.buttons(tab, 0), "the buttons")
     resume = next(b for b in rig.buttons(tab, 0) if b["key"] == "resume")
     page.mouse.click(resume["x"] + resume["w"] / 2, resume["y"] + resume["h"] / 2)
-    got = rig.wait_for(
-        lambda: rig.ext().evaluate(
+
+    # getContexts lists the panel document before it has navigated (documentUrl is ''), so wait
+    # for the bound URL itself rather than for any context.
+    def panel_urls():
+        return rig.ext().evaluate(
             "() => chrome.runtime.getContexts({contextTypes: ['SIDE_PANEL']})"
             ".then((c) => c.map((x) => x.documentUrl))"
-        ),
-        "the side panel",
+        )
+
+    rig.wait_for(
+        lambda: any(f"panel/index.html?tab={tab}" in u for u in panel_urls()),
+        "the side panel to load bound to the tab",
     )
+    got = panel_urls()
     assert any(f"panel/index.html?tab={tab}" in u for u in got), got
     st = rig.send({"type": "panel/state", "tab": tab})
     assert st["ats"] == "greenhouse" and st["host"] == "boards.greenhouse.io"
