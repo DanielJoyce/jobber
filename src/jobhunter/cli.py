@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
+import os
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -14,7 +16,7 @@ from typing import Annotated
 import typer
 from typer.core import TyperGroup
 
-from jobhunter import container, secrets
+from jobhunter import container, logsetup, secrets
 from jobhunter.config import Settings, env_files, load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
@@ -224,7 +226,6 @@ def _load_env(
 def _configure_logging(verbose: int, quiet: int) -> None:
     """One stderr handler for the whole process (bug 85e102e); the level comes from -v/-q, then
     JOBHUNTER_LOG_LEVEL, then [logging] level in config.toml, else INFO."""
-    from jobhunter import logsetup
 
     try:
         config_level = load_settings().logging.level
@@ -233,6 +234,12 @@ def _configure_logging(verbose: int, quiet: int) -> None:
     logsetup.configure(
         logsetup.resolve_level(verbose=verbose, quiet=quiet, config_level=config_level)
     )
+    logsetup.OVERRIDE = logsetup.override_source(verbose, quiet)
+    bad = os.environ.get(logsetup.LEVEL_ENV_VAR, "").strip()
+    if bad and logsetup.parse_level(bad) is None:  # never echo the value
+        logging.getLogger(__name__).warning(
+            "ignoring %s: not one of DEBUG, INFO, WARNING, ERROR", logsetup.LEVEL_ENV_VAR
+        )
 
 
 def _refuse_split_data() -> None:
@@ -1310,6 +1317,8 @@ def console(
 
     # Fields set on the command line win over config: a change to them has no effect (019 B).
     pinned = [f for f, v in (("console.host", host), ("console.port", port)) if v is not None]
+    if logsetup.OVERRIDE:
+        pinned.append("logging.level")
     app_.state.config_watch = ConfigWatcher(cli_overrides=pinned)
     _serve(app_, bind_host, bind_port, uvicorn)
 
@@ -1317,7 +1326,6 @@ def console(
 def _serve(app_, bind_host: str, bind_port: int, uvicorn) -> None:
     """Run uvicorn with a handle on the server, so a console Restart can stop it gracefully
     and then re-exec or exit 42 (specs/019 Addendum B "Restart", S12b)."""
-    from jobhunter import logsetup
     from jobhunter.console import restart
     from jobhunter.ops import version
 

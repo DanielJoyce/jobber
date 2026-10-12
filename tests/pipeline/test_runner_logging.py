@@ -20,10 +20,11 @@ from test_runner import (
     stub,
 )
 
-from jobhunter.config import Fetch, Settings
+from jobhunter.config import Settings
 from jobhunter.pipeline import runner
 
-SECRET_EMAIL = "sentinel.person@example.com"
+TITLE_SENTINEL = "TITLESENTINEL-heron-2204"
+EMPLOYER_SENTINEL = "EMPLOYERSENTINEL-ibex-8830"
 POSTING_SENTINEL = "POSTINGSENTINEL-wombat-5519"
 
 
@@ -82,6 +83,7 @@ def test_resolve_logs_per_source_totals(conn, caplog):
     FakeAdapter.stubs = {"a": [stub("a", n, desc="", needs_resolve=True) for n in (1, 2, 3)]}
     go(conn, [row("a")], stages=["list", "resolve"])
     msgs = info_lines(caplog)
+    assert any(m.startswith("resolve a: 3 candidates") for m in msgs)
     assert any(m.startswith("resolve a: 3 resolved, 0 errors") for m in msgs)
     assert any(m.startswith("stage resolve done") and "3 resolved" in m for m in msgs)
 
@@ -91,17 +93,66 @@ def test_resolve_progress_is_periodic_not_per_row(conn, caplog, monkeypatch):
     FakeAdapter.stubs = {"a": [stub("a", n, desc="", needs_resolve=True) for n in range(1, 13)]}
     caplog.set_level(logging.INFO)
     go(conn, [row("a")], stages=["list", "resolve"])
-    progress = [m for m in info_lines(caplog) if "postings resolved so far" in m]
+    progress = [m for m in info_lines(caplog) if "postings tried" in m]
     assert len(progress) == 2  # after 5 and after 10, not after each of 12
+    assert progress[0].startswith("resolve a: 5 of 12 postings tried, 5 resolved")
+
+
+def test_resolve_progress_does_not_repeat_after_failures(conn, caplog, monkeypatch):
+    """Once done is a multiple of PROGRESS_EVERY, failed postings must not re-log the line."""
+    monkeypatch.setattr(runner, "PROGRESS_EVERY", 2)
+    FakeAdapter.stubs = {"a": [stub("a", n, desc="", needs_resolve=True) for n in range(1, 9)]}
+    real = FakeAdapter.resolve
+
+    def flaky(self, s, ctx):
+        if s.external_id in {"a-3", "a-4", "a-5", "a-6"}:
+            raise ValueError("bad page")
+        return real(self, s, ctx)
+
+    monkeypatch.setattr(FakeAdapter, "resolve", flaky)
+    caplog.set_level(logging.INFO)
+    go(conn, [row("a")], stages=["list", "resolve"])
+    progress = [m for m in info_lines(caplog) if "postings tried" in m]
+    assert len(progress) == len(set(progress))
+    assert len(progress) <= 3
+
+
+def test_resolve_start_line_names_the_spacing(conn, caplog):
+    caplog.set_level(logging.INFO)
+    FakeAdapter.stubs = {"a": [stub("a", n, desc="", needs_resolve=True) for n in (1, 2)]}
+
+    @contextmanager
+    def ctx(src):
+        yield SimpleNamespace(stats={}, spacing=lambda url: (5.0, "robots Crawl-delay"))
+
+    runner.run_pipeline(
+        conn,
+        Settings(),
+        [row("a")],
+        adapters=ADAPTERS,
+        ctx_factory=ctx,
+        profile_loader=lambda: PROFILE,
+        stages=["list", "resolve"],
+    )
+    assert any(
+        "resolve a: 2 candidates, one request every 5.0s (robots Crawl-delay)" in m
+        for m in info_lines(caplog)
+    )
 
 
 def test_no_personal_text_in_any_record(conn, caplog):
     caplog.set_level(logging.DEBUG)
-    settings = Settings(fetch=Fetch(user_agent_contact=SECRET_EMAIL))
-    FakeAdapter.stubs = {"a": [stub("a", 1, desc=f"<p>Build systems. {POSTING_SENTINEL}</p>")]}
-    go(conn, [row("a")], settings=settings, stages=INGEST)
+    FakeAdapter.stubs = {
+        "a": [
+            stub(
+                "a", 1, title=TITLE_SENTINEL, desc=f"<p>Build systems. {POSTING_SENTINEL}</p>"
+            ).model_copy(update={"agency_raw": EMPLOYER_SENTINEL}),
+            stub("a", 2, title=TITLE_SENTINEL, desc="", needs_resolve=True),
+        ]
+    }
+    go(conn, [row("a")], stages=INGEST)
     assert caplog.records
     for r in caplog.records:
         text = r.getMessage() + str(r.args)
-        assert SECRET_EMAIL not in text and POSTING_SENTINEL not in text, text
-        assert "Systems Engineer" not in text  # titles are logged as ids, not text
+        for sentinel in (POSTING_SENTINEL, TITLE_SENTINEL, EMPLOYER_SENTINEL):
+            assert sentinel not in text, text  # ids and counts only

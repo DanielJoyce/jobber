@@ -429,7 +429,11 @@ class MailAlertsAdapter:
         try:
             resp = ctx.get(stub.url)
         except (RobotsDisallowed, AccessDenied, SourceBlocked) as exc:
-            log.info("keeping %s partial: %s", stub.url, exc)
+            log.info(
+                "keeping an alert posting from %s partial: %s",
+                urlsplit(stub.url).netloc,
+                type(exc).__name__,
+            )
             return JobDetail(**data)
         except TransientFetchError as exc:
             # A plain error: the runner logs it and retries next run without failing the source.

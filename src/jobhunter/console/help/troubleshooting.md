@@ -20,22 +20,25 @@ Where to read them:
 - The console, run in a terminal: the same terminal.
 - The host timers: `journalctl --user -u jobhunter-run.service -n 100` (add `-f` to follow), and
   `jobhunter-collect.service` for batch collection.
-- The container units: `journalctl --user -u jobhunter-console -n 100` and
-  `journalctl --user -u 'jobhunter-ctr-*' -b`.
+- A console run as a unit, on the host or in a container: `journalctl --user -u jobhunter-console
+  -n 100`. The container timers: `journalctl --user -u 'jobhunter-ctr-*' -b`.
 
-To change the level, use any one of these (first match wins): `-v` or `-q` before the command
-(`jobhunter -v run` is DEBUG, `jobhunter -q run` is WARNING), the `JOBHUNTER_LOG_LEVEL`
-environment variable (`DEBUG`, `INFO`, `WARNING` or `ERROR`), or in `config.toml`:
+To change the level, use any of these. The command-line flag beats the environment variable,
+which beats `config.toml`; with none of them the level is INFO. `-v` steps one level toward
+DEBUG and `-q` one toward ERROR from whatever the other two give, so `jobhunter -v run` is DEBUG
+at the default and `jobhunter -q run` is WARNING. `JOBHUNTER_LOG_LEVEL` takes `DEBUG`, `INFO`,
+`WARNING` or `ERROR` (anything else is ignored with one warning). In `config.toml`:
 
 ```toml
 [logging]
 level = "DEBUG"
 ```
 
-DEBUG adds per-item detail and is noisy. A level set in `config.toml` or the environment is read
-once at start, so restart the console after changing it. HTTP libraries (`httpx`, `anthropic`,
-`urllib3`) stay at WARNING at every level. The console's request lines (`GET /... 200`) keep
-their usual INFO level whatever you choose.
+DEBUG adds per-item detail and is noisy. The environment variable and `config.toml` are read once
+at start, so restart the console after changing them. While the variable or `-v`/`-q` is in force,
+`/config/changes` shows an edit to `[logging] level` as having no effect. HTTP libraries
+(`httpx`, `anthropic`, `urllib3`) stay at WARNING at every level. The console's request lines
+(`GET /... 200`) keep their usual INFO level whatever you choose.
 
 ## Unknown key in config.toml
 

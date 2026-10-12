@@ -383,11 +383,25 @@ def _resolve_source(
     budget: int,
 ) -> int:
     done = 0
+    candidates = _resolve_candidates(conn, src.key, now, budget)
+    total = len(candidates)
+    if total:
+        spacing = getattr(ctx, "spacing", None)
+        every, why = spacing(src.entry) if callable(spacing) else (None, "")
+        logger.info(
+            "resolve %s: %d candidates%s",
+            src.key,
+            total,
+            f", one request every {every:.1f}s ({why})" if every else "",
+        )
     last_log = time.monotonic()
-    for row in _resolve_candidates(conn, src.key, now, budget):
-        if done and (done % PROGRESS_EVERY == 0 or time.monotonic() - last_log >= PROGRESS_SECONDS):
-            last_log = time.monotonic()
-            logger.info("resolve %s: %d postings resolved so far", src.key, done)
+    last_done = 0
+    for i, row in enumerate(candidates):
+        if done != last_done and (
+            done % PROGRESS_EVERY == 0 or time.monotonic() - last_log >= PROGRESS_SECONDS
+        ):
+            last_log, last_done = time.monotonic(), done
+            logger.info("resolve %s: %d of %d postings tried, %d resolved", src.key, i, total, done)
         conn.execute(
             "UPDATE job SET resolve_attempts = resolve_attempts + 1 WHERE id = ?", (row["id"],)
         )

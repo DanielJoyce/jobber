@@ -46,6 +46,20 @@ def parse_level(value: object) -> int | None:
     return getattr(logging, name) if name in LEVELS else None
 
 
+# What overrides ``[logging] level`` in this process ("" when nothing does); set by the CLI so
+# /config/changes can say an edit to it has no effect.
+OVERRIDE = ""
+
+
+def override_source(verbose: int = 0, quiet: int = 0) -> str:
+    """Words for what overrides ``[logging] level``, or "" when nothing does."""
+    if verbose or quiet:
+        return "the command line (-v/-q)"
+    if os.environ.get(LEVEL_ENV_VAR, "").strip():
+        return LEVEL_ENV_VAR
+    return ""
+
+
 def resolve_level(*, verbose: int = 0, quiet: int = 0, config_level: str | None = None) -> int:
     """``JOBHUNTER_LOG_LEVEL``, then ``[logging] level``, else INFO; -v steps that toward
     DEBUG and -q toward ERROR."""

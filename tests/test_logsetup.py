@@ -126,3 +126,30 @@ def test_cli_flags_and_config(tmp_path, monkeypatch):
 def test_cli_without_settings_defaults_to_info():
     assert CliRunner().invoke(app, ["version"]).exit_code == 0
     assert logging.getLogger().level == logging.INFO
+
+
+def test_invalid_env_level_warns_once_without_echoing_it(monkeypatch, caplog):
+    monkeypatch.setenv(logsetup.LEVEL_ENV_VAR, "LOUDSENTINEL")
+    with caplog.at_level(logging.WARNING):
+        assert CliRunner().invoke(app, ["version"]).exit_code == 0
+    warns = [r.getMessage() for r in caplog.records if "ignoring" in r.getMessage()]
+    assert len(warns) == 1 and "LOUDSENTINEL" not in warns[0]
+
+
+def test_override_source_names_what_beats_the_config(monkeypatch):
+    assert logsetup.override_source() == ""
+    assert logsetup.override_source(verbose=1) == "the command line (-v/-q)"
+    monkeypatch.setenv(logsetup.LEVEL_ENV_VAR, "DEBUG")
+    assert logsetup.override_source() == logsetup.LEVEL_ENV_VAR
+
+
+def test_config_changes_marks_logging_level_no_effect_when_overridden(monkeypatch):
+    from jobhunter import config_watch
+
+    monkeypatch.setattr(logsetup, "OVERRIDE", logsetup.LEVEL_ENV_VAR)
+    old = Settings()
+    new = Settings.model_validate({"logging": {"level": "DEBUG"}})
+    (change,) = [
+        c for c in config_watch.diff(old, new, ["logging.level"]) if c.field == "logging.level"
+    ]
+    assert change.class_text == "no effect: set on JOBHUNTER_LOG_LEVEL"

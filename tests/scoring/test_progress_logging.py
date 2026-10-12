@@ -25,7 +25,8 @@ from jobhunter.scoring import rescore, screen
 
 QUOTE = "Write Terraform modules and Go tooling."
 KEY_SENTINEL = "sk-ant-api03-SENTINELKEY0123456789abcdefghijklmnop"
-EMAIL_SENTINEL = "sentinel.person@example.com"
+TITLE_SENTINEL = "TITLESENTINEL-heron-2204"
+EMPLOYER_SENTINEL = "EMPLOYERSENTINEL-ibex-8830"
 RESUME_SENTINEL = "RESUMESENTINEL-quokka-7731"
 POSTING_SENTINEL = "POSTINGSENTINEL-wombat-5519"
 
@@ -159,15 +160,15 @@ def test_hidden_scorer_spec_never_reaches_the_log(conn, profile, caplog):
 
 
 def test_no_sentinel_reaches_any_record_at_debug(conn, profile, caplog, monkeypatch):
-    """Keys, contact addresses, resume text and posting text appear in no record, over a batch
+    """Keys, resume text, posting text, titles and employers appear in no record, over a batch
     submit, a collect, a sync run and a re-score, with the root logger at DEBUG."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", KEY_SENTINEL)
-    monkeypatch.setenv("JOBHUNTER_CONTACT", EMAIL_SENTINEL)
     profile = profile.model_copy(update={"resume_text": f"{RESUME_SENTINEL}\n- ran hosts\n"})
     caplog.set_level(logging.DEBUG)
     description = f"{QUOTE} {POSTING_SENTINEL} Run the fleet."
     for n in range(1, 5):
         add_group(conn, n, profile, description=description)
+    conn.execute("UPDATE job SET title = ?, employer = ?", (TITLE_SENTINEL, EMPLOYER_SENTINEL))
     client = FakeClient()
     batch_id = screen.submit_batch(
         conn, client, profile, limit=2, now=NOW, scorer=SCORER, remaining_usd=lambda: 5.0
@@ -191,5 +192,11 @@ def test_no_sentinel_reaches_any_record_at_debug(conn, profile, caplog, monkeypa
     assert caplog.records, "nothing logged at all"
     for r in caplog.records:
         text = r.getMessage() + (r.exc_text or "") + str(r.args)
-        for sentinel in (KEY_SENTINEL, EMAIL_SENTINEL, RESUME_SENTINEL, POSTING_SENTINEL):
+        for sentinel in (
+            KEY_SENTINEL,
+            RESUME_SENTINEL,
+            POSTING_SENTINEL,
+            TITLE_SENTINEL,
+            EMPLOYER_SENTINEL,
+        ):
             assert sentinel not in text, (sentinel, r.name, text)
