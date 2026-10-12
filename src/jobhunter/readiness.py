@@ -1006,16 +1006,115 @@ def _usajobs(ctx: _Ctx) -> Check:
     )  # fmt: skip
 
 
+def _newest_run(ctx: _Ctx, *, timer_only: bool = False) -> sqlite3.Row | None:
+    """The newest ``run`` row (only timer-started ones with ``timer_only``), with its trigger.
+    A database from before migration 0037 has no trigger column: no timer rows, and the newest
+    run with a NULL trigger."""
+    where = "WHERE \"trigger\" = 'timer' " if timer_only else ""
+    rows = _query(
+        ctx,
+        'SELECT id, started_at, ended_at, exit_status, "trigger" AS trig FROM run '
+        f"{where}ORDER BY id DESC LIMIT 1",
+    )
+    if rows is None:
+        if timer_only:
+            return None
+        rows = _query(
+            ctx,
+            "SELECT id, started_at, ended_at, exit_status, NULL AS trig FROM run "
+            "ORDER BY id DESC LIMIT 1",
+        )
+    return rows[0] if rows else None
+
+
+def run_label(trigger: Any, when: datetime | None) -> str:
+    """ "nightly run at ..." only for timer-started runs (019); "manual run at ..." otherwise."""
+    at = when.astimezone().strftime("%Y-%m-%d %H:%M") if when else "an unknown time"
+    if trigger == "timer":
+        return f"nightly run at {at}"
+    if trigger == "manual":
+        return f"manual run at {at}"
+    return f"run at {at}"
+
+
+def _unit_marked(ctx: _Ctx) -> bool | None:
+    """Does the installed run unit mark its runs ``JOBHUNTER_TRIGGER=timer``? A small file
+    read. None when this process cannot see the unit (container mode, or not installed)."""
+    from jobhunter.ops import preflight, schedule
+
+    if ctx.mode == CONTAINER:
+        return None
+    if ctx.mode == HOST_MANAGING:
+        unit_dir = ctx.unit_dir()
+        try:
+            if preflight.trigger_dropin_path(unit_dir, preflight.RUN).is_file():
+                return True
+        except OSError:
+            pass
+        return schedule.has_trigger(unit_dir / f"{preflight.RUN}.container")
+    return schedule.has_trigger(schedule.unit_dir(ctx.home) / "jobhunter-run.service")
+
+
+TIMER_STALE = timedelta(hours=36)
+UNMARKED_HINT = (
+    "timer runs are not marked yet: rerun `jobhunter schedule install` (host) or "
+    "`jobhunter container preflight` (containers)"
+)
+
+
+def _timer_health(ctx: _Ctx, base: Check) -> Check:
+    """Timers not running is judged from the newest timer-started run, so a manual run does
+    not hide dead timers, provided the installed run unit carries the marker. Otherwise (no
+    marker, or the unit is not visible and no timer row exists yet) it falls back to the newest
+    run of any trigger and never reports dead timers (019 "What the nightly run sees")."""
+    marked = _unit_marked(ctx)
+    timer = _newest_run(ctx, timer_only=True) if ctx.conn is not None else None
+    if marked is False or timer is None:
+        newest = _newest_run(ctx) if ctx.conn is not None else None
+        seen = (
+            f"newest: {run_label(newest['trig'], _parse_ts(newest['started_at']))}"
+            if newest is not None
+            else "no run recorded yet"
+        )
+        if marked is False or (marked is None and ctx.mode == CONTAINER):
+            command = (
+                "jobhunter schedule install" if ctx.mode == HOST else
+                "jobhunter container preflight"
+            )  # fmt: skip
+            return replace(
+                base, due=base.status == OK and marked is False,
+                detail=f"{base.detail}; {UNMARKED_HINT}; {seen}",
+                fix=base.fix or (Fix("command", command) if marked is False else None),
+            )  # fmt: skip
+        return replace(base, detail=f"{base.detail}; no timer-started run recorded yet; {seen}")
+    started = _parse_ts(timer["started_at"])
+    if started is not None and ctx.now - started <= TIMER_STALE:
+        return replace(
+            base, status=OK if base.status == UNKNOWN else base.status,
+            detail=f"{base.detail}; last {run_label('timer', started)}",
+        )  # fmt: skip
+    status_cmd = (
+        "systemctl --user list-timers 'jobhunter-*'" if ctx.mode == HOST
+        else "systemctl --user list-timers 'jobhunter-ctr-*'  (on the host)"
+    )  # fmt: skip
+    return replace(
+        base, status=BROKEN, due=False,
+        detail=f"timers not running: no timer-started run in the last 36 hours (last "
+        f"{run_label('timer', started)})",
+        fix=Fix("command", status_cmd),
+    )  # fmt: skip
+
+
 def _schedule(ctx: _Ctx) -> Check:
     from jobhunter.ops import preflight, schedule
 
     title, unlocks = "Scheduled runs", "Nightly ingest and scoring"
     if ctx.mode == CONTAINER:
-        return Check(
+        return _timer_health(ctx, Check(
             "run.schedule", SOURCES, RECOMMENDED, UNKNOWN, False, title,
             "the Quadlet timers are not visible from inside the container", unlocks,
             Fix("command", "jobhunter doctor --containers"),
-        )  # fmt: skip
+        ))  # fmt: skip
     user_dir = schedule.unit_dir(ctx.home)
     host_enabled = preflight.host_timers_enabled(user_dir, schedule.TIMERS)
     if ctx.mode == HOST_MANAGING:
@@ -1028,18 +1127,22 @@ def _schedule(ctx: _Ctx) -> Check:
             )  # fmt: skip
         ctr = preflight.host_timers_enabled(user_dir, preflight.CTR_TIMERS)
         if ctr:
-            return Check("run.schedule", SOURCES, RECOMMENDED, OK, False, title,
-                         "container timers enabled: " + ", ".join(ctr), unlocks,
-                         None, "systemd user timers")  # fmt: skip
+            return _timer_health(ctx, Check(
+                "run.schedule", SOURCES, RECOMMENDED, OK, False, title,
+                "container timers enabled: " + ", ".join(ctr), unlocks, None,
+                "systemd user timers",
+            ))  # fmt: skip
         return Check(
             "run.schedule", SOURCES, RECOMMENDED, MISSING, False, title,
             "no jobhunter-ctr timers are enabled", unlocks,
             Fix("command", "jobhunter container preflight"),
         )  # fmt: skip
     if host_enabled:
-        return Check("run.schedule", SOURCES, RECOMMENDED, OK, False, title,
-                     "host timers enabled: " + ", ".join(host_enabled), unlocks, None,
-                     "systemd user timers")  # fmt: skip
+        return _timer_health(ctx, Check(
+            "run.schedule", SOURCES, RECOMMENDED, OK, False, title,
+            "host timers enabled: " + ", ".join(host_enabled), unlocks, None,
+            "systemd user timers",
+        ))  # fmt: skip
     return Check("run.schedule", SOURCES, RECOMMENDED, MISSING, False, title,
                  "no timers are enabled, so nothing runs on its own", unlocks,
                  Fix("command", "jobhunter schedule install"))  # fmt: skip
@@ -1071,29 +1174,26 @@ def _exception_type(text: str | None) -> str:
 
 def _last_run(ctx: _Ctx) -> Check:
     title, unlocks = "Last run", "Whether ingest and scoring are working"
-    rows = _query(
-        ctx, "SELECT id, started_at, ended_at, exit_status FROM run ORDER BY id DESC LIMIT 1"
-    )  # fmt: skip
-    if rows is None and ctx.conn is not None:
+    run = _newest_run(ctx)
+    if run is None and ctx.conn is not None and _query(ctx, "SELECT 1 FROM run LIMIT 1") is None:
         return Check("run.last", SOURCES, RECOMMENDED, UNKNOWN, False, title,
                      "the database could not be read", unlocks,
                      Fix("command", "jobhunter doctor"))  # fmt: skip
-    if not rows:
+    if run is None:
         return Check("run.last", SOURCES, RECOMMENDED, OK, False, title, "no run yet", unlocks,
                      Fix("command", "jobhunter run"))  # fmt: skip
-    run = rows[0]
     started = _parse_ts(run["started_at"])
-    when = started.astimezone().strftime("%Y-%m-%d %H:%M") if started else "unknown time"
+    label = run_label(run["trig"], started)
     if run["ended_at"] is None:
         if started is not None and ctx.now - started > UNFINISHED_RUN_LIMIT:
             return Check("run.last", SOURCES, RECOMMENDED, BROKEN, False, title,
-                         f"the run at {when} never finished (it crashed or was killed); see "
+                         f"the {label} never finished (it crashed or was killed); see "
                          "the journal", unlocks, Fix("command", "jobhunter run"))  # fmt: skip
         return Check("run.last", SOURCES, RECOMMENDED, OK, False, title,
-                     f"run at {when} has not finished", unlocks)  # fmt: skip
+                     f"{label} has not finished", unlocks)  # fmt: skip
     if run["exit_status"] == "ok":
         return Check("run.last", SOURCES, RECOMMENDED, OK, False, title,
-                     f"run at {when} finished ok", unlocks)  # fmt: skip
+                     f"{label} finished ok", unlocks)  # fmt: skip
     bad = _query(
         ctx, "SELECT source_key, error FROM run_source WHERE run_id = ? AND status != 'ok'",
         (run["id"],),
@@ -1104,7 +1204,7 @@ def _last_run(ctx: _Ctx) -> Check:
         reasons.append(mapped or f"{_exception_type(row['error'])} (see /sources)")
     shown = "; ".join(dict.fromkeys(reasons)) or "a source failed (see /sources)"
     return Check("run.last", SOURCES, RECOMMENDED, BROKEN, False, title,
-                 f"run at {when} exited 1: {shown}", unlocks, Fix("route", "/sources"))  # fmt: skip
+                 f"{label} exited 1: {shown}", unlocks, Fix("route", "/sources"))  # fmt: skip
 
 
 # -- email alerts -------------------------------------------------------------------------------
@@ -1530,8 +1630,15 @@ def run_checks(
     environ: Mapping[str, str] | None = None,
     home: Path | None = None,
     spend: bool = True,
+    use_snapshot: bool = True,
+    viewer: str = "the console",
 ) -> list[Check]:
     """Every local check, in display order. Read-only, no network, no subprocess.
+
+    With ``use_snapshot`` (the default) each row carries its **effective status**: merged with
+    a fresh ``readiness.json`` (``readiness_snapshot.effective``), so the console and doctor show
+    what the nightly run saw. The writers of that file (``run``, ``doctor --snapshot``) pass
+    False to record their own view. ``viewer`` names this process in a disagreement.
 
     ``registry_rows`` are the registry rows loaded once at console start: the startup
     ``secrets.Report`` cannot tell which variables are USAJOBS's, and parsing the registry per
@@ -1557,10 +1664,15 @@ def run_checks(
     ctx.prefs = prefs_state(settings)
     ctx.conn = _open_ro(db_path)
     try:
-        return [build(ctx) for build, cheap in _CHECKS if cheap or not cheap_only]
+        checks = [build(ctx) for build, cheap in _CHECKS if cheap or not cheap_only]
     finally:
         if ctx.conn is not None:
             ctx.conn.close()
+    if not use_snapshot:
+        return checks
+    from jobhunter import readiness_snapshot
+
+    return readiness_snapshot.apply(checks, data_dir, now=now, mode=mode, viewer=viewer)
 
 
 def essentials_ok_cheap(

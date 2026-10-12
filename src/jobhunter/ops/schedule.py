@@ -30,6 +30,11 @@ UNIT_FILES = (
     "jobhunter-verify.timer",
     "jobhunter-notify@.service",
 )
+# Timer runs are marked explicitly (specs/019 S4): the run records 'timer' in run.trigger and
+# readiness.json, so a manual run never hides timers that stopped running.
+TRIGGER_LINE = "Environment=JOBHUNTER_TRIGGER=timer"
+TRIGGERED_UNITS = ("jobhunter-run.service", "jobhunter-collect.service")
+REINSTALL_HINT = "rerun `jobhunter schedule install`"
 SYSTEM_PATH_TAIL = "/usr/local/bin:/usr/bin:/bin"
 LINGER_HINT = "optional, to keep timers running while logged out: loginctl enable-linger $USER"
 
@@ -171,8 +176,25 @@ def install(
     return "\n".join(lines)
 
 
-def status() -> str:
-    """Read-only: ``systemctl --user list-timers 'jobhunter-*'``."""
+def has_trigger(path: Path) -> bool | None:
+    """Does the unit file set ``JOBHUNTER_TRIGGER=timer``? None when it cannot be read (not
+    installed). A small file read, no subprocess."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return any(line.strip() == TRIGGER_LINE for line in text.splitlines())
+
+
+def unmarked_units(home: Path | None = None) -> list[str]:
+    """Installed host units written before the trigger marker existed."""
+    target = unit_dir(home)
+    return [name for name in TRIGGERED_UNITS if has_trigger(target / name) is False]
+
+
+def status(home: Path | None = None) -> str:
+    """Read-only: ``systemctl --user list-timers 'jobhunter-*'``, plus a line for each
+    installed unit that lacks the trigger marker."""
     cmd = ["systemctl", "--user", "list-timers", "jobhunter-*"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -181,6 +203,11 @@ def status() -> str:
     out = (proc.stdout + proc.stderr).rstrip()
     if proc.returncode != 0:
         raise ScheduleError(out or f"exit {proc.returncode}")
+    for name in unmarked_units(home):
+        out += (
+            f"\n{name} does not mark its runs as timer runs (JOBHUNTER_TRIGGER=timer): "
+            f"{REINSTALL_HINT}"
+        )
     return out
 
 

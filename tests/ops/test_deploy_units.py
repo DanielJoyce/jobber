@@ -88,12 +88,14 @@ def test_common_container_properties(name):
     assert f"%h/{preflight.CACHE_SOURCE}:/cache:z" in c["Volume"]
     assert f"%h/{preflight.CONFIG_SOURCE}:/config/config.toml:ro,z" in c["Volume"]
     assert not any(":Z" in v for v in c["Volume"])
+    timer_marked = ["JOBHUNTER_TRIGGER=timer"] if name in preflight.TRIGGER_UNITS else []
     assert sorted(c["Environment"]) == [
         "JOBHUNTER_CACHE_DIR=/cache",
         "JOBHUNTER_DATA_DIR=/data",
         "JOBHUNTER_DB_PATH=/data/jobhunter.db",
         "JOBHUNTER_PROFILE_DIR=/data/profile",
         "JOBHUNTER_RESUME_PATH=/data/resume",
+        *timer_marked,
     ]
     assert u["Service"]["ExecStartPre"] == [
         "/usr/bin/mkdir -p -m 0700 %h/.local/share/jobhunter %h/.cache/jobhunter"

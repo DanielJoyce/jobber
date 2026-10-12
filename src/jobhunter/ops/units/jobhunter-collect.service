@@ -17,4 +17,6 @@ ExecStart=@EXEC@ score --collect-pending --wait 2h
 ExecStart=@EXEC@ score --rescore-pending --wait 2h
 Nice=10
 Environment=PATH=@PATH@
+# Marks timer runs (specs/019 S4); a manual `jobhunter run` from a shell is recorded as manual.
+Environment=JOBHUNTER_TRIGGER=timer
 @XDG_ENV@

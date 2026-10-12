@@ -154,9 +154,8 @@ def test_unknown_group_and_unavailable_options_are_usage_errors(tmp_path, monkey
     write_config(tmp_path, monkeypatch)
     bad = run_doctor("--group", "nope")
     assert bad.exit_code == 2 and "unknown group" in bad.output
-    for flag in ("--live", "--snapshot"):
-        result = run_doctor(flag)
-        assert result.exit_code == 2 and "not available yet" in result.output
+    result = run_doctor("--live")
+    assert result.exit_code == 2 and "not available yet" in result.output
     assert run_doctor("--no-such-option").exit_code == 2
 
 

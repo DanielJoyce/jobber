@@ -18,6 +18,8 @@ Environment=JOBHUNTER_DB_PATH=/data/jobhunter.db
 Environment=JOBHUNTER_PROFILE_DIR=/data/profile
 Environment=JOBHUNTER_RESUME_PATH=/data/resume
 Environment=JOBHUNTER_CACHE_DIR=/cache
+# Marks timer runs (specs/019 S4); preflight also writes it as a drop-in for older units.
+Environment=JOBHUNTER_TRIGGER=timer
 Exec=score --collect-pending --wait 2h
 
 [Service]

@@ -99,8 +99,10 @@ def test_services_are_oneshot_niced_with_path_and_xdg_env(inst):
         text = units[name]
         assert "Type=oneshot" in text
         assert "Nice=10" in text
+        marked = [schedule.TRIGGER_LINE] if name in schedule.TRIGGERED_UNITS else []
         assert [ln for ln in text.splitlines() if ln.startswith("Environment=")] == [
             f"Environment=PATH={PATH}",
+            *marked,
             f"Environment=XDG_CONFIG_HOME={home / '.config'}",
             f"Environment=XDG_DATA_HOME={home / '.local/share'}",
             f"Environment=XDG_CACHE_HOME={home / '.cache'}",
@@ -228,6 +230,25 @@ def test_status_is_read_only_list_timers(monkeypatch):
     out = schedule.status()
     assert rec.calls == [["systemctl", "--user", "list-timers", "jobhunter-*"]]
     assert "jobhunter-run.timer" in out
+
+
+def test_installed_units_mark_timer_runs_and_status_flags_old_ones(inst, home, monkeypatch):
+    schedule.install(inst, home=home)
+    target = home / ".config" / "systemd" / "user"
+    assert schedule.has_trigger(target / "jobhunter-run.service") is True
+    assert schedule.has_trigger(target / "jobhunter-collect.service") is True
+    assert schedule.has_trigger(target / "jobhunter-verify.service") is False  # not a run
+    assert schedule.unmarked_units(home) == []
+    monkeypatch.setattr(schedule.subprocess, "run", Recorder(stdout="NEXT ... jobhunter-run\n"))
+    assert "JOBHUNTER_TRIGGER" not in schedule.status(home)
+    # a unit installed before S4: no marker line
+    old = target / "jobhunter-run.service"
+    old.write_text(old.read_text().replace(schedule.TRIGGER_LINE + "\n", ""))
+    assert schedule.unmarked_units(home) == ["jobhunter-run.service"]
+    out = schedule.status(home)
+    assert "jobhunter-run.service does not mark its runs" in out
+    assert "rerun `jobhunter schedule install`" in out
+    assert schedule.has_trigger(target / "nope.service") is None
 
 
 def test_uninstall_disables_and_removes_units(inst, home, monkeypatch):

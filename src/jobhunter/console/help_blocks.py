@@ -114,6 +114,13 @@ OTHER_ROWS = (
     ),
     ("JOBHUNTER_CONTAINER", "container mode switch", "-", "set by the image, do not set", "-"),
     (
+        "JOBHUNTER_TRIGGER",
+        "marks timer-started runs (`timer`); anything else is a manual run",
+        "set by the run and collect units, do not set",
+        "set by the run, collect and rescore units (and preflight's trigger drop-in), do not set",
+        "no",
+    ),
+    (
         "JOBHUNTER_PUBLISHED_LOOPBACK_ONLY",
         "the console's published-port check",
         "-",
