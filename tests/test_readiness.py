@@ -495,7 +495,7 @@ def write_auth_meta(settings: Settings, age: timedelta, storage: str = "file") -
 
 @pytest.mark.parametrize(
     ("days", "status", "due"),
-    [(0, OK, False), (5, OK, False), (6, OK, True), (7, OK, True), (8, BROKEN, False)],
+    [(0, OK, False), (5, OK, False), (6, OK, True), (7, BROKEN, False), (8, BROKEN, False)],
 )
 def test_gmail_token_age_while_the_app_is_in_testing(tmp_path, home, days, status, due):
     settings = good_settings(tmp_path)
@@ -952,3 +952,140 @@ def test_run_checks_is_fast_with_warm_caches(tmp_path, home):
         evaluate(settings, env)
     per_call = (time.perf_counter() - start) / 5
     assert per_call < 0.05, f"{per_call * 1000:.0f} ms per run_checks"
+
+
+# --- review fixes (PR 127) --------------------------------------------------------------------
+
+
+def test_backups_fix_is_the_auto_backup_that_clears_the_row(tmp_path):
+    row = evaluate(good_settings(tmp_path))["backups.auto"]
+    assert row.fix.text == "jobhunter db backup --auto"
+
+
+def test_secrets_valid_points_chmod_at_the_loose_file_only(tmp_path):
+    settings = good_settings(tmp_path)
+    private = tmp_path / "private.env"
+    loose = tmp_path / "loose.env"
+    for path, mode in ((private, 0o600), (loose, 0o644)):
+        path.write_text("X=1\n", encoding="utf-8")
+        os.chmod(path, mode)
+    row = evaluate(settings, env_files=[private, loose])["secrets.valid"]
+    assert row.fix.text == f"chmod 600 {loose}"
+    only_invalid = evaluate(settings, {"OPENROUTER_API_KEY": "has space"}, env_files=[private])
+    fix = only_invalid["secrets.valid"].fix
+    assert "chmod" not in fix.text
+    assert "OPENROUTER_API_KEY" in fix.text
+
+
+def test_failed_query_is_unknown_not_no_run_yet(tmp_path):
+    settings = good_settings(tmp_path)
+    Path(settings.paths.data_dir).mkdir(parents=True)
+    Path(settings.paths.db_path).write_bytes(b"not a database" * 100)
+    assert evaluate(settings)["run.last"].status == UNKNOWN
+
+
+def test_a_crashed_run_does_not_stay_ok(tmp_path):
+    settings = good_settings(tmp_path)
+    conn = make_db(settings)
+    conn.execute(
+        "INSERT INTO run (started_at, stages) VALUES (?, 'all')",
+        ((NOW - timedelta(minutes=5)).isoformat(),),
+    )
+    conn.commit()
+    assert evaluate(settings)["run.last"].status == OK
+    conn.execute("UPDATE run SET started_at = ?", ((NOW - timedelta(hours=20)).isoformat(),))
+    conn.commit()
+    conn.close()
+    assert evaluate(settings)["run.last"].status == BROKEN
+
+
+def test_prefs_cache_is_not_stored_when_the_files_change_while_loading(tmp_path, monkeypatch):
+    from jobhunter.console import prefs_graceful
+
+    settings = good_settings(tmp_path)
+    write_prefs(settings)
+    write_resume(settings)
+    real = prefs_graceful.lenient_state
+
+    def racing(s):
+        state = real(s)
+        write_resume(settings, "second.md")  # a change lands during the load
+        return state
+
+    monkeypatch.setattr(prefs_graceful, "lenient_state", racing)
+    readiness.prefs_state(settings)
+    monkeypatch.setattr(prefs_graceful, "lenient_state", real)
+    assert evaluate(settings)["profile.resume"].status == BROKEN  # two .md files now
+
+
+def test_keyring_token_with_a_recent_successful_run_is_ok(tmp_path):
+    settings = good_settings(tmp_path)
+    conn = make_db(settings)
+    add_source(conn, "us-mailalerts", "ok", None, last_ok=NOW - timedelta(hours=3))
+    conn.close()
+    assert evaluate(settings)["mail.token"].status == OK
+
+
+def test_api_drafting_in_host_managing_mode_reads_the_host_environment(tmp_path):
+    settings = good_settings(tmp_path, apply={"runner": "api"})
+    Path(settings.paths.data_dir).mkdir(parents=True)
+    (Path(settings.paths.data_dir) / "deployment.toml").write_text("x\n", encoding="utf-8")
+    row = evaluate(settings, {"ANTHROPIC_API_KEY": FAKE_KEY}, mode=HOST_MANAGING)
+    assert row["apply.runner"].status == OK
+
+
+def test_containers_fix_applies_the_change(tmp_path):
+    settings = good_settings(tmp_path)
+    conn = make_db(settings)
+    (Path(settings.paths.data_dir) / "deployment.toml").write_text("x\n", encoding="utf-8")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute(
+        "INSERT INTO application (id, job_group_id, status, created_at, updated_at) "
+        "VALUES (1, 1, 'applied', 'x', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO attachment (application_id, kind, path, added_at) "
+        "VALUES (1, 'other', '/home/someone/cv.pdf', 'x')"
+    )
+    conn.commit()
+    conn.close()
+    fix = evaluate(settings, mode=HOST_MANAGING)["containers.deployment"].fix
+    assert "relativize-paths --apply" in fix.text
+
+
+def test_paths_use_tilde_through_a_symlinked_home_and_for_dotenv_and_file_states(tmp_path):
+    real = tmp_path / "real" / "user"
+    real.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "real")
+    home = link / "user"  # HOME is a symlink to the real directory
+    settings = good_settings(tmp_path)
+    write_prefs(settings)
+    resume = real / "resume.md"
+    resume.write_text("# r\n", encoding="utf-8")
+    write_prefs(settings, f"resume_path: {resume}\ntarget_titles: [Engineer]\n")
+    dotenv = real / ".env"
+    dotenv.write_text("X=1\n", encoding="utf-8")
+    os.chmod(dotenv, 0o644)
+    keyfile = real / "usajobs.key"
+    keyfile.write_text("k-fake\n", encoding="utf-8")
+    environ = {"USAJOBS_API_KEY_FILE": str(keyfile), "USAJOBS_EMAIL": "x@example.org"}
+    names = secrets.known_names(settings)
+    states = secrets.resolve(
+        names, set(), {"USAJOBS_EMAIL": real / ".env", "ANTHROPIC_API_KEY": real / ".env"},
+        print, environ=environ,
+    )  # fmt: skip
+    environ_after = dict(environ)
+    checks = run_checks(
+        settings, secrets_report=secrets.Report(states, [dotenv]), now=NOW, mode=HOST,
+        registry_rows=[], environ=environ_after, home=home,
+    )  # fmt: skip
+    text = json.dumps([c.as_dict() for c in checks])
+    assert str(real) not in text
+    assert str(home) not in text
+    by_id = {c.id: c for c in checks}
+    assert "(.env ~/.env)" in by_id["source.usajobs"].detail or "file ~/usajobs.key" in (
+        by_id["source.usajobs"].detail
+    )
+    assert "~/resume.md" in by_id["profile.resume"].detail
+    assert by_id["secrets.valid"].fix.text == "chmod 600 ~/.env"

@@ -16,6 +16,10 @@ Rules this module keeps (019 "Rules for every check"):
   error text (``source.status_note``, ``run_source.error``) is mapped to fixed wording.
 - **Format, not validity.** A key's presence, source and shape; a wrong prefix is a note.
 
+Read-only database connections on a WAL database may create ``jobhunter.db-wal`` and
+``jobhunter.db-shm`` next to the database (SQLite needs them to read); they hold no new data.
+Doctor (S2) should say so rather than promise "writes nothing".
+
 ``cheap_only=True`` (the banner) skips the alert-subscription counts and the backup listing.
 The slow inputs are cached per process: the registry's USAJOBS variable names and the lenient
 profile state (keyed on file modification times).
@@ -76,6 +80,8 @@ NEWEST_BACKUP_MAX_AGE = timedelta(days=3)
 LABEL_WINDOW = timedelta(days=14)
 ARRIVAL_WINDOW = timedelta(days=30)
 RECENT_OK = timedelta(days=2)
+UNFINISHED_RUN_LIMIT = timedelta(hours=6)
+RELATIVIZE_COMMAND = "jobhunter db backup && jobhunter db relativize-paths --apply"
 
 # The fixed list of check ids (019: "stable, from a fixed list"). Routes that take a check id
 # (dismiss, live checks) validate against this.
@@ -213,12 +219,19 @@ def _show(path: Path | str, ctx: _Ctx) -> str:
         ):
             if text == inside or text.startswith(inside + "/"):
                 return f"~/{outside}{text[len(inside) :]} [{text}]"
-    home = str(ctx.home)
-    if text == home:
-        return "~"
-    if text.startswith(home + "/"):
-        return "~" + text[len(home) :]
+    for home in dict.fromkeys((str(ctx.home), os.path.realpath(ctx.home))):
+        if text == home:
+            return "~"
+        if text.startswith(home + "/"):
+            return "~" + text[len(home) :]
     return text
+
+
+def _describe(state: secrets.SecretState, ctx: _Ctx) -> str:
+    """``SecretState.describe`` with any path shown through ``_show`` ("set (.env ~/.env)")."""
+    if state.state in (secrets.FILE, secrets.DOTENV):
+        return f"set ({state.state} {_show(state.detail, ctx)})"
+    return state.describe()
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -330,9 +343,16 @@ def prefs_state(settings: Settings) -> Any:
         extra = Path(state.resume_target) if state.resume_target else None
         if sig == _signature(settings, extra):
             return state
+    before = _signature(settings)
     state = prefs_graceful.lenient_state(settings)
     extra = Path(state.resume_target) if state.resume_target else None
-    _PREFS_CACHE[key] = (_signature(settings, extra), state)
+    after = _signature(settings, extra)
+    # cache only when nothing changed while it loaded, so old content never sits under a new
+    # signature
+    if _signature(settings) == before:
+        _PREFS_CACHE[key] = (after, state)
+    else:
+        _PREFS_CACHE.pop(key, None)
     return state
 
 
@@ -386,13 +406,13 @@ def _presence(
         return _Presence("absent", "unset", "podman secret")
     state = _secret_state(ctx, env_name)
     if state.state == secrets.INVALID:
-        return _Presence("invalid", f"{env_name} {state.describe()}", "invalid")
+        return _Presence("invalid", f"{env_name} {_describe(state, ctx)}", "invalid")
     if state.state == secrets.UNSET:
         if ctx.mode == CONTAINER and not console_sees:
             return _Presence("unseen", "not visible from this container", "")
         return _Presence("absent", f"{env_name} unset", "")
     source = {secrets.ENV: "env", secrets.FILE: "podman secret"}.get(state.state, state.state)
-    return _Presence("present", f"{env_name} {state.describe()}", source)
+    return _Presence("present", f"{env_name} {_describe(state, ctx)}", source)
 
 
 def _secret_fix(
@@ -933,6 +953,10 @@ def _last_run(ctx: _Ctx) -> Check:
     rows = _query(
         ctx, "SELECT id, started_at, ended_at, exit_status FROM run ORDER BY id DESC LIMIT 1"
     )  # fmt: skip
+    if rows is None and ctx.conn is not None:
+        return Check("run.last", SOURCES, RECOMMENDED, UNKNOWN, False, title,
+                     "the database could not be read", unlocks,
+                     Fix("command", "jobhunter doctor"))  # fmt: skip
     if not rows:
         return Check("run.last", SOURCES, RECOMMENDED, OK, False, title, "no run yet", unlocks,
                      Fix("command", "jobhunter run"))  # fmt: skip
@@ -940,6 +964,10 @@ def _last_run(ctx: _Ctx) -> Check:
     started = _parse_ts(run["started_at"])
     when = started.astimezone().strftime("%Y-%m-%d %H:%M") if started else "unknown time"
     if run["ended_at"] is None:
+        if started is not None and ctx.now - started > UNFINISHED_RUN_LIMIT:
+            return Check("run.last", SOURCES, RECOMMENDED, BROKEN, False, title,
+                         f"the run at {when} never finished (it crashed or was killed); see "
+                         "the journal", unlocks, Fix("command", "jobhunter run"))  # fmt: skip
         return Check("run.last", SOURCES, RECOMMENDED, OK, False, title,
                      f"run at {when} has not finished", unlocks)  # fmt: skip
     if run["exit_status"] == "ok":
@@ -1077,6 +1105,8 @@ def _gmail_token(ctx: _Ctx) -> Check:
         if unseen:
             return row(UNKNOWN, "the console container never sees the token", f=None)
         if ctx.mode == HOST and meta is None:
+            if src and src["status"] == "ok" and last_ok and ctx.now - last_ok <= RECENT_OK:
+                return row(OK, "worked at the last run (stored in the keyring)")
             return row(UNKNOWN, "use Test (free), or run `jobhunter mail status`", f=None)
         return row(MISSING, "no Gmail token")
 
@@ -1088,12 +1118,11 @@ def _gmail_token(ctx: _Ctx) -> Check:
     expires = issued + timedelta(days=GMAIL_TESTING_DAYS)
     if last_ok and last_ok > expires:
         return row(OK, "working past 7 days, so the app has left Testing")
-    age_days = (ctx.now - issued).days
-    if age_days >= GMAIL_TESTING_DAYS + 1:
+    age_days = (ctx.now - issued).days  # 6 here means due tomorrow: expiry is later
+    if ctx.now >= expires:
         return row(BROKEN, "token older than 7 days; the app is in Testing, re-authorize")
     if age_days >= GMAIL_TESTING_DAYS - 1:
-        word = "tomorrow" if age_days == GMAIL_TESTING_DAYS - 1 else "today"
-        return row(OK, f"re-auth due {word}", due=True)
+        return row(OK, "re-auth due tomorrow", due=True)
     return row(OK, f"re-auth due about {expires.astimezone().date().isoformat()}")
 
 
@@ -1163,7 +1192,11 @@ def _runner(ctx: _Ctx) -> Check:
             None, "container",
         )  # fmt: skip
     if apply_cfg.runner == "api":
-        cred = _credential(ctx, "anthropic:" + apply_cfg.api_model)
+        # drafting runs on the host, so the host environment decides, not the podman drop-ins
+        cred = scorers.credential_for(
+            "anthropic:" + apply_cfg.api_model, ctx.settings.scoring, environ=ctx.environ,
+            home=ctx.home,
+        )  # fmt: skip
         if cred.status == scorers.PRESENT:
             return Check("apply.runner", APPLY, RECOMMENDED, OK, False, title,
                          "runner = api; an Anthropic credential is set", unlocks, None,
@@ -1240,16 +1273,26 @@ def _secrets_valid(ctx: _Ctx) -> Check:
     if ctx.report is None:
         return Check("secrets.valid", RUNNING, RECOMMENDED, UNKNOWN, False, title,
                      "secrets were not resolved in this process", unlocks)  # fmt: skip
-    problems = [f"{s.name} {s.describe()}" for s in ctx.report.states if s.state == secrets.INVALID]
-    for line in secrets.env_file_warnings(ctx.report.env_files):
-        problems.append(line.removeprefix("warning: ").split("; run:")[0])
+    invalid = [s for s in ctx.report.states if s.state == secrets.INVALID]
+    problems = [f"{s.name} {s.describe()}" for s in invalid]
+    loose: list[Path] = []
+    for path in ctx.report.env_files:
+        try:
+            mode = stat_module.S_IMODE(path.stat().st_mode)
+        except OSError:
+            continue
+        if mode & 0o077:
+            loose.append(path)
+            problems.append(f"{_show(path, ctx)} is readable by group or others ({mode:04o})")
     if problems:
-        first_env = next(iter(ctx.report.env_files), None)
+        if loose:
+            fix = Fix("command", f"chmod 600 {_show(loose[0], ctx)}")
+        else:
+            names = ", ".join(s.name for s in invalid)
+            fix = Fix("command", f"correct the value or the *_FILE path of: {names}")
         return Check(
             "secrets.valid", RUNNING, RECOMMENDED, BROKEN, False, title,
-            "; ".join(problems), unlocks,
-            Fix("command", f"chmod 600 {_show(first_env, ctx)}") if first_env else None,
-            reads_at_start=True,
+            "; ".join(problems), unlocks, fix, reads_at_start=True,
         )  # fmt: skip
     return Check("secrets.valid", RUNNING, RECOMMENDED, OK, False, title,
                  "every secret is well-formed and .env files are private", unlocks,
@@ -1260,7 +1303,7 @@ def _backups(ctx: _Ctx) -> Check:
     from jobhunter.core import backup
 
     title, unlocks = "Backups", "Recovery"
-    fix = Fix("command", "jobhunter db backup")
+    fix = Fix("command", "jobhunter db backup --auto")
     found = backup.auto_backups(backup.auto_dir(ctx.data_dir))
     if not found:
         detail = "no automatic backups" + (
@@ -1314,7 +1357,7 @@ def _containers(ctx: _Ctx) -> Check:
             else f"{count} stored path(s) are absolute, which a container cannot resolve"
         )
         return Check("containers.deployment", RUNNING, ESSENTIAL, BROKEN, False, title, detail,
-                     unlocks, Fix("command", "jobhunter db relativize-paths"))  # fmt: skip
+                     unlocks, Fix("command", RELATIVIZE_COMMAND))  # fmt: skip
     return Check("containers.deployment", RUNNING, ESSENTIAL, UNKNOWN, False, title,
                  "stored paths are relative; run `jobhunter doctor --containers` for the rest",
                  unlocks, fix)  # fmt: skip

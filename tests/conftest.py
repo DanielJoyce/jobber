@@ -233,6 +233,15 @@ def _no_real_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(keyring, "get_password", blocked)
+    monkeypatch.setattr(keyring, "set_password", blocked)
+    monkeypatch.setattr(keyring, "delete_password", blocked)
+
+    # get_keyring probes D-Bus. A stub that is not the null backend keeps code that asks "is a
+    # keyring usable?" on its usual path, and every call that would use it is patched above.
+    class _StubKeyring:
+        pass
+
+    monkeypatch.setattr(keyring, "get_keyring", lambda: _StubKeyring())
 
 
 def build_old_layout(root: Path) -> Path:
