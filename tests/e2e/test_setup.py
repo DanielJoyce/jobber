@@ -23,3 +23,14 @@ def test_setup_dark_mode_rows_use_dark_surface(page, server):
     expect(row).to_be_visible()
     bg = row.evaluate("el => getComputedStyle(el).backgroundColor")
     assert bg == "rgb(26, 26, 25)"  # --surface-1 in dark
+
+
+def test_refused_resume_upload_shows_its_error_with_js_on(page, server, tmp_path):
+    page.goto(f"{server.url}/setup?all=1")
+    pdf = tmp_path / "cv.pdf"
+    pdf.write_bytes(b"%PDF-1.4 synthetic")
+    page.locator('#row-profile-resume input[type="file"]').set_input_files(str(pdf))
+    page.locator('#row-profile-resume button[type="submit"]').click()
+    expect(page.locator("#row-profile-resume .su-error")).to_contain_text(
+        "Can't read that file type"
+    )

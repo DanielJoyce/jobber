@@ -308,7 +308,7 @@ def test_container_page_says_paths_are_host_paths(tmp_path):
 def test_rows_read_from_config_toml_carry_restart_note(client):
     r = row(client.get("/setup").text, "fetch.contact")
     assert "Read when the console started" in r
-    assert "12:00 UTC" in r
+    assert "(2026-10-1" in r  # local time, from the localtime filter
     assert "Ctrl-C" in r
 
 
@@ -436,3 +436,66 @@ def test_all_ok_group_collapses_and_show_everything_expands(tmp_path):
     assert "Collapse finished items" in everything
     assert "Show everything" in default
     assert default.count("<details") > everything.count("<details")
+
+
+# --- review fixes (B2, S1, minors) -------------------------------------------------------------
+
+
+def test_container_resume_upload_repoints_an_absolute_yaml_path(tmp_path):
+    s = make_settings(tmp_path)
+    pdir = Path(s.paths.profile_dir)
+    pdir.mkdir(parents=True)
+    text = GOOD_PREFS.read_text().replace("resume_path: null", "resume_path: /home/x/resume.md")
+    (pdir / "preferences.yaml").write_text(text)
+    c = make_client(s, mode=readiness.CONTAINER)
+    before = row(c.get("/setup").text, "profile.resume")
+    assert "su-broken" in before
+    r = c.post(
+        "/setup/resume",
+        files={"file": ("cv.md", b"# Synthetic\n", "text/markdown")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    saved = yaml.safe_load((pdir / "preferences.yaml").read_text())
+    assert not Path(saved["resume_path"]).is_absolute()
+    assert (pdir / saved["resume_path"]).resolve().is_file()
+    after = row(c.get("/setup?all=1").text, "profile.resume")
+    assert "su-ok" in after
+
+
+def test_htmx_swap_carries_the_refreshed_summary(client):
+    client.post("/setup/starter-prefs")
+    r = client.post(
+        "/setup/resume",
+        files={"file": ("r.md", b"# Synthetic\n", "text/markdown")},
+        headers={"hx-request": "true"},
+    )
+    assert 'id="su-summary" hx-swap-oob="true"' in r.text
+
+
+def test_dismissed_row_collapses_and_returns_when_status_changes(client, settings):
+    cid = recommended_failing(client)
+    client.post("/setup/dismiss", data={"check_id": cid})
+    html = client.get("/setup").text
+    assert "hidden (" in row(html, cid)
+    assert "Hide this for now" not in row(html, cid)
+    path = Path(settings.paths.data_dir) / "setup-dismissed.json"
+    data = json.loads(path.read_text())
+    data["dismissed"][cid]["status"] = "ok"  # it was hidden as something else
+    path.write_text(json.dumps(data))
+    assert "hidden (" not in row(client.get("/setup").text, cid)
+
+
+def test_doctor_only_rows_are_not_listed(client):
+    html = client.get("/setup?all=1").text
+    assert 'id="row-config-file"' not in html
+    assert 'id="row-db-schema"' not in html
+
+
+def test_no_literal_backticks_or_double_or_or_test_button_text(tmp_path):
+    c = make_client(make_settings(tmp_path, mail={"alerts_address": "x+jobs@example.test"}))
+    main = c.get("/setup?all=1").text.split("<main>", 1)[1]
+    t = text_of(main)
+    assert "`" not in t
+    assert "or or" not in " ".join(t.split())
+    assert "Test (free)" not in t

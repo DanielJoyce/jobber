@@ -539,7 +539,7 @@ def _scorer_row(
     if field_name == "screen_scorer":
         alt = Fix(
             "command",
-            'or pick another scorer in config.toml, e.g.  [scoring] screen_scorer = "jev:<model>"',
+            'pick another scorer in config.toml, e.g.  [scoring] screen_scorer = "jev:<model>"',
         )
     if invalid and state is not None:
         detail = f"{spec}; {var} {state.describe()}"

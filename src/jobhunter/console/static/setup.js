@@ -12,3 +12,13 @@ document.addEventListener("click", function (ev) {
     navigator.clipboard.writeText(text).then(done, function () {});
   } catch (e) {}
 });
+
+// A refused resume upload answers 413/415/422 with the row and its error; htmx 2 does not
+// swap 4xx by default, so let this one through (as prefs.js does for section saves).
+document.addEventListener("htmx:beforeSwap", function (ev) {
+  var xhr = ev.detail && ev.detail.xhr;
+  if (!xhr || [413, 415, 422].indexOf(xhr.status) === -1) return;
+  if (!/\/setup\/resume$/.test(xhr.responseURL || "")) return;
+  ev.detail.shouldSwap = true;
+  ev.detail.isError = false;
+});

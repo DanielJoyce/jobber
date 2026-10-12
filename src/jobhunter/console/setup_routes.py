@@ -10,6 +10,8 @@ wording ``readiness`` builds.
 # No ``from __future__ import annotations``: FastAPI must resolve the local annotations.
 import contextlib
 import json
+import os
+import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,6 +39,10 @@ from jobhunter.scoring.profile import (
 from jobhunter.xdg import mkdir_private
 
 DISMISSED_FILE = "setup-dismissed.json"
+# Rows only the CLI shows (019 "/setup": rows 1-3 are doctor-only).
+DOCTOR_ONLY = frozenset({"config.file", "db.schema"})
+# The live "Test (free)" button is S6; until it lands the row points at the command only.
+TEST_BUTTON_TEXT = re.compile(r"use Test \(free\),? or (?:run )?(`[^`]+`)")
 CLIENT_SECRET = "jobhunter_google_client"
 
 # A step is blocked by the earlier steps it needs: `mail auth` needs the client JSON, and
@@ -67,6 +73,8 @@ class Row:
     cloud_steps: list[str] = field(default_factory=list)
     dismissible: bool = False
     upload_error: str = ""
+    hidden: bool = False
+    detail: str = ""
 
 
 @dataclass
@@ -125,21 +133,39 @@ def build_groups(
     home: Path | None,
     *,
     errors: dict[str, str] | None = None,
+    dismissed: dict[str, Any] | None = None,
 ) -> list[Group]:
     by_step = {c.step: c for c in checks if c.step}
     rows_by_group: dict[str, list[Row]] = {g: [] for g in rd.GROUPS}
     for c in checks:
+        if c.id in DOCTOR_ONLY:
+            continue
         failing = c.status in rd.FAILING
         quiet = (c.status in (rd.OK, rd.OPTIONAL_STATUS)) and not c.due
         due_ok = c.due and c.status == rd.OK
+        effective = "due" if c.due else c.status
+        # A hidden row stays hidden only while its status is the one that was hidden.
+        hidden = (
+            not quiet
+            and can_dismiss(c)
+            and isinstance((dismissed or {}).get(c.id), dict)
+            and dismissed[c.id].get("status") == effective
+        )
+        word = "due soon" if due_ok else c.status
         row = Row(
             check=c,
             icon="!" if due_ok else STATUS_ICON.get(c.status, "?"),
-            word="due soon" if due_ok else c.status,
-            quiet=quiet,
-            restart=rd.RESTART_COMMAND[mode] if c.reads_at_start and not quiet else "",
-            dismissible=can_dismiss(c) and (failing or c.due),
+            word=f"hidden ({word})" if hidden else word,
+            quiet=quiet or hidden,
+            restart=(
+                rd.RESTART_COMMAND[mode].replace("`", "")
+                if c.reads_at_start and not quiet and not hidden
+                else ""
+            ),
+            dismissible=can_dismiss(c) and (failing or c.due) and not hidden,
             upload_error=(errors or {}).get(c.id, ""),
+            hidden=hidden,
+            detail=TEST_BUTTON_TEXT.sub(r"run \1", c.detail).replace("`", ""),
         )
         if c.group == rd.EMAIL and c.step > 1 and not quiet:
             for need in STEP_NEEDS.get(c.step, ()):
@@ -194,14 +220,26 @@ def register(
             home=home_of(request),
         )
 
-    def groups_for(request: Request, errors: dict[str, str] | None = None) -> list[Group]:
-        return build_groups(
-            compute(request),
+    def view_of(request: Request, errors: dict[str, str] | None = None) -> dict[str, Any]:
+        """Groups plus the summary numbers. Essentials are judged on every check, including
+        the doctor-only rows the page does not list."""
+        checks = compute(request)
+        mode = mode_of(request)
+        groups = build_groups(
+            checks,
             settings_of(request),
-            mode_of(request),
+            mode,
             home_of(request),
             errors=errors,
+            dismissed=read_dismissed(dismissed_path(settings_of(request))),
         )
+        return {
+            "groups": groups,
+            "mode": mode,
+            "started": started,
+            "essentials_ok": rd.essentials_ok(checks),
+            "todo_count": sum(1 for g in groups for r in g.rows if not r.quiet),
+        }
 
     def page(
         request: Request,
@@ -211,7 +249,6 @@ def register(
         flash: str = "",
         status: int = 200,
     ) -> HTMLResponse:
-        groups = groups_for(request, errors)
         return templates.TemplateResponse(
             request,
             "setup.html",
@@ -219,17 +256,10 @@ def register(
                 "title": "Setup",
                 "active": "/setup",
                 "nav": nav,
-                "groups": groups,
                 "show_all": show_all,
-                "mode": mode_of(request),
-                "started": started,
                 "flash": flash,
-                "essentials_ok": all(
-                    not (r.check.level == rd.ESSENTIAL and r.check.status in rd.FAILING)
-                    for g in groups
-                    for r in g.rows
-                ),
-                "todo_count": sum(1 for g in groups for r in g.rows if not r.quiet),
+                "oob": False,
+                **view_of(request, errors),
             },
             status_code=status,
         )
@@ -254,12 +284,12 @@ def register(
     def resume_row_response(request: Request, error: str, status: int) -> Response:
         errors = {"profile.resume": error} if error else None
         if request.headers.get("hx-request") == "true":
-            groups = groups_for(request, errors)
-            row = next(r for g in groups for r in g.rows if r.check.id == "profile.resume")
+            view = view_of(request, errors)
+            row = next(r for g in view["groups"] for r in g.rows if r.check.id == "profile.resume")
             return templates.TemplateResponse(
                 request,
-                "_setup_row.html",
-                {"r": row, "mode": mode_of(request), "started": started, "show_all": True},
+                "_setup_resume_swap.html",
+                {"r": row, "show_all": True, "oob": True, **view},
                 status_code=status,
             )
         if error:
@@ -282,18 +312,34 @@ def register(
         except gr.UploadError as exc:
             return resume_row_response(request, str(exc), exc.status)
         settings = settings_of(request)
+        mode = mode_of(request)
+        pdir = resolve_path(settings.paths.profile_dir)
+        data_dir = resolve_path(settings.paths.data_dir)
         with _WRITE_LOCK:
             before = gr.lenient_state(settings)
-            target = gr.resume_target(settings, before.profile)
-            gr.store_resume(target, filename, text, now())
+            yaml_value = before.profile.resume_path
+            unusable = bool(yaml_value) and mode in (rd.CONTAINER, rd.HOST_MANAGING)
+            if unusable:
+                # An absolute or outside-the-data-dir path never resolves in a container
+                # (019 "Modes"): store under the configured resume folder and re-point.
+                absolute = Path(yaml_value).expanduser().is_absolute()
+                inside = not absolute and rd._within(
+                    Path(os.path.normpath(pdir / yaml_value)), data_dir
+                )
+                unusable = not inside
+            if unusable:
+                target = resolve_path(settings.paths.resume_path)
+            else:
+                target = gr.resume_target(settings, before.profile)
+            dest = gr.store_resume(target, filename, text, now())
             after = gr.lenient_state(settings)
-            if after.kind == "resume" and not after.profile.resume_path:
-                # The loader still cannot find it: point preferences.yaml at the new place.
-                prefs_file = profile_dir(request) / PREFERENCES_FILE
+            if unusable or (after.kind == "resume" and not after.profile.resume_path):
+                # Point preferences.yaml at the stored file, relative to the profile folder.
+                prefs_file = pdir / PREFERENCES_FILE
                 with contextlib.suppress(OSError, ProfileError):  # file stored; row says the rest
                     save_profile_changes(
-                        profile_dir(request),
-                        {"resume_path": str(target)},
+                        pdir,
+                        {"resume_path": os.path.relpath(dest, pdir)},
                         expected_mtime_ns=prefs_file.stat().st_mtime_ns,
                         require_resume=False,
                     )
@@ -307,7 +353,7 @@ def register(
             raise HTTPException(422, "no check_id given")
         if any(i not in rd.CHECK_IDS for i in ids):
             raise HTTPException(422, "unknown check id")
-        checks = {c.id: c for c in compute(request)}
+        checks = {c.id: c for c in await run_in_threadpool(compute, request)}
         for i in ids:
             c = checks.get(i)
             if c is None or not can_dismiss(c):
