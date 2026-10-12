@@ -29,7 +29,7 @@ import logging
 import re
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from urllib.parse import parse_qs
 
@@ -37,6 +37,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from jobhunter import readiness
 from jobhunter.achievements import catalog, engine
 from jobhunter.core import db
 
@@ -102,6 +103,26 @@ def with_band_event(existing: str | None) -> str:
 
 def gate(app: FastAPI) -> engine.Gate:
     return app.state.achievements
+
+
+def essentials_judge(app: FastAPI) -> Callable[[], bool | None]:
+    """The gate's ``setup.ready`` input: 019's essentials over the cheap checks, from the same
+    app state /setup reads, with no spend read. Called at most once per fingerprint."""
+
+    def judge() -> bool | None:
+        state = app.state
+        return readiness.essentials_ok_cheap(
+            state.settings,
+            secrets_report=getattr(state, "secrets_report", None),
+            now=datetime.now(UTC),
+            mode=getattr(state, "setup_mode", None)
+            or readiness.detect_mode(settings=state.settings),
+            registry_rows=getattr(state, "registry_rows", None),
+            environ=getattr(state, "setup_environ", None),
+            home=getattr(state, "setup_home", None),
+        )
+
+    return judge
 
 
 def _flag(form: dict[str, list[str]], key: str) -> bool | None:
@@ -260,7 +281,7 @@ def register(
         busy = False
         if settings.enabled:
             try:
-                g.refresh(conn, moment, force=True)
+                g.refresh(conn, moment, force=True, essentials=essentials_judge(app))
             except sqlite3.Error as exc:  # render what is stored; the next call retries
                 logger.info("achievements: evaluate skipped: %s", exc)
                 busy = True  # don't wait on the lock a second time for seen

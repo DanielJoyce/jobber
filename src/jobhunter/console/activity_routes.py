@@ -33,6 +33,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.achievements import catalog, engine
 from jobhunter.config import resolve_path
+from jobhunter.console.achievements_routes import essentials_judge
 from jobhunter.core import runlock
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.scoring import rescore as rs
@@ -46,7 +47,10 @@ logger = logging.getLogger(__name__)
 
 
 def achievement_notice(
-    conn: sqlite3.Connection, gate: engine.Gate, moment: datetime
+    conn: sqlite3.Connection,
+    gate: engine.Gate,
+    moment: datetime,
+    essentials: Callable[[], bool | None] | None = None,
 ) -> dict[str, Any] | None:
     """Evaluate when something changed, then describe the unseen unlocks to show (or None).
 
@@ -54,7 +58,7 @@ def achievement_notice(
     in a rule must not take every page down. A failed evaluation still shows the stored
     unlocks; anything else shows no notice and the rest of the band as usual."""
     try:
-        return _notice(conn, gate, moment)
+        return _notice(conn, gate, moment, essentials)
     except Exception:
         logger.exception("activity: achievement notice skipped")
         _rollback(conn)
@@ -67,7 +71,12 @@ def _rollback(conn: sqlite3.Connection) -> None:
             conn.execute("ROLLBACK")
 
 
-def _notice(conn: sqlite3.Connection, gate: engine.Gate, moment: datetime) -> dict[str, Any] | None:
+def _notice(
+    conn: sqlite3.Connection,
+    gate: engine.Gate,
+    moment: datetime,
+    essentials: Callable[[], bool | None] | None,
+) -> dict[str, Any] | None:
     try:
         settings = engine.read_settings(conn)
     except sqlite3.Error:
@@ -76,7 +85,7 @@ def _notice(conn: sqlite3.Connection, gate: engine.Gate, moment: datetime) -> di
     if not settings.enabled:
         return None
     try:
-        gate.refresh(conn, moment, wait=False)
+        gate.refresh(conn, moment, wait=False, essentials=essentials)
     except sqlite3.Error as exc:  # render what is stored; the next poll retries
         logger.info("activity: achievements evaluate skipped: %s", exc)
         _rollback(conn)
@@ -148,7 +157,12 @@ def register(
             command = holder.command if holder else None
             run_label = command if command and _SAFE_COMMAND.match(command) else None
         active = running is not None or (held and running is None)
-        notice = achievement_notice(conn, request.app.state.achievements, moment)
+        notice = achievement_notice(
+            conn,
+            request.app.state.achievements,
+            moment,
+            essentials_judge(request.app),
+        )
         response = templates.TemplateResponse(
             request,
             "_activity.html",

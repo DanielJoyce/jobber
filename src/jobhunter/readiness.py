@@ -240,6 +240,7 @@ class _Ctx:
     db_path: Path
     conn: sqlite3.Connection | None = None
     prefs: Any = None  # a PrefsState, computed once per call
+    spend: bool = True  # False: no read of today's spend (the achievements gate)
 
     def unit_dir(self) -> Path:
         from jobhunter.ops import preflight
@@ -900,15 +901,17 @@ def _caps(ctx: _Ctx) -> Check:
             reads_at_start=True,
         )  # fmt: skip
     detail = f"${scoring.daily_cap_usd:.2f}/day, ${scoring.weekly_cap_usd:.2f}/week"
-    day = ctx.now.astimezone(UTC).date().isoformat()
-    from jobhunter.core.spend import SCORING_ONLY
+    if ctx.spend:
+        day = ctx.now.astimezone(UTC).date().isoformat()
+        from jobhunter.core.spend import SCORING_ONLY
 
-    rows = _query(
-        ctx, f"SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ? AND {SCORING_ONLY}",
-        (day,),
-    )  # fmt: skip
-    if rows:
-        detail += f"; ${float(rows[0][0]):.2f} spent today"
+        rows = _query(
+            ctx,
+            f"SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ? AND {SCORING_ONLY}",
+            (day,),
+        )  # fmt: skip
+        if rows:
+            detail += f"; ${float(rows[0][0]):.2f} spent today"
     return Check("scorer.caps", SCORING, ESSENTIAL, OK, False, title, detail, unlocks, None,
                  "config.toml", reads_at_start=True)  # fmt: skip
 
@@ -1488,12 +1491,14 @@ def run_checks(
     registry_rows: Iterable[Any] | None = None,
     environ: Mapping[str, str] | None = None,
     home: Path | None = None,
+    spend: bool = True,
 ) -> list[Check]:
     """Every local check, in display order. Read-only, no network, no subprocess.
 
     ``registry_rows`` are the registry rows loaded once at console start: the startup
     ``secrets.Report`` cannot tell which variables are USAJOBS's, and parsing the registry per
     call costs about 0.5 s. ``environ`` and ``home`` default to the process's; tests inject.
+    ``spend=False`` skips the read of today's spend (``llm_spend``) in the spend-cap detail.
     """
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}")
@@ -1509,6 +1514,7 @@ def run_checks(
         home=home if home is not None else Path.home(),
         data_dir=data_dir,
         db_path=db_path,
+        spend=spend,
     )
     ctx.prefs = prefs_state(settings)
     ctx.conn = _open_ro(db_path)
@@ -1517,3 +1523,29 @@ def run_checks(
     finally:
         if ctx.conn is not None:
             ctx.conn.close()
+
+
+def essentials_ok_cheap(
+    settings: Settings,
+    *,
+    secrets_report: secrets.Report | None,
+    now: datetime,
+    mode: str,
+    registry_rows: Iterable[Any] | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> bool:
+    """019's ``essentials_ok`` over the cheap checks only, with no spend read: the achievements
+    gate's input for ``setup.ready``. Local and free, like ``run_checks``."""
+    checks = run_checks(
+        settings,
+        secrets_report=secrets_report,
+        now=now,
+        mode=mode,
+        cheap_only=True,
+        registry_rows=registry_rows,
+        environ=environ,
+        home=home,
+        spend=False,
+    )
+    return essentials_ok(checks)

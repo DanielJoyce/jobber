@@ -275,3 +275,23 @@ def test_settings_form_labels_and_state(client, db_path):
     assert "<legend>Hide categories</legend>" in page
     assert ">Rhythm</h2>" not in page
     assert page.count("<label>") == page.count("</label>") >= 8
+
+
+def test_all_set_unlocks_in_the_console_when_essentials_are_ok(client, db_path, monkeypatch):
+    from jobhunter import readiness
+
+    monkeypatch.setattr(readiness, "essentials_ok_cheap", lambda *a, **k: True)
+    assert client.get("/achievements").status_code == 200
+    rows = run(db_path, "SELECT tier FROM achievement_unlock WHERE achievement_id = 'setup.ready'")
+    assert [tuple(r) for r in rows] == [(1,)]
+
+
+def test_all_set_is_not_granted_in_the_console_while_an_essential_is_missing(
+    client, db_path, monkeypatch
+):
+    from jobhunter import readiness
+
+    monkeypatch.setattr(readiness, "essentials_ok_cheap", lambda *a, **k: False)
+    client.get("/activity")
+    rows = run(db_path, "SELECT tier FROM achievement_unlock WHERE achievement_id = 'setup.ready'")
+    assert rows == []

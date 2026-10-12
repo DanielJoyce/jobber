@@ -145,3 +145,42 @@ def test_copy_never_leads_with_rejected_or_says_lost():
         for text in (a.name, a.description, a.hint):
             assert not text.lower().startswith("rejected")
             assert not re.search(r"\b(lost|broken)\b", text.lower()), text
+
+
+def test_essentials_input_reads_no_banned_tables(db_path, monkeypatch):
+    """The gate's setup.ready input runs readiness's cheap checks with no spend read: SQLite's
+    authorizer on readiness's own read-only connection sees no banned table. A control run
+    with spend on must show the authorizer does catch llm_spend."""
+    from types import SimpleNamespace
+
+    from jobhunter import readiness
+    from jobhunter.config import Paths, Settings
+    from jobhunter.console.achievements_routes import essentials_judge
+
+    settings = Settings(paths=Paths(profile_dir=db_path.parent / "profile", db_path=db_path))
+    real_open = readiness._open_ro
+    seen: list[set[str]] = []
+
+    def watched(path):
+        conn = real_open(path)
+        if conn is not None:
+            read: set[str] = set()
+
+            def authorizer(action, arg1, arg2, dbname, source):
+                if action == sqlite3.SQLITE_READ and arg1:
+                    read.add(arg1)
+                return sqlite3.SQLITE_OK
+
+            conn.set_authorizer(authorizer)
+            seen.append(read)
+        return conn
+
+    monkeypatch.setattr(readiness, "_open_ro", watched)
+    app = SimpleNamespace(state=SimpleNamespace(settings=settings))
+    essentials_judge(app)()
+    assert seen and seen[-1] & FORBIDDEN_TABLES == set()
+
+    readiness.run_checks(
+        settings, secrets_report=None, now=NOW.astimezone(TZ), mode="host", spend=True
+    )
+    assert "llm_spend" in seen[-1]  # the control: the detector sees a spend read
