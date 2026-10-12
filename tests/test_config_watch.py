@@ -612,6 +612,39 @@ def test_a_comment_only_config_counts_as_empty(env):
     assert state.errors == ("config.toml is empty; save it again",) and not state.can_apply
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["[scoring]\n", "[scoring]\n# nothing yet\n[apply]\n\n[paths.nested]\n"],
+)
+def test_a_bare_table_header_config_counts_as_empty(env, text):
+    env.cfg.write_text("[scoring]\ndaily_cap_usd = 0.25\n")
+    running = load_settings(env.cfg)
+    w = env.make()
+    env.cfg.write_text(text)
+    state = w.check(running)
+    assert state.errors == ("config.toml is empty; save it again",)
+    assert not state.can_apply and not state.fields
+
+
+def test_a_bare_table_header_at_start_is_not_an_error(env):
+    env.cfg.write_text("[scoring]\n")
+    running = load_settings(env.cfg)
+    w = env.make()
+    env.cfg.write_text("[scoring]\n# still nothing\n")
+    assert not w.check(running).pending
+
+
+def test_a_config_replaced_by_a_directory_is_an_error_not_defaults(env):
+    env.cfg.write_text("[scoring]\ndaily_cap_usd = 0.25\n")
+    running = load_settings(env.cfg)
+    w = env.make()
+    env.cfg.unlink()
+    env.cfg.mkdir()
+    state = w.check(running)
+    assert state.errors == ("config.toml could not be read (IsADirectoryError)",)
+    assert not state.can_apply and not state.fields
+
+
 def test_a_comment_only_config_at_start_is_not_an_error(env):
     env.cfg.write_text("# nothing yet\n")
     running = load_settings(env.cfg)

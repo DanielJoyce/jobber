@@ -603,10 +603,17 @@ def _layer_keys(layers: Any) -> frozenset[str]:
     return frozenset(keys)
 
 
+def _sets_nothing(table: dict[str, Any]) -> bool:
+    """True when ``table`` holds no value at any depth: only empty tables such as a bare
+    ``[scoring]`` header, which parse to ``{"scoring": {}}``, and no keys."""
+    return all(isinstance(v, dict) and _sets_nothing(v) for v in table.values())
+
+
 def _is_blank(path: Path) -> bool:
-    """True when ``path`` reads as TOML that sets nothing (empty, whitespace, only comments)."""
+    """True when ``path`` reads as TOML that sets no keys (empty, whitespace, only comments,
+    or only table headers)."""
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8")) == {}
+        return _sets_nothing(tomllib.loads(path.read_text(encoding="utf-8")))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return False
 
@@ -750,6 +757,11 @@ class ConfigWatcher:
         if start[0] and not fp[0]:
             # Loading would give the defaults (higher caps, other scorers): not a change to offer.
             errors: tuple[str, ...] = ("config.toml is missing; save it again",)
+            self._loaded = _Loaded(fp, digest, None, errors, mfp, mdigest)
+            return
+        if fp[0] and path.is_dir():
+            # config.toml replaced by a directory: unreadable, never the defaults.
+            errors = ("config.toml could not be read (IsADirectoryError)",)
             self._loaded = _Loaded(fp, digest, None, errors, mfp, mdigest)
             return
         if self._start_has_settings and fp[0] and _is_blank(path):
