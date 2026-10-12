@@ -15,11 +15,11 @@ HEADER_LINES = 8
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")
 _NANP = re.compile(
-    r"(?<![\w.\-])(?:\+?1[\s.\-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.\-]?)\d{3}[\s.\-]?\d{4}(?![\w\-])"
+    r"(?<![\w.\-])(?:\+?1[\s.\-]?)?(?:\([2-9]\d{2}\)\s?|[2-9]\d{2}[\s.\-]?)\d{3}[\s.\-]?\d{4}(?![\w\-])"
 )
-_INTL = re.compile(r"(?<![\w.\-])\+\d{1,3}(?:[\s.\-]?(?:\(\d{1,4}\)|\d{1,4})){2,5}(?![\w\-])")
+_INTL = re.compile(r"(?<![\w.\-])\+\d{1,3}(?:[\s.\-]?(?:\(\d{1,5}\)|\d{1,5})){2,5}(?![\w\-])")
 # A postal code, with or without its state, is never part of a phone number.
-_POSTAL = re.compile(r"\b(?:[A-Z]{2}\s+)?\d{5}(?:-\d{4})?\b(?=\s|,|$|\|)")
+_POSTAL = re.compile(r"\b(?:[A-Z]{2}\s+\d{5}(?:-\d{4})?|\d{5}-\d{4})\b")
 _LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _SEPARATORS = re.compile(r"\s*(?:\||\u00b7|\u2022|\u2014|\u2013|\s/\s|;|\t|\s-\s)\s*|\s{3,}")
 _CREDENTIAL = re.compile(r"^[A-Z][A-Za-z.]{1,8}$")

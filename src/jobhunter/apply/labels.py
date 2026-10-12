@@ -498,12 +498,11 @@ _REQUIRE = re.compile(r"\b(requires?|required|requiring|needs?|needed|needing)\b
 _NEGATED = re.compile(r"\b(not|never|no|cannot|unable|unless|neither|nor)\b|n't|\bnon[- ]")
 _WITHOUT = re.compile(r"\bwithout\b")
 _AUTH = re.compile(
-    r"\b(authori[sz]ed|authori[sz]ation|eligible|eligibility|work permit|right to work|"
-    r"citizen\w*|resident)\b"
+    r"\b(authori[sz]ed|authori[sz]ation|eligible|eligibility|permitted|entitled|"
+    r"legally|legal right|work permit|right to work|citizen\w*|resident|if so|which type)\b"
 )
 # A second question joined on ("... and are you 18 or older", "... or will you require").
 _SECOND_CLAUSE = re.compile(r"\b(and|or)\s+(are|do|does|will|can|have|is|would|did)\s+you\b")
-_CONJUNCTION = re.compile(r"\b(and|or)\b")
 _PAST = re.compile(
     r"\b(have you|has|had|did)\b|\bpreviously\b|\bin the past\b|\blast (job|employer|role)\b"
 )
@@ -533,7 +532,7 @@ def sponsorship_polarity(question: str) -> str | None:
     norm = _OPTION_HINT.sub(" ", normalize(question))
     if not _SPONSOR.search(norm) or _PAST.search(norm) or _VISA_STATUS.search(norm):
         return None
-    if _SECOND_CLAUSE.search(norm) or (_AUTH.search(norm) and _CONJUNCTION.search(norm)):
+    if _SECOND_CLAUSE.search(norm) or _AUTH.search(norm):
         return None
     without = _WITHOUT.search(norm) is not None
     required = _REQUIRE.search(norm) is not None

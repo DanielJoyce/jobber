@@ -86,9 +86,10 @@ def test_email_shape_is_local_at_domain_dot_tld(email):
     assert answers.Contact(email="canary.contact@invalid.test").email
 
 
-def test_a_carriage_return_in_a_contact_value_is_refused():
+@pytest.mark.parametrize("sep", ["\r", "\u2028", "\x85"])
+def test_any_line_break_in_a_contact_value_is_refused(sep):
     with pytest.raises(ValueError):
-        answers.Contact.model_validate({"city": "a\rb"})
+        answers.Contact.model_validate({"city": f"a{sep}b"})
 
 
 def test_the_contact_help_button_points_at_its_help_body(client):
@@ -262,6 +263,11 @@ def test_copy_from_header_with_nothing_recognizable_says_so(client, pdir):
             "Jane Public\n+44 20 7946 0958\n",
             {"first_name": "Jane", "last_name": "Public", "phone": "+44 20 7946 0958"},
         ),
+        ("Jane Public\nEmployee ID: 1234567890\n", {"first_name": "Jane", "last_name": "Public"}),
+        (
+            "Jane Public\n+91 98765 43210\n",
+            {"first_name": "Jane", "last_name": "Public", "phone": "+91 98765 43210"},
+        ),
         ("", {}),
         ("Summary\nSystems engineer with 10 years of experience.\n", {}),
     ],
@@ -286,8 +292,17 @@ def test_the_header_parser_reads_only_the_header():
         ("Will you need sponsorship to work for us?*", "require"),
         ("Is sponsorship required?", "require"),
         ("Can you work without sponsorship?", "without"),
-        ("Are you authorized to work in the United States without visa sponsorship?", "without"),
+        ("Are you authorized to work in the United States without visa sponsorship?", None),
         ("Able to work without requiring sponsorship", "without"),
+        # authorization is a different answer: never ticked
+        ("Are you legally authorized to work in the US without sponsorship?", None),
+        ("Work authorization: do you require sponsorship?", None),
+        ("Are you eligible to work in the US without sponsorship?", None),
+        ("Are you permitted to work here without sponsorship?", None),
+        ("Are you legally able to work here without sponsorship?", None),
+        ("Do you have the right to work here without sponsorship?", None),
+        ("Are you entitled to work here? Will you require sponsorship?", None),
+        ("Will you require sponsorship? If so, which type?", None),
         # combined questions
         ("Are you authorized to work in the US? Will you require sponsorship?", None),
         ("Will you require sponsorship, or are you authorized to work in the US?", None),

@@ -98,7 +98,7 @@ def env(tmp_path, monkeypatch):
 
 def assert_clean(blob: str):
     for c in CANARIES:
-        assert c not in blob, c
+        assert c.casefold() not in blob.casefold(), c
 
 
 def test_scoring_and_deep_requests_carry_no_contact_value(env):

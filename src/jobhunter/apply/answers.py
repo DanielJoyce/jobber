@@ -310,7 +310,7 @@ class Contact(_Strict):
     @field_validator("*", mode="after")
     @classmethod
     def _one_line(cls, value: str | None) -> str | None:
-        if value is not None and ("\n" in value or "\r" in value):
+        if value is not None and len(value.splitlines()) > 1:
             raise ValueError("must be one line")
         return value
 
