@@ -42,6 +42,7 @@ VOS = "vos/employflorida_virtual_recruiter.eml"
 JOBLINK = "joblink/illinoisjoblink_saved_search.eml"
 NLX = "nlx/usnlx_job_alert.eml"
 PA = "generic/pacareerlink_alert.eml"
+LINKEDIN = "pending/linkedin_alert.eml"
 JOBLINK_HOST = "illinoisjoblink.illinois.gov"
 JOBLINK_ROBOTS = "User-agent: *\nDisallow: /search/jobs\nDisallow: /search/resumes\n"
 DETAIL_HTML = (
@@ -695,3 +696,40 @@ def test_sample_saves_scrubbed_fixtures(tmp_path, monkeypatch):
 
     det, found = parse_message(load_eml(out / "m1.eml"), load_registry())
     assert det.family == "joblink" and len(found) == 3
+
+
+# --- pending-parser sites: recorded, never parsed or fetched --------------------------------
+
+
+def test_linkedin_alert_is_recorded_pending_with_no_stubs_and_no_fetch(
+    rows, src, settings, conn, web
+):
+    gmail = FakeGmail()
+    gmail.add("m1", LINKEDIN)
+    report = run_pipeline(conn, settings, src, gmail, rows, web)
+    assert report.exit_code == 0
+    assert web.requests == []  # not even robots.txt
+    assert conn.execute("SELECT COUNT(*) FROM job").fetchone()[0] == 0
+    row = conn.execute("SELECT family, entries, sender_domain FROM mail_message").fetchone()
+    assert tuple(row) == ("pending-linkedin", 0, "linkedin.com")
+
+
+def test_other_sender_still_generic_parsed(rows, src, settings, conn, web):
+    gmail = FakeGmail()
+    gmail.add("m1", PA)
+    gmail.add("m2", LINKEDIN)
+    stubs = search(adapter_for(gmail, rows), src, settings, conn, web)
+    assert len(stubs) == 2 and all("linkedin" not in s.url for s in stubs)
+    fam = dict(conn.execute("SELECT message_id, family FROM mail_message").fetchall())
+    assert fam["m2"] == "pending-linkedin" and fam["m1"] != "pending-linkedin"
+
+
+def test_may_resolve_never_for_board_hosts(rows):
+    from jobhunter.sources.adapters.mailalerts import may_resolve
+
+    for url in (
+        "https://www.linkedin.com/jobs/view/3900000001/",
+        "https://uk.indeed.com/viewjob?jk=abc",
+        "https://sfbay.craigslist.org/sfc/eng/d/x/123.html",
+    ):
+        assert may_resolve(url, "generic", rows) is False

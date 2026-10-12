@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from jobhunter.config import Mail
 from jobhunter.core.db import transaction
 from jobhunter.core.models import Policy, SourceRow
+from jobhunter.mail.pending import PENDING_PREFIX
 from jobhunter.mail.setup import mail_domain_warnings
 from jobhunter.scoring.profile import Profile
 
@@ -245,12 +246,11 @@ def sender_rows(conn: sqlite3.Connection, mail: Mail) -> list[SenderRow]:
     counts: dict[str, int] = {}
     latest: dict[str, datetime] = {}
     for r in conn.execute(
-        "SELECT sender_domain, received_at FROM mail_message WHERE sender_domain IS NOT NULL"
+        "SELECT family, received_at FROM mail_message WHERE family LIKE 'pending-%'"
     ):
-        dom = bare_domain(r["sender_domain"])
         ts = _parse_ts(r["received_at"])
         for site in SENDER_SITES:
-            if domain_matches(dom, [site.domain]):
+            if r["family"] == PENDING_PREFIX + site.key:
                 counts[site.key] = counts.get(site.key, 0) + 1
                 if ts is not None and ts > latest.get(site.key, ts):
                     latest[site.key] = ts

@@ -80,7 +80,7 @@
         <span class="tag">routed</span> {% for a in s.configured %}<code>{{ a }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
         {% endif %}
         {% if s.suggested_missing %}
-        <p>Add the sender, then run <code>jobhunter mail setup</code>:</p>
+        <p>Add the sender (replace any existing <code>fallback_senders</code> line), then run <code>jobhunter mail setup</code>:</p>
         <pre><code>{{ s.toml_line }}</code></pre>
         {% elif not s.suggested_sender and not s.configured %}
         <span class="muted">Sender address not known yet: after your first alert arrives, read its From address and put it in <code>mail.fallback_senders</code>.</span>

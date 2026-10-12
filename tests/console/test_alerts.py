@@ -92,11 +92,11 @@ def client(tmp_path, profile_dir, conn):
     return TestClient(make_app(tmp_path, profile_dir))
 
 
-def add_alert(conn, message_id, origin, received, sender="jobs.example.net"):
+def add_alert(conn, message_id, origin, received, sender="jobs.example.net", family="generic"):
     conn.execute(
         "INSERT INTO mail_message (message_id, family, origin_source_key, sender_domain, "
-        "subject, received_at, entries, processed_at) VALUES (?, 'generic', ?, ?, 'Jobs', ?, 1, ?)",
-        (message_id, origin, sender, received.isoformat(), NOW.isoformat()),
+        "subject, received_at, entries, processed_at) VALUES (?, ?, ?, ?, 'Jobs', ?, 1, ?)",
+        (message_id, family, origin, sender, received.isoformat(), NOW.isoformat()),
     )
 
 
@@ -328,9 +328,18 @@ def sender(data, key):
 
 
 def test_sender_rows_count_unparsed_alerts_by_domain(conn):
-    add_alert(conn, "l1", None, NOW - timedelta(days=2), sender="linkedin.com")
-    add_alert(conn, "l2", None, NOW - timedelta(days=1), sender="mail.linkedin.com")
-    add_alert(conn, "c1", None, NOW, sender="craigslist.org")
+    add_alert(
+        conn, "l1", None, NOW - timedelta(days=2), sender="linkedin.com", family="pending-linkedin"
+    )
+    add_alert(
+        conn,
+        "l2",
+        None,
+        NOW - timedelta(days=1),
+        sender="mail.linkedin.com",
+        family="pending-linkedin",
+    )
+    add_alert(conn, "c1", None, NOW, sender="craigslist.org", family="pending-craigslist")
     add_alert(conn, "o1", None, NOW, sender="jobs.example.net")
     data = checklist(conn)
     li, cl = sender(data, "linkedin"), sender(data, "craigslist")
@@ -360,7 +369,7 @@ def test_domain_wide_linkedin_warns(conn):
 
 
 def test_page_shows_sender_rows(client, conn):
-    add_alert(conn, "l1", None, NOW, sender="linkedin.com")
+    add_alert(conn, "l1", None, NOW, sender="linkedin.com", family="pending-linkedin")
     conn.commit()
     html = client.get("/alerts").text
     assert 'id="sender-linkedin"' in html and 'id="sender-craigslist"' in html

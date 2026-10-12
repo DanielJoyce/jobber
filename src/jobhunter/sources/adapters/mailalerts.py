@@ -48,6 +48,8 @@ from jobhunter.core.models import (
 from jobhunter.core.textnorm import parse_date
 from jobhunter.mail.message import MailMessage
 from jobhunter.mail.parsers import AlertEntry, Detection, parse_message, row_for_host
+from jobhunter.mail.pending import pending_family, pending_key
+from jobhunter.pipeline.board_ids import is_board_host
 from jobhunter.pipeline.dedupe import normalize_employer
 from jobhunter.pipeline.dedupe_url import normalize_apply_url
 from jobhunter.pipeline.listing import to_iso
@@ -88,6 +90,8 @@ def may_resolve(url: str, family: str, rows: Sequence[SourceRow]) -> bool:
     FetchContext still checks robots.txt before the request.
     """
     host = urlsplit(url).hostname or ""
+    if is_board_host(host) or pending_key(host):
+        return False  # LinkedIn, Indeed, Craigslist: never requested, not even robots.txt
     row = row_for_host(host, rows)
     if row is not None:
         return row.robots.status not in _NO_FETCH_ROBOTS
@@ -339,6 +343,9 @@ class MailAlertsAdapter:
     ) -> Iterator[JobStub]:
         now = to_iso(self._clock())
         det, found = parse_message(msg, self.rows)
+        pending = pending_family(msg.sender_domain) if det.family == "generic" else None
+        if pending:  # no parser yet: record only, so the parser's re-read can find it
+            det, found = Detection(pending, det.origin, "pending parser"), []
         self.stats.messages += 1
         self.stats.families[det.family] = self.stats.families.get(det.family, 0) + 1
         conn.execute(
@@ -358,7 +365,7 @@ class MailAlertsAdapter:
             ),
         )
         if not found:
-            log.warning("alert %s (%s): no job entries parsed", msg.message_id, det.family)
+            log.info("alert %s (%s): no job entries parsed", msg.message_id, det.family)
         for i, entry in enumerate(found):
             try:
                 stub = stub_for(src, det, entry, msg, self.rows)

@@ -42,6 +42,8 @@ CASES = [
     ("nlx/usnlx_job_alert.eml", "nlx", "us-nlx", 2),
     ("generic/unknown_board.eml", "generic", None, 2),
     ("generic/pacareerlink_alert.eml", "generic", "pa-pacareerlink", 2),
+    # generic by parse_message; the mailalerts adapter records it as pending-linkedin instead
+    ("pending/linkedin_alert.eml", "generic", None, 2),
 ]
 
 
