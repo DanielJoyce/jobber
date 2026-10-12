@@ -1100,9 +1100,9 @@ def score_sync(
         return reserve
 
     per_job = per_job_now()
-    # Nothing known about this model's price: the first chunk is one wave, so its real cost
-    # is learned before more is sent. The up-front cut is skipped then: the guess would set
-    # the night's volume, and the per-chunk check below enforces the cap at measured prices.
+    # Nothing known about this model's price: the first chunk is a single request, so its
+    # real cost is learned before more is sent. The up-front cut is skipped then: the guess
+    # would set the night's volume, and the per-chunk check enforces the cap at measured cost.
     guessed = price is None and measured_cost_per_job_usd(conn, scorer.name) <= 0
     if remaining_usd is not None:
         affordable = math.floor(max(remaining_usd(), 0.0) / per_job)
@@ -1126,7 +1126,7 @@ def score_sync(
     pos = 0
     reserved = 0.0  # what this run has reserved for the chunks it sent
     while pos < len(groups):
-        size = workers if guessed and pos == 0 else chunk
+        size = 1 if guessed and pos == 0 else chunk
         part = groups[pos : pos + size]
         if remaining_usd is not None:
             # Recorded spend so far counts here, so a model dearer than its reservation
@@ -1377,6 +1377,9 @@ def estimated_request_cost(
         floor = chat_price_usd(rates, n_jobs)
     elif (measured := measured_cost_per_job_usd(conn, scorer.name)) > 0:
         floor = measured * n_jobs  # no list price: the measured cost per job, per pack
+    elif isinstance(scorer, OpenRouterScorer):
+        # Neither a price nor history: the unpriced guess per job, as on the single path.
+        floor = unpriced_reserve_usd(scorer.name, scoring_for(scorer), batch=False) * n_jobs
     default = float(getattr(scorer, "est_cost_per_request_usd", 0.0) or 0.0)
     if default <= 0:
         return max(ESTIMATED_COST_PER_REQUEST_USD * n_jobs, floor)
@@ -1457,8 +1460,15 @@ def _score_sync_packed(
     workers = max(1, int(getattr(getattr(scorer, "config", None), "max_concurrency", 1)))
     key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
     pos = 0
+    # Nothing known about the price: one pack goes alone first, so its real cost is measured
+    # before a full wave is sent.
+    guessed = (
+        isinstance(scorer, OpenRouterScorer)
+        and _chat_rates(scorer) is None
+        and measured_cost_per_job_usd(conn, scorer.name) <= 0
+    )
     while pos < len(packs):
-        wave = packs[pos : pos + workers]
+        wave = packs[pos : pos + (1 if guessed and pos == 0 else workers)]
         if remaining_usd is not None:
             remaining = max(remaining_usd(), 0.0)
             affordable = 0

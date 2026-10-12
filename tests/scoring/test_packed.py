@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 import httpx
 import pytest
@@ -66,6 +67,13 @@ def make(handler, tmp_path, **cfg) -> OpenRouterScorer:
     config = OpenRouter(catalog_cache=tmp_path / "cat.json", **cfg)
     client = httpx.Client(transport=httpx.MockTransport(handler))
     return OpenRouterScorer(SLUG, config, client=client, env={"OPENROUTER_API_KEY": "k"})
+
+
+def cheap_catalog(tmp_path) -> None:
+    """A fresh cached catalog pricing the slugs cheaply, so a pack's estimate is the configured
+    per-request figure (or measured history), not the unpriced per-job guess (bug df51dff)."""
+    prices = {SLUG: (0.10, 0.50), "other/model": (0.10, 0.50)}
+    (tmp_path / "cat.json").write_text(json.dumps({"fetched_at": time.time(), "prices": prices}))
 
 
 def seed(conn, profile, n: int) -> list[int]:  # noqa: F811
@@ -275,6 +283,7 @@ def test_cost_split_counts_invalid_items_too(conn, profile, tmp_path):  # noqa: 
 
 def test_spend_cap_stops_before_next_pack(conn, profile, tmp_path):  # noqa: F811
     seed(conn, profile, 6)
+    cheap_catalog(tmp_path)
     log: list = []
     scorer = make(serve(log, all_valid), tmp_path, jobs_per_request=2)
     res = screen.score_sync(
@@ -292,6 +301,7 @@ def test_spend_cap_stops_before_next_pack(conn, profile, tmp_path):  # noqa: F81
 
 def test_spend_cap_uses_measured_mean_cost(conn, profile, tmp_path):  # noqa: F811
     seed(conn, profile, 4)
+    cheap_catalog(tmp_path)
     conn.execute(
         "INSERT INTO llm_spend (day, model, tier, calls, cost_usd) "
         "VALUES (?, ?, 'screen', 10, 1.0)",
@@ -448,3 +458,16 @@ def test_scorer_from_string_reads_config():
     scoring = Scoring(openrouter=OpenRouter(jobs_per_request=8))
     assert scorer_from_string(f"openrouter:{SLUG}", scoring=scoring).jobs_per_request == 8
     assert scorer_from_string("local:m").jobs_per_request == 1
+
+
+def test_unpriced_pack_goes_alone_first(conn, profile, tmp_path):  # noqa: F811
+    # A variable-price router with no history: $0.04 a job, and one pack before a full wave.
+    seed(conn, profile, 8)
+    log: list = []
+    scorer = make(serve(log, all_valid), tmp_path, jobs_per_request=2, max_concurrency=4)
+    assert screen.estimated_request_cost(conn, scorer, NOW, 2) == pytest.approx(0.08)
+    sizes: list[int] = []
+    real_submit = scorer.submit
+    scorer.submit = lambda reqs: sizes.append(len(reqs)) or real_submit(reqs)
+    screen.score_sync(conn, scorer, profile, limit=10, now=NOW, remaining_usd=lambda: 5.0)
+    assert sizes[0] == 1 and sum(sizes) == 4

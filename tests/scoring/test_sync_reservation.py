@@ -25,12 +25,17 @@ from test_screen import (
     succeeded,
 )
 
-from jobhunter.config import OpenRouter, Scoring, Settings, check_scorer_spec
+from jobhunter.config import OpenAICompat, OpenRouter, Scoring, Settings, check_scorer_spec
 from jobhunter.console import prefs as pf
 from jobhunter.pipeline import backfill as bf
 from jobhunter.pipeline import runner
 from jobhunter.scoring import rescore, scorers, screen
-from jobhunter.scoring.scorers import AnthropicScorer, OpenRouterScorer, ceiling_cost
+from jobhunter.scoring.scorers import (
+    AnthropicScorer,
+    OpenAICompatScorer,
+    OpenRouterScorer,
+    ceiling_cost,
+)
 
 DESCRIPTION_QUOTE = "Write Terraform modules and Go tooling."
 PRICEY = "pricey/model-large"  # $1 in / $5 out per Mtok in the cached catalog
@@ -405,3 +410,23 @@ def test_refresh_catalog_before_planning_prices_a_new_slug(conn, tmp_path):
     assert api.catalog_fetches == 1
     assert rescore.cost_per_job(conn, scoring.screen_scorer, scoring) == (0.002, "default")
     rescore.refresh_catalog("jev:typesafe/jev-1.13", scoring, lambda spec: pytest.fail("no"))
+
+
+def test_backfill_sync_route_holds_a_zero_cost_scorer_to_its_budget(conn, profile):
+    # An openai-compat server with no configured prices records $0 a call; each chunk is
+    # still counted at the $0.002 reservation, so the budget stops it (not 300 of 300).
+    add_groups(conn, profile, 300)
+    api = ChatAPI(0.0)
+    scorer = OpenAICompatScorer(
+        "free-model",
+        OpenAICompat(base_url="https://llm.example.com"),
+        client=httpx.Client(transport=httpx.MockTransport(api)),
+        env={"OPENAI_COMPAT_API_KEY": "k"},
+    )
+    est = bf.estimate(conn, profile, scorer, budget_usd=0.1, now=NOW)
+    assert est.per_job.usd == 0.002
+    _, submitted, committed, stop = bf._submit(
+        conn, profile, scorer, None, est, chunk_size=20, now=NOW, out=lambda s: None
+    )
+    assert submitted == api.calls == math.floor(0.1 / 0.002) == 50
+    assert committed == pytest.approx(0.1) and "budget reached" in stop

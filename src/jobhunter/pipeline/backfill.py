@@ -179,7 +179,23 @@ def resolve_backlog(conn: sqlite3.Connection, now: datetime) -> int:
 
 
 def per_job_cost(conn: sqlite3.Connection, scorer: FitScorer) -> PerJobCost:
-    """Measured history first, then the scorer's own price, then the $0.002 default."""
+    """Measured history first, then the scorer's own price, then the $0.002 default.
+
+    A non-batching scorer is never priced below what ``score_sync`` reserves for it
+    (``screen.reserve_per_job_usd``), so the confirmed estimate matches the run's cap checks.
+    """
+    base = _history_or_price(conn, scorer)
+    if scorer.supports_batching:
+        return base
+    price = screen.scorer_list_price_usd(scorer)
+    reserve = screen.reserve_per_job_usd(conn, scorer.name, screen.scoring_for(scorer), price=price)
+    if reserve > base.usd + 1e-12:
+        why = "no known price" if price is None else "the model's price at typical tokens"
+        return PerJobCost(reserve, f"spend-cap reservation ({why})")
+    return base
+
+
+def _history_or_price(conn: sqlite3.Connection, scorer: FitScorer) -> PerJobCost:
     count, avg = conn.execute(
         "SELECT COUNT(*), AVG(cost_usd) FROM fit_score "
         "WHERE model = ? AND tier = 'screen' AND cost_usd > 0",
@@ -255,11 +271,14 @@ def _submit(
     per = est.per_job.usd
     committed = est.committed_usd
     start_committed = committed
+    unreported = 0.0  # reserved for sent chunks beyond the cost they recorded
 
     def sync_remaining() -> float:
-        # The backfill budget, less what this run has actually spent since it started: the
-        # synchronous route checks it before every chunk at the model's own reservation.
-        return est.budget_usd - start_committed - (_spent_today(conn, now) - est.spent_today_usd)
+        # The backfill budget, less what this run has spent since it started and what it
+        # reserved for chunks that recorded less (a scorer that reports $0 still counts at its
+        # reservation): the synchronous route checks it before every chunk.
+        spent = _spent_today(conn, now) - est.spent_today_usd
+        return est.budget_usd - start_committed - spent - unreported
 
     batch_ids: list[str] = []
     submitted = 0
@@ -299,13 +318,18 @@ def _submit(
             )
             n = res.submitted
             if n == 0:
+                if sync_remaining() < per:
+                    stop = "budget reached; the rest waits for the next run"
                 break
             out(
                 f"  chunk: {n} jobs, {res.written} scored, {res.errored} errored, "
                 f"{res.invalid} invalid"
             )
             submitted += n
-            committed += res.cost_usd  # what was spent, not the estimate
+            # What was spent, but never less than the reservation for what was sent.
+            charge = max(res.cost_usd, n * per)
+            unreported += charge - res.cost_usd
+            committed += charge
             if res.written == 0:
                 stop = "a chunk wrote no scores; stopped"
                 break

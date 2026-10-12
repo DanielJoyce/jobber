@@ -469,8 +469,8 @@ A model with no list price (an OpenRouter router with variable pricing, a slug m
 the catalog) is priced by its measured history (`fit_score.cost_usd`, which OpenRouter reports
 per call) once it has some. **With neither a price nor history it is over the line**: it
 reserves $0.04 a job, or `scoring.openrouter.est_cost_per_request_usd` when higher, and
-`score_sync` sends one `max_concurrency` wave first so its real cost is measured before more
-goes out. An Anthropic model missing from the price table is refused as a scorer
+`score_sync` sends a single request first (one job, or one pack on the packed route) so its
+real cost is measured before more goes out. An Anthropic model missing from the price table is refused as a scorer
 (`check_scorer_spec`, so the nightly run skips with the reason and `submit_batch` sends
 nothing); a batch already submitted under one is collected with its spend recorded at the
 table's dearest rates, and reserved at those rates until then.
@@ -478,11 +478,13 @@ table's dearest rates, and reserved at those rates until then.
 `score_sync` re-checks the cap before every chunk of 8 single-job requests (or one
 `max_concurrency` wave, when larger), re-reading the reservation with what the sent chunks
 cost, and counting what it reserved for chunks whose cost was not reported. Packed requests
-are checked per wave as before, their estimate floored at the catalog price of the pack, or
-the measured cost per job times the pack size. The `/prefs` paid-change estimate and the
-re-score plan price the configured `screen_scorer` the same way (`rescore.cost_per_job`).
-`jobhunter backfill` prices uncollected batches per model, and its synchronous route passes
-its budget to `score_sync` as the spend cap, counting what was actually spent.
+are checked per wave as before, their estimate floored at the catalog price of the pack, else
+the measured cost per job times the pack size, else the unpriced guess per job times the pack
+size. The `/prefs` paid-change estimate and the re-score plan price the configured
+`screen_scorer` the same way (`rescore.cost_per_job`). `jobhunter backfill` prices uncollected
+batches per model and a non-batching scorer at no less than its reservation; its synchronous
+route passes its budget to `score_sync` as the spend cap and counts each chunk at the higher
+of what it recorded and its reservation, so a scorer that reports $0 still stops at the budget.
 
 **Stage 3, per job:** 5,000 in + 3,000 cached + 1,500 out ≈ **$0.051**. At 40/week → **$2.02/week**.
 
