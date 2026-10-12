@@ -150,8 +150,9 @@ def accept(
         )
         if row["kind"] == "rejection":  # accepting it confirms the rejection row too
             conn.execute(
-                "UPDATE rejection SET state = 'confirmed' WHERE gmail_message_id = ?",
-                (row["gmail_message_id"],),
+                "UPDATE rejection SET state = 'confirmed', "
+                "confirmed_at = COALESCE(confirmed_at, ?) WHERE gmail_message_id = ?",
+                (now_s, row["gmail_message_id"]),
             )
     else:
         gid = row["job_group_id"]

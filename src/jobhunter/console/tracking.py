@@ -159,10 +159,12 @@ def add_event(
     if own:
         conn.execute("BEGIN IMMEDIATE")
     try:
+        # recorded_at is when the row was written, whatever ``at`` says (specs/021: a
+        # backdated event does not fill a past week).
         cur = conn.execute(
-            "INSERT INTO application_event (application_id, at, status, note, source) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (app_id, at_s, status, (note or "").strip() or None, source),
+            "INSERT INTO application_event (application_id, at, status, note, source, "
+            "recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (app_id, at_s, status, (note or "").strip() or None, source, _iso(datetime.now(UTC))),
         )
         rebuild_status(conn, app_id)
         if status == "applied":
@@ -171,7 +173,10 @@ def add_event(
         if own:
             conn.execute("ROLLBACK")
         raise
-    conn.commit()
+    # A caller's transaction is the caller's to commit (the no-response route writes the event,
+    # its follow-up record and the cleared action as one unit).
+    if own:
+        conn.execute("COMMIT")
     return int(cur.lastrowid or 0)
 
 
@@ -365,10 +370,38 @@ def _item(
     )
 
 
-def set_next_action(
-    conn: sqlite3.Connection, app_id: int, action: str | None, at: str | None
+def _log_followup(
+    conn: sqlite3.Connection, app_id: int, kind: str, due_at: str | None, now: datetime
 ) -> None:
-    """Set or clear the next action. ``at`` is a date or timestamp (validated)."""
+    """One ``followup_log`` row (specs/021 "Write points"); the caller holds the transaction."""
+    conn.execute(
+        "INSERT INTO followup_log (application_id, at, kind, due_at) VALUES (?, ?, ?, ?)",
+        (app_id, _iso(now), kind, due_at),
+    )
+
+
+def _current_due(conn: sqlite3.Connection, app_id: int) -> str | None:
+    row = conn.execute("SELECT next_action_at FROM application WHERE id = ?", (app_id,)).fetchone()
+    if row is None:
+        raise TrackingError(f"no such application {app_id}")
+    return (row["next_action_at"] or "").strip() or None
+
+
+def set_next_action(
+    conn: sqlite3.Connection,
+    app_id: int,
+    action: str | None,
+    at: str | None,
+    *,
+    snooze: bool = False,
+    now: datetime | None = None,
+) -> None:
+    """Set or clear the next action. ``at`` is a date or timestamp (validated).
+
+    A ``planned`` follow-up record is written, in the same transaction, only when the date
+    changes to a new non-empty value: the drawer re-posts the prefilled date on every save, so
+    re-saving it or editing only the text writes nothing, and neither does a snooze (a date
+    you did not choose)."""
     at = (at or "").strip() or None
     if at:
         try:
@@ -376,17 +409,64 @@ def set_next_action(
         except ValueError as exc:
             raise TrackingError(f"bad date {at!r}") from exc
     action = (action or "").strip() or None
-    cur = conn.execute(
-        "UPDATE application SET next_action = ?, next_action_at = ?, updated_at = ? WHERE id = ?",
-        (action, at, _iso(datetime.now(UTC)), app_id),
-    )
-    if cur.rowcount == 0:
-        raise TrackingError(f"no such application {app_id}")
-    conn.commit()
+    now = now or datetime.now(UTC)
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        before = _current_due(conn, app_id)
+        conn.execute(
+            "UPDATE application SET next_action = ?, next_action_at = ?, updated_at = ? "
+            "WHERE id = ?",
+            (action, at, _iso(now), app_id),
+        )
+        if at is not None and at != before and not snooze:
+            _log_followup(conn, app_id, "planned", at, now)
+    except BaseException:
+        if own:
+            conn.execute("ROLLBACK")
+        raise
+    if own:
+        conn.execute("COMMIT")
 
 
-def done(conn: sqlite3.Connection, app_id: int) -> None:
-    set_next_action(conn, app_id, None, None)
+def done(conn: sqlite3.Connection, app_id: int, now: datetime | None = None) -> None:
+    """Follow-up Done: clear the next action. When a dated next action was in force, a
+    ``done`` record for that date is kept (Done on a nudge with no next action keeps none)."""
+    now = now or datetime.now(UTC)
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        due = _current_due(conn, app_id)
+        if due is not None:
+            _log_followup(conn, app_id, "done", due, now)
+        set_next_action(conn, app_id, None, None, now=now)
+    except BaseException:
+        if own:
+            conn.execute("ROLLBACK")
+        raise
+    if own:
+        conn.execute("COMMIT")
+
+
+def no_response(conn: sqlite3.Connection, app_id: int, now: datetime) -> None:
+    """Follow-ups "No response": the ``no_response`` event, its follow-up record (with the
+    next action date in force, if any) and the cleared next action, in one transaction."""
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        due = _current_due(conn, app_id)
+        add_event(conn, app_id, "no_response", "marked from follow-ups", now)
+        _log_followup(conn, app_id, "no_response", due, now)
+        set_next_action(conn, app_id, None, None, now=now)
+    except BaseException:
+        if own:
+            conn.execute("ROLLBACK")
+        raise
+    if own:
+        conn.execute("COMMIT")
 
 
 def snooze(conn: sqlite3.Connection, app_id: int, now: datetime, days: int = SNOOZE_DAYS) -> None:
@@ -394,7 +474,7 @@ def snooze(conn: sqlite3.Connection, app_id: int, now: datetime, days: int = SNO
     if row is None:
         raise TrackingError(f"no such application {app_id}")
     when = (now + timedelta(days=days)).date().isoformat()
-    set_next_action(conn, app_id, row["next_action"], when)
+    set_next_action(conn, app_id, row["next_action"], when, snooze=True, now=now)
 
 
 def update_details(
@@ -436,9 +516,9 @@ def add_contact(conn: sqlite3.Connection, app_id: int, **fields: str | None) -> 
     if not application_exists(conn, app_id):
         raise TrackingError(f"no such application {app_id}")
     cur = conn.execute(
-        "INSERT INTO contact (application_id, name, role, email, phone, note) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (app_id, *vals),
+        "INSERT INTO contact (application_id, name, role, email, phone, note, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (app_id, *vals, _iso(datetime.now(UTC))),
     )
     conn.commit()
     return int(cur.lastrowid or 0)

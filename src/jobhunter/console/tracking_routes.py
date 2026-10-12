@@ -205,7 +205,9 @@ def register(
         require_app(conn, app_id)
         error = None
         try:
-            t.set_next_action(conn, app_id, f.get("next_action"), f.get("next_action_at"))
+            t.set_next_action(
+                conn, app_id, f.get("next_action"), f.get("next_action_at"), now=now()
+            )
         except t.TrackingError as exc:
             error = str(exc)
         return drawer_response(request, conn, app_id, error)
@@ -281,7 +283,7 @@ def register(
     @app.post("/followups/{app_id}/done")
     def fu_done(request: Request, conn: Conn, app_id: int) -> Response:
         require_app(conn, app_id)
-        t.done(conn, app_id)
+        t.done(conn, app_id, now())
         return followup_reply(request)
 
     @app.post("/followups/{app_id}/snooze")
@@ -293,8 +295,7 @@ def register(
     @app.post("/followups/{app_id}/no-response")
     def fu_no_response(request: Request, conn: Conn, app_id: int) -> Response:
         require_app(conn, app_id)
-        t.add_event(conn, app_id, "no_response", "marked from follow-ups", now())
-        t.done(conn, app_id)
+        t.no_response(conn, app_id, now())
         return followup_reply(request)
 
     @app.post("/followups/{app_id}/applied")

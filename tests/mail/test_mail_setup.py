@@ -306,3 +306,64 @@ def test_personal_mail_domain_warning():
     report = setup.setup_mailbox(Gmail(), make_settings(fallback_sender_domains=["linkedin.com"]))
     assert any(line.startswith("warning:") for line in report.lines())
     assert not setup.domain_warnings(make_settings(fallback_senders=["a@linkedin.com"]))
+
+
+# --- mail_setup_at for the achievements board (specs/021 setup.mail, ticket A1) ------------
+
+
+@pytest.fixture
+def cfg_db(tmp_path, monkeypatch):
+    db_path = tmp_path / "jh.db"
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f'[paths]\ndb_path = "{db_path}"\n\n[mail]\nalerts_address = "{ADDR}"\n'
+        'fallback_sender_domains = ["a.test"]\n'
+    )
+    monkeypatch.setenv("JOBHUNTER_CONFIG", str(path))
+    g = Gmail()
+    monkeypatch.setattr(auth, "load_token", lambda: "t")
+    monkeypatch.setattr(auth, "build_service", lambda settings: g)
+    return db_path
+
+
+def _mail_setup_at(db_path):
+    from jobhunter.core import db
+
+    c = db.connect(db_path)
+    try:
+        row = c.execute(
+            "SELECT value FROM achievement_setting WHERE key = 'mail_setup_at'"
+        ).fetchone()
+        return None if row is None else row[0]
+    finally:
+        c.close()
+
+
+def test_cli_setup_records_mail_setup_at_once(cfg_db):
+    result = runner.invoke(app, ["mail", "setup"])
+    assert result.exit_code == 0, result.output
+    first = _mail_setup_at(cfg_db)
+    assert first is not None and first.endswith("+00:00")
+    assert runner.invoke(app, ["mail", "setup"]).exit_code == 0  # re-run: nothing to create
+    assert _mail_setup_at(cfg_db) == first  # the first success is kept
+
+
+def test_cli_dry_run_records_nothing(cfg_db):
+    from jobhunter.core import db
+
+    c = db.connect(cfg_db)
+    db.migrate(c)
+    c.close()
+    result = runner.invoke(app, ["mail", "setup", "--dry-run"])
+    assert result.exit_code == 0 and "would create: label" in result.output
+    assert _mail_setup_at(cfg_db) is None
+
+
+def test_cli_failed_setup_records_nothing(cfg_db, monkeypatch):
+    def refuse(settings):
+        raise auth.MailAuthError("token revoked")
+
+    monkeypatch.setattr(auth, "build_service", refuse)
+    result = runner.invoke(app, ["mail", "setup"])
+    assert result.exit_code == 1
+    assert not cfg_db.exists() or _mail_setup_at(cfg_db) is None

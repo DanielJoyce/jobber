@@ -290,7 +290,14 @@ def _merge_application(
     res.applications_merged += 1
     # Keep the more advanced application; ties keep the survivor's (the older group's).
     win, lose = (aa, sa) if _APP_RANK[aa["status"]] > _APP_RANK[sa["status"]] else (sa, aa)
-    for table in ("application_event", "contact", "attachment", "rejection", "mail_proposal"):
+    for table in (
+        "application_event",
+        "contact",
+        "attachment",
+        "rejection",
+        "mail_proposal",
+        "followup_log",
+    ):
         conn.execute(
             f"UPDATE {table} SET application_id = ? WHERE application_id = ?",
             (win["id"], lose["id"]),
@@ -299,9 +306,15 @@ def _merge_application(
     if lose["applied_at"]:
         detail += f", applied {lose['applied_at']}"
     conn.execute(
-        "INSERT INTO application_event (application_id, at, status, note, source) "
-        "VALUES (?, ?, ?, ?, 'manual')",
-        (win["id"], to_iso(now), win["status"], f"Merged duplicate application ({detail})"),
+        "INSERT INTO application_event (application_id, at, status, note, source, recorded_at) "
+        "VALUES (?, ?, ?, ?, 'manual', ?)",
+        (
+            win["id"],
+            to_iso(now),
+            win["status"],
+            f"Merged duplicate application ({detail})",
+            to_iso(now),
+        ),
     )
     _merge_packets(conn, win["id"], lose["id"], now)
     conn.execute("DELETE FROM application WHERE id = ?", (lose["id"],))

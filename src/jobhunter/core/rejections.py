@@ -145,9 +145,17 @@ def load(conn: sqlite3.Connection) -> list[Rejection]:
     return [_row(r) for r in rows]
 
 
-def confirm(conn: sqlite3.Connection, rid: int) -> bool:
-    """Mark a pending rejection confirmed; False when there is no such row."""
-    cur = conn.execute("UPDATE rejection SET state = 'confirmed' WHERE id = ?", (rid,))
+def confirm(conn: sqlite3.Connection, rid: int, now: datetime | None = None) -> bool:
+    """Mark a pending rejection confirmed; False when there is no such row.
+
+    ``confirmed_at`` records when you confirmed it (specs/021: the classifier's own
+    'confirmed' rows carry none); a second confirm keeps the first time."""
+    at = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
+    cur = conn.execute(
+        "UPDATE rejection SET state = 'confirmed', confirmed_at = COALESCE(confirmed_at, ?) "
+        "WHERE id = ?",
+        (at, rid),
+    )
     return bool(cur.rowcount)
 
 

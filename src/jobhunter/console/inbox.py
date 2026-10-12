@@ -331,9 +331,9 @@ def _write_label(conn: sqlite3.Connection, group_id: int, label: str, now: str) 
                 (group_id, now, now),
             )
             conn.execute(
-                "INSERT INTO application_event (application_id, at, status, note, source) "
-                "VALUES (?, ?, 'interested', ?, 'manual')",
-                (cur.lastrowid, now, SHORTLIST_NOTE),
+                "INSERT INTO application_event (application_id, at, status, note, source, "
+                "recorded_at) VALUES (?, ?, 'interested', ?, 'manual', ?)",
+                (cur.lastrowid, now, SHORTLIST_NOTE, now),
             )
 
 
@@ -366,12 +366,14 @@ def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
             "SELECT COUNT(*) FROM application_event WHERE application_id = ?", (app["id"],)
         ).fetchone()[0]
         # A mail proposal about this application keeps it (accepting it needs the row), and so
-        # does an assisted-apply packet (specs/017): it is work the user started on it.
+        # does an assisted-apply packet (specs/017): it is work the user started on it. So does
+        # a follow-up history (specs/021 followup_log), like a contact.
         others = conn.execute(
             "SELECT (SELECT COUNT(*) FROM contact WHERE application_id = :a) + "
             "(SELECT COUNT(*) FROM attachment WHERE application_id = :a) + "
             "(SELECT COUNT(*) FROM mail_proposal WHERE application_id = :a) + "
-            "(SELECT COUNT(*) FROM application_packet WHERE application_id = :a)",
+            "(SELECT COUNT(*) FROM application_packet WHERE application_id = :a) + "
+            "(SELECT COUNT(*) FROM followup_log WHERE application_id = :a)",
             {"a": app["id"]},
         ).fetchone()[0]
         mine = conn.execute(
