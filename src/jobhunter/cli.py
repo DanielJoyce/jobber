@@ -15,7 +15,7 @@ import typer
 from typer.core import TyperGroup
 
 from jobhunter import container, secrets
-from jobhunter.config import load_env_files, load_settings, resolve_path
+from jobhunter.config import Settings, load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
 from jobhunter.sources.registry import enabled_sources, load_registry, sync_sources_table
@@ -1129,9 +1129,32 @@ def init() -> None:
         return
     typer.echo(f"created {db_path}")
     typer.echo(
-        f"next: put your resume (.md) in {resolve_path(settings.paths.resume_path)} or upload "
-        "it in `jobhunter console`, then set your preferences there."
+        f"next: open http://{settings.console.host}:{settings.console.port}/setup, "
+        "or run `jobhunter doctor`"
     )
+
+
+def _warn_essentials(settings: Settings, host: str, port: int) -> None:
+    """One stderr line at console start when an essential is failing (019 "Banner")."""
+    from jobhunter import readiness
+
+    try:
+        checks = readiness.run_checks(
+            settings,
+            secrets_report=_SECRETS_REPORT,
+            now=datetime.now(UTC),
+            mode=readiness.detect_mode(settings=settings),
+            cheap_only=True,
+        )
+    except Exception:  # a hint must never stop the console starting
+        return
+    n = sum(1 for c in checks if c.level == readiness.ESSENTIAL and c.status in readiness.FAILING)
+    if n:
+        shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        typer.echo(
+            f"setup: {n} essential item(s) missing or broken; open http://{shown}:{port}/setup",
+            err=True,
+        )
 
 
 @app.command()
@@ -1180,6 +1203,7 @@ def console(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     app_.state.secrets_report = _SECRETS_REPORT  # the secret rows on /setup
+    _warn_essentials(settings, bind_host, bind_port)
     uvicorn.run(app_, host=bind_host, port=bind_port)
 
 

@@ -2,7 +2,7 @@
 
 ``GET /setup`` renders ``readiness.run_checks`` grouped by section. Three writes, none of
 which takes a secret: ``POST /setup/starter-prefs``, ``POST /setup/resume`` and
-``POST /setup/dismiss``. The live checks (S6), the banner and redirect (S3b) and the help
+``POST /setup/dismiss``. The live checks (S6) and the help
 links (S11e) are other tickets. No check value is ever rendered here: the rows are the fixed
 wording ``readiness`` builds.
 """
@@ -188,6 +188,27 @@ def read_dismissed(path: Path) -> dict[str, Any]:
     return items if isinstance(items, dict) else {}
 
 
+def banner_view(checks: list[rd.Check], dismissed: dict[str, Any]) -> dict[str, Any] | None:
+    """What the banner shows: failing essentials (never hideable) and, only when none fail,
+    the recommended rows that are missing, broken or due and not hidden at that status.
+    Titles only; nothing here is a value."""
+    essentials = [c for c in checks if c.level == rd.ESSENTIAL and c.status in rd.FAILING]
+    recommended = []
+    for c in checks:
+        if c.level != rd.RECOMMENDED or not (c.status in rd.FAILING or c.due):
+            continue
+        effective = "due" if c.due else c.status
+        entry = dismissed.get(c.id)
+        if isinstance(entry, dict) and entry.get("status") == effective:
+            continue
+        recommended.append(c)
+    if essentials:
+        return {"essentials": essentials, "recommended": [], "ids": []}
+    if recommended:
+        return {"essentials": [], "recommended": recommended, "ids": [c.id for c in recommended]}
+    return None
+
+
 def register(
     app: FastAPI,
     templates: Jinja2Templates,
@@ -240,6 +261,39 @@ def register(
             "essentials_ok": rd.essentials_ok(checks),
             "todo_count": sum(1 for g in groups for r in g.rows if not r.quiet),
         }
+
+    def banner_of(request: Request) -> dict[str, Any] | None:
+        """The /, /inbox banner (019 "Banner"): cheap checks only, no value rendered."""
+        try:
+            checks = rd.run_checks(
+                settings_of(request),
+                secrets_report=getattr(request.app.state, "secrets_report", None),
+                now=now(),
+                mode=mode_of(request),
+                registry_rows=getattr(request.app.state, "registry_rows", None),
+                environ=getattr(request.app.state, "setup_environ", None),
+                home=home_of(request),
+                cheap_only=True,
+            )
+            dismissed = read_dismissed(dismissed_path(settings_of(request)))
+        except Exception:  # a broken check must never take down Today or the inbox
+            return None
+        return banner_view(checks, dismissed)
+
+    def first_run_redirect(request: Request, conn: sqlite3.Connection) -> Response | None:
+        """303 to /setup while an essential fails and the database holds no jobs."""
+        banner = banner_of(request)
+        if banner is None or not banner["essentials"]:
+            return None
+        try:
+            if conn.execute("SELECT 1 FROM job LIMIT 1").fetchone() is not None:
+                return None
+        except sqlite3.Error:
+            return None
+        return RedirectResponse("/setup", status_code=303)
+
+    templates.env.globals["setup_banner"] = lambda request: banner_of(request)
+    app.state.setup_first_run = first_run_redirect
 
     def page(
         request: Request,
@@ -366,4 +420,7 @@ def register(
                 current[i] = {"status": "due" if checks[i].due else checks[i].status, "at": stamp}
             mkdir_private(path.parent)
             _atomic_private_write(path, json.dumps({"dismissed": current}, sort_keys=True))
+        back = str(form.get("next") or "")
+        if back in ("/", "/inbox"):  # the banner's Hide returns to the page it was on
+            return RedirectResponse(back, status_code=303)
         return RedirectResponse("/setup?done=dismissed", status_code=303)

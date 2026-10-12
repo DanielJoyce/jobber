@@ -24,11 +24,9 @@
     {% endif %}
   </header>
 
+  {% include "_setup_banner.html" %}
   {% if profile_error is not none %}
-  <div class="banner" role="alert">
-    <strong>No profile yet.</strong> Create <code>profile/preferences.yaml</code> (and your resume) so jobs can be scored into buckets. Nothing is listed until then.
-    <div class="muted">{{ profile_error }}</div>
-  </div>
+  <p class="muted">Nothing is listed until a profile loads. {{ profile_error }}</p>
   {% elif data %}
   <div class="bulk-bar" id="bulk-bar" role="toolbar" aria-label="Bulk actions">
     <label class="bulk-all"><input type="checkbox" id="select-all"> <span id="bulk-count">Select all visible</span></label>

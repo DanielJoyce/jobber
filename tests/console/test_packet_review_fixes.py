@@ -177,7 +177,7 @@ def test_url_only_pasted_job_page_has_no_email_alert_banner(client, conn):  # no
 def test_new_packet_key_works_without_a_profile(client, pdir):  # noqa: F811
     (pdir / "preferences.yaml").unlink()
     page = client.get("/inbox").text
-    assert "No profile yet" in page and 'href="/apply/new"' in page
+    assert "Nothing is listed until a profile loads" in page and 'href="/apply/new"' in page
     assert "inbox.js" in page  # binds n
 
 

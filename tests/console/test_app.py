@@ -43,6 +43,22 @@ def test_placeholder_routes(client, route):
 
 
 def test_today_is_dashboard(client):
+    # An empty database with a failing essential goes to /setup (019 S3b); a job ends that.
+    first = client.get("/", follow_redirects=False)
+    assert first.status_code == 303 and first.headers["location"] == "/setup"
+    conn = db.connect(client.app.state.settings.paths.db_path)
+    conn.execute(
+        "INSERT INTO source (key, state, class, name, family, tier, entry, policy, status) "
+        "VALUES ('s', 'live', 'A', 's', 'joblink', 'http', 'https://example.invalid/', "
+        "'enabled', 'ok')"
+    )
+    conn.execute(
+        "INSERT INTO job (source_key, external_id, url, title, stage, first_seen_at, "
+        "last_seen_at) VALUES ('s', '1', 'https://example.invalid/1', 'T', 'listed', "
+        "'2026-10-09T08:00:00+00:00', '2026-10-09T08:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
     r = client.get("/")
     assert r.status_code == 200
     assert 'id="map"' in r.text
