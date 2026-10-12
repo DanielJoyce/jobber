@@ -400,6 +400,19 @@ def test_check_save_needs_force_for_an_uncached_openrouter_slug():
     assert check.error is None and check.needs_force
 
 
+def test_check_save_needs_force_when_the_credential_is_missing(dirs, monkeypatch):
+    settings = load_settings()
+    assert mc.check_save("screen", "jev:typesafe/jev-1.13", settings=settings).ok
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    check = mc.check_save("screen", "jev:typesafe/jev-1.13", settings=settings)
+    assert check.error is None
+    assert check.needs_force == (
+        "No OpenRouter key found (OPENROUTER_API_KEY unset); it cannot run until one is set",
+    )
+    out = cli.invoke(app, ["models", "set", "screen", "jev:typesafe/jev-1.13"])
+    assert out.exit_code == 2 and "No OpenRouter key found" in out.output
+
+
 def test_a_forced_value_applies_when_read_back(dirs):
     """--force saves a value the reservation rule would not offer; the reader must not then
     block it (the reservation is a save-time rule)."""

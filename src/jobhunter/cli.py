@@ -2948,7 +2948,7 @@ def models_set(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     layers = load_layers()
-    check = mc.check_save(use, parsed, layers.merged.scoring)
+    check = mc.check_save(use, parsed, layers.merged.scoring, settings=layers.merged)
     if check.error:
         typer.echo(f"refused: {check.error}", err=True)
         raise typer.Exit(2)

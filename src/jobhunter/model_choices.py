@@ -181,6 +181,7 @@ def check_save(
     scoring: Scoring | None = None,
     *,
     local_ids: list[str] | None = None,
+    settings: Any = None,
 ) -> SaveCheck:
     """Validate one field for a save. Local and free: no network, no subprocess.
 
@@ -189,7 +190,9 @@ def check_save(
     written. Then the catalog's offer rules (``catalog.judge``): a screening option above the
     flat reservation or with no price, an OpenRouter slug that is not in the cache or lacks
     structured output, a local model not on the server's list. Those save only with ``force``.
-    The credential check ("save anyway" when the key is missing) is M3's ``model_access``.
+    With ``settings``, a screening or deep value whose credential is missing (M3's
+    ``model_access``, local checks only) also needs ``force``: the nightly run may see keys
+    this process does not (019 "What the nightly run sees"), so it is a warning, not proof.
     """
     section, key = field_of(name)
     if error := check_model_key(section, key, value):
@@ -204,6 +207,14 @@ def check_save(
         reasons.append(f"not offered for {catalog.USE_LABELS[name].lower()}: {verdict.reason}")
     if verdict.note:
         reasons.append(verdict.note)
+    if settings is not None and name in ("screen", "deep"):
+        from jobhunter import model_access, readiness
+
+        access = model_access.scorer_access(
+            str(value), settings, mode=readiness.detect_mode(settings=settings)
+        )
+        if access.status == model_access.MISSING:
+            reasons.append(f"{access.detail}; it cannot run until one is set")
     return SaveCheck(needs_force=tuple(reasons))
 
 
