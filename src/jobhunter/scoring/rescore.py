@@ -38,7 +38,7 @@ from jobhunter.pipeline.locations import load_job_group_locations
 from jobhunter.scoring import buckets as bk
 from jobhunter.scoring import decisions, prefilter, screen
 from jobhunter.scoring.profile import Profile
-from jobhunter.scoring.scorers import FitScorer, scorer_from_string, split_scorer
+from jobhunter.scoring.scorers import FitScorer, ScorerError, scorer_from_string, split_scorer
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +158,28 @@ def cost_per_job(
     if price is None:
         price = screen.unpriced_reserve_usd(spec, scoring, batch=spec.startswith("anthropic:"))
     return max(screen.ESTIMATED_COST_PER_REQUEST_USD, price), "default"
+
+
+def refresh_catalog(
+    spec: str, scoring: Scoring, scorer_factory: ScorerFactory | None = None
+) -> None:
+    """Refresh the cached OpenRouter price catalog (at most daily) before planning a run.
+
+    The plan prices an OpenRouter slug from that cache (``cost_per_job``), and nothing else
+    writes it until a scoring run does. Called only where a run is about to be planned and
+    paid for (the CLI, ``run_request``); console pages read the cache and never fetch.
+    """
+    if not spec.startswith("openrouter:"):
+        return
+    make = scorer_factory or (lambda s: scorer_from_string(s, scoring=scoring))
+    try:
+        scorer = make(spec)
+    except ScorerError as exc:
+        logger.warning("price catalog not refreshed: %s", exc)
+        return
+    refresh = getattr(scorer, "catalog", None)
+    if callable(refresh):
+        refresh()  # fetch failures are caught and logged inside; the cache stays as it was
 
 
 # The same caps the daily run checks (screen.remaining_budget: tighter of daily and weekly).
@@ -585,6 +607,7 @@ def run_request(
         plan = stored_plan(conn, row, profile, scoring, now())
     else:
         spec = scorer or row["scorer"] or scoring.screen_scorer
+        refresh_catalog(spec, scoring, scorer_factory)
         plan = make_plan(conn, profile, scoring, row["scope"], spec, now())
     if plan.refusal:
         raise RescoreRefused(plan.refusal)

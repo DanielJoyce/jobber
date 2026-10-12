@@ -612,6 +612,10 @@ class OpenRouterScorer(OpenAICompatScorer):
     def _lookup(self, slug: str) -> tuple[float, float] | None:
         return _catalog_rates(self.catalog(), slug)
 
+    def catalog_rates(self) -> tuple[float, float] | None:
+        """This slug's catalog rates, refreshing the cached catalog when over a day old."""
+        return self._lookup(self.model)
+
     def cost(self, usage: Any, *, batch: bool = False) -> float:
         reported = getattr(usage, "cost_usd", None)
         if reported is not None:

@@ -196,6 +196,15 @@ def per_job_cost(conn: sqlite3.Connection, scorer: FitScorer) -> PerJobCost:
     return PerJobCost(FALLBACK_COST_PER_JOB_USD, "default; scorer price unknown")
 
 
+def _spent_today(conn: sqlite3.Connection, now: datetime) -> float:
+    return float(
+        conn.execute(
+            f"SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ? AND {SCORING_ONLY}",
+            (to_iso(now)[:10],),
+        ).fetchone()[0]
+    )
+
+
 def estimate(
     conn: sqlite3.Connection,
     profile: Profile,
@@ -213,10 +222,7 @@ def estimate(
         "rejected": rejections.rejected_json(conn),
     }
     eligible = conn.execute(_COUNT_ELIGIBLE, params).fetchone()[0]
-    spent = conn.execute(
-        f"SELECT coalesce(sum(cost_usd), 0) FROM llm_spend WHERE day = ? AND {SCORING_ONLY}",
-        (to_iso(now)[:10],),
-    ).fetchone()[0]
+    spent = _spent_today(conn, now)
     pending = conn.execute(
         "SELECT coalesce(sum(request_count), 0) FROM score_batch WHERE collected_at IS NULL"
     ).fetchone()[0]
@@ -248,6 +254,13 @@ def _submit(
     """Submit chunks until the budget or the eligible set runs out. Returns what was done."""
     per = est.per_job.usd
     committed = est.committed_usd
+    start_committed = committed
+
+    def sync_remaining() -> float:
+        # The backfill budget, less what this run has actually spent since it started: the
+        # synchronous route checks it before every chunk at the model's own reservation.
+        return est.budget_usd - start_committed - (_spent_today(conn, now) - est.spent_today_usd)
+
     batch_ids: list[str] = []
     submitted = 0
     stop = "all eligible groups submitted"
@@ -276,7 +289,13 @@ def _submit(
             out(f"  batch {batch_id}: {n} jobs submitted")
         else:
             res = screen.score_sync(
-                conn, scorer, profile, limit=limit, now=now, rejection_days=rejection_days
+                conn,
+                scorer,
+                profile,
+                limit=limit,
+                now=now,
+                rejection_days=rejection_days,
+                remaining_usd=sync_remaining,
             )
             n = res.submitted
             if n == 0:
@@ -286,7 +305,7 @@ def _submit(
                 f"{res.invalid} invalid"
             )
             submitted += n
-            committed += n * per
+            committed += res.cost_usd  # what was spent, not the estimate
             if res.written == 0:
                 stop = "a chunk wrote no scores; stopped"
                 break

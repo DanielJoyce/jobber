@@ -529,20 +529,46 @@ def unpriced_reserve_usd(spec: str, scoring: Scoring | None = None, *, batch: bo
     return max(UNPRICED_RESERVE_PER_JOB_USD, est)
 
 
+_LOOK_UP: Any = object()
+
+
 def reserve_per_job_usd(
-    conn: sqlite3.Connection, spec: str, scoring: Scoring | None = None, *, batch: bool = False
+    conn: sqlite3.Connection,
+    spec: str,
+    scoring: Scoring | None = None,
+    *,
+    batch: bool = False,
+    price: float | None = _LOOK_UP,
 ) -> float:
     """What the spend cap reserves for one screen job to ``spec`` (bugs 026b50c, df51dff).
 
     The highest of ``ESTIMATED_COST_PER_REQUEST_USD``, the mean measured for that model, and
-    its list price at ``TYPICAL_USAGE`` (``list_price_per_job_usd``); a model with no price
-    reserves ``unpriced_reserve_usd`` instead of its list price. Never below the old flat
-    $0.002, so a cheap model reserves exactly what it did; a dearer one reserves its own price.
+    its list price at ``TYPICAL_USAGE`` (``list_price_per_job_usd``, or ``price`` when the
+    caller already looked it up). Never below the old flat $0.002, so a cheap model reserves
+    exactly what it did; a dearer one reserves its own price. A model with no list price is
+    priced by its measured history when it has some, else by the ``unpriced_reserve_usd``
+    guess: over the line only while nothing at all is known about its price.
     """
-    price = list_price_per_job_usd(spec, scoring, batch=batch)
+    if price is _LOOK_UP:
+        price = list_price_per_job_usd(spec, scoring, batch=batch)
+    measured = measured_cost_per_job_usd(conn, spec)
     if price is None:
-        price = unpriced_reserve_usd(spec, scoring, batch=batch)
-    return max(ESTIMATED_COST_PER_REQUEST_USD, measured_cost_per_job_usd(conn, spec), price)
+        price = measured if measured > 0 else unpriced_reserve_usd(spec, scoring, batch=batch)
+    return max(ESTIMATED_COST_PER_REQUEST_USD, measured, price)
+
+
+def scorer_list_price_usd(scorer: Any) -> float | None:
+    """``list_price_per_job_usd`` for a scorer that is about to send requests.
+
+    An OpenRouter scorer reads its catalog through its own ``catalog()``: the disk cache when
+    under a day old, else one fetch of the public, free ``/models`` list, which is then cached
+    on disk for the console's estimates (those only read the cache). Only scoring paths call
+    this; nothing that renders a page does.
+    """
+    if isinstance(scorer, OpenRouterScorer):
+        rates = scorer.catalog_rates()
+        return None if rates is None else chat_price_usd(rates)
+    return list_price_per_job_usd(scorer.name, scoring_for(scorer))
 
 
 def reserve_per_request_usd(conn: sqlite3.Connection, scorer: str) -> float:
@@ -1063,9 +1089,25 @@ def score_sync(
             group_ids=group_ids,
             new_only=new_only,
         )
-    per_job = reserve_per_job_usd(conn, scorer.name, scoring_for(scorer))
+    price = scorer_list_price_usd(scorer)
+    scoring = scoring_for(scorer)
+
+    def per_job_now() -> float:
+        # Re-read before every chunk: the chunks already sent are measured history now.
+        reserve = reserve_per_job_usd(conn, scorer.name, scoring, price=price)
+        if out.submitted:
+            reserve = max(reserve, out.cost_usd / out.submitted)
+        return reserve
+
+    per_job = per_job_now()
+    # Nothing known about this model's price: the first chunk is one wave, so its real cost
+    # is learned before more is sent. The up-front cut is skipped then: the guess would set
+    # the night's volume, and the per-chunk check below enforces the cap at measured prices.
+    guessed = price is None and measured_cost_per_job_usd(conn, scorer.name) <= 0
     if remaining_usd is not None:
         affordable = math.floor(max(remaining_usd(), 0.0) / per_job)
+        if guessed:
+            affordable = limit if affordable > 0 else 0
         if affordable < limit:
             logger.warning(
                 "spend cap: screening limited to %d groups at $%.4f a job", affordable, per_job
@@ -1082,12 +1124,18 @@ def score_sync(
     chunk = max(SYNC_CHUNK, workers)
     key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
     pos = 0
+    reserved = 0.0  # what this run has reserved for the chunks it sent
     while pos < len(groups):
-        part = groups[pos : pos + chunk]
+        size = workers if guessed and pos == 0 else chunk
+        part = groups[pos : pos + size]
         if remaining_usd is not None:
             # Recorded spend so far counts here, so a model dearer than its reservation
-            # stops the run within one chunk of the cap.
-            fits = math.floor(max(remaining_usd(), 0.0) / per_job)
+            # stops the run within one chunk of the cap. What was reserved for sent chunks
+            # beyond what they recorded still counts: a model that reports no cost cannot
+            # run past the cap at its reservation.
+            per = per_job_now()
+            room = remaining_usd() - max(0.0, reserved - out.cost_usd)
+            fits = math.floor(max(room, 0.0) / per + 1e-9)
             if fits < len(part):
                 logger.warning(
                     "spend cap: screening stopped with %d groups not sent",
@@ -1096,9 +1144,10 @@ def score_sync(
                 part = part[: max(fits, 0)]
             if not part:
                 break
+            reserved += len(part) * per
         pos += len(part)
         _score_sync_chunk(conn, scorer, profile, part, key, out, now, rejection_days)
-        if len(part) < chunk:
+        if len(part) < size:
             break
     return out
 
@@ -1326,6 +1375,8 @@ def estimated_request_cost(
     floor = 0.0
     if (rates := _chat_rates(scorer)) is not None:
         floor = chat_price_usd(rates, n_jobs)
+    elif (measured := measured_cost_per_job_usd(conn, scorer.name)) > 0:
+        floor = measured * n_jobs  # no list price: the measured cost per job, per pack
     default = float(getattr(scorer, "est_cost_per_request_usd", 0.0) or 0.0)
     if default <= 0:
         return max(ESTIMATED_COST_PER_REQUEST_USD * n_jobs, floor)
@@ -1341,9 +1392,9 @@ def estimated_request_cost(
 
 
 def _chat_rates(scorer: Any) -> tuple[float, float] | None:
-    """A chat scorer's (input, output) USD per Mtok without any network call, or None."""
+    """A chat scorer's (input, output) USD per Mtok, or None. Called only while scoring."""
     if isinstance(scorer, OpenRouterScorer):
-        return cached_openrouter_rates(scorer.openrouter, scorer.model)
+        return scorer.catalog_rates()  # a scoring path: refreshed at most daily
     if isinstance(scorer, OpenAICompatScorer) and not isinstance(scorer, LocalScorer):
         return (scorer.config.input_usd_per_mtok, scorer.config.output_usd_per_mtok)
     return None

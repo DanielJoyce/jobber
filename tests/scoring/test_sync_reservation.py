@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 
 import httpx
 import pytest
@@ -42,21 +43,32 @@ SONNET_TABLE = 0.00507
 UNPRICED_ANTHROPIC = "anthropic:claude-unknown-9"
 
 
+CATALOG = {PRICEY: (1.0, 5.0), CHEAP: (0.10, 0.50)}
+
+
 def write_catalog(path, prices: dict[str, tuple[float, float]]) -> None:
-    path.write_text(json.dumps({"fetched_at": 0.0, "prices": prices}))
+    """A cache written just now, so a scorer reads it rather than refetching."""
+    path.write_text(json.dumps({"fetched_at": time.time(), "prices": prices}))
 
 
 class ChatAPI:
-    """An OpenRouter chat endpoint that answers every screen and reports ``cost`` per call.
-    Any catalog fetch fails the test: a reservation must read the disk cache only."""
+    """An OpenRouter endpoint: answers every screen and reports ``cost`` per call, and serves
+    the public ``/models`` catalog (``CATALOG``), counting fetches."""
 
     def __init__(self, cost: float) -> None:
         self.cost = cost
         self.calls = 0
+        self.catalog_fetches = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
-            pytest.fail("the spend cap must not fetch the OpenRouter catalog")
+            self.catalog_fetches += 1
+            data = [
+                {"id": k, "pricing": {"prompt": str(v[0] / 1e6), "completion": str(v[1] / 1e6)}}
+                for k, v in CATALOG.items()
+            ]
+            data.append({"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}})
+            return httpx.Response(200, json={"data": data})
         self.calls += 1
         return httpx.Response(
             200,
@@ -79,14 +91,14 @@ class ChatAPI:
 def router(tmp_path, slug: str, api: ChatAPI, *, catalog: bool = True) -> OpenRouterScorer:
     path = tmp_path / "openrouter_models.json"
     if catalog:
-        write_catalog(path, {PRICEY: (1.0, 5.0), CHEAP: (0.10, 0.50)})
+        write_catalog(path, CATALOG)
     config = OpenRouter(catalog_cache=path)
     client = httpx.Client(transport=httpx.MockTransport(api))
     return OpenRouterScorer(slug, config, client=client, env={"OPENROUTER_API_KEY": "or-key"})
 
 
-def add_groups(conn, profile, n: int) -> None:
-    for i in range(1, n + 1):
+def add_groups(conn, profile, n: int, start: int = 1) -> None:
+    for i in range(start, start + n):
         add_group(conn, i, profile)
 
 
@@ -97,6 +109,10 @@ def spent(conn) -> float:
 def capped(conn, daily: float = 2.0):
     scoring = Scoring(daily_cap_usd=daily, weekly_cap_usd=100.0)
     return lambda: screen.remaining_budget(conn, scoring, NOW)
+
+
+def sync(conn, scorer, profile, remaining):
+    return screen.score_sync(conn, scorer, profile, limit=2000, now=NOW, remaining_usd=remaining)
 
 
 # ─── score_sync reserves per model ──────────────────────────────────────────
@@ -117,72 +133,82 @@ def test_expensive_openrouter_slug_never_submits_more_than_a_2_usd_cap_covers(
 ):
     add_groups(conn, profile, 400)
     api = ChatAPI(PRICEY_PER_JOB)  # billed at what the catalog says
-    res = screen.score_sync(
-        conn,
-        router(tmp_path, PRICEY, api),
-        profile,
-        limit=2000,
-        now=NOW,
-        remaining_usd=capped(conn),
-    )
+    res = sync(conn, router(tmp_path, PRICEY, api), profile, capped(conn))
     fits = math.floor(2.0 / PRICEY_PER_JOB)
     assert fits == 227  # the flat $0.002 let 400 (up to 1000) through, about $3.51 here
     assert res.submitted == api.calls == fits
     assert spent(conn) <= 2.0
+    assert api.catalog_fetches == 0  # a fresh cache is not refetched
 
 
-def test_a_model_dearer_than_its_reservation_stops_within_one_chunk_of_the_cap(
-    conn, profile, tmp_path
-):
+def test_a_model_dearer_than_its_reservation_stops_at_the_cap(conn, profile, tmp_path):
     add_groups(conn, profile, 400)
     api = ChatAPI(0.03)  # 3.4x what the catalog price predicts
-    res = screen.score_sync(
-        conn,
-        router(tmp_path, PRICEY, api),
-        profile,
-        limit=2000,
-        now=NOW,
-        remaining_usd=capped(conn),
+    res = sync(conn, router(tmp_path, PRICEY, api), profile, capped(conn))
+    # The reservation is re-read before each chunk with what the sent chunks cost, so the
+    # run stops at the cap rather than at the 227 groups the catalog price allowed.
+    assert res.submitted == math.floor(2.0 / 0.03 + 1e-9) == 66
+    assert spent(conn) <= 2.0
+
+
+def test_no_catalog_cache_is_fetched_once_and_both_nights_are_priced(conn, profile, tmp_path):
+    # Nothing has written the cache (the normal state on a new install): the scoring run
+    # refreshes it through the scorer's own catalog(), then prices from it.
+    add_groups(conn, profile, 300)
+    api = ChatAPI(0.0009)
+    first = sync(conn, router(tmp_path, CHEAP, api, catalog=False), profile, capped(conn))
+    assert api.catalog_fetches == 1
+    assert (tmp_path / "openrouter_models.json").exists()
+    assert first.submitted == 300  # $2 at the $0.002 floor covers 1000; 0.04 would allow 50
+    add_groups(conn, profile, 300, start=301)
+    second = sync(conn, router(tmp_path, CHEAP, api, catalog=False), profile, capped(conn))
+    assert second.submitted == 300 and api.catalog_fetches == 1  # the cache is now read
+    # Console estimates read the same cache, never fetching.
+    routed = Scoring(
+        screen_scorer=f"openrouter:{CHEAP}",
+        openrouter=OpenRouter(catalog_cache=tmp_path / "openrouter_models.json"),
     )
-    # Recorded spend is checked before each chunk, so the run cannot reach the 227 groups the
-    # up-front reservation allowed.
-    assert res.submitted < 2.0 / 0.03 + screen.SYNC_CHUNK
-    assert spent(conn) <= 2.0 + screen.SYNC_CHUNK * 0.03
+    assert screen.list_price_per_job_usd(routed.screen_scorer, routed) is not None
 
 
-def test_unpriced_openrouter_slug_is_over_the_line(conn, profile, tmp_path):
+def test_unpriced_slug_with_measured_history_is_priced_by_it(conn, profile, tmp_path):
+    # openrouter/auto has variable pricing: no catalog price. OpenRouter reports what each
+    # call cost, so after the first wave the measured mean prices it, not the $0.04 guess.
     add_groups(conn, profile, 100)
-    api = ChatAPI(0.0)
+    api = ChatAPI(0.0004)
+    scorer = router(tmp_path, "openrouter/auto", api)
+    res = sync(conn, scorer, profile, capped(conn))
+    assert res.submitted == 100  # not 50 at $0.04
+    assert screen.reserve_per_job_usd(conn, scorer.name, screen.scoring_for(scorer)) == 0.002
+    add_groups(conn, profile, 100, start=101)
+    again = sync(conn, router(tmp_path, "openrouter/auto", api), profile, capped(conn))
+    assert again.submitted == 100
+
+
+def test_unpriced_slug_with_nothing_known_sends_one_wave_first(conn, profile, tmp_path):
+    add_groups(conn, profile, 100)
+    api = ChatAPI(0.24)  # a dear router, unknown until billed
+    scorer = router(tmp_path, "openrouter/auto", api)
+    assert screen.reserve_per_job_usd(conn, scorer.name, screen.scoring_for(scorer)) == 0.04
+    res = sync(conn, scorer, profile, capped(conn))
+    # One wave of max_concurrency (2) at $0.48, then the measured $0.24 a job: 6 more.
+    assert res.submitted == 2 + 6
+    assert spent(conn) <= 2.0
+
+
+def test_unpriced_slug_that_reports_no_cost_stays_over_the_line(conn, profile, tmp_path):
+    add_groups(conn, profile, 100)
+    api = ChatAPI(0.0)  # no price and no measured cost: the $0.04 guess holds
     scorer = router(tmp_path, "nobody/unlisted-model", api)
     assert screen.list_price_per_job_usd(scorer.name, screen.scoring_for(scorer)) is None
-    assert screen.reserve_per_job_usd(conn, scorer.name, screen.scoring_for(scorer)) == 0.04
-    res = screen.score_sync(conn, scorer, profile, limit=2000, now=NOW, remaining_usd=capped(conn))
+    res = sync(conn, scorer, profile, capped(conn))
     assert res.submitted == api.calls == 50  # $2 / $0.04, not 100 at $0.002
-
-
-def test_no_catalog_cache_at_all_reserves_the_unpriced_ceiling(conn, profile, tmp_path):
-    add_groups(conn, profile, 30)
-    api = ChatAPI(0.0)
-    scorer = router(tmp_path, CHEAP, api, catalog=False)
-    res = screen.score_sync(
-        conn, scorer, profile, limit=2000, now=NOW, remaining_usd=capped(conn, daily=0.5)
-    )
-    assert res.submitted == 12  # $0.50 / $0.04
 
 
 def test_configured_estimate_above_the_ceiling_is_used_for_unpriced(conn, tmp_path):
     config = OpenRouter(catalog_cache=tmp_path / "none.json", est_cost_per_request_usd=0.1)
     scoring = Scoring(openrouter=config)
     assert screen.reserve_per_job_usd(conn, "openrouter:x/y", scoring) == pytest.approx(0.1)
-
-
-def test_cheap_openrouter_slug_volume_is_unchanged(conn, profile, tmp_path):
-    add_groups(conn, profile, 300)
-    api = ChatAPI(0.0009)
-    res = screen.score_sync(
-        conn, router(tmp_path, CHEAP, api), profile, limit=2000, now=NOW, remaining_usd=capped(conn)
-    )
-    assert res.submitted == res.written == 300  # $2 at $0.002 covers 1000
 
 
 def test_packed_estimate_is_floored_at_the_catalog_price(conn, tmp_path):
@@ -192,6 +218,36 @@ def test_packed_estimate_is_floored_at_the_catalog_price(conn, tmp_path):
     assert eight > pricey.est_cost_per_request_usd  # 0.0429 > the configured 0.04
     cheap = router(tmp_path, CHEAP, ChatAPI(0.0))
     assert screen.estimated_request_cost(conn, cheap, NOW, 8) == 0.04  # unchanged
+
+
+def test_packed_estimate_for_an_unpriced_slug_uses_measured_cost_per_job(conn, profile, tmp_path):
+    gid = add_group(conn, 1, profile)
+    conn.execute(
+        "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
+        "verdict, overall, dimensions, evidence, cost_usd, created_at) "
+        "VALUES (?, 'screen', 'openrouter:openrouter/auto', 'p', 'old', 'weak', 10, '{}', "
+        "'[]', 0.01, 'x')",
+        (gid,),
+    )
+    auto = router(tmp_path, "openrouter/auto", ChatAPI(0.0))
+    assert screen.estimated_request_cost(conn, auto, NOW, 8) == pytest.approx(0.08)
+
+
+# ─── backfill's synchronous route stops at its budget ───────────────────────
+
+
+def test_backfill_sync_route_stops_at_its_budget(conn, profile, tmp_path):
+    add_groups(conn, profile, 60)
+    api = ChatAPI(PRICEY_PER_JOB)
+    scorer = router(tmp_path, PRICEY, api)
+    est = bf.estimate(conn, profile, scorer, budget_usd=0.1, now=NOW)
+    _, submitted, committed, _ = bf._submit(
+        conn, profile, scorer, None, est, chunk_size=50, now=NOW, out=lambda s: None
+    )
+    # Its own per-job figure undercounts the cached prompt tokens; score_sync's per-model
+    # reservation and recorded spend hold it to the budget.
+    assert submitted == api.calls == math.floor(0.1 / PRICEY_PER_JOB) == 11
+    assert spent(conn) <= 0.1 and committed == pytest.approx(spent(conn))
 
 
 # ─── Unpriced Anthropic models ──────────────────────────────────────────────
@@ -330,3 +386,22 @@ def test_prefs_estimate_prices_the_configured_scorer(conn, profile, tmp_path):
     assert est["cost_per_job"] == pytest.approx(SONNET_TABLE)
     for option in est["options"]:
         assert option.cost_usd == pytest.approx(option.jobs * SONNET_TABLE)
+
+
+# ─── Re-score plans price from a refreshed catalog ──────────────────────────
+
+
+def test_refresh_catalog_before_planning_prices_a_new_slug(conn, tmp_path):
+    api = ChatAPI(0.0)
+    scoring = Scoring(
+        screen_scorer=f"openrouter:{CHEAP}",
+        openrouter=OpenRouter(catalog_cache=tmp_path / "openrouter_models.json"),
+    )
+    # Disk only, nothing cached yet: the unpriced guess.
+    assert rescore.cost_per_job(conn, scoring.screen_scorer, scoring) == (0.04, "default")
+    rescore.refresh_catalog(
+        scoring.screen_scorer, scoring, lambda spec: router(tmp_path, CHEAP, api, catalog=False)
+    )
+    assert api.catalog_fetches == 1
+    assert rescore.cost_per_job(conn, scoring.screen_scorer, scoring) == (0.002, "default")
+    rescore.refresh_catalog("jev:typesafe/jev-1.13", scoring, lambda spec: pytest.fail("no"))

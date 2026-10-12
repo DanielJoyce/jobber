@@ -736,6 +736,7 @@ def _score_rescore(
             return
         now = clock()
         try:
+            rs.refresh_catalog(spec, settings.scoring)
             plan = rs.make_plan(conn, profile, settings.scoring, scope, spec, now)
         except (rs.RescoreError, ScorerError) as exc:
             typer.echo(f"re-score: {exc}", err=True)
