@@ -72,6 +72,20 @@ def available_scorers(scoring: Any, env: Mapping[str, str] | None = None) -> lis
     return [(s, label) for s, label in out if not (s in seen or seen.add(s))]
 
 
+def wire_spec(spec: str) -> str:
+    """What the page posts for ``spec``: the spec itself, or its digest label when it must
+    not be shown (the server maps the label back with ``resolve_spec``)."""
+    return shown_value(spec) or hidden_label(spec)
+
+
+def resolve_spec(posted: str | None, scorers: list[tuple[str, str]]) -> str | None:
+    """The offered scorer spec that ``posted`` (a spec or its digest label) names, or None."""
+    for spec, _ in scorers:
+        if posted in (spec, wire_spec(spec)):
+            return spec
+    return None
+
+
 def _spec_problem(spec: str, field: str = "scorer", scoring: Any = None) -> str | None:
     """The one-line reason a scorer spec must not run, or None. The configured screen scorer
     goes through ``scorer_problems``, which also reports a use an invalid models.toml blocks."""
@@ -310,7 +324,7 @@ def register(
             request_id = None  # queued requests are run from /prefs
         else:
             scorers = available_scorers(settings.scoring)
-            spec = scorer if scorer in dict(scorers) else scorers[0][0]
+            spec = resolve_spec(scorer, scorers) or scorers[0][0]
         scope = scope if scope in rs.SCOPES else "recent"
         queued = rs.get_request(conn, request_id) if request_id is not None else None
         if queued is not None and queued["status"] != "pending":
@@ -347,7 +361,8 @@ def register(
             "scope": scope,
             "scorer": spec,
             "problem": problem,
-            "scorers": scorers,
+            "scorers": [(wire_spec(sp), label) for sp, label in scorers],
+            "scorer_wire": wire_spec(spec),
             "scope_labels": SCOPE_LABELS,
             "running": running,
             "queued": queued,
@@ -395,10 +410,8 @@ def register(
         settings = request.app.state.settings
         if state_of(request).kind != "ok":
             return render_panel(request, conn, message="Fix the preferences file first.")
-        spec = (
-            spec_in
-            if spec_in in dict(available_scorers(settings.scoring))
-            else (settings.scoring.screen_scorer)
+        spec = resolve_spec(spec_in, available_scorers(settings.scoring)) or (
+            settings.scoring.screen_scorer
         )
         return run_confirmed(request, conn, scope=scope, spec=spec, token=token,
                              queued_id=queued_id)  # fmt: skip

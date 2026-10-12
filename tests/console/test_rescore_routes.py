@@ -351,6 +351,45 @@ def test_invalid_configured_scorer_still_shows_picker(pdir, db_path, monkeypatch
     assert 'id="rescore-run"' in ok
 
 
+COMMIT = "a1b2c3d4e5" * 4
+HIDDEN_SPEC = "local:/models/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/" + COMMIT
+KEY_SPEC = "openrouter:sk-or-v1-" + "SENTINEL0123456789abcdef" * 2
+
+
+def test_a_key_shaped_screen_spec_never_appears_on_prefs_or_its_panel(pdir, db_path):
+    c = make_client(pdir, db_path, screen_scorer=KEY_SPEC)
+    for url in ("/prefs", "/prefs/rescore/panel"):
+        text = c.get(url).text
+        assert "SENTINEL0123" not in text and "sk-or-v1" not in text
+    assert "(hidden value" in c.get("/prefs/rescore/panel").text
+
+
+def test_a_hidden_but_valid_spec_is_labelled_and_a_confirmed_rescore_runs_once(
+    pdir, db_path, conn, monkeypatch
+):
+    from jobhunter.config import hidden_label
+
+    for var in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("jobhunter.scoring.screen.cached_openrouter_rates", lambda *a: None)
+    c = make_client(pdir, db_path, screen_scorer=HIDDEN_SPEC)
+    seen = []
+    c.app.state.rescore_scorer_factory = lambda spec: seen.append(spec) or FakeScorer()
+    label = hidden_label(HIDDEN_SPEC)
+    panel = c.get("/prefs/rescore/panel", params={"scope": "all"}).text
+    assert COMMIT not in panel and COMMIT not in c.get("/prefs").text
+    assert f'<option value="{label}" selected>{label} (configured default)' in panel
+    r = c.post(
+        "/prefs/rescore/run", data={"scope": "all", "scorer": label, "plan": token_of(panel)}
+    )
+    assert r.status_code == 200 and COMMIT not in r.text
+    finish(c)
+    rows = conn.execute("SELECT * FROM rescore_request").fetchall()
+    assert len(rows) == 1 and rows[0]["status"] == "done"
+    assert seen == [HIDDEN_SPEC]
+    assert COMMIT not in c.get(f"/prefs/rescore/progress/{rows[0]['id']}").text
+
+
 # --- Console Restart: the re-score is registered work (019 S12b) -----------------------------
 
 
