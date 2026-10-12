@@ -28,6 +28,15 @@
   {% include "_kpis.html" %}
 </section>
 
+{% if ach_strip %}
+<p class="ach-strip" id="ach-strip">
+  <span>Achievements <strong>{{ ach_strip.earned }}</strong></span>
+  {% if ach_strip.next_up %}<span>Next: {{ ach_strip.next_up.name }} {{ ach_strip.next_up.progress }} of {{ ach_strip.next_up.target }}</span>{% endif %}
+  {% if ach_strip.rhythm is not none %}<span>Rhythm {{ ach_strip.rhythm }} {{ 'week' if ach_strip.rhythm == 1 else 'weeks' }}</span>{% endif %}
+  <a class="ach-strip-link" href="/achievements">View all &#9656;</a>
+</p>
+{% endif %}
+
 <section class="panel map-panel" aria-labelledby="map-title">
   <div class="map-toolbar">
     <h2 id="map-title">Map</h2>
