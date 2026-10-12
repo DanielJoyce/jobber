@@ -2390,25 +2390,6 @@ def secrets_status() -> None:
         typer.echo(note)
 
 
-def _absolute_path_count(db_path: Path, data_dir: Path) -> tuple[int | None, str]:
-    """Stored paths that are absolute or escape the data dir (C14), read-only: ``(count,
-    "")``, ``(None, "")`` when there is no database yet, ``(None, why)`` when unreadable."""
-    import sqlite3
-
-    from jobhunter.core import dbpaths
-
-    if not db_path.is_file():
-        return None, ""
-    try:
-        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
-        try:
-            return dbpaths.count_absolute_paths(conn, data_dir), ""
-        finally:
-            conn.close()
-    except sqlite3.Error as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-
-
 @container_app.command("preflight")
 def container_preflight_cmd(
     unit_dir: Annotated[
@@ -2449,6 +2430,7 @@ def container_preflight_cmd(
     secret names only, never values. Rerun after any podman secret change. Host only.
     """
     from jobhunter.config import config_file
+    from jobhunter.core import dbpaths
     from jobhunter.ops import preflight
     from jobhunter.ops import version as ver
     from jobhunter.xdg import config_home
@@ -2493,7 +2475,7 @@ def container_preflight_cmd(
 
     db_path = resolve_path(paths.db_path)
     report = _SECRETS_REPORT
-    abs_count, abs_error = _absolute_path_count(db_path, data_dir)
+    abs_count, abs_error = dbpaths.absolute_path_count(db_path, data_dir)
     # The drop-in variable names must match the config file the units mount.
     mounted_path = Path.home() / preflight.CONFIG_SOURCE
     mounted, mounted_error = None, ""

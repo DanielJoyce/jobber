@@ -214,6 +214,27 @@ def _isolate_user_files(
     monkeypatch.setattr(sqlite3, "connect", _guarded_sqlite_connect)
 
 
+class KeyringBlocked(RuntimeError):
+    """Raised when a test reads the OS keyring."""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``keyring.get_password`` raises, so no test can read a developer's real keyring (the
+    Gmail refresh token lives there; specs/019 "The checks module"). Reading the keyring goes
+    over D-Bus and can block on an unlock prompt. A test that needs a token patches the
+    ``jobhunter.mail.auth`` helpers or ``keyring.get_password`` itself, after this fixture."""
+    import keyring
+
+    def blocked(*args: object, **kwargs: object) -> object:
+        raise KeyringBlocked(
+            "test tried to read the OS keyring; patch keyring.get_password in the test "
+            "(see tests/conftest.py)"
+        )
+
+    monkeypatch.setattr(keyring, "get_password", blocked)
+
+
 def build_old_layout(root: Path) -> Path:
     """A synthetic checkout in the pre-XDG layout, shaped like a real one: a WAL database with
     the full schema and some rows, data/backups, data/cache, a stray file in data/, profile/
