@@ -2,6 +2,7 @@
 .su-group > details > summary { cursor: pointer; display: flex; align-items: baseline; gap: 8px; }
 .su-group > details > summary h2 { display: inline; margin: 18px 0 6px; }
 .su-row { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: var(--text-primary); padding: 8px 12px; margin: 0 0 8px; }
+.su-row { overflow-wrap: anywhere; }
 .su-row p { margin: 4px 0; }
 .su-row summary { cursor: pointer; }
 .su-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
