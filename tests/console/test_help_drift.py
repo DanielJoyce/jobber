@@ -344,3 +344,65 @@ def test_readme_help_table_lists_exactly_the_topics():
     linked = re.findall(r"\]\(src/jobhunter/console/help/([a-z-]+)\.md\)", readme)
     assert sorted(linked) == sorted(t.slug for t in helpdocs.TOPICS)
     assert all((helpdocs.HELP_DIR / f"{s}.md").is_file() for s in linked)
+
+
+# --- environment variables: every one the code reads is in the generated table --------------
+
+ENV_SHAPE = re.compile(
+    r"(JOBHUNTER|ANTHROPIC|USAJOBS|OPENROUTER|OPENAI_COMPAT|LLAMA|CLAUDE|XDG)_[A-Z0-9_]+"
+)
+
+
+def env_like_literals() -> dict[str, str]:
+    """Every string literal in src/ shaped like an environment variable name -> first file."""
+    import ast
+
+    found: dict[str, str] = {}
+    for path in sorted((ROOT / "src").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and ENV_SHAPE.fullmatch(node.value)
+            ):
+                found.setdefault(node.value, str(path.relative_to(ROOT)))
+    return found
+
+
+def test_every_environment_variable_in_the_code_is_documented():
+    from jobhunter.console import help_blocks as helpblocks
+
+    table = helpblocks.env_var_table()
+    missing = {}
+    for name, where in env_like_literals().items():
+        base = name.removesuffix("_FILE")
+        if f"`{name}`" in table or f"`{base}`" in table or name in helpblocks.NOT_ENV:
+            continue
+        missing[name] = where
+    assert not missing, (
+        "read in the code but not in the environment-variable table of settings-and-secrets.md "
+        f"(add to jobhunter/console/help_blocks.py): {missing}"
+    )
+
+
+def test_environment_table_names_are_still_read_by_the_code():
+    """The reverse: a documented variable that no code reads any more is stale."""
+    from jobhunter.console import help_blocks as helpblocks
+
+    used = set(env_like_literals())
+    used |= {f"{n}_FILE" for n in used}
+    for name in re.findall(r"^\| `([A-Z0-9_]+)`", helpblocks.env_var_table(), flags=re.M):
+        assert name in used or name.removesuffix("_FILE") in used, f"{name} is never read"
+
+
+def test_importing_the_help_package_loads_no_settings_or_secrets_code():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, jobhunter.console.help; "
+        "bad = [m for m in ('jobhunter.config', 'jobhunter.secrets', 'jobhunter.mail.auth', "
+        "'jobhunter.ops.ctr') if m in sys.modules]; print(bad)"
+    )
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+    assert out.stdout.strip() == "[]", out.stderr or out.stdout
