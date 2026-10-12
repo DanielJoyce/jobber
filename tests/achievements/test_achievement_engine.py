@@ -275,7 +275,7 @@ def test_all_set_is_permanent_after_24_hours(world):
     assert ("setup.ready", 1) in world.unlocks()
 
 
-def test_essentials_are_judged_once_per_fingerprint(world):
+def test_essentials_are_judged_once_per_fingerprint_and_on_every_forced_refresh(world):
     gate = engine.Gate(tz=TZ)
     judged = []
 
@@ -285,11 +285,12 @@ def test_essentials_are_judged_once_per_fingerprint(world):
 
     gate.refresh(world.conn, NOW, essentials=essentials)
     gate.refresh(world.conn, NOW, essentials=essentials)  # same fingerprint: no evaluation
-    gate.refresh(world.conn, NOW, force=True, essentials=essentials)  # forced, same fingerprint
     assert len(judged) == 1
+    gate.refresh(world.conn, NOW, force=True, essentials=essentials)  # forced: judged again
+    assert len(judged) == 2
     world.prefs_save("2026-10-10 10:00")
     gate.refresh(world.conn, NOW, essentials=essentials)
-    assert len(judged) == 2
+    assert len(judged) == 3
     assert ("setup.ready", 1) in world.unlocks()
 
 

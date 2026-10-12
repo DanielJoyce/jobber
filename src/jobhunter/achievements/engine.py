@@ -460,8 +460,9 @@ class Gate:
         """``evaluate`` when the fingerprint changed (or ``force``). A ``sqlite3.Error``
         propagates and leaves the fingerprint unchanged, so the next call retries.
 
-        ``essentials`` is called at most once per fingerprint (a forced refresh reuses the
-        value judged for the same fingerprint); an exception in it means unknown.
+        ``essentials`` is called once per fingerprint and again on every forced refresh, so
+        a fix made outside the database (config.toml, .env, the resume) shows up on the next
+        /achievements load without a DB change. An exception in it means unknown.
 
         ``wait=False`` (the polled ``/activity``): when another request in this process is
         already evaluating, return ``[]`` at once instead of queueing a second read phase
@@ -476,7 +477,7 @@ class Gate:
         try:
             ess: bool | None = None
             if essentials is not None:
-                if self._ess_fp != fp:
+                if force or self._ess_fp != fp:
                     self._ess, self._ess_fp = self._judge(essentials), fp
                 ess = self._ess
             new = evaluate(conn, now, tz, essentials=ess)
