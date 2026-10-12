@@ -1,8 +1,8 @@
 # 022 — Extension apply assist: fill on click, resume and letter buttons, applied on submit
 
-Status: **draft for review, revision 2** (bug `d23b093`). Revision 1 was written 2026-10-11
-against `main` at `8836891`. Revision 2 (2026-10-12, rebased on `1f4c08a`) takes your answers to
-revision 1's four questions, three new requests, and the review's findings ([History](#history)).
+Status: **draft for review, revision 3** (bug `d23b093`). Revision 1 was written 2026-10-11
+against `main` at `8836891`. Revision 2 (2026-10-12) takes your answers to revision 1's four questions,
+three new requests, and the review's findings; revision 3 takes the re-review ([History](#history)).
 017 phase 1 (1a to 1e) is merged; nothing of 017 phase 2 is built. No code yet.
 
 You asked (2026-10-11) for three things in jobhunter's extension: a way to generate a tailored
@@ -23,7 +23,7 @@ never-store list, the `/ext/v1/` security) and changes it where your decisions r
 | **Fill** | On a Greenhouse, Lever, Ashby or Workable form (Workday when you enable it), click the jobhunter icon or the small **Fill** pill on the form. On **any other site**, the toolbar icon offers **Fill this page** for the page you are on. The side panel lists every visible field: what it will fill and from which saved answer, what the site already filled, and what is yours. **Fill** writes the ticked rows | Fill on page load, touch salary, EEO, consent or signature fields, write a hidden or disabled field, overwrite a field that has a value (except the named actions in [Overwrites](#overwrites)), click Submit |
 | **Resume and letter buttons** | On the four ATSs (and Workday), a small jobhunter button sits beside the resume upload, the cover-letter upload and the cover-letter text box. Click it: the side panel shows the packet for this job, which runner drafts it and what that costs, and waits for **Generate**. When the draft passes the checks, the panel shows each changed line with its cited source; **Attach** puts the PDF in that upload, or **Insert** puts the letter text in that box | Spend without your confirm, attach a draft with an unsupported line or an unticked "partly" line |
 | **Applied on submit** | On the four ATSs (and Workday), when **you** press Submit and the site shows its confirmation, the extension tells jobhunter, which records `applied` for the matched job. Each ATS asks you first; after 3 submits where your answer matched, it offers to record on its own. A notice offers **Undo** | Record a submit the site rejected, a submit a page script made, guess the job, or click Submit itself |
-| **Contact header kept local** | Your name, email and phone are replaced by placeholders in every request to any model (scoring and drafting) and put back on your machine when a document is rendered or exported | Send them to a model |
+| **Contact header kept local** | Your resume's header lines (name, email, phone, links) are replaced by placeholders in every request to any model (scoring and drafting), the same values are replaced wherever else they appear, and a last check before sending stops the request if any is left. They are put back on your machine when a document is rendered or exported. `/prefs` shows what models see | Send them to a model |
 
 **jobhunter still never submits an application** ([017](017-assisted-apply.md#non-goals),
 [008](008-compliance.md#what-we-will-not-build)). The extension has no code path to Submit; this
@@ -39,7 +39,7 @@ spec adds a passive listener that notices *your* submit, nothing that causes one
 | Does a fill session need a packet? | **No.** A session belongs to the matched application. A packet adds the resume to attach and the drafts to insert | Many applications are quick ones with your base resume |
 | Fill outside the four ATSs | **Fill this page** from the toolbar icon on any site, through the existing `activeTab` grant: top frame only, no new permission, best-effort matching, no buttons and no submit watch there | Your request (2026-10-12) |
 | When the buttons appear | **On page load, on the supported ATS hosts only**, in one overlay in a closed shadow root ([Buttons](#where-the-buttons-appear)) | Your answer (2026-10-12) |
-| Switches | Per ATS in the options page: **Show buttons** (on) and **Record submits** (on), independent. Off means no buttons, or no submit listeners at all | Your request (2026-10-12) |
+| Switches | Per ATS in the options page: **Show buttons** (on: the resume and letter buttons and the **Fill** pill) and **Record submits** (on: the submit listeners, the in-page ask prompt and the in-page applied notice), independent. Content scripts learn both from the `forms/get` answer. Off means no overlay elements of that kind and, for Record submits, no listeners at all. Auto mode is stored on the console and **survives toggling**: turning Record submits back on resumes in the mode it had | Your request (2026-10-12) |
 | Where spending is confirmed | **Only in extension pages** (the side panel or the extension's own popup window). The worker accepts spend and write messages only from extension pages ([Sender policy](#sender-policy)) | A page can script clicks on anything in its own DOM; it cannot reach an extension page |
 | Which runner drafts | The **effective** drafting runner (`models.toml` over `config.toml`, as 020): `cli` by default (`claude -p` on your subscription, no API cost). The panel names the runner and model before **Generate**; an API run shows its amount and needs its own click | [017 CLI runner](017-assisted-apply.md#cli-runner), [020](020-model-selection.md) |
 | Attaching a generated version from the panel | Allowed when the checker report is clean **and** the entailment pass ran and found no unsupported line; every "partly" line needs your tick in the panel, which shows each changed line beside its cited source. Anything else opens the packet page | Your answer (2026-10-12), with the stricter rule |
@@ -48,7 +48,8 @@ spec adds a passive listener that notices *your* submit, nothing that causes one
 | How auto-recording is switched on | Each ATS starts in **ask** mode. After 3 asked submits where your answer agreed with the confirmation rule and none disagreed, the panel offers **Record <ATS> submits automatically**; your click turns it on, for that ATS, form variant and rule version | Your answer (2026-10-12) |
 | Undo | One click, for 7 days, from the page notice, the popup or the pipeline page ([Undo](#undo)) | A wrong `applied` must be cheap to take back |
 | Event source | `application_event.source = 'manual'` with a fixed note, plus an `ext_applied` row that holds the undo data. No change to the `source` CHECK | Changing a CHECK means rebuilding `application_event`; 017 said "no new `application_event.source`" |
-| Contact header and models | **Replaced by placeholders** in every model request (screen, deep pass, Jev and Decisions scorers, drafting, entailment, question drafts, `llm bench`); put back locally when rendering and exporting. `scoring_version` keeps hashing the full resume, so nothing is re-scored | Your request (2026-10-12). Reverses 017's "resume sent as Stage 2 sends it" |
+| Contact header and models | The resume's **header block is replaced line by line**, and the exact contact values found there (plus the `/prefs` contact block) are replaced anywhere else, in every model request; a final check over the **assembled request** at the runner and scorer boundary fails closed if any value remains. Put back locally when rendering and exporting. `scoring_version` and the screen rubric are unchanged, so nothing is re-scored ([Contact header](#contact-header-kept-local)) | Your request (2026-10-12). Reverses 017's "resume sent as Stage 2 sends it" |
+| Fill this page: where it refuses | `[capture] disabled_hosts`, the console's own origin, LinkedIn and Indeed (017: the extension never acts on linkedin.com; Easy Apply is theirs), and Workday hosts until **Enable for Workday** | Keeps 017's rule; Workday needs the step-aware session |
 | Distribution | **Load unpacked**, as now | [Store review](#store-review) |
 
 Recorded on `d23b093`.
@@ -102,7 +103,7 @@ form needs the ATS host permissions and `all_frames` content scripts that this s
 | **`content/frame.js`** with `locate.js`, `act.js`, `submit.js` | Declared in the manifest for the required ATS hosts, `all_frames: true`, `run_at: document_idle`; registered with `scripting.registerContentScripts` for an optional host you granted; injected into the top frame on **Fill this page** elsewhere. Announces its frame; gets this ATS's form data from the worker's cache; draws the overlay; on a message, snapshots fields (017's two steps) and writes one approved value; watches for your submit | Use the network; read field values except in the console-cleared snapshot step; act on page messages; keep values; decide never-store; send spend or write messages |
 | **Service worker** (`background.js`) | As 1e: the only part that talks to the console. New: the [sender policy](#sender-policy), the frame registry per tab, pending submit attempts, assist state for the popup and badge, re-injection after a reload | Hold a session in globals |
 | **Side panel** (`panel/`) | As 017: the fill session, bound to its tab. New: the assist card, the draft estimate and **Generate**, **Attach**, **Insert**, the ask question, **Undo** | Run in the page |
-| **Console** | `apply/ats_forms.py`, `apply/page_match.py`, the fill routes, the draft routes that return 202, `/ext/v1/applied`, undo, `documents.model_lines` | Trust anything the page says beyond field descriptors and URLs |
+| **Console** | `apply/ats_forms.py`, `apply/page_match.py`, the fill routes, the draft routes that return 202, `/ext/v1/applied`, undo, `apply/contact.py` | Trust anything the page says beyond field descriptors and URLs |
 
 Plain JavaScript modules, no build step, as 1e. Classification, mapping, never-store, job
 matching and the applied rule live in Python, so the tested code is the deciding code.
@@ -133,7 +134,8 @@ table, or from the wrong sender, is refused and logged (type and sender kind, no
 
 | Sender kind | How the worker knows | May send |
 |---|---|---|
-| **Content script** | `sender.id` is this extension, `sender.tab` is set, `sender.url`'s host is a granted ATS host (or a tab and frame the worker injected into for **Fill this page**, frame 0 only), and `sender.frameId` is the frame that announced itself for that `documentId` | `frame/hello`, `forms/get`, `panel/open` (open the panel at a field; no write), `submit/attempt`, `submit/outcome`, `ask/answer` and `applied/undo` (both undoable, no spend), `frame/bye` |
+| **ATS content script** | `sender.id` is this extension, `sender.tab` is set, `sender.url`'s host is a granted ATS host, and `sender.frameId` is the frame that announced itself for that `documentId`. The host and the ATS are taken from `sender.url`, never from the payload | `frame/hello`, `forms/get`, `panel/open` (open the panel at a field; no write), `submit/attempt`, `submit/outcome`, `ask/answer` and `applied/undo` (both undoable, no spend), `frame/bye`. `ask/answer` and `applied/undo` are accepted only for attempts and records the worker holds **for that same tab** (`sender.tab.id`) |
+| **Injected generic frame** (Fill this page) | As above, but the tab and frame 0 are ones the worker injected into after your icon click, on a host that is not an ATS host | Only `frame/hello`, `forms/get`, `frame/bye`. Everything else on such a page is driven from the side panel |
 | **Extension page** | `sender.id` is this extension and `sender.url` starts with `chrome.runtime.getURL("")` (the side panel, the popup, the popup window, the options page) | Everything else: `session/*`, `fill/write`, `match/pick`, `draft/estimate`, `draft/generate`, `packet/ready`, `file/attach`, `text/insert`, `ats/mode`, `capture/*`, `pair` |
 
 A Python test parses `MESSAGE_POLICY` and fails if any spend type (`draft/generate`), any write
@@ -174,7 +176,13 @@ frame host. `ask/answer` is accepted only for an attempt whose question is open.
 ### Fill this page (any other site)
 
 On a site without the content scripts, the popup offers **Fill this page** next to **Send to
-jobhunter**. The click grants `activeTab` for the tab, as capture does. The worker injects
+jobhunter**, except where it refuses: hosts in `[capture] disabled_hosts`, the console's own
+origin (`127.0.0.1`, `localhost` or `[::1]` on the console port), every LinkedIn and Indeed host
+(017: the extension never acts on linkedin.com, and Easy Apply is their own form), and Workday
+hosts before **Enable for Workday** (the popup offers that instead, because Workday's steps need
+the [step-aware session](#workday-and-multi-step-forms)). The refusal list comes from `version`,
+with LinkedIn and Indeed also built into the extension as 1e's notice hosts are. NEOGOV is not
+refused: Fill this page works there per page, best effort, as on any site. The click grants `activeTab` for the tab, as capture does. The worker injects
 `frame.js`, `locate.js` and `act.js` (not `submit.js`) into **frame 0** only, with the console's
 **generic** form data (label synonyms for contact, links and the yes/no answers; no selectors),
 and opens the side panel. Then steps 3 to 8 as above, with these limits:
@@ -182,7 +190,7 @@ and opens the side panel. Then steps 3 to 8 as above, with these limits:
 | | Fill this page |
 |---|---|
 | Frames | The top frame only. A form in a cross-origin iframe is not reachable; the panel says so ("this form is inside a frame from <host>; jobhunter can fill it only on the supported ATSs") |
-| Matching | Best effort: the page URL and `job.page_url`, `job.url`, `job.apply_url` (rule 3 below), else you pick or **Add this job** (1e capture). Never decided by employer and title |
+| Matching | Best effort: the page URL, normalized by `dedupe_url.normalize_apply_url`, against `job.page_url`, `job.url` and `job.apply_url` (rule 3 below), deciding only when `capture.identifies_posting` says the URL names one posting; otherwise you pick or **Add this job** (1e capture). Never decided by employer and title |
 | Resume | No buttons; **Attach resume** from the panel on a file input the generic data recognizes, else attach by hand |
 | Grant ends | `activeTab` ends when the tab navigates. A multi-page form needs a new icon click per page; the panel says "click the jobhunter icon on the new page" |
 | Submit | No watch. The panel offers **Mark applied** after you submit, your click ([Mark applied](#mark-applied-by-hand)) |
@@ -267,8 +275,14 @@ it (A1 checks this on a React fixture). The buttons answer only `isTrusted` clic
 
 **After an extension reload** the worker re-injects the content scripts into open tabs on the
 granted ATS hosts (`chrome.tabs.query` with those URL patterns, allowed by the host permissions,
-then `scripting.executeScript` with `allFrames: true`). An orphaned script, whose
-`chrome.runtime.id` is gone, removes its overlay and its listeners at once.
+then `scripting.executeScript` with `allFrames: true`). **Orphan removal:** each content script
+opens a long-lived `chrome.runtime.connect` port to the worker at start. A reload disconnects
+it; the script's `port.onDisconnect` handler checks `chrome.runtime?.id`, and when it is gone
+removes its overlay host element and every listener it added (it keeps them in one list for
+this). Each overlay click handler also checks `chrome.runtime?.id` first, so a click on a stale
+button does nothing. An ordinary worker restart (idle stop) also disconnects the port; then
+`chrome.runtime.id` is still set and the script reconnects instead. A re-injected script finds an
+existing overlay host with its marker attribute and replaces it.
 
 ### Opening the panel
 
@@ -313,6 +327,13 @@ With entailment turned off (`[apply] entailment_check = false`) or failed, the p
 offer **Attach**; the packet page's export and your own attach still work. The base resume
 needs none of this.
 
+**Edited versions.** An edit (`origin = 'edited'`) runs no entailment pass: `write_version`
+only carries verdicts forward for lines whose text is unchanged. An edited line has no verdict,
+so rule 2 cannot pass for it from the panel. The card says "v4 has 3 edited lines without a
+fact check" and routes you to **Review in jobhunter**, where each edited line needs your tick
+(**I checked this line**, stored as `entail_ack`) before the panel offers **Attach**. No
+entailment run is started by an edit, so editing never spends.
+
 **Attach** exports the version if needed (017 Export rules), asks the console for the file, and
 sets it on **the field the button sits beside** with 017's attach methods and `attach_ok` check,
 after the visibility re-check and the replace question. **Insert** writes `export.to_text` into
@@ -349,9 +370,11 @@ answer within 20 seconds. So:
   and the `inflight` claim, synchronously) and `run_claimed(...)` (the runner call, the version
   write or the failure). `generate` stays their composition for the packet page and
   `apply draft`.
-- **Claim handoff.** `start` takes the `inflight` lock in the request thread and passes the held
-  lock object to the draft thread, which releases it in its `finally`, as `deep_routes` does with
-  the run lock. The request thread never releases it after a successful start.
+- **Claim handoff.** `inflight.claim` is a context manager today. A7 adds an object form,
+  `inflight.Claim.take(data_dir, key)` returning a held claim with `release()` (idempotent), and
+  re-expresses the context manager on it. `start` takes it in the request thread and passes the
+  object to the draft thread, which releases it in its `finally`, as `deep_routes` does with the
+  run lock. The request thread releases it only when `start` fails after taking it.
 - **Stored state.** `start` writes a `draft_run` row (packet, kind, question key, runner, started
   time); `run_claimed` sets its outcome. A row with no outcome and no live thread after a restart
   reads as **stopped**.
@@ -482,9 +505,9 @@ job. It records through the same route with mode `mark`, never changes an ATS's 
 
 | # | Evidence | Strength |
 |---|---|---|
-| 1 | The fill session or assist card already bound this tab and frame to an application, **and the frame's posting key equals the session's** | Decides |
-| 2 | An `ats_posting_ref` row for the posting key (your earlier pick or add) | Decides |
-| 3 | The posting key (or, on **Fill this page**, the normalized page URL) equals the key of a group's `apply_link.final_url` or `start_url`, a `job.url`, `job.apply_url` or `job.page_url`, or a `job_board_ref.apply_url` | Decides when exactly one group matches |
+| 1 | The fill session or assist card already bound this tab and frame to an application, **and** on an ATS the frame's posting key equals the session's (both non-NULL), or on **Fill this page** (posting key NULL, which never compares equal) the tab is the session's tab and the page URL normalized by `normalize_apply_url` equals the URL the session started on | Decides |
+| 2 | An `ats_posting_ref` row for the posting key (your earlier pick or add); ATS pages only | Decides |
+| 3 | On an ATS, the posting key equals the key of a group's `apply_link.final_url` or `start_url`, a `job.url`, `job.apply_url` or `job.page_url`, or a `job_board_ref.apply_url`. On **Fill this page**, the page URL normalized by `dedupe_url.normalize_apply_url` equals one of those URLs normalized the same way, **and** `capture.identifies_posting(url)` is true | Decides when exactly one group matches; otherwise asks |
 | 4 | An `apply_click` in the last 24 hours whose `final_url` has this posting key | Decides when exactly one group matches |
 | 5 | Anything else, or several groups | Never decides: you pick, or **Add this job** |
 
@@ -502,7 +525,9 @@ A recorded event keeps the **rule number** that matched, the posting key and the
 ### What you see
 
 - **On the page**, after a record: a notice in the overlay for 20 seconds, "jobhunter: marked
-  applied, <title> at <employer> · Undo · ×", trusted clicks only.
+  applied, <title> at <employer> · Undo · ×", trusted clicks only. It belongs to **Record
+  submits**, as the ask prompt does (both appear only where the submit listeners run), not to
+  **Show buttons**.
 - **The badge** shows ✓ until the tab navigates.
 - **The popup** shows "Recorded: applied to … at 14:05 · Undo" for 24 hours.
 - **The console**: the event on `/pipeline/{id}` and `/job/{id}` carries "recorded by the
@@ -596,29 +621,93 @@ no contact details.
 
 ### Contact header kept local
 
-`documents.model_lines(resume_text)` returns the numbered resume (`L1`...`Ln`, same keys as
-`numbered_resume`) with contact details replaced:
+One module, `apply/contact.py`, in three parts: find the values, redact text, check a request.
 
-| Replaced | How found | Placeholder |
-|---|---|---|
-| Your name | The header's name-shaped first line (`export.person_name`), and each later occurrence of that exact name | `[NAME]` |
-| Email addresses | A standard address pattern, anywhere in the resume | `[EMAIL]` |
-| Phone numbers | Patterns with separators, `+` country codes and **digits-only runs of 10 to 15 digits**, anywhere in the resume | `[PHONE]` |
+**1. The header block and the values.** `contact.header(resume_text)` returns the **header
+block**: the non-blank lines before the first section heading (a Markdown heading, or a line
+that equals a known section name such as Summary, Experience, Skills or Education, in any case).
+If no heading appears within the first 10 non-blank lines, the header is the lines up to the
+first blank line, at most 6, and `/prefs` shows "jobhunter could not find where your header
+ends; check what models see". `contact.values(profile, answers)` collects, for exact matching
+elsewhere:
 
-Every model-bound request builds the resume from `model_lines`: Stage 2 screen (all scorers,
-batch and sync), the deep pass, the Jev and Decisions scorers (`scoring/decisions.py` today sends
-`profile.resume_text`), packet drafting and regenerate, cover letters, question drafts, the
-entailment pass and `llm bench`. A test seeds a resume with canary values (`Canaryname
-Testperson`, `canary.contact.7f3a@invalid.test`, `5550100199`, `555-0100-199`) and asserts that
-no request body from any scorer or runner fake contains them; a new model call site that skips
-`model_lines` fails it.
+| Value | From |
+|---|---|
+| Each header line, whole | The header block |
+| Email addresses, URLs (LinkedIn, GitHub, personal site, any other) and phone strings | Found **inside the header lines** only, by pattern; phones also kept as their digit string |
+| Name parts | The header's first line cut at the first separator (`|`, `·`, `,`, `•`, ` - `, two or more spaces), with titles and credentials dropped (`Dr.`, `Mr.`, `Ms.`, `PhD`, `MBA`, `PE`, `CPA` and similar, as a list in the module), giving the full name and each token of three or more letters, middle initials ignored. So "Pat Q. Doe, PhD", "Dr. Pat Q. Doe" and "Pat Doe | Seattle, WA" all give "Pat Doe", "Pat", "Doe" |
+| The `/prefs` contact block | First, last and preferred name, email, phone (and its digit string) |
 
-Local rendering puts them back: rendering and export map the model's header citations to the
-**real** lines (they already render the header from `lines_ctx`; that map is now the unredacted
-one), and replace `[NAME]`, `[EMAIL]` and `[PHONE]` in letters and drafts with your local values.
-The factcheck reads the same redacted lines the model read, so citations still check.
-`Profile.scoring_version` keeps hashing the full resume, so this change re-scores nothing; prompt
-caches miss once.
+Nothing is matched by pattern outside the header, so IP addresses, ISBNs, version numbers and
+metrics in bullets are left alone, and re-insertion can never put your phone number into a
+bullet that never held it. A4 reuses this parser for **Copy from my resume header**.
+
+**2. Redaction.** `contact.model_text(profile)` returns the resume with **each header line
+replaced whole** by `[CONTACT LINE 1]`, `[CONTACT LINE 2]`, ... (so line numbers do not move),
+and every other exact, case-insensitive occurrence of a value replaced by `[NAME]`, `[EMAIL]`,
+`[PHONE]` (a digit run equal to a phone's digit string) or `[LINK]`, longest values first,
+name tokens only at word boundaries. `contact.model_lines(profile) =
+numbered_resume(model_text(profile))`, with the same keys as `numbered_resume(resume_text)`.
+`contact.redact(text, values)` applies the second step to any text.
+
+**3. The boundary check.** Building requests from `model_text` is not enough: other text in a
+request can carry the values. Today `generator.build_request` puts the current resume
+version's `body_md` (real header included) into cover-letter and question requests;
+`_entail_request` sends `context.lines` and each item's text; employer notes, story facts and
+the regenerate instruction are your own typing. So redaction also runs **over the assembled
+request**:
+
+- in `generator`, on the system prompt, the user message and the schema-free parts of every
+  request, immediately before `_run_api` and `_run_cli` (one function both call, so neither can
+  skip it), for drafts, regenerations, letters, question drafts and the entailment pass;
+- in `scoring/profile.py::scoring_inputs` (every Stage 2 scorer and the deep pass build their
+  system block from it) and `scoring/decisions.py::candidate_state` (Jev and Decisions);
+- in `llm bench`, which uses those two.
+
+After redaction, `contact.check(request_text, values)` looks for any value again
+(case-insensitive, and phone digit strings inside digit runs). **If one remains, the call fails
+closed**: nothing is sent, nothing is billed, and the page or run summary says "a contact detail
+would have been sent; nothing was sent" with the value's kind (never the value). A canary test
+(`Canaryname Q. Testperson, PhD | Canaryville, WA`, `canary.contact.7f3a@invalid.test`,
+a fictional 555-01xx canary phone written digits-only and with parentheses and spaces (kept in
+the test file, not here, so the secret scan stays quiet), `linkedin.com/in/canaryname-testperson`) asserts that no request
+body from any scorer or runner fake contains a canary, in these scenarios among others: a letter
+after a **base** resume version, a letter after a **generated** one, a question draft, a
+regenerate whose instruction names you, and **entailment on an edited letter** that you signed
+with your name. A model call site that bypasses the boundary function fails the test.
+
+**Line maps.** `generator.Context.lines` keeps the **real** lines; it is what renders documents
+and what the editor shows. A new `Context.model_lines` (the redacted view) is what any request
+carries. The factcheck and the entailment pass read the redacted view, and treat a placeholder
+and its real value as equal: before comparing, both the output text and the cited lines are
+passed through `contact.redact`, so "Sincerely, [NAME]" and "Sincerely, Pat Doe" both pass
+against a cited header line. The checker flags as **unsupported** any other bracketed
+placeholder (`[ADDRESS]`, `[COMPANY]`, `[YOUR NAME HERE]`), because the model invented it.
+
+**Render and export.** Every document kind (resume, cover letter, question draft) and every way
+out (packet page, Copy, Insert, Attach, text, Markdown, HTML and PDF export) replaces
+`[CONTACT LINE n]`, `[NAME]`, `[EMAIL]`, `[PHONE]` and `[LINK]` with your local values,
+case-insensitively (`[name]`, `[Name]`). Header citations render from the real `Context.lines`
+as today. The export filename's name (`export.person_name`) reads the **real** first line.
+Documents stored before A0 hold real text already and render unchanged.
+
+**What models are told.** The drafting system prompt gains one instruction: "Contact details
+are replaced by bracketed placeholders; keep them as written and add no others." The drafting
+`prompt_version` becomes `apply-v2` on new documents only. The **screen rubric
+(`scoring/rubric.py::RUBRIC_TEXT`) and its `PROMPT_VERSION` are not changed**: a version bump
+there would mark every screen score stale. Scorers simply see `[CONTACT LINE n]` lines.
+
+**Re-scoring.** `Profile.scoring_version` keeps hashing the full resume. When you edit only
+your header, `/prefs` compares a hash of `model_text` before and after: if it is unchanged, the
+re-score offer is replaced by "only your contact header changed; models see the same text, so
+nothing needs re-scoring". Prompt caches miss once when A0 lands.
+
+**Preview and limits.** `/prefs` (Profile and resume) gets **What models see**: `model_text`
+as it will be sent, with the replaced spans marked. The help topic says what is **not**
+caught: a name or nickname that is neither in the header nor in the contact block, contact
+details written differently from how they appear in the header or `/prefs` (another email
+address, a phone with other digits), references' or other people's contact details, and your
+street address if it is outside the header.
 
 ### The contact block
 
@@ -810,13 +899,15 @@ call. The browser network is blocked by `--host-resolver-rules`, as 1e.
 |---|---|
 | Fixtures | `tests/fixtures/ats_forms/<ats>/`: hand-written pages in each ATS's shape (Greenhouse classic, `job-boards`, embed on an employer page; Lever; Ashby with the Autofill box, and its embed; Workable; Workday steps; a generic employer form for **Fill this page**), each with confirmation, server-error and challenge states; a **honeypot** form (a hidden `email2`, an off-screen field, a zero-size field, an `aria-hidden` block, a `disabled` field); a **late filler** page whose script fills a field 1 s after load; a React page that re-renders the form. Captured public empty forms only with your approval, by hand in a browser, never fetched by tooling (Greenhouse `/embed/` is disallowed to crawlers); stripped as 017 says. Canary contact values only; the fixture lint applies |
 | Form data | Selectors and synonyms find the fields on every fixture; a renamed label is found by synonym; step and other controls are not-submit |
-| Matching | Each ATS's posting, form and embed URLs give one key; `job.page_url` matches on Fill this page; one group decides; two ask; a session with another posting key asks; employer and title never match; a pick survives a merge |
+| Matching | Each ATS's posting, form and embed URLs give one key; on Fill this page, `job.page_url` matches through `normalize_apply_url` and decides only when `identifies_posting` is true (a careers-home URL asks); a generic session binds only its own tab and starting URL (two NULL posting keys never match); one group decides; two ask; a session with another posting key asks; employer and title never match; a pick survives a merge |
 | Answer bank | Contact and sponsorship round-trip; never-store label in `contact:` refused; Copy from header proposes only; sponsorship polarity vectors ("require", "without", negated, ambiguous: ticked, inverted, suggested); a promoted answer naming another employer is not ticked |
-| Contact header | `model_lines` vectors (name lines, emails, separated and digits-only phones, a phone-like date range left alone); the canary test over every scorer and runner fake; export and the packet page show the real header; `scoring_version` unchanged |
+| Contact header | `contact.header` and `contact.values` vectors: "Name | City, ST", "Name, PhD", "Dr. First Q. Last", a header with LinkedIn, GitHub and site URLs, a resume with no heading (fallback and the `/prefs` warning); an IP address, an ISBN, a version number and a metric in bullets left alone; a phone written another way elsewhere left alone unless its digits equal the header phone's; the canary scenarios above through the boundary function, and the fail-closed path (a value planted after redaction: nothing sent, no fake called); factcheck and entailment accept "Sincerely, [NAME]" and the real name alike; an invented `[ADDRESS]` badged unsupported; render replaces `[name]` and `[Name]` in every document kind and every export; the filename from the real first line; `RUBRIC_TEXT` and the screen `PROMPT_VERSION` unchanged; `/prefs` says "only your contact header changed" for a header-only edit; What models see shows `model_text` |
 | Classification | 017's tests plus: row 0 on every honeypot field (never ticked, never written, even when its label is "Email"); contact rows ticked; the late filler's field is not overwritten; split phone `listed`; never-store beats contact synonyms |
 | Drafting | `start` refuses with 409 before any runner call on a stale token, a held claim and over the cap; 202 then `done` with the fake; the claim lock is held by the thread until it ends; `stopped` after a simulated restart; a CLI failure ends in `failed` with no SDK call; overage needs `confirm_paid`; container refuses; `question_draft` needs a packet; the call-site registry includes the card; shutdown joins the thread |
-| Attach and insert | File size and SHA-256 equal the export; only the clicked field; replace question on a filled file input; insert into a non-empty textarea refused; `maxlength` refused; `file` refuses a version with a `no` line, an unticked `partly` line or no entailment |
-| Sender policy | The `MESSAGE_POLICY` test above; e2e: each page-only type from a content script refused, each content type from an unexpected frame refused; console refuses `submit/outcome` without a matching attempt |
+| Attach and insert | File size and SHA-256 equal the export; only the clicked field; replace question on a filled file input; insert into a non-empty textarea refused; `maxlength` refused; `file` refuses a version with a `no` line, an unticked `partly` line or no entailment; an edited version with untouched lines keeps their verdicts, and its edited lines route to Review in jobhunter until ticked; an edit starts no entailment run (the fakes see no call) |
+| Sender policy | The `MESSAGE_POLICY` test above; e2e: each page-only type from a content script refused, each content type from an unexpected frame refused, every type but `frame/hello`, `forms/get` and `frame/bye` refused from an injected generic frame, an ATS named in a payload ignored in favour of `sender.url`, `ask/answer` and `applied/undo` for another tab's record refused; console refuses `submit/outcome` without a matching attempt |
+| Fill this page refusals | No injection on a `disabled_hosts` host, the console's own origin, a LinkedIn or Indeed host, or a Workday host before Enable for Workday (the popup offers Enable instead); NEOGOV fixture fills per page |
+| Switches | Show buttons off: no overlay host element exists until a Record-submits prompt needs one, and no button or pill; Record submits off: no submit listeners, no ask prompt, no in-page notice; both learned from `forms/get`; auto mode unchanged after toggling Record submits off and on |
 | Submit watch | Every row of [No false positives](#no-false-positives-the-cases), end to end; the ask prompt appears in the overlay and the badge; ask records only on Yes; the auto offer only after 3 agreeing observations; a rule version change returns to ask; **Record submits** off adds no listeners |
 | Record and undo | Through the routes: event at attempt time, status, created application, packet attach, `ext_applied`; already-applied gives no event and no Undo; undo restores only unchanged fields; refused after a later event by id; refused when stale after a merge; deletes a created application only with no references (one test per referencing table); a kept application with no events gets the `interested` event and a valid status; `wrong_job` clears the posting ref and keeps the mode; `not_applied` on an automatic record returns to ask; achievements revoked within 24 h, kept after |
 | Workday | Steps fixture: session survives Next, per-step snapshots, attach on My Experience only, disclosures `yours`, Next never an attempt |
@@ -868,31 +959,31 @@ help"); A12 is spec markings only. Worker and reviewer per the `CLAUDE.md` table
 
 | # | Ticket | Difficulty | Worker / reviewer | Depends on |
 |---|---|---|---|---|
-| A0 `e7c2bcd` | Contact header kept local: `documents.model_lines`, every model call site through it (screen, deep, Jev, Decisions, drafting, entailment, question drafts, `llm bench`), local re-add on render and export, placeholder substitution in letters, canary test over all fakes, `scoring_version` unchanged; help (`profile-and-resume.md`) | hard | opus / opus xhigh | |
-| A1 `9e2c202` | Offline spike: content scripts on ATS hosts and in an embedded iframe; `sidePanel.open` sync before `await` from a relayed click, else the window fallback; `action.openPopup` without a gesture; whether the panel is observable headless; `responseStatus` in a frame; overlay on a React fixture across re-renders; `frameId` stable across a frame navigation; re-injection after reload; `registerContentScripts` for an optional host; `userActivation` and `SubmitEvent.submitter` on the fixtures | normal | sonnet / opus | |
-| A2 `69849da` | Extension skeleton: manifest (description, sidePanel, ATS hosts, content-script entry, Workday optional hosts), `frame.js` announce, `forms` route and cache, `MESSAGE_POLICY` with its Python test, panel shell bound to the tab, popup **Fill this form**, Show buttons and Record submits switches, re-injection and orphan cleanup, lint, e2e harness with the fake runner at module scope; `browser-extension.md` | normal | sonnet / opus | A1 |
+| A0 `e7c2bcd` | Contact header kept local: `apply/contact.py` (header block, values, `model_text`, `model_lines`, `redact`, `check`); redaction and the fail-closed check at the runner boundary before `_run_api` and `_run_cli`, in `scoring_inputs` and `decisions.candidate_state`; `Context.lines` real and `Context.model_lines` redacted; factcheck and entailment accept placeholders and real values; unknown placeholders unsupported; render and export replace placeholders case-insensitively for every kind; filename from the real line; drafting prompt instruction and `apply-v2`, rubric untouched; `/prefs` header-only notice and What models see; canary scenarios; help (`profile-and-resume.md`, what is not caught) | hard | opus / opus xhigh | |
+| A1 `9e2c202` | Offline spike: content scripts on ATS hosts and in an embedded iframe; `sidePanel.open` sync before `await` from a relayed click, else the window fallback; `action.openPopup` without a gesture; whether the panel is observable headless; `responseStatus` in a frame; overlay on a React fixture across re-renders; `frameId` stable across a frame navigation; re-injection after reload and the port-disconnect orphan signal; `registerContentScripts` for an optional host; `userActivation` and `SubmitEvent.submitter` on the fixtures; and 017's 2a items: `setAccessLevel` on `storage.local` hides the token from content scripts, the resume arrives byte-identical through base64 messaging, `safeDispatch` refuses every submit-like target on the fixtures | normal | sonnet / opus | |
+| A2 `69849da` | Extension skeleton: manifest (description, sidePanel, ATS hosts, content-script entry, Workday optional hosts), `frame.js` announce, `forms` route and cache, `MESSAGE_POLICY` with its Python test, panel shell bound to the tab, popup **Fill this form**, Show buttons and Record submits switches delivered through `forms/get`, the **one body-level overlay** (host element, closed shadow root, placement and re-placement, `isTrusted` and `runtime.id` checks), re-injection and port-based orphan removal, lint, e2e harness with the fake runner at module scope; `browser-extension.md` | normal | sonnet / opus | A1 |
 | A3 `467a606` | `ats_forms.py` (fields, synonyms, visibility facts, submit and other controls, variants, confirmation and error rules with versions, `parse_done`, `attach_ok`, generic entry), `page_match.py` with posting keys and `job.page_url`, `ats_posting_ref`, `match` routes, vectors | hard | opus / opus xhigh | |
-| A4 `5ed37eb` | Answer bank: `contact`, `requires_sponsorship`, `from_employer` on promote, `/prefs` section, Copy from my resume header, sponsorship polarity vectors, never-sent tests; help | normal | sonnet / opus | |
+| A4 `5ed37eb` | Answer bank: `contact`, `requires_sponsorship`, `from_employer` on promote, `/prefs` section, Copy from my resume header, sponsorship polarity vectors, never-sent tests, reusing A0's header parser; help | normal | sonnet / opus | A0 |
 | A5 `850a8ac` | Console fill: `fill_session` migration, Start note in `AUTO_NOTES`, sessions and snapshots in memory, `fill_classify` with row 0 and the 022 rows and tick defaults, value release, write refusal, caps, idle close, API contract tests | hard | opus / opus xhigh | A3, A4 |
-| A7 `0aebb94` | Drafting in the background: `start` and `run_claimed`, claim handoff, `draft_run`, estimate, generate (202) and draft-status for resume, cover letter and question draft, runner lines from the effective settings with 020's line and fallback notice, call-site registry, `app.state` runner, thread join on shutdown, S12b registry if present, packet page shows a draft in progress; `drafting.md` | hard | opus / opus xhigh | |
-| A6 `725855c` | Extension Fill: `locate.js`, stable keys, visibility re-check before each write, `act.js` and `safeDispatch`, Start, Fill, Insert, Draft (with Prepare when there is no packet), Use packet value, Submit outline, **Fill this page** through `activeTab` on frame 0 with the generic data; e2e with honeypot, late filler and submit counters | hard | opus / opus xhigh | A2, A5, A7 |
-| A10 `22f4dde` | Recording backend: `tracking.mark_applied` shared with `answer_prompt`, `ext_applied` migration, `applied` and undo routes (extension and console) with every undo rule, **Mark applied** in the panel, pipeline Undo, merge re-pointing; help | hard | opus / opus xhigh | A3, A5 |
-| A8 `537b1a0` | Buttons and the assist card: overlay, panel or window, every card state, the attach rule with per-line sources and `partly` ticks (`entail-ack`), `ready` and `file` routes, replace question, Attach and Insert on the clicked field, Add this job in the frame, session report of attached versions; e2e | hard | opus / opus xhigh | A2, A3, A5, A6, A7 |
-| A9 `3641292` | Submit watch in ask mode: `submit.js` with the gesture, `userActivation` and `submitter` rules, pending attempts, confirmation and error watch across a frame navigation, `submit/attempt` and `submit/outcome` with the console's attempt check, the visible ask prompt (overlay, badge, popup), `submit_observation`; every false-positive fixture | hard | opus / opus xhigh | A2, A3, A10 |
+| A7 `0aebb94` | Drafting in the background: `start` and `run_claimed`, claim handoff, `draft_run`, estimate, generate (202) and draft-status for resume, cover letter and question draft, runner lines from the effective settings with 020's line and fallback notice, call-site registry, `app.state` runner, thread join on shutdown, S12b registry if present, `inflight.Claim` object form, packet page shows a draft in progress; `drafting.md` | hard | opus / opus xhigh | A0 (both rewrite `generator.py`) |
+| A6 `725855c` | Extension Fill: `locate.js`, stable keys, visibility re-check before each write, `act.js` and `safeDispatch`, Start, Fill, Insert, Draft (with Prepare when there is no packet), Use packet value, Submit outline, the **Fill** pill in the overlay, **Fill this page** through `activeTab` on frame 0 with the generic data and the refusal list; e2e with honeypot, late filler and submit counters; help | hard | opus / opus xhigh | A2, A5, A7 |
+| A10 `22f4dde` | Recording backend: `tracking.mark_applied` shared with `answer_prompt`, `ext_applied` migration, `applied` and undo routes (extension and console) with every undo rule, the console's pipeline Undo, merge re-pointing; no extension UI (the panel's Mark applied is in A9); help | hard | opus / opus xhigh | A3, A5 |
+| A8 `537b1a0` | Buttons and the assist card: the buttons in A2's overlay, panel or window, every card state, the attach rule with per-line sources and `partly` ticks (`entail-ack`), `ready` and `file` routes, replace question, Attach and Insert on the clicked field, Add this job in the frame, session report of attached versions, edited-version routing; e2e; help | hard | opus / opus xhigh | A2, A3, A5, A6, A7 |
+| A9 `3641292` | Submit watch in ask mode: `submit.js` with the gesture, `userActivation` and `submitter` rules, pending attempts, confirmation and error watch across a frame navigation, `submit/attempt` and `submit/outcome` with the console's attempt check, the visible ask prompt (overlay, badge, popup), **Mark applied** in the panel and popup, `submit_observation`; every false-positive fixture; help (`browser-extension.md`: what counts as your submit, ask mode) | hard | opus / opus xhigh | A2, A3, A10 |
 | A14 `2982a5c` | Auto mode: `ats_record_mode` keyed by ATS, variant and rule version, the offer after 3 agreeing observations, the applied notice with Undo, `not_applied` back to ask and `wrong_job` clearing the posting ref, `/prefs` lines; help | hard | opus / opus xhigh | A9, A10 |
 | A11 `b7ebe3a` | Workday: Enable for Workday, registered scripts, step-aware sessions and snapshots, attach on My Experience, Review-only submit, Workday data and fixtures; help | hard | opus / opus xhigh | A6, A8, A9 |
 | A12 `fbee458` | Spec markings: 017 sections marked superseded where 022 changes them, 009 roadmap line, 008 personal-data line for the contact header | mechanical | haiku / sonnet | |
 
-**Order.** A0, A1, A3, A4, A7 and A12 can start at once (four workers at a time). Then A2 (after
-A1) and A5 (after A3, A4); then A6 and A10; then A8 and A9; then A14 and A11.
+**Order.** A0, A1, A3 and A12 can start at once (four workers at a time). Then A2 (after A1), A4
+and A7 (after A0); then A5 (after A3, A4); then A6 and A10; then A8 and A9; then A14 and A11.
 
 **Estimate**, by the calibrated rule (mechanical 0.75 h, normal 1.4 h, hard 2.1 h; schedule = sum
 / 3, plus 30%; range 0.7x to 1.6x; floor = the longest dependency chain):
 
 - Fourteen tickets: 10 hard (21 h) + 3 normal (4.2 h) + 1 mechanical (0.75 h) = **25.95 h**.
 - Schedule: 25.95 / 3 = 8.65 h, plus 30% = **about 11.2 h**; range 7.9 to 18.0 h.
-- Floor: A3, A5, A6, A8, A11 = 5 x 2.1 = **10.5 h** (A3, A5, A10, A9, A14 is 10.5 h too). It is
-  under the schedule, so **about 11.2 h**, range **10.5 to 18.0 h**.
+- Floor: A0, A4, A5, A6, A8, A11 = 2.1 + 1.4 + 2.1 + 2.1 + 2.1 + 2.1 = **11.9 h**. It is above
+  the schedule, so it binds: **about 11.9 h**, range **11.9 to 18.0 h**.
 - Tokens: 10 x 2.0M + 3 x 0.6M + 0.5M = **about 22.3M**.
 - Not included: your live acceptance runs, fixture capture if you approve it, and PR merge waits.
 
@@ -903,6 +994,22 @@ the stricter entailment rule; ask mode first, auto after 3 agreeing submits; con
 locally on `/prefs`.
 
 ## History
+
+### Revision 3 (2026-10-12)
+
+From the re-review of revision 2. Contact header: redaction now also runs over the assembled
+request at the runner and scorer boundary and fails closed, because resume versions, entailment
+context and your own notes carried the values; line maps pinned (real `Context.lines`, redacted
+`Context.model_lines`, checks accept both, render replaces placeholders for every kind); the
+whole header block is replaced line by line and only exact values are matched elsewhere, because
+name and phone patterns misfired; rubric untouched; a preview and stated limits. Fill this page
+refuses `disabled_hosts`, the console's origin, LinkedIn and Indeed (017's rule kept) and Workday
+before it is enabled; matching through `normalize_apply_url` and `identifies_posting`; generic
+sessions bound to their tab and URL; generic frames limited to three message types; records and
+attempts scoped to their tab. Switches: Record submits owns the prompt and notice, both come via
+`forms/get`, auto mode survives toggling. Edited versions route to review instead of running
+entailment. `inflight.Claim` object form; the orphan mechanism stated. Graph: overlay in A2, the
+Fill pill in A6, Mark applied in A9, A7 and A4 after A0; A1 regains 017's 2a items.
 
 ### Revision 2 (2026-10-12)
 
