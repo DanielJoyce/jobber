@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from jobhunter.apply import answers as ans
+from jobhunter.apply.resume_header import propose_contact
 from jobhunter.console import prefs as pf
 from jobhunter.console import prefs_answers as pa
 from jobhunter.console import prefs_graceful as gr
@@ -104,6 +105,7 @@ def register(
         upload_error: str | None = None,
         answers_form: pa.AnswersForm | None = None,
         section_result: tuple[str, str] | None = None,
+        ans_note: str | None = None,
     ) -> HTMLResponse:
         settings = request.app.state.settings
         profile = st.profile
@@ -165,6 +167,9 @@ def register(
             "ans_warnings": loaded.warnings,
             "ans_link_fields": ans.LINK_FIELDS,
             "ans_text_fields": ans.TEXT_FIELDS,
+            "ans_contact_fields": ans.CONTACT_FIELDS,
+            "ans_sponsorship_label": ans.SPONSORSHIP_LABEL,
+            "ans_note": ans_note,
             "ans_work_auth_label": ans.WORK_AUTH_LABEL,
             "ans_work_auth_choices": pa.WORK_AUTH_CHOICES,
             "unsaved_sections": unsaved,
@@ -393,6 +398,38 @@ def register(
             queued = f"&rescore={scope}"
         saved = len(changes) + len(answer_writes)
         return RedirectResponse(f"/prefs?saved={saved}{queued}", status_code=303)
+
+    @app.post("/prefs/contact/from-resume", response_class=HTMLResponse)
+    async def contact_from_resume(request: Request, conn: Conn) -> Response:
+        """**Copy from my resume header**: put the parser's proposal in the contact boxes for
+        you to check. Saves nothing and reads nothing but the resume already on disk."""
+        form = pf.parse_form(await request.body())
+        return await run_in_threadpool(contact_from_resume_work, request, conn, form)
+
+    def contact_from_resume_work(
+        request: Request, conn: sqlite3.Connection, form: pf.Form
+    ) -> Response:
+        st = state_of(request)
+        proposal = propose_contact(st.profile.resume_text)
+        af = pa.with_proposal(pa.parse(form), proposal)
+        if proposal:
+            names = ", ".join(label.lower() for k, label, _ in ans.CONTACT_FIELDS if k in proposal)
+            note = (
+                f"Filled from your resume header: {names}. Check each box, then save; "
+                "nothing is saved yet."
+            )
+        elif st.profile.resume_text.strip():
+            note = "Found nothing recognizable in the resume header. Type the details instead."
+        else:
+            note = "There is no resume to read yet. Upload one below, or type the details."
+        page = render_page(request, conn, st, answers_form=af, ans_note=note)
+        body = page.body.decode()
+        start = body.index('<section class="panel" id="sec-answers"')
+        end = body.index("</section>", start) + len("</section>")
+        response = HTMLResponse(body[start:end])
+        response.headers["HX-Retarget"] = "#sec-answers"
+        response.headers["HX-Reswap"] = "outerHTML"
+        return response
 
     @app.post("/prefs/section/{section}", response_class=HTMLResponse)
     async def save_section(request: Request, conn: Conn, section: str) -> Response:

@@ -16,7 +16,7 @@
 
 .prefs-form label { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; color: var(--text-secondary); font-size: 0.875rem; }
 .prefs-form label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text-primary); }
-.prefs-form input[type="text"], .prefs-form input[type="number"], .prefs-form select, .prefs-form textarea {
+.prefs-form input[type="text"], .prefs-form input[type="number"], .prefs-form input[type="email"], .prefs-form input[type="tel"], .prefs-form select, .prefs-form textarea {
   font: inherit; font-size: 0.9375rem; color: var(--text-primary); background: var(--page);
   border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 100%;
 }

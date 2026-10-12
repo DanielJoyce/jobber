@@ -489,3 +489,57 @@ def numeric_subject(question: str) -> str:
     """ "How many years of experience do you have with Terraform?" -> "terraform"."""
     words = re.findall(r"[a-z0-9][a-z0-9+#./-]*", normalize(question))
     return " ".join(w for w in words if w not in _FILLER)
+
+
+# ─── Sponsorship polarity (specs/022 "The answer bank") ─────────────────────
+
+_SPONSOR = re.compile(r"\bsponsor")
+_REQUIRE = re.compile(r"\b(requires?|required|requiring|needs?|needed|needing)\b")
+_NEGATED = re.compile(r"\b(not|never|no|cannot|unable|unless|neither|nor)\b|n't|\bnon[- ]")
+_WITHOUT = re.compile(r"\bwithout\b")
+_AUTH = re.compile(
+    r"\b(authori[sz]ed|authori[sz]ation|eligible|eligibility|permitted|entitled|"
+    r"legally|legal right|work permit|right to work|citizen\w*|resident|if so|which type)\b"
+)
+# A second question joined on ("... and are you 18 or older", "... or will you require").
+_SECOND_CLAUSE = re.compile(r"\b(and|or)\s+(are|do|does|will|can|have|is|would|did)\s+you\b")
+_PAST = re.compile(
+    r"\b(have you|has|had|did)\b|\bpreviously\b|\bin the past\b|\blast (job|employer|role)\b"
+)
+_VISA_STATUS = re.compile(
+    r"\b(current|currently)\b[^?]*\bvisa\b(?!\s+sponsor)|\bvisa\b[^.?]*\b(requires?|requiring)\b"
+    r"|\b(on|hold|holds|holding)\s+an?\b[^?]*\bvisa\b"
+)
+_OPTION_HINT = re.compile(r"[(\[]?\b(yes|y)\s*/\s*(no|n)\b[)\]]?")
+
+
+def is_sponsorship_question(question: str) -> bool:
+    return _SPONSOR.search(normalize(question)) is not None
+
+
+def sponsorship_polarity(question: str) -> str | None:
+    """Which way a sponsorship question asks, so the stored yes/no can be applied safely.
+
+    ``"require"``: "Will you require sponsorship?" (yes means you need it; takes the stored
+    value). ``"without"``: "Can you work without sponsorship?" (yes means you do not need it;
+    takes the inverse). ``None``: not a sponsorship question, or worded so the direction is not
+    certain (a negation beside "require", a question that also asks about authorization, a
+    question that never says require or without): the caller suggests, never ticks.
+    """
+    stripped = _OPTION_HINT.sub(" ", (question or "").casefold()).strip()
+    if "?" in stripped.rstrip("?* \t"):
+        return None  # more than one question
+    norm = _OPTION_HINT.sub(" ", normalize(question))
+    if not _SPONSOR.search(norm) or _PAST.search(norm) or _VISA_STATUS.search(norm):
+        return None
+    if _SECOND_CLAUSE.search(norm) or _AUTH.search(norm):
+        return None
+    without = _WITHOUT.search(norm) is not None
+    required = _REQUIRE.search(norm) is not None
+    if without:
+        # "without sponsorship" / "without requiring sponsorship"; any other negation
+        # ("not ... without") flips it back and is not trusted.
+        return None if _NEGATED.search(norm) else "without"
+    if not required or _NEGATED.search(norm):
+        return None
+    return "require"

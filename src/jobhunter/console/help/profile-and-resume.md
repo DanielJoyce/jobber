@@ -13,6 +13,26 @@ You rarely edit it by hand. The `/prefs` page in the console is a form over the 
 previews the effect of a change before you save it. If the file does not exist yet, `/setup`
 in the console can write a starter file for you to fill in.
 
+## Application answers and your contact details
+
+The **Application answers** section of `/prefs` keeps what application forms ask again and
+again: links, notice period, relocation, work authorization, a yes or no for "Will you require
+visa sponsorship?", and your **contact details** (first, last and preferred name, email, phone,
+city, state or region, country). They are stored in the same file, under `answers:`.
+
+- They are free, never part of scoring, and **never sent to any model**: not for scoring, the
+  deep pass, drafting or the entailment check. They are not written to logs or to the change
+  history either. The browser extension reads them only when you click Fill.
+- **Copy from my resume header** reads the first lines of your resume and puts what it finds
+  (name, email, phone, city and state) in the boxes. It is a simple reader, so check every box.
+  It saves nothing; click **Save Application answers** when the boxes are right.
+- The sponsorship answer is applied by the question's wording. "Will you require sponsorship?"
+  takes your answer; "Can you work without sponsorship?" takes the opposite. A wording that is
+  not clear is only suggested, never filled for you.
+- A street address, postal code, salary, citizenship and the other never-store topics are
+  refused. If a hand edit of the `answers:` block is wrong, only the broken entry is ignored,
+  with a warning on `/prefs`; scoring and the nightly run are not affected.
+
 ## The resume
 
 Use one readable `.md` file. You can upload it in the console on `/setup`, or put it where
