@@ -537,7 +537,16 @@ class Heartbeat:
     An in-memory database cannot be opened by a second connection; it gets no thread.
     """
 
-    def __init__(self, conn: sqlite3.Connection, request_id: int, now: Callable[[], datetime]):
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        request_id: int,
+        now: Callable[[], datetime],
+        table: str = "rescore_request",
+    ):
+        if table not in ("rescore_request", "deep_request"):
+            raise ValueError(f"no heartbeat for {table!r}")
+        self._table = table
         self._path = _db_file(conn)
         self._id = request_id
         self._now = now
@@ -563,7 +572,7 @@ class Heartbeat:
             while not self._stop.wait(HEARTBEAT_EVERY_S):
                 try:
                     hb.execute(
-                        "UPDATE rescore_request SET heartbeat_at = ? "
+                        f"UPDATE {self._table} SET heartbeat_at = ? "
                         "WHERE id = ? AND status = 'running'",
                         (to_iso(self._now()), self._id),
                     )

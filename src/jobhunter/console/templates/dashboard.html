@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block head %}
+  <link rel="stylesheet" href="{{ static_url('deep.css') }}">
   <script src="{{ static_url('vendor/d3-7.9.0.min.js') }}" defer></script>
   <script src="{{ static_url('vendor/topojson-client-3.1.0.min.js') }}" defer></script>
   <script src="{{ static_url('dashboard.js') }}" defer></script>
@@ -36,6 +37,15 @@
   <a class="ach-strip-link" href="/achievements">View all &#9656;</a>
 </p>
 {% endif %}
+
+{#- Deep pass (specs/020 M11): the panel loads on click and only plans; a run needs its own confirm. -#}
+<section class="panel deep-section" id="deep-pass" aria-labelledby="deep-title">
+  <div id="deep-panel" hx-get="/deep/panel?mode=next" hx-trigger="click from:#deep-open" hx-swap="innerHTML">
+    <h2 id="deep-title">Deep pass</h2>
+    <p class="muted">A careful read of your top screened jobs by a larger model, with a report for each. It may use more money than screening, and runs only when you confirm.</p>
+    <button type="button" class="button" id="deep-open">Deep-score top N&hellip;</button>
+  </div>
+</section>
 
 <section class="panel map-panel" aria-labelledby="map-title">
   <div class="map-toolbar">

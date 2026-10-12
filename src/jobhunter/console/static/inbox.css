@@ -9,6 +9,9 @@
   /* Bucket names are long: give the chips their own wrapping row instead of squeezing them
      into a column beside the title and cost. */
   .chips { order: 3; flex: 1 1 100%; }
+  /* The deep pass is on Today and each job page too; at phone width its link would wrap the
+     header onto another row and push the first job down. */
+  .deep-link { display: none; }
 }
 .banner { margin: 16px 0; padding: 12px 16px; border: 1px solid var(--axis); border-radius: 8px; background: var(--surface-1); color: var(--text-primary); }
 .bucket { margin-top: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); overflow: hidden; }

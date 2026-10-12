@@ -16,6 +16,7 @@ import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from anthropic import transform_schema
@@ -29,7 +30,12 @@ from jobhunter.scoring import screen as stage2
 from jobhunter.scoring.buckets import compute_row
 from jobhunter.scoring.profile import Profile, scoring_inputs
 from jobhunter.scoring.rubric import DIMENSIONS, PROMPT_VERSION, RUBRIC_TEXT
-from jobhunter.scoring.scorers import compute_message_cost
+from jobhunter.scoring.scorers import (
+    PRICING_PER_MTOK,
+    ceiling_cost,
+    compute_cost,
+    compute_message_cost,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +47,21 @@ DEFAULT_SCORER = "anthropic:claude-opus-5-5"
 MAX_TOKENS = 32000
 EFFORT = "high"
 BETAS = ["server-side-fallback-2026-07-01"]
-# specs/006 "Cost": about $0.051 per deep job on Opus 5.5 ($0.064 on Opus 5); padded for the
-# spend-cap check.
+# specs/006 "Cost": about $0.051 per deep job on Opus 5.5 ($0.064 on Opus 5). Kept for
+# reference; the spend-cap admission uses ``worst_case_usd`` (specs/020 M11).
 ESTIMATED_COST_PER_REQUEST_USD = 0.08
+# Server-side fallback targets per deep model (``BETAS``, ``fallbacks: "default"``): a refused
+# request may be answered, and billed, by one of these at its own rates. Per the platform docs
+# ("Migrating to Claude Opus 5.5", "... Sonnet 5.5", "... Opus 5", checked 2026-10-11): Opus 5.5
+# falls back to Claude Opus 5 or Opus 4.8, Opus 5 (cyber) to Opus 4.8, Sonnet 5.5 to Sonnet 5.
+FALLBACK_TARGETS: dict[str, tuple[str, ...]] = {
+    "claude-opus-5-5": ("claude-opus-4-8", "claude-opus-5"),
+    "claude-opus-5": ("claude-opus-4-8",),
+    "claude-sonnet-5-5": ("claude-sonnet-5",),
+}
+# Typical input for one deep call (specs/006 "Cost", Stage 3): 5,000 in + 3,000 cached.
+_WORST_INPUT = {"input_tokens": 5000, "cache_creation_input_tokens": 0}
+_WORST_CACHED = 3000
 DEEP_PROMPT_VERSION = f"{PROMPT_VERSION}+deep1"
 DISAGREEMENT_LEVELS = 1  # flagged when buckets differ by MORE than this many levels
 _BUCKET_ORDER = [b.value for b in Bucket]  # A..G, best to worst
@@ -246,6 +264,12 @@ def shortlist(
             profile.scoring_version,
         ),
     ).fetchall()
+    return _top(conn, profile, rows, n)
+
+
+def _top(conn: sqlite3.Connection, profile: Profile, rows: list[sqlite3.Row], n: int) -> list[int]:
+    """The top ``n`` of ``rows`` (latest screen rows with ``gid``) by computed overall, best
+    first, ties by group id; rejected groups and groups with no canonical job are left out."""
     scored: list[tuple[int, int]] = []
     rejected = rejections.rejected_group_ids(conn)
     for row in rows:
@@ -260,13 +284,87 @@ def shortlist(
     return [gid for _, gid in scored[: max(n, 0)]]
 
 
+def rerun_list(
+    conn: sqlite3.Connection, profile: Profile, n: int, *, scorer: str = DEFAULT_SCORER
+) -> list[int]:
+    """Top ``n`` groups, ranked as ``shortlist`` ranks, whose deep report (current prompt and
+    ``scoring_version``) came from another model and that have none from ``scorer`` yet.
+
+    The console's "Re-run my top groups with <model>" (specs/020 M11). A paid attempt with
+    ``scorer`` that wrote nothing for the current description revision is skipped, as in
+    ``shortlist``.
+    """
+    rows = conn.execute(
+        "SELECT g.id AS gid, f.* FROM job_group g JOIN fit_score f ON f.job_group_id = g.id "
+        "WHERE f.tier = 'screen' AND f.id = ("
+        "  SELECT s.id FROM fit_score s WHERE s.job_group_id = g.id AND s.tier = 'screen' "
+        "  ORDER BY (s.scoring_version = ?) DESC, s.id DESC LIMIT 1) "
+        "AND EXISTS (SELECT 1 FROM fit_score d WHERE d.job_group_id = g.id "
+        "  AND d.tier = 'deep' AND d.prompt_version = ? AND d.scoring_version = ? "
+        "  AND d.model != ?) "
+        "AND NOT EXISTS (SELECT 1 FROM fit_score d WHERE d.job_group_id = g.id "
+        "  AND d.tier = 'deep' AND d.prompt_version = ? AND d.scoring_version = ? "
+        "  AND d.model = ?) "
+        "AND NOT EXISTS (SELECT 1 FROM score_failure x WHERE x.job_group_id = g.id "
+        "  AND x.tier = 'deep' AND x.model = ? AND x.prompt_version = ? "
+        "  AND x.scoring_version = ? AND x.input_rev = g.description_rev)",
+        (
+            profile.scoring_version,
+            DEEP_PROMPT_VERSION,
+            profile.scoring_version,
+            scorer,
+            DEEP_PROMPT_VERSION,
+            profile.scoring_version,
+            scorer,
+            scorer,
+            DEEP_PROMPT_VERSION,
+            profile.scoring_version,
+        ),
+    ).fetchall()
+    return _top(conn, profile, rows, n)
+
+
+def stored_report(
+    conn: sqlite3.Connection, group_id: int, scorer: str, profile: Profile
+) -> sqlite3.Row | None:
+    """This group's deep report from ``scorer`` under the current prompt and profile."""
+    return _stored(conn, group_id, scorer, profile)
+
+
 # ─── Scoring ────────────────────────────────────────────────────────────────
+
+
+def worst_case_usd(scorer: str = DEFAULT_SCORER) -> float:
+    """What one deep call can cost at most (specs/020 "Worst case per call").
+
+    ``MAX_TOKENS`` (thinking and output together) plus the typical input, priced at the
+    dearest of the model and its server-side fallback targets: about $0.83 for Opus 5.5,
+    answered by ``claude-opus-4-8``. A model missing from the price table is priced at the
+    table's dearest rates. A call is admitted only when the remaining cap still covers this.
+    """
+    usage = SimpleNamespace(
+        **_WORST_INPUT, cache_read_input_tokens=_WORST_CACHED, output_tokens=MAX_TOKENS
+    )
+    name = stage2.model_id(scorer)
+    if name not in PRICING_PER_MTOK:
+        return ceiling_cost(usage, batch=False)
+    models = [name, *(m for m in FALLBACK_TARGETS.get(name, ()) if m in PRICING_PER_MTOK)]
+    return max(compute_cost(usage, f"anthropic:{m}", batch=False) for m in models)
+
+
+def capped_detail(worst: float) -> str:
+    """Why a deep call was not started: the cap left is below one call's worst case."""
+    return (
+        f"spend cap reached: less than ${worst:.2f} of the scoring cap is left, and one deep "
+        f"call can cost up to ${worst:.2f} (32,000 tokens at the dearest fallback model's "
+        "rates), so it was not started. Nothing was spent on it"
+    )
 
 
 def _cost_model(message: Any, scorer: str) -> str:
     """Price by the model that actually answered (a server-side fallback may differ)."""
     answered = getattr(message, "model", None)
-    if isinstance(answered, str) and answered in stage2.PRICING_PER_MTOK:
+    if isinstance(answered, str) and answered in PRICING_PER_MTOK:
         return answered
     return scorer
 
@@ -297,9 +395,12 @@ def deep_score(
         raise ValueError(f"job group {group_id} has no canonical job")
     if group_id in rejections.rejected_group_ids(conn):
         return DeepResult("rejected", detail="the employer already rejected this posting")
-    if remaining_usd is not None and remaining_usd() < ESTIMATED_COST_PER_REQUEST_USD:
+    # Worst-case admission (specs/020 M11): a call starts only when the cap left still covers
+    # the dearest it can be, so a long report never carries a run past the cap.
+    worst = worst_case_usd(scorer)
+    if remaining_usd is not None and remaining_usd() < worst:
         logger.warning("spend cap reached: deep pass skipped for group %d", group_id)
-        return DeepResult("capped", detail="daily spend cap reached")
+        return DeepResult("capped", detail=capped_detail(worst))
 
     (job_d,) = stage2._context_rows(
         conn, [{**dict(job), "group_id": group_id}], now, rejection_days

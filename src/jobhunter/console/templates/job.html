@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
 <link rel="stylesheet" href="{{ static_url('detail.css') }}">
+<link rel="stylesheet" href="{{ static_url('deep.css') }}">
 <div class="detail" data-gid="{{ d.group_id }}" data-posting-url="{{ d.posting_href or '' }}">
   <p><a href="/inbox">&larr; inbox</a></p>
 
@@ -65,6 +66,17 @@
   {% endif %}
 
   {% if group_score %}{% with d = group_score.d, est = group_score.est, notice = group_score.notice, profile_error = group_score.profile_error, score_message = group_score.score_message, score_ok = group_score.score_ok %}{% include "_group_score.html" %}{% endwith %}{% endif %}
+
+  {% if not d.posting_rejection %}
+  {#- The deep pass panel loads on click (or at once from the inbox's d key, ?deep=1). Loading it only plans; a run needs its own confirm. -#}
+  <section class="card deep-section" id="deep-section">
+    <div id="deep-panel" hx-get="/deep/panel?group={{ d.group_id }}" hx-trigger="{% if request.query_params.get('deep') %}load{% else %}click from:#deep-open{% endif %}" hx-swap="innerHTML">
+      <h2>Deep pass</h2>
+      <p class="muted">A careful read of this posting by a larger model, with a report. It may use more money than screening, and runs only when you confirm.</p>
+      <button type="button" class="button" id="deep-open">{% if d.tier == 'deep' %}Re-run the deep pass&hellip;{% else %}Deep-score this job&hellip;{% endif %}</button>
+    </div>
+  </section>
+  {% endif %}
 
   {% if d.scored %}
   <section class="card">

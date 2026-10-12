@@ -5,6 +5,9 @@
 {%- elif pending -%}
 <a class="activity-item" href="/prefs#sec-rescore"><span class="activity-dot" aria-hidden="true"></span>Re-score queued</a>
 {%- endif -%}
+{%- if deep_running -%}
+<a class="activity-item" href="/#deep-pass"><span class="activity-dot" aria-hidden="true"></span>Deep pass {{ deep_running.done }}/{{ deep_running.total }} with {{ short(deep_label(deep_running.scorer), 40) }}</a>
+{%- endif -%}
 {%- if run_held -%}
 <span class="activity-item"><span class="activity-dot" aria-hidden="true"></span>Run in progress{% if run_label %} ({{ run_label }}){% endif %}</span>
 {%- endif -%}
@@ -12,6 +15,13 @@
 <span class="activity-item activity-done">Re-score done: {{ finished.scored }} scored, ${{ "%.2f" | format(finished.cost_usd) }} &mdash; dashboard updated <a href="/">Dashboard</a><button type="button" class="activity-dismiss" data-dismiss="{{ finished.id }}" aria-label="Dismiss">&times;</button></span>
 {%- elif finished -%}
 <span class="activity-item activity-failed">Re-score failed: {{ short(finished.error or 'unknown error') }} <a href="/prefs#sec-rescore">Details</a><button type="button" class="activity-dismiss" data-dismiss="{{ finished.id }}" aria-label="Dismiss">&times;</button></span>
+{%- endif -%}
+{%- if deep_finished and deep_finished.status == 'done' -%}
+<span class="activity-item activity-done">{{ deep_finished.scored }} deep report{{ '' if deep_finished.scored == 1 else 's' }}, ${{ "%.2f" | format(deep_finished.spent_usd) }} <a href="/inbox">Inbox</a><button type="button" class="activity-dismiss" data-dismiss-deep="{{ deep_finished.id }}" aria-label="Dismiss">&times;</button></span>
+{%- elif deep_finished and deep_finished.status == 'canceled' -%}
+<span class="activity-item activity-done">Deep pass canceled: {{ deep_finished.scored }} report{{ '' if deep_finished.scored == 1 else 's' }}, ${{ "%.2f" | format(deep_finished.spent_usd) }}<button type="button" class="activity-dismiss" data-dismiss-deep="{{ deep_finished.id }}" aria-label="Dismiss">&times;</button></span>
+{%- elif deep_finished -%}
+<span class="activity-item activity-failed">Deep pass failed: {{ short(deep_finished.error or 'unknown error') }}<button type="button" class="activity-dismiss" data-dismiss-deep="{{ deep_finished.id }}" aria-label="Dismiss">&times;</button></span>
 {%- endif -%}
 {#- Achievement notice (specs/021): aria-live off so the band's own live region does not re-read it on every poll; app.js announces it once through #ach-announce. No animation: a fade would replay on every swap. The dismiss posts exactly the ids rendered here. -#}
 {%- if ach -%}
@@ -24,7 +34,7 @@
 {%- if cfg -%}
 <span class="activity-item activity-config{% if cfg.errors or cfg.replaced %} activity-failed{% endif %}"><span>{{ cfg_summary }}
 {%- for line in cfg.bar_errors %} <code>{{ line }}</code>{% endfor -%}
-{%- if cfg.can_apply and running %} A running re-score keeps the settings it started with.{% endif -%}
+{%- if cfg.can_apply and (running or deep_running) %} {% if running and deep_running %}A running re-score and deep pass keep the settings they started with.{% elif deep_running %}A running deep pass keeps the settings it started with.{% else %}A running re-score keeps the settings it started with.{% endif %}{% endif -%}
 {%- if cfg_restart %} {% if cfg.needs_restart %}Restart needed{% else %}Or restart to pick it up{% endif %}: <code>{{ cfg_restart }}</code>{% if cfg.replaced %} (check the file first: <code>{{ cfg_ctr_doctor }}</code>){% endif %}.{% endif -%}
 </span>
 {%- if cfg.can_apply -%}

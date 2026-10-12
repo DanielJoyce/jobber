@@ -51,4 +51,13 @@
   </div>
   {% endif %}
 </form>
+{% if r.key == "deep" %}
+{#- The deep pass panel (specs/020 M11): loads on click and only plans; a run needs its own confirm. -#}
+<div class="deep-section" id="models-deep-run">
+  <div id="deep-panel" hx-get="/deep/panel?mode=next" hx-trigger="click from:#deep-open" hx-swap="innerHTML">
+    <p class="muted">Run the deep pass with the saved model. It may use more money than screening, and runs only when you confirm.</p>
+    <button type="button" class="button" id="deep-open">Deep-score&hellip;</button>
+  </div>
+</div>
+{% endif %}
 </section>

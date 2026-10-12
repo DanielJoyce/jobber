@@ -388,3 +388,18 @@ def test_shortlist_skips_groups_deep_scored_by_an_older_model(conn, profile):
     new = FakeClient(final(report()))
     assert deep.deep_score(conn, new, profile, g2, now=NOW).status == "scored"
     assert len(new.calls) == 1
+
+
+def test_a_call_is_admitted_only_when_the_cap_covers_its_worst_case(conn, profile):
+    """specs/020 M11: the CLI's --deep and --deep-group use the same admission as the console.
+    Opus 5.5's worst case is 32,000 tokens at Opus 4.8's rates (its fallback), about $0.83."""
+    worst = deep.worst_case_usd("anthropic:claude-opus-5-5")
+    assert worst == pytest.approx(0.8265)
+    assert deep.worst_case_usd("anthropic:claude-sonnet-5-5") == pytest.approx(0.3306)
+    gid = add_group(conn, 1)
+    client = FakeClient(final(report()))
+    res = deep.deep_score(conn, client, profile, gid, now=NOW, remaining_usd=lambda: worst - 0.01)
+    assert res.status == "capped" and client.calls == []
+    assert "one deep call can cost up to $0.83" in res.detail
+    ok = deep.deep_score(conn, client, profile, gid, now=NOW, remaining_usd=lambda: worst)
+    assert ok.status == "scored"

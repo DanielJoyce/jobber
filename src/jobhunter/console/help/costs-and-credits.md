@@ -14,7 +14,8 @@ Spends API credits (or OpenRouter credits):
   browser extension
 - `jobhunter score --submit` and `--group`
 - `jobhunter backfill`, which scores older jobs under its own budget (see the caps)
-- the deep pass: `jobhunter score --deep 10` or `--deep-group`
+- the deep pass: **Deep pass** on Today or a job page in the console, or
+  `jobhunter score --deep 10` and `--deep-group`
 - a draft made with the `api` runner (see [Drafting](drafting.md))
 
 Never spends: opening `/setup`, `jobhunter doctor`, the free live checks (`doctor --live`
@@ -88,18 +89,46 @@ than one job alone.
 
 The deep pass reads the full posting for your top screened jobs and writes a report, on
 `deep_scorer` (an `anthropic:` model). It is the dear one: roughly 5 cents per job on the
-default model, against a small fraction of a cent for screening. It runs only when you ask:
+default model, against a small fraction of a cent for screening. It runs only when you ask.
+
+**In the console.** Press **Deep-score top N** on Today (the Inbox's **Deep pass** link goes
+there), **Deep-score…** under the Deep pass row on [Models](/models), or **Deep-score this job**
+on a job page (the Inbox's `d` key opens it). The panel says
+plainly that this may use more money than screening, and shows, before anything is spent:
+
+- which jobs it would deep-score: the top N by screen score with no deep report yet, or (Re-run
+  my top groups) those whose report came from another model;
+- the estimate (per job from your measured deep runs on that model, else the price table,
+  times the jobs listed), the worst case for one job, and the ceiling;
+- what is left of today's and this week's cap, and how many of the N fit under it now.
+
+Opening the panel or changing N spends nothing. Only **Deep-score N jobs, up to $X**, then OK
+in the confirm box, starts a run. If the plan changed in the meantime (new scores, a profile
+or model change), nothing runs and the panel shows the new plan. A run goes on in the
+background while you browse; the activity band shows "Deep pass 3/10", then the result. Cancel
+stops it after the call in flight. A second click while one runs only shows its progress.
+
+The button appears only in a browser on the machine running the console. Opened from anywhere
+else, the panel gives the command instead. A deep run takes the run lock, so it does not start
+while the nightly run, a re-score or another `jobhunter score` holds it.
+
+**From a terminal:**
 
 ```bash
 jobhunter score --deep 10
+jobhunter score --deep-group 1234
 ```
 
-Before each job it checks that at least $0.08 of the scoring cap is left, and stops with
-`daily spend cap reached` otherwise. Admission is deliberately stricter than the average: one
-call can produce up to 32,000 tokens, and a model that falls back to another can bill at the
-dearer model's rates. The design in specs/020 (model selection) will admit a deep call only when
-the cap still covers its worst case, which is about 85 cents on the default model, and the
-last part of a day's cap then goes unused by deep runs.
+**The worst case.** One call can produce up to 32,000 tokens, and a model that falls back to
+another can bill at the dearer model's rates: about $0.83 on the default model. So a deep call
+starts only when what is left of the scoring cap still covers that worst case, in the console
+and in the CLI alike; otherwise it stops with `spend cap reached`, and the message names the cap
+that binds (daily or weekly) and what to change. When it stops before deep-scoring anything,
+`jobhunter score --deep` exits with status 1. The
+last ~$0.83 of a day's cap therefore goes unused by deep runs, and **with a daily cap below
+about $0.83 the deep pass cannot run at all**: raise `[scoring] daily_cap_usd` if you want it.
+A console run also has a ceiling, the estimate plus 25% plus one worst-case call, and starts no
+call that could pass it.
 
 ## Credits are separate accounts
 

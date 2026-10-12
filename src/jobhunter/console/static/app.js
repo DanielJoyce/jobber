@@ -65,11 +65,17 @@
   document.addEventListener("htmx:configRequest", function (e) {
     if (e.detail.path !== "/activity") return;
     try { e.detail.parameters.dismissed = sessionStorage.getItem("jh-activity-dismissed") || ""; } catch (x) {}
+    try { e.detail.parameters.dismissed_deep = sessionStorage.getItem("jh-activity-dismissed-deep") || ""; } catch (x) {}
   });
   document.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest(".activity-dismiss");
     if (!b) return;
-    try { sessionStorage.setItem("jh-activity-dismissed", b.getAttribute("data-dismiss")); } catch (x) {}
+    // A deep pass line (specs/020 M11) is remembered apart from the re-score line.
+    var deep = b.hasAttribute("data-dismiss-deep");
+    try {
+      sessionStorage.setItem(deep ? "jh-activity-dismissed-deep" : "jh-activity-dismissed",
+                             b.getAttribute(deep ? "data-dismiss-deep" : "data-dismiss"));
+    } catch (x) {}
     var box = document.getElementById("activity");
     // Only this line: the achievement notice beside it stays.
     var item = b.closest(".activity-item");

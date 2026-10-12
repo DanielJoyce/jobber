@@ -1,0 +1,46 @@
+{#- The deep pass panel (specs/020 M11), loaded into #deep-panel on the job page and Today. Rendering it plans only: no network, no write. Only the confirm POST to /deep/run starts a run. -#}
+{% set p = dp.plan %}
+<h3 class="deep-title">Deep pass with {{ dp.model }}</h3>
+<p class="deep-warning" id="deep-warning"><strong>This may use more money than screening</strong>{% if p and p.per_job_usd is not none %}: about ${{ "%.2f" | format(p.per_job_usd) }} a job ({{ p.per_job_source }}){% if p.times_screen and p.times_screen > 1 %}, about {{ p.times_screen }} times the screen{% endif %}{% endif %}. It runs only when you confirm, and never on its own.</p>
+{% if dp.message %}<div class="banner banner-error" role="alert" id="deep-message">{{ dp.message }}</div>{% endif %}
+{% if dp.shown %}{% with r = dp.shown, remote = dp.remote %}{% include "_deep_progress.html" %}{% endwith %}{% endif %}
+{% if dp.profile_error %}
+<p class="muted">Fix the preferences file first: {{ dp.profile_error }}</p>
+{% elif dp.running %}
+{% elif p %}
+<form id="deep-form" class="deep-form" hx-disinherit="hx-confirm" hx-post="/deep/run" hx-target="#deep-panel" hx-swap="innerHTML" hx-disabled-elt="#deep-run"
+      hx-confirm="Deep-score {{ p.total }} job{{ '' if p.total == 1 else 's' }} with {{ p.model }}? Estimated ${{ '%.2f' | format(p.estimated_usd) }}, up to ${{ '%.2f' | format(p.max_usd) }}. This spends API credits and costs more than screening.">
+  <input type="hidden" name="plan" value="{{ p.token }}">
+  {% if p.mode == 'group' %}
+  <input type="hidden" name="group" value="{{ dp.group_id }}">
+  {% else %}
+  <div class="grid2">
+    <label>How many
+      <select name="n" hx-get="/deep/panel" hx-trigger="change" hx-target="#deep-panel" hx-swap="innerHTML" hx-include="closest form">
+        {% for c in dp.n_choices %}<option value="{{ c }}"{% if c == p.n %} selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    <fieldset class="deep-mode">
+      <legend class="visually-hidden">Which jobs</legend>
+      <label><input type="radio" name="mode" value="next"{% if p.mode == 'next' %} checked{% endif %} hx-get="/deep/panel" hx-trigger="change" hx-target="#deep-panel" hx-swap="innerHTML" hx-include="closest form"> Next unscored: the top {{ p.n }} by screen score with no deep report yet</label>
+      <label><input type="radio" name="mode" value="rerun"{% if p.mode == 'rerun' %} checked{% endif %} hx-get="/deep/panel" hx-trigger="change" hx-target="#deep-panel" hx-swap="innerHTML" hx-include="closest form"> Re-run my top groups with {{ p.model }}: those with a report from another model</label>
+    </fieldset>
+  </div>
+  {% endif %}
+  {% if p.note %}<p class="hint" id="deep-note">{{ p.note }}</p>{% endif %}
+  {% if p.listed %}
+  <details class="deep-list"{% if p.total <= 5 %} open{% endif %}>
+    <summary>Would deep-score {{ p.total }} job{{ '' if p.total == 1 else 's' }}</summary>
+    <ul class="plain">{% for item in p.listed %}<li><a href="/job/{{ item.group_id }}">{{ item.label }}</a></li>{% endfor %}</ul>
+  </details>
+  <p id="deep-estimate">Estimate <strong>about ${{ "%.2f" | format(p.estimated_usd) }}</strong> &middot; worst case for one job ${{ "%.2f" | format(p.worst_usd) }} &middot; ceiling <strong>${{ "%.2f" | format(p.max_usd) }}</strong></p>
+  {% endif %}
+  <p id="deep-caps" class="muted">Left today ${{ "%.2f" | format([p.daily_left, 0] | max) }} of ${{ "%.2f" | format(p.daily_cap) }}, this week ${{ "%.2f" | format([p.weekly_left, 0] | max) }} of ${{ "%.2f" | format(p.weekly_cap) }}. A call starts only when the cap and the ceiling still cover its worst case.{% if p.total and not p.refusal and p.fit_now < p.total %} Only {{ p.fit_now }} of {{ p.total }} fit under the cap now; the run stops there.{% endif %}</p>
+  {% if p.refusal %}<p class="field-error" role="alert" id="deep-refusal">{{ p.refusal }}</p>{% endif %}
+  {% if dp.remote %}
+  <p class="hint" id="deep-remote">The deep pass spends your credits, so it starts only from a browser on the machine running the console. There, or in a terminal, run <code>{{ dp.command }}</code>.</p>
+  {% else %}
+  <div class="actions"><button type="submit" class="button primary" id="deep-run"{% if p.total == 0 or p.refusal %} disabled{% endif %}>Deep-score {{ p.total }} job{{ '' if p.total == 1 else 's' }}, up to ${{ "%.2f" | format(p.max_usd) }}</button></div>
+  {% endif %}
+</form>
+{% endif %}

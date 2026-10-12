@@ -71,7 +71,7 @@ RUNNER_LABELS = {"cli": "Subscription (claude CLI)", "api": "API key"}
 EFFORTS = ("low", "medium", "high")
 ALSO_USED_BY = {
     "screen": "Score now, backfill, llm bench, a hand-run score --submit, queued re-scores",
-    "deep": "jobhunter score --deep N and --deep-group GID",
+    "deep": "Deep pass on Today and the job page, jobhunter score --deep N and --deep-group GID",
 }
 # Typical request sizes for the drafting estimate, as the packet page uses (packet_docs).
 TYPICAL_CHARS = {"resume": 32_000, "cover_letter": 36_000, "question_draft": 20_000}
@@ -935,8 +935,9 @@ def register(
             spec = text_of(settings.scoring.deep_scorer) or "the new model"
             out.append(
                 f"New deep runs use {spec}. Groups already deep-scored keep their reports, "
-                "and `jobhunter score --deep N` moves on to the next N; re-run one group with "
-                "`jobhunter score --deep-group GID`."
+                "and Deep-score top N (or `jobhunter score --deep N`) moves on to the next N. "
+                "To re-run your top groups with it, use Deep-score below and pick Re-run; "
+                "one group: its job page, or `jobhunter score --deep-group GID`."
             )
         if any(mc.USE_OF[n] in ("drafting", "check") for n in changed):
             out.append("The next Generate uses it.")

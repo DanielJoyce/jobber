@@ -636,12 +636,14 @@ def _score_mode(
             _note_already_scored(conn, profile, scorer)
         if deep is not None or deep_group is not None:
             from jobhunter.scoring import deep as stage3
+            from jobhunter.scoring import deep_run
 
             deep_scorer = settings.scoring.deep_scorer
             gids = [deep_group] if deep_group is not None else None
             if gids is None:
                 assert deep is not None
                 gids = stage3.shortlist(conn, profile, deep, scorer=deep_scorer)
+            deep_spent = 0.0
             for gid in gids:
                 try:
                     res = stage3.deep_score(
@@ -657,10 +659,16 @@ def _score_mode(
                 except anthropic.APIError as exc:
                     typer.echo(f"group {gid}: API error: {exc}", err=True)
                     continue
+                if res.status == "capped":
+                    # A call starts only when the cap covers its worst case (specs/020 M11).
+                    why = deep_run.cap_message(conn, settings.scoring, now, deep_scorer)
+                    typer.echo(f"group {gid}: not started, spend cap reached. {why}", err=True)
+                    if deep_spent == 0.0:
+                        raise typer.Exit(1)  # nothing was deep-scored: not a success
+                    break
+                deep_spent += res.cost_usd
                 flag = " DISAGREES with screen" if res.disagreement else ""
                 typer.echo(f"group {gid}: {res.status}{flag} {res.detail}".rstrip())
-                if res.status == "capped":
-                    break
         elif submit and client is None:
             try:
                 sync_scorer = scorer_from_string(scorer, scoring=settings.scoring)
