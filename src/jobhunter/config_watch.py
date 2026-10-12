@@ -191,12 +191,12 @@ class FieldChange:
     new: str | None = None
     note: str = ""  # "changed", "changed (not shown)", "3 entries, was 2"
     source: str = "config.toml"  # or "models.toml" (specs/020)
-    held: bool = False  # reloadable, but held with its scorer section until a restart
+    held: str = ""  # why a reloadable field waits for a restart ("held with its API key")
 
     @property
     def class_text(self) -> str:
         if self.held:
-            return "needs restart (held with its API key)"
+            return f"needs restart ({self.held})"
         return CLASS_TEXT[self.cls]
 
 
@@ -222,27 +222,43 @@ def describe(field_name: str, old: Any, new: Any) -> tuple[str | None, str | Non
     return None, None, "changed"
 
 
-# Scorer sections whose endpoint reloads but whose credential does not. A reload of the
-# endpoint alone would send the running key to the new host, so a section is held whole while
-# its credential side (api_key_env, or any .env file) has a pending change.
+# Scorer sections. Their endpoints are restart fields (config.RESTART_FIELDS); the rest of a
+# section waits with them while its credential side (api_key_env, or any .env file) has a
+# pending change, so a section never runs half old, half new.
 SCORER_SECTIONS = ("scoring.openai_compat", "scoring.openrouter", "scoring.local")
+HELD_KEY = "held with its API key"
+HELD_DATA_DIR = "models.toml moves with the data folder"
 
 
-def held_sections(running: Settings, new: Settings, env_pending: bool = False) -> set[str]:
-    """Scorer sections Apply must keep at their running value: every one while a ``.env``
-    change is pending (a key's value may change with its endpoint), else those with a changed
-    restart-class field (``api_key_env``, ``catalog_cache``)."""
-    if env_pending:
-        return set(SCORER_SECTIONS)
-    held: set[str] = set()
-    for name in config.leaf_fields():
+def _model_fields() -> list[str]:
+    return [f"{s}.{k}" for s, keys in config.MODEL_KEYS.items() for k in keys]
+
+
+def held_fields(running: Settings, new: Settings, env_pending: bool = False) -> dict[str, str]:
+    """Reloadable fields Apply must keep at their running value, with the reason.
+
+    - Every field of a scorer section while a ``.env`` change is pending, or while one of its
+      restart fields (``api_key_env``, ``catalog_cache``, the endpoint) changed.
+    - The model keys (``config.MODEL_KEYS``) when ``paths.data_dir`` changed: the new values
+      come from another data folder's models.toml, which belongs with the restart.
+    """
+    leaves = config.leaf_fields()
+    sections: set[str] = set(SCORER_SECTIONS) if env_pending else set()
+    for name in leaves:
         section = name.rsplit(".", 1)[0]
         if (
             section in SCORER_SECTIONS
             and config.reload_class(name) != RELOAD
             and config.field_value(running, name) != config.field_value(new, name)
         ):
-            held.add(section)
+            sections.add(section)
+    held = {
+        n: HELD_KEY
+        for n in leaves
+        if config.reload_class(n) == RELOAD and n.rsplit(".", 1)[0] in sections
+    }
+    if running.paths.data_dir != new.paths.data_dir:
+        held.update({n: HELD_DATA_DIR for n in _model_fields()})
     return held
 
 
@@ -255,24 +271,24 @@ def diff(
     models_keys: Iterable[str] = (),
 ) -> list[FieldChange]:
     """Every leaf field whose value differs, classified. ``overrides`` are fields set on the
-    command line (``--host``/``--port``): a change to them has no effect. A reloadable field
-    in a held scorer section is classed as restart. ``models_keys`` are the fields that come
+    command line (``--host``/``--port``): a change to them has no effect. A held reloadable
+    field (``held_fields``) is classed as restart. ``models_keys`` are the fields that come
     from models.toml (listed under that file)."""
     pinned = set(overrides)
     from_models = set(models_keys)
-    held = held_sections(running, new, env_pending)
+    held = held_fields(running, new, env_pending)
     out: list[FieldChange] = []
     for name in config.leaf_fields():
         a, b = config.field_value(running, name), config.field_value(new, name)
         if a == b:
             continue
         cls = NO_EFFECT if name in pinned else config.reload_class(name)
-        is_held = cls == RELOAD and name.rsplit(".", 1)[0] in held
-        if is_held:
+        why = held.get(name, "") if cls == RELOAD else ""
+        if why:
             cls = RESTART
         old, shown_new, note = describe(name, a, b)
         source = "models.toml" if name in from_models else "config.toml"
-        out.append(FieldChange(name, cls, old, shown_new, note, source, is_held))
+        out.append(FieldChange(name, cls, old, shown_new, note, source, why))
     return out
 
 
@@ -285,18 +301,26 @@ def _set_leaf(settings: BaseModel, name: str, value: Any) -> None:
 
 
 def partial(running: Settings, new: Settings, *, env_pending: bool = False) -> Settings:
-    """``new`` with every restart-class field kept at its running value (``paths`` and
-    ``console`` whole, and each held scorer section whole), so Apply swaps in only what
-    reloads on its own."""
+    """``new`` with every restart-class or held field kept at its running value (``paths`` and
+    ``console`` whole), so Apply swaps in only what reloads on its own. When the data folder
+    changes, the running models.toml layers stay too (``_models`` and the blocked scorers)."""
     out = new.model_copy(deep=True)
     object.__setattr__(out, "paths", running.paths)
     object.__setattr__(out, "console", running.console)
-    held = held_sections(running, new, env_pending)
+    held = held_fields(running, new, env_pending)
     for name in config.leaf_fields():
         if name.startswith(("paths.", "console.")):
             continue
-        if config.reload_class(name) != RELOAD or name.rsplit(".", 1)[0] in held:
+        if config.reload_class(name) != RELOAD or name in held:
             _set_leaf(out, name, config.field_value(running, name))
+    if running.paths.data_dir != new.paths.data_dir:
+        for attr, src, dst in (
+            ("_models", running, out),
+            ("_blocked", running.scoring, out.scoring),
+        ):
+            private = getattr(src, "__pydantic_private__", None) or {}
+            if attr in private:
+                dst.__pydantic_private__[attr] = private[attr]
     return out
 
 
@@ -403,14 +427,22 @@ class _Loaded:
 
 
 def _layer_keys(layers: Any) -> frozenset[str]:
-    """Dotted fields a ``config.Layers`` took (or tried to take) from models.toml."""
+    """Dotted fields whose effective value comes from models.toml: its valid keys, and the
+    spending keys it blocks. An invalid [apply] key falls back to config.toml, so an edit there
+    is a config.toml change."""
     if not isinstance(layers, config.Layers):
         return frozenset()
-    keys = {
-        f"{s}.{k}" for part in (layers.layer, layers.invalid) for s, d in part.items() for k in d
-    }
+    keys = {f"{s}.{k}" for s, d in layers.layer.items() for k in d}
     keys |= {f"scoring.{k}" for k in layers.blocked}
     return frozenset(keys)
+
+
+def _is_blank(path: Path) -> bool:
+    """True when ``path`` reads as TOML that sets nothing (empty, whitespace, only comments)."""
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8")) == {}
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
 
 
 class ConfigWatcher:
@@ -452,6 +484,9 @@ class ConfigWatcher:
         path = self._config_path()
         self._start_fp = fingerprint(path, stat)
         self._start_digest = _file_digest(path)
+        # A file that set something at start and now sets nothing (empty, or only comments)
+        # is a save in progress or a mistake, never a change back to the defaults.
+        self._start_has_settings = bool(self._start_fp[0]) and not _is_blank(path)
         self._loaded: _Loaded | None = None
         self._replaced = False
         if start_env is None:
@@ -545,7 +580,7 @@ class ConfigWatcher:
             errors: tuple[str, ...] = ("config.toml is missing; save it again",)
             self._loaded = _Loaded(fp, digest, None, errors, mfp, mdigest)
             return
-        if start[0] and start[3] > 0 and fp[0] and fp[3] == 0:
+        if self._start_has_settings and fp[0] and _is_blank(path):
             errors = ("config.toml is empty; save it again",)
             self._loaded = _Loaded(fp, digest, None, errors, mfp, mdigest)
             return

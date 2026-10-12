@@ -45,6 +45,12 @@ DOCTOR_ONLY = frozenset({"config.file", "db.schema"})
 # The live "Test (free)" button is S6; until it lands the row points at the command only.
 TEST_BUTTON_TEXT = re.compile(r"use Test \(free\),? or (?:run )?(`[^`]+`)")
 CLIENT_SECRET = "jobhunter_google_client"
+# Rows whose value comes only from settings that Apply reloads (config.RELOADABLE), so after an
+# Apply their rule-6 note says "read at HH:MM (applied)". Every other row is read at start:
+# secrets, paths, the bind address (console.exposure), and the scorer rows (their credential).
+APPLIED_ROWS = frozenset(
+    {"fetch.contact", "scorer.caps", "mail.address", "mail.label", "apply.runner", "apply.cap"}
+)
 GMAIL_HELP = "/help/email-alerts#step-1-google-client-json"
 
 # A step is blocked by the earlier steps it needs: `mail auth` needs the client JSON, and
@@ -231,6 +237,7 @@ def register(
     Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
     started = now()
     templates.env.globals["COMMAND_PREFIXES"] = COMMAND_PREFIXES
+    templates.env.globals["APPLIED_ROWS"] = APPLIED_ROWS
 
     def settings_of(request: Request) -> Settings:
         return request.app.state.settings

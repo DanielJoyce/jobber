@@ -458,36 +458,45 @@ def test_reload_table_marks_each_table():
 
 
 @pytest.mark.parametrize("section", ["openai_compat", "openrouter", "local"])
-def test_endpoint_and_key_name_changed_together_are_held_whole(section):
-    """The running key must never go to a new host: a section whose api_key_env changes is
-    held at its running value, base_url included, and listed as needing a restart."""
+def test_an_endpoint_change_alone_never_reloads(section):
+    """A key resolved at start (a podman secret's *_FILE, the process environment) can rotate
+    unseen, so a new host must never get the running key: an endpoint is a restart field."""
     a = _settings(scoring={section: {"base_url": "https://provider-a.example/v1"}})
-    b = _settings(
-        scoring={
-            section: {"base_url": "https://provider-b.example/v1", "api_key_env": "PROVIDER_B_KEY"}
-        }
-    )
-    changes = {c.field: c for c in cw.diff(a, b)}
-    url = changes[f"scoring.{section}.base_url"]
-    assert url.cls == "restart" and url.held
-    assert "needs restart" in url.class_text
-    new = cw.partial(a, b)
-    assert getattr(new.scoring, section) == getattr(a.scoring, section)
-
-
-def test_endpoint_with_a_pending_env_change_is_held():
-    a = _settings(scoring={"openai_compat": {"base_url": "https://provider-a.example/v1"}})
-    b = _settings(
-        scoring={"openai_compat": {"base_url": "https://provider-b.example/v1"}},
-        fetch={"default_rps": 0.5},
-    )
-    (url,) = [c for c in cw.diff(a, b, env_pending=True) if c.field.endswith("base_url")]
+    b = _settings(scoring={section: {"base_url": "https://provider-b.example/v1"}})
+    (url,) = cw.diff(a, b)
     assert url.cls == "restart"
+    assert cw.partial(a, b) == a
+    state = cw.State(fields=(url,), new_settings=b)
+    assert not state.can_apply and state.needs_restart
+
+
+def test_local_runtime_picks_an_endpoint_and_needs_a_restart():
+    a = _settings()
+    b = _settings(scoring={"local": {"runtime": "ollama"}})
+    assert [c.cls for c in cw.diff(a, b)] == ["restart"]
+    assert cw.partial(a, b).scoring.local.runtime == "llama.cpp"
+
+
+@pytest.mark.parametrize("section", ["openai_compat", "openrouter", "local"])
+def test_a_section_whose_key_name_changes_is_held_whole(section):
+    a = _settings()
+    b = _settings(scoring={section: {"max_concurrency": 4, "api_key_env": "PROVIDER_B_KEY"}})
+    changes = {c.field: c for c in cw.diff(a, b)}
+    held = changes[f"scoring.{section}.max_concurrency"]
+    assert held.cls == "restart" and held.held == cw.HELD_KEY
+    assert held.class_text == "needs restart (held with its API key)"
+    assert getattr(cw.partial(a, b).scoring, section) == getattr(a.scoring, section)
+
+
+def test_a_pending_env_change_holds_every_scorer_section():
+    a = _settings()
+    b = _settings(scoring={"openrouter": {"max_concurrency": 4}}, fetch={"default_rps": 0.5})
+    (held,) = [c for c in cw.diff(a, b, env_pending=True) if c.field.startswith("scoring.")]
+    assert held.cls == "restart"
     new = cw.partial(a, b, env_pending=True)
-    assert new.scoring.openai_compat.base_url == "https://provider-a.example/v1"
+    assert new.scoring.openrouter.max_concurrency == 2
     assert new.fetch.default_rps == 0.5  # unrelated reloads still apply
-    # Without a pending .env change the endpoint alone reloads.
-    assert cw.partial(a, b).scoring.openai_compat.base_url == "https://provider-b.example/v1"
+    assert cw.partial(a, b).scoring.openrouter.max_concurrency == 4  # nothing pending
 
 
 def test_watcher_holds_the_endpoint_while_env_changes(env):
@@ -571,3 +580,54 @@ def test_models_toml_is_watched_and_listed_under_its_name(tmp_path):
     new = cw.partial(running, state.new_settings)
     assert new.scoring.screen_scorer == "local:qwen3"
     assert new.scoring.weekly_cap_usd == 12.0
+
+
+def _data_config(tmp_path, name: str, models: str = "") -> Path:
+    data = tmp_path / name
+    data.mkdir(exist_ok=True)
+    if models:
+        (data / "models.toml").write_text(models)
+    cfg = tmp_path / f"{name}.toml"
+    cfg.write_text(f'[paths]\ndata_dir = "{data}"\n')
+    return cfg
+
+
+def test_a_data_dir_change_holds_the_model_keys_and_the_running_layers(tmp_path):
+    a = load_settings(_data_config(tmp_path, "a", '[scoring]\nscreen_scorer = "local:qwen3"\n'))
+    b = load_settings(_data_config(tmp_path, "b", '[scoring]\nscreen_scorer = "local:other"\n'))
+    changes = {c.field: c for c in cw.diff(a, b)}
+    held = changes["scoring.screen_scorer"]
+    assert held.cls == "restart" and held.held == cw.HELD_DATA_DIR
+    new = cw.partial(a, b)
+    assert new.scoring.screen_scorer == "local:qwen3"
+    assert new._models is a._models  # the running models.toml layers, not the new folder's
+
+
+def test_a_comment_only_config_counts_as_empty(env):
+    env.cfg.write_text("[scoring]\ndaily_cap_usd = 0.25\n")
+    running = load_settings(env.cfg)
+    w = env.make()
+    env.cfg.write_text("# everything commented out\n   \n")
+    state = w.check(running)
+    assert state.errors == ("config.toml is empty; save it again",) and not state.can_apply
+
+
+def test_a_comment_only_config_at_start_is_not_an_error(env):
+    env.cfg.write_text("# nothing yet\n")
+    running = load_settings(env.cfg)
+    w = env.make()
+    env.cfg.write_text("# still nothing\n")
+    assert not w.check(running).pending
+
+
+def test_an_invalid_models_key_does_not_claim_a_config_edit(tmp_path):
+    cfg = _data_config(tmp_path, "d", '[apply]\nrunner = "bogus"\n')
+    running = load_settings(cfg)
+    clock = Clock()
+    w = cw.ConfigWatcher(
+        config_path=lambda: cfg, env_candidates=lambda: [], clock=clock,
+        container_mode=False, start_env={},
+    )  # fmt: skip
+    cfg.write_text(cfg.read_text() + '[apply]\nrunner = "api"\n')
+    (change,) = w.check(running).fields
+    assert change.field == "apply.runner" and change.source == "config.toml"

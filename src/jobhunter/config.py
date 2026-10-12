@@ -847,7 +847,6 @@ RELOADABLE: frozenset[str] = frozenset(
         "scoring.weekly_cap_usd",
         "scoring.deep_shortlist",
         "scoring.employer_rejection_days",
-        "scoring.openai_compat.base_url",
         "scoring.openai_compat.input_usd_per_mtok",
         "scoring.openai_compat.output_usd_per_mtok",
         "scoring.openai_compat.max_concurrency",
@@ -855,7 +854,6 @@ RELOADABLE: frozenset[str] = frozenset(
         "scoring.openai_compat.jobs_per_request",
         "scoring.openai_compat.max_input_tokens_per_request",
         "scoring.openai_compat.est_cost_per_request_usd",
-        "scoring.openrouter.base_url",
         "scoring.openrouter.title",
         "scoring.openrouter.referer",
         "scoring.openrouter.provider",
@@ -864,8 +862,6 @@ RELOADABLE: frozenset[str] = frozenset(
         "scoring.openrouter.jobs_per_request",
         "scoring.openrouter.max_input_tokens_per_request",
         "scoring.openrouter.est_cost_per_request_usd",
-        "scoring.local.runtime",
-        "scoring.local.base_url",
         "scoring.local.timeout_s",
         "scoring.local.max_concurrency",
         "scoring.local.json_schema",
@@ -907,6 +903,13 @@ RESTART_FIELDS: frozenset[str] = frozenset(
         "scoring.openrouter.api_key_env",
         "scoring.local.api_key_env",
         "scoring.openrouter.catalog_cache",
+        # An endpoint goes with its credential, which is resolved at start and may rotate
+        # unseen (a podman secret's *_FILE, the process environment): a new host must never
+        # get the running key, so a scorer endpoint changes only with a restart.
+        "scoring.openai_compat.base_url",
+        "scoring.openrouter.base_url",
+        "scoring.local.base_url",
+        "scoring.local.runtime",  # picks the default endpoint
     }
 )
 

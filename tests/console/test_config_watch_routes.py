@@ -90,7 +90,7 @@ def apply(client: TestClient, console: Console, **kw: Any):
 
 # --- every reloadable field changed --------------------------------------------------------------
 
-LITERAL_ALT = {"apply.runner": "api", "apply.effort": "high", "scoring.local.runtime": "ollama"}
+LITERAL_ALT = {"apply.runner": "api", "apply.effort": "high"}
 
 
 def changed_value(leaf: str, old: Any) -> Any:
@@ -346,18 +346,20 @@ def test_every_settings_annotation_is_handled_by_the_swap_test():
     assert get_args(config.Apply.model_fields["runner"].annotation)
 
 
-def test_apply_with_a_pending_env_edit_keeps_the_running_endpoint(console):
+def test_apply_with_a_pending_env_edit_keeps_the_running_scorer_sections(console):
     client = console.client()
     console.write(
         "[scoring]\nweekly_cap_usd = 20.0\n"
-        '[scoring.openai_compat]\nbase_url = "https://provider-b.example/v1"\n'
+        "[scoring.openai_compat]\nmax_concurrency = 5\n"
+        '[scoring.openrouter]\nbase_url = "https://provider-b.example/v1"\n'
     )
     console.env_file.write_text("OPENAI_COMPAT_API_KEY=placeholder\n")
     page = client.get("/config/changes").text
     assert "held with its API key" in page
     apply(client, console)
     assert console.settings.scoring.weekly_cap_usd == 20.0
-    assert console.settings.scoring.openai_compat.base_url == "http://localhost:8000"
+    assert console.settings.scoring.openai_compat.max_concurrency == 2
+    assert console.settings.scoring.openrouter.base_url == "https://openrouter.ai/api/v1"
 
 
 def test_non_loopback_peer_gets_the_command_for_a_reload_only_change(console):
@@ -379,3 +381,12 @@ def test_deleted_config_offers_no_apply(console):
     r = apply(client, console, follow_redirects=False)
     assert r.headers["location"].endswith("flash=nothing")
     assert console.settings.scoring.daily_cap_usd == 2.0
+
+
+def test_only_rows_backed_by_reloadable_settings_say_applied():
+    from jobhunter import readiness as rd
+    from jobhunter.console import setup_routes
+
+    assert set(rd.CHECK_IDS) >= setup_routes.APPLIED_ROWS
+    for restart_only in ("console.exposure", "secrets.valid", "data.permissions", "scorer.screen"):
+        assert restart_only not in setup_routes.APPLIED_ROWS

@@ -158,9 +158,10 @@ line appears there: "config.toml changed: 3 settings", with **Apply now**, **Det
 - **Details** in the console lists each changed setting and whether it reloads. Values are
   shown only for caps, scorers, models, rates, timeouts, ports and switches. Anything personal
   (your contact, alerts address, sender lists), URLs and paths show only "changed".
-- A scorer's endpoint (`base_url`) changed together with its `api_key_env`, or while a `.env`
-  change is waiting, needs a restart too: applying the new endpoint alone would send the old
-  key to the new host, so that whole `[scoring.*]` table waits for the restart.
+- A scorer's endpoint (`base_url`, and `runtime` for local models) always needs a restart: the
+  API key is read at start, so a new endpoint must come with the key read then, never the old
+  one. While its `api_key_env` or a `.env` file has a change waiting, the rest of that
+  `[scoring.*]` table waits for the restart too.
 - A change to `models.toml` (the models you pick on the console's models page, or with
   `jobhunter models set`) is listed under that file and applies the same way.
 - If `config.toml` disappears or is emptied, the console keeps its settings and says so; it
@@ -182,9 +183,9 @@ Apply works only from a browser on the machine running the console. Other comman
 | `[paths]` | Restart the console |
 | `[fetch]` | Apply now (reloads in place); except `global_concurrency`: restart the console |
 | `[scoring]` | Apply now (reloads in place) |
-| `[scoring.openai_compat]` | Apply now (reloads in place); except `api_key_env`: restart the console |
-| `[scoring.openrouter]` | Apply now (reloads in place); except `api_key_env`, `catalog_cache`: restart the console |
-| `[scoring.local]` | Apply now (reloads in place); except `api_key_env`: restart the console |
+| `[scoring.openai_compat]` | Apply now (reloads in place); except `base_url`, `api_key_env`: restart the console |
+| `[scoring.openrouter]` | Apply now (reloads in place); except `base_url`, `api_key_env`, `catalog_cache`: restart the console |
+| `[scoring.local]` | Apply now (reloads in place); except `runtime`, `base_url`, `api_key_env`: restart the console |
 | `[apply]` | Apply now (reloads in place) |
 | `[mail]` | Apply now (reloads in place) |
 | `[console]` | Restart the console |
