@@ -1014,7 +1014,7 @@ def _usajobs(ctx: _Ctx) -> Check:
 
 def _newest_run(ctx: _Ctx, *, timer_only: bool = False) -> sqlite3.Row | None:
     """The newest ``run`` row (only timer-started ones with ``timer_only``), with its trigger.
-    A database from before migration 0037 has no trigger column: no timer rows, and the newest
+    A database from before migration 0038 has no trigger column: no timer rows, and the newest
     run with a NULL trigger."""
     where = "WHERE \"trigger\" = 'timer' " if timer_only else ""
     rows = _query(

@@ -321,7 +321,7 @@ def test_unmarked_unit_falls_back_and_never_reports_dead_timers(tmp_path, home):
 def test_marked_unit_with_only_migrated_null_rows_falls_back(tmp_path, home):
     settings = ready(tmp_path)
     enable_host_timers(home, marked=True)
-    add_run(settings, NOW - timedelta(days=5), None)  # from before migration 0037
+    add_run(settings, NOW - timedelta(days=5), None)  # from before migration 0038
     row = evaluate(settings)["run.schedule"]
     assert row.status == OK
     assert "timers not running" not in row.detail
@@ -384,11 +384,12 @@ def test_last_run_reads_a_database_from_before_the_trigger_column(tmp_path):
 def test_migration_leaves_existing_runs_null(tmp_path):
     conn = sqlite3.connect(":memory:")
     shipped = db._load_migrations()
+    (ours,) = [version for version, name, _sql in shipped if "run_trigger" in name]
     for version, _name, sql in shipped:
-        if version < 37:
+        if version < ours:
             conn.executescript(sql)
     conn.execute("INSERT INTO run (started_at, stages) VALUES ('2026-01-01', 'list')")
-    (sql,) = [sql for version, _name, sql in shipped if version == 37]
+    (sql,) = [sql for version, _name, sql in shipped if version == ours]
     conn.executescript(sql)
     assert conn.execute('SELECT "trigger" FROM run').fetchone()[0] is None
     with pytest.raises(sqlite3.IntegrityError):
