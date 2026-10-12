@@ -34,7 +34,7 @@ from jobhunter.sources.adapters.usajobs import MAX_DATE_POSTED_DAYS as USAJOBS_M
 
 logger = logging.getLogger(__name__)
 
-INGEST_STAGES = tuple(s for s in runner.STAGES if s != "score")
+INGEST_STAGES = tuple(s for s in runner.STAGES if s not in ("score", "apply_links"))
 DEFAULT_CHUNK_SIZE = 5000
 DEFAULT_MAX_RESOLVE = 5000
 DEFAULT_POLL_SECONDS = 60.0

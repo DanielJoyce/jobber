@@ -36,6 +36,7 @@ from jobhunter.core.fetch import (
     FetchContext,
     FetchError,
     RobotsDisallowed,
+    TransientFetchError,
     fetch_context_for_url,
 )
 from jobhunter.core.models import ApplyHop, ApplyLink, ApplyStatus
@@ -96,6 +97,9 @@ class Resolution:
     error: str | None = None
     fetched: bool = False  # True when the final page was actually requested
     login: bool = False  # stopped at a login or single-sign-on wall
+    # A failure that may pass (429, 5xx, a transport error, a host held by Retry-After, an
+    # unreachable robots.txt): the walk says nothing about where the link really goes.
+    transient: bool = False
 
     @property
     def employer_host(self) -> str | None:
@@ -191,6 +195,24 @@ def _stop_at_login(res: Resolution, before: str, wall: str) -> None:
     """Stop the walk at a login wall: the button can only open the page before it."""
     res.status, res.final_url, res.login = ApplyStatus.blocked, before, True
     res.error = f"{LOGIN_ERROR} at {host_of(wall)}"
+
+
+_ROBOTS_DOWN = re.compile(r"^robots\.txt (unreachable|returned 5\d\d)")
+
+
+def robots_unavailable(exc: RobotsDisallowed) -> bool:
+    """A refusal because robots.txt could not be read (unreachable, 5xx), not because it
+    disallows us: FetchContext denies the whole origin for the run, which may pass."""
+    return bool(_ROBOTS_DOWN.match(exc.reason))
+
+
+class Deferred(Exception):
+    """``resolve_group(defer_transient=True)``: a start failed in a way that may pass and
+    nothing settled the group, so no row was written; try again later."""
+
+    def __init__(self, group_id: int, errors: list[str]) -> None:
+        super().__init__(f"job_group {group_id}: deferred ({'; '.join(errors)[:300]})")
+        self.group_id = group_id
 
 
 def _fetchable(url: str) -> str:
@@ -294,6 +316,7 @@ def resolve_url(
             res.status = ApplyStatus.blocked
             res.final_url = previous if res.chain else start_url
             res.error = str(exc)
+            res.transient = robots_unavailable(exc)
             return res
         except AccessDenied as exc:
             res.error, res.final_url = str(exc), url
@@ -301,6 +324,7 @@ def resolve_url(
             return res
         except FetchError as exc:  # TransientFetchError and friends
             res.error, res.final_url = str(exc), url
+            res.transient = isinstance(exc, TransientFetchError)
             return res
         set_status(resp.status)
         res.final_url = url
@@ -589,6 +613,7 @@ def resolve_group(
     browser_fallback: BrowserFallback | None = None,
     max_fetches: int = MAX_FETCH_STARTS,
     only_if_settled: bool = False,
+    defer_transient: bool = False,
 ) -> ApplyLink:
     """Resolve a job group's apply link and upsert its ``apply_link`` row.
 
@@ -600,6 +625,11 @@ def resolve_group(
     ``only_if_settled`` (re-resolving an existing row): the new result replaces the row only
     when it is an answer (live, expired, or a real login stop), so a transient failure, such as
     an unreachable robots.txt, leaves the old row to be tried again later.
+
+    ``defer_transient`` (the nightly pass): when any start failed transiently (see
+    ``Resolution.transient``) and no start settled the group, raise :class:`Deferred` and
+    write nothing, so an outage never stores a worse link in place of the one a later walk
+    would find.
     """
     existing = get_apply_link(conn, group_id)
     if existing is not None and existing.chosen_by == "user":
@@ -631,6 +661,10 @@ def resolve_group(
     if not results:
         raise ValueError(f"job_group {group_id}: no start URL could be tried")
     win_cand, best = rank_results(results, classes)[0]
+    if defer_transient and not _settled(win_cand, best, classes):
+        failed = [r.error or "transient failure" for _, r in results if r.transient]
+        if failed:
+            raise Deferred(group_id, failed)
     capture = _capture_wins(win_cand, best, classes)
     link = ApplyLink(
         job_group_id=group_id,

@@ -6,7 +6,7 @@ command fills in absolute paths (the project venv's `jobhunter` and this checkou
 
 | Unit | When | Runs |
 |---|---|---|
-| `jobhunter-run.timer` | 02:00 local, up to 10 min random delay | `jobhunter run` (ingest through score submit) |
+| `jobhunter-run.timer` | 02:00 local, up to 10 min random delay | `jobhunter run` (ingest through score submit, then apply links) |
 | `jobhunter-collect.timer` | 03:30 local | `jobhunter score --collect-pending` |
 | `jobhunter-verify.timer` | Sunday 04:00 local | `jobhunter sources verify` (still a stub on main; reports "not implemented") |
 
@@ -26,6 +26,36 @@ Install does not run `systemctl` unless you pass `--enable`. Logs for a unit:
 `journalctl --user -u jobhunter-run.service -n 20`. A run logs its progress there: each stage,
 each source and each scoring batch. For the container units, the console terminal and how to
 change the level, see [Troubleshooting](troubleshooting.md#where-the-logs-go-and-how-much-they-say).
+
+## Apply links in the run
+
+The last stage of `jobhunter run`, `apply_links`, runs after scoring and never holds it up. It
+works out where Apply should go for the jobs you are most likely to open, so the job page and
+the Apply button do not wait on a slow site the next morning:
+
+- jobs you shortlisted (an application at **interested** or **preparing**), then
+- jobs not yet triaged whose fit is in bucket **A** or **B**, best first.
+
+Only jobs with no apply link yet are taken. A link you set by hand is never touched, and a job
+whose link already stopped at a login page is never fetched again, here or anywhere else: set
+the link by hand on the job page if you find the real one. Postings past their closing date
+are skipped. Requests respect robots.txt and each site's rate limit, and nothing is charged:
+no scorer runs in this stage.
+
+If a site is having trouble when the run reaches it (it answers 429 or a 5xx error, asks for a
+long pause, cannot be reached, or its robots.txt cannot be read) and no other link for the job
+settled it, nothing is saved for that job: it is counted as `deferred` and tried again next
+run, so a bad night never fixes a worse link in place.
+
+At most `apply_links.per_run` jobs per run (default 200), with `apply_links.workers`
+(default 4) at once, and no job starts after `apply_links.max_minutes` (default 20) so the run
+does not keep the 03:30 collect waiting (it waits for the run at most two hours). Jobs not
+reached wait for the next run (`left`, and `late` when time ran out). Set `per_run = 0` under
+`[apply_links]` in `config.toml` to turn the stage off. To leave it out of one run, name the
+stages you want: `jobhunter run --stage list,resolve,normalize,dedupe,prefilter,score`. What it did shows on
+[/log](/log) with each run (`apply_links: tried …, live …, deferred …, errors …`); a failure
+in this stage is logged and never fails the run. Ctrl-C stops it within about one request,
+like the fetch stages. Jobs it did not reach still resolve when you open them.
 
 Optional, to keep the timers running while you are logged out:
 `loginctl enable-linger $USER`. Without it, timers that never fire are reported as "timers not

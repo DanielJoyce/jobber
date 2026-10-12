@@ -59,7 +59,7 @@ from jobhunter.sources.registry import sync_sources_table
 
 logger = logging.getLogger(__name__)
 
-STAGES = ("list", "resolve", "normalize", "dedupe", "prefilter", "score")
+STAGES = ("list", "resolve", "normalize", "dedupe", "prefilter", "score", "apply_links")
 NEEDS_PROFILE = ("prefilter", "score")
 DEFAULT_MAX_RESOLVE = 1500
 FULL_LOOKBACK_DAYS = 60
@@ -578,6 +578,45 @@ def _score_stage(
     report.counts["score"] = str(result)
 
 
+def _apply_links_stage(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    profile: Profile | None,
+    now: datetime,
+    report: RunReport,
+    apply_ctx_factory: Callable[[str], Any] | None,
+) -> None:
+    """Resolve apply links for shortlisted and A/B groups (bug cf23a1c). After scoring, so it
+    never holds scoring up; requests only through FetchContext, nothing paid. Any failure is
+    logged and noted in the counts; it never fails the run."""
+    limit = settings.apply_links.per_run
+    if limit <= 0:
+        report.counts["apply_links"] = {"off": 1}
+        logger.info("stage apply_links: off (apply_links.per_run = 0)")
+        return
+    from jobhunter.pipeline import apply_pass
+
+    try:
+        result = apply_pass.resolve_likely(
+            conn,
+            settings,
+            profile,
+            now=now,
+            limit=limit,
+            workers=settings.apply_links.workers,
+            max_seconds=settings.apply_links.max_minutes * 60,
+            ctx_factory=apply_ctx_factory,
+        )
+    except Exception as exc:  # never fail the run over apply links
+        logger.warning("apply-link pass failed: %s", exc, exc_info=True)
+        report.messages.append(
+            f"apply_links: failed ({type(exc).__name__}); links resolve on demand"
+        )
+        report.counts["apply_links"] = {"failed": 1}
+        return
+    report.counts["apply_links"] = result.counts()
+
+
 # ─── orchestration ──────────────────────────────────────────────────────────
 
 
@@ -921,6 +960,10 @@ def run_pipeline(
         stage_done(
             "score", stage_t0, f": outcome={report.score_outcome} jobs={report.counts.get('score')}"
         )
+    if "apply_links" in stages:
+        stage_t0 = time.monotonic()
+        _apply_links_stage(conn, settings, profile, now, report, apply_ctx_factory)
+        stage_done("apply_links", stage_t0, f": {report.counts.get('apply_links')}")
 
     for key, res in results.items():
         conn.execute(
