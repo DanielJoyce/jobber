@@ -50,7 +50,7 @@ CLIENT_SECRET = "jobhunter_google_client"
 STEP_NEEDS = {3: (1,), 4: (2, 3), 5: (2,), 6: (2,), 7: (2,)}
 
 COMMAND_PREFIXES = (
-    "[ -e", "read -rs", "jobhunter", "systemctl", "podman", "chmod", "install ", "uv ",
+    "[ -e", "read -rs", "jobhunter", "systemctl", "podman", "chmod", "install -m", "uv ",
 )  # fmt: skip
 
 STATUS_ICON = {
