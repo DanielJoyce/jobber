@@ -1043,6 +1043,19 @@ def run_label(trigger: Any, when: datetime | None) -> str:
     return f"run at {at}"
 
 
+def _marker_files(ctx: _Ctx) -> list[Path]:
+    """The files that can carry the run unit's trigger marker, most specific first."""
+    from jobhunter.ops import preflight, schedule
+
+    if ctx.mode == HOST_MANAGING:
+        unit_dir = ctx.unit_dir()
+        return [
+            preflight.trigger_dropin_path(unit_dir, preflight.RUN),
+            unit_dir / f"{preflight.RUN}.container",
+        ]
+    return [schedule.unit_dir(ctx.home) / "jobhunter-run.service"]
+
+
 def _unit_marked(ctx: _Ctx) -> bool | None:
     """Does the installed run unit mark its runs ``JOBHUNTER_TRIGGER=timer``? A small file
     read. None when this process cannot see the unit (container mode, or not installed)."""
@@ -1061,6 +1074,35 @@ def _unit_marked(ctx: _Ctx) -> bool | None:
     return schedule.has_trigger(schedule.unit_dir(ctx.home) / "jobhunter-run.service")
 
 
+def _marked_unit_age(ctx: _Ctx) -> timedelta | None:
+    """How long the timers have had to fire: ``ctx.now`` minus the newest of the marked unit
+    file's mtime and the mtime of the run timer's ``*.wants`` enable link (``lstat``, the
+    moment it was enabled). Enabling later than installing, or disable then re-enable, so
+    restarts the clock. None when no marked file can be stat'ed."""
+    from jobhunter.ops import preflight, schedule
+
+    stamps: list[float] = []
+    for path in _marker_files(ctx):
+        try:
+            if schedule.has_trigger(path) is not True:
+                continue
+            stamps.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    if not stamps:
+        return None
+    timer = preflight.CTR_TIMERS[0] if ctx.mode == HOST_MANAGING else schedule.TIMERS[0]
+    try:
+        for link in schedule.unit_dir(ctx.home).glob(f"*.wants/{timer}"):
+            try:
+                stamps.append(link.lstat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return ctx.now - datetime.fromtimestamp(max(stamps), UTC)
+
+
 TIMER_STALE = timedelta(hours=36)
 UNMARKED_HINT = (
     "timer runs are not marked yet: rerun `jobhunter schedule install` (host) or "
@@ -1070,11 +1112,33 @@ UNMARKED_HINT = (
 
 def _timer_health(ctx: _Ctx, base: Check) -> Check:
     """Timers not running is judged from the newest timer-started run, so a manual run does
-    not hide dead timers, provided the installed run unit carries the marker. Otherwise (no
-    marker, or the unit is not visible and no timer row exists yet) it falls back to the newest
-    run of any trigger and never reports dead timers (019 "What the nightly run sees")."""
+    not hide dead timers, provided the installed run unit carries the marker. A marked unit
+    with no timer row at all is dead once it has been installed and enabled for over 36 hours
+    (``_marked_unit_age``). Otherwise (no marker, or the unit is not visible and no timer row
+    exists yet) it falls back to the newest run of any trigger and does not report dead timers
+    (019 "What the nightly run sees")."""
     marked = _unit_marked(ctx)
     timer = _newest_run(ctx, timer_only=True) if ctx.conn is not None else None
+    if marked is True and timer is None and ctx.conn is not None:
+        # timers that never produced a row (e.g. linger off from day one): the unit file's
+        # age says how long they have had to fire
+        age = _marked_unit_age(ctx)
+        if age is not None and age > TIMER_STALE:
+            newest = _newest_run(ctx)
+            seen = (
+                f"newest: {run_label(newest['trig'], _parse_ts(newest['started_at']))}"
+                if newest is not None
+                else "no run recorded yet"
+            )
+            status_cmd = "systemctl --user list-timers 'jobhunter-*'"
+            if ctx.mode != HOST:
+                status_cmd = "systemctl --user list-timers 'jobhunter-ctr-*'"
+            return replace(
+                base, status=BROKEN, due=False,
+                detail="timers not running: no timer-started run since the run unit was "
+                f"installed over 36 hours ago; {seen}",
+                fix=Fix("command", status_cmd),
+            )  # fmt: skip
     if marked is False or timer is None:
         newest = _newest_run(ctx) if ctx.conn is not None else None
         seen = (

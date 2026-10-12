@@ -357,7 +357,10 @@ carries the marker**. The check reads the installed unit (a small file read: the
 host-managing mode). When the marker is missing there, or the console cannot see the unit
 (container mode) and no timer-triggered row exists yet, it falls back to the newest run of any
 trigger and says "timer runs are not marked yet: rerun `jobhunter schedule install` (host) or
-`jobhunter container preflight` (containers)", rather than reporting dead timers. Wording that
+`jobhunter container preflight` (containers)", rather than reporting dead timers. One exception: a unit that carries the marker but has no
+timer-triggered row at all (for example linger off from day one) is reported as "timers not
+running" once the newer of the unit file's mtime and the run timer's enable link (`*.wants`
+`lstat` mtime) is over 36 hours old. Wording that
 says "nightly" is used only for timer-triggered data; manual runs are labelled "manual run at
 HH:MM".
 
