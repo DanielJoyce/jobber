@@ -931,7 +931,7 @@ def map_error_text(text: str | None) -> str | None:
         return None
     head = text.split(":", 1)[0].strip()
     lowered = text.lower()
-    if "RefreshError" in text or "invalid_grant" in lowered:
+    if "RefreshError" in text or "invalid_grant" in lowered or head == "GmailTokenExpired":
         return "Gmail token expired or revoked"
     if head == "UsajobsAuthMissing":
         return "USAJOBS credentials missing"

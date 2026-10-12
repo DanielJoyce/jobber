@@ -11,8 +11,11 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -22,7 +25,7 @@ from keyring.backends import null
 from jobhunter import container
 from jobhunter.config import Settings, resolve_path
 from jobhunter.ops import podman
-from jobhunter.xdg import config_home
+from jobhunter.xdg import config_home, mkdir_private
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -76,6 +79,76 @@ MANUAL_PROMPT = (
 
 class MailAuthError(RuntimeError):
     """A user-actionable Gmail auth problem."""
+
+
+TOKEN_EXPIRED_MESSAGE = "Gmail token expired or revoked"
+
+
+class GmailTokenExpired(MailAuthError):
+    """Google refused the refresh token. The message is fixed: the raw error is dropped."""
+
+    def __init__(self) -> None:
+        super().__init__(TOKEN_EXPIRED_MESSAGE)
+
+
+@contextmanager
+def translate_refresh_error() -> Iterator[None]:
+    """Turn google-auth's RefreshError into GmailTokenExpired (fixed text, no raw error)."""
+    from google.auth.exceptions import RefreshError
+
+    try:
+        yield
+    except RefreshError:
+        raise GmailTokenExpired() from None
+
+
+# --- gmail-auth.json: when the token was issued and where it lives (never the token) ------
+
+AUTH_RECORD_NAME = "gmail-auth.json"
+
+
+def auth_record_path(settings: Settings) -> Path:
+    return resolve_path(settings.paths.data_dir) / AUTH_RECORD_NAME
+
+
+def read_auth_record(settings: Settings) -> dict | None:
+    try:
+        data = json.loads(auth_record_path(settings).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_auth_record(
+    settings: Settings, storage: str, issued_at: str | datetime | None = None, *, unknown=False
+) -> None:
+    """Atomically write ``{issued_at, storage}`` (0600). ``issued_at`` defaults to now (UTC);
+    ``unknown=True`` records it as null instead. Holds no token material."""
+    if unknown:
+        issued = None
+    elif isinstance(issued_at, datetime):
+        issued = issued_at.astimezone(UTC).isoformat()
+    else:
+        issued = issued_at or datetime.now(UTC).isoformat()
+    path = auth_record_path(settings)
+    mkdir_private(path.parent)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".gmail-auth-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"issued_at": issued, "storage": storage}))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _record_quietly(settings: Settings, storage: str, echo, **kw) -> None:
+    """The token is already stored; a failed record only costs the age row, so warn."""
+    try:
+        write_auth_record(settings, storage, **kw)
+    except OSError as exc:
+        echo(f"warning: could not write {AUTH_RECORD_NAME} ({type(exc).__name__}).")
 
 
 def client_secrets_path(settings: Settings) -> Path:
@@ -359,7 +432,9 @@ def authenticate(
         token = run_manual_flow(settings, port=port or DEFAULT_PORT)
     else:
         token = run_oauth_flow(settings, port=port or 0, open_browser=open_browser)
-    return store_token(token)
+    where = store_token(token)
+    _record_quietly(settings, where, print)
+    return where
 
 
 # --- podman secret (host only, specs/018 C7) ------------------------------------------------
@@ -441,6 +516,15 @@ def authenticate_to_podman_secret(
             raise MailAuthError("No locally stored Gmail token to move. Run without --from-local.")
         prefix, existing = find_podman()
         write_podman_secret(prefix, name, token)
+        # No new consent: keep the original issue date, or record it as unknown, never now.
+        old = read_auth_record(settings)
+        _record_quietly(
+            settings,
+            f"podman secret {name}",
+            echo,
+            issued_at=old.get("issued_at") if old else None,
+            unknown=not (old and old.get("issued_at")),
+        )
         return "replaced" if name in existing else "new"
     # The client JSON stays on the host for the weekly re-auth (specs/018 Gmail).
     require_client_secrets(settings)
@@ -453,6 +537,7 @@ def authenticate_to_podman_secret(
         write_podman_secret(prefix, name, token)
     except BaseException as exc:
         where = store_token(token, echo)
+        _record_quietly(settings, where, echo)
         reason = str(exc) if isinstance(exc, MailAuthError) else type(exc).__name__
         echo(
             f"warning: could not write podman secret {name} ({reason}). The token was kept in "
@@ -464,6 +549,7 @@ def authenticate_to_podman_secret(
         return "local"
     if keep_local:
         store_token(token, echo)
+    _record_quietly(settings, f"podman secret {name}", echo)
     return "replaced" if name in existing else "new"
 
 
