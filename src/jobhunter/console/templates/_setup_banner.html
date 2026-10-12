@@ -1,0 +1,24 @@
+{% set sb = setup_banner(request) %}
+{% if sb %}
+<div class="setup-banner{% if sb.essentials %} setup-banner-essential{% endif %}" id="setup-banner" role="{{ 'alert' if sb.essentials else 'status' }}">
+  <div class="sb-text">
+    {% if sb.essentials %}
+    <strong>Setup: {{ sb.essentials | length }} {{ 'essential' if sb.essentials | length == 1 else 'essentials' }} missing or broken, so new jobs may not be fetched or scored.</strong>
+    <div class="muted">{% for c in sb.essentials %}{{ c.title }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</div>
+    {% else %}
+    <strong>{{ sb.recommended | length }} recommended {{ 'item' if sb.recommended | length == 1 else 'items' }}:</strong>
+    {% for c in sb.recommended %}{{ c.title }}{% if c.due and c.status == 'ok' %} (due){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+    {% endif %}
+  </div>
+  <div class="sb-actions">
+    <a class="act" href="/setup">Open setup</a>
+    {% if not sb.essentials %}
+    <form method="post" action="/setup/dismiss">
+      {% for i in sb.ids %}<input type="hidden" name="check_id" value="{{ i }}">{% endfor %}
+      <input type="hidden" name="next" value="{{ request.url.path }}">
+      <button type="submit" class="act">Hide</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

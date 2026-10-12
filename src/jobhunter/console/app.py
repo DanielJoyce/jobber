@@ -15,7 +15,7 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -386,7 +386,10 @@ def create_app(
         sort: str | None = None,
         dir: str | None = None,
         buckets: str | None = None,
-    ) -> HTMLResponse:
+    ) -> Response:
+        first_run = request.app.state.setup_first_run(request, conn)
+        if first_run is not None:
+            return first_run
         range_ = dash.clamp_range(range)
         metric_ = dash.clamp_metric(metric)
         ctx: dict[str, object] = {

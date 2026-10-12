@@ -246,6 +246,7 @@ def test_init_creates_the_private_data_dir_and_database():
     assert result.exit_code == 0, result.output
     db_file = data_home() / "jobhunter.db"
     assert f"created {db_file}" in result.output
+    assert "next: open http://127.0.0.1:8808/setup, or run `jobhunter doctor`" in result.output
     assert os.stat(data_home()).st_mode & 0o777 == 0o700
     assert os.stat(db_file).st_mode & 0o777 == 0o600
     again = runner.invoke(app, ["init"])

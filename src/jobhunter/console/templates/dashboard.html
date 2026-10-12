@@ -6,6 +6,7 @@
   <script src="{{ static_url('charts.js') }}" defer></script>
 {% endblock %}
 {% block main %}
+{% include "_setup_banner.html" %}
 <div class="dash-head">
   <h1>Today <span class="muted">&middot; {{ today.strftime("%a %b ") }}{{ today.day }}</span></h1>
   <form id="dash-controls" class="dash-controls" action="/" method="get">
