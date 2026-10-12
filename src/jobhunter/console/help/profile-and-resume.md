@@ -31,9 +31,12 @@ and costs nothing:
 - salary floor and target, states and their ranking, remote settings
 - title exclusions, employment types excluded
 - the weights and the bucket thresholds
-- the spend caps and the deep-pass shortlist size
 
 Search queries are free too, and take effect on the next run.
+
+The spend caps and the deep-pass shortlist size are not in `preferences.yaml`. They are
+`[scoring]` settings in `config.toml`: they cost nothing to change, but the console reads them
+when it starts, so restart it after editing them.
 
 What the model reads is different. Changing your resume, your current focus, what you are done
 with, or your narrative changes the scoring version. New jobs are scored with the new text from

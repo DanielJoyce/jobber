@@ -46,18 +46,28 @@ Both are in `[scoring.openrouter] provider`. The decisions endpoint takes only
 have a reason: a model that only some data-collecting providers serve will then be refused
 rather than fed your resume.
 
-## How cost is reported
+## How cost is reported, and what the cap reserves
 
-- Each response is billed by OpenRouter. When the response reports its cost, jobhunter records
-  that figure.
-- When it does not, jobhunter uses the public model catalog, which it caches (the file is under
-  the cache folder; `jobhunter paths` lists it) and refreshes at most daily.
-- When neither is known, the cost is recorded as zero and a warning is logged once, so the
-  figure on `/costs` is a floor for that model. Watch the OpenRouter dashboard too.
+The two providers differ, because they cost differently.
 
-For the spend cap, a request is reserved at `[scoring.openrouter] est_cost_per_request_usd`
-before the real cost is known. How the caps work is in
-[Costs and credits](costs-and-credits.md).
+**`jev:` and `decisions:`**
+
+- Cost is the figure the response reports. When it reports none, jobhunter charges about
+  $0.042 per million input tokens (the rate observed for Jev; output is free). It never uses
+  the model catalog and never records zero.
+- Before each request the spend cap is checked against a token estimate at that same rate. The
+  setting `est_cost_per_request_usd` plays no part, so changing it does not change Jev's caps.
+
+**`openrouter:`**
+
+- Cost is the figure the response reports, else the public model catalog (cached under the
+  cache folder, refreshed at most daily), else zero with a one-time warning. A model with no
+  known price therefore shows as free on `/costs`: watch the OpenRouter dashboard too.
+- The cap reserves, for each request, the mean cost per request measured for that model (today's
+  spend, else all history). With no history it uses `[scoring.openrouter]
+  est_cost_per_request_usd`. It is never below the model's catalog list price.
+
+How the caps work is in [Costs and credits](costs-and-credits.md).
 
 ## Check it
 

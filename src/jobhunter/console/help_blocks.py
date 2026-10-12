@@ -12,8 +12,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from jobhunter import config, secrets
-from jobhunter.config import SCORER_PROVIDERS, OpenAICompat, OpenRouter
 from jobhunter.apply import cli_runner
+from jobhunter.config import SCORER_PROVIDERS, OpenAICompat, OpenRouter
 from jobhunter.console import help as helpdocs
 from jobhunter.mail import auth
 from jobhunter.ops import ctr

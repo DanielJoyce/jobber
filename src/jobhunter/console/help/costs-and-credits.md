@@ -1,23 +1,25 @@
 # Costs and credits
 
-Only a few actions spend money, every one is capped, and nothing starts a paid action without
-you having set it up or confirmed it. The `/costs` page in the console shows what was spent and
+Only a few actions spend money. Most are held to the caps below; the exceptions are listed
+under them. Nothing starts a paid action without you having set it up or confirmed it. The `/costs` page in the console shows what was spent and
 how much of each cap is left.
 
 ## What spends money, and what never does
 
 Spends API credits (or OpenRouter credits):
 
-- the nightly score stage of `jobhunter run`, and `jobhunter score --collect-pending`
+- the nightly score stage of `jobhunter run`
 - a re-score you confirm in the console (`/prefs`), or `jobhunter score --rescore`
-- **Score now** on a single job in the console
+- **Score this group now** on a single job in the console, and scoring a group from the
+  browser extension
+- `jobhunter score --submit` and `--group`
+- `jobhunter backfill`, which scores older jobs under its own budget (see the caps)
 - the deep pass: `jobhunter score --deep 10` or `--deep-group`
 - a draft made with the `api` runner (see [Drafting](drafting.md))
 
 Never spends: opening `/setup`, `jobhunter doctor`, reading this help, browsing the inbox,
 editing free preferences (see [Profile and resume](profile-and-resume.md)), and drafting with
-the `cli` runner on your subscription. A scorer you run yourself, such as `llm bench` with a
-paid `--scorer`, spends too, so the command and its estimate are yours to decide.
+the `cli` runner on your subscription. A paid `llm bench` is the exception, below.
 
 ## The caps
 
@@ -31,12 +33,21 @@ daily_cap_usd = 1.00
 ```
 
 - `[scoring] daily_cap_usd` and `weekly_cap_usd` cap screening and the deep pass together.
-  Every scoring run checks the tighter of the two (today's spend, and the last seven days).
+  Scoring runs check the tighter of the two (today's spend, and the last seven days).
 - `[apply] daily_cap_usd` is separate and caps drafting on the `api` runner only. Setting it to
   `0` refuses every paid draft.
 - At a cap the run stops scoring, says `spend cap reached`, and carries on with everything
   else. A cap reached is a note, not a failure. The values above are the defaults; change
   them in `config.toml` and restart the console. `/prefs` shows the scoring caps.
+
+### Where the caps do not apply
+
+- `jobhunter backfill` has its own ceiling, `--budget-usd` (default: the weekly cap). It
+  replaces the daily cap for that command only.
+- `jobhunter llm bench` with a paid `--scorer` calls the scorer but records nothing, so it is
+  counted against no cap and does not show on `/costs`. Only `--n` limits it.
+- Collecting a batch (`score --collect-pending`) spends nothing new: the batch was already paid
+  for and reserved when submitted.
 
 ## Reservations
 
