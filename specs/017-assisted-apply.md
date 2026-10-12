@@ -10,6 +10,11 @@ revision 8 adds [phase 1e, Capture](#phase-1e-capture-from-any-job-page): a **Se
 jobhunter** button in the extension, built first, which also carries the extension's plumbing;
 revision 9 takes the review of revision 8; revision 10 takes the check of revision 9.
 
+**Phase 2 is now specified with changes in [022](022-extension-apply-assist.md)** (2026-10-11):
+the gate is waived, Jobright coexistence is dropped, fill sessions belong to an application,
+per-field resume and letter buttons are added, and a confirmed submit records `applied`. Where
+the two differ, 022 wins.
+
 You asked: *"Is there any way to automate the application part of the process? Filling out web
 forms?"* Then you added that most sites now parse an uploaded resume and fill themselves, that
 your existing fill helpers already handle forms and skip salary and EEO questions, and that
