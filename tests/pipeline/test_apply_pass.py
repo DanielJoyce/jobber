@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import httpx
 import pytest
@@ -21,7 +25,7 @@ PROFILE = Profile.model_validate({"hard": {"states_allowed": ["CO"]}})
 PAGE = "<html><body><h1>Analyst</h1><p>Apply today.</p></body></html>"
 
 
-def dims(skills: int) -> dict:
+def dims(skills: int, direction: str = "match") -> dict:
     return {
         "skills": {"score": skills, "why": "x"},
         "seniority": {"score": skills, "why": "x"},
@@ -29,19 +33,33 @@ def dims(skills: int) -> dict:
         "raw_skills": skills,
         "recency_weighted_skills": skills,
         "stale_skills": [],
-        "seniority_direction": "match",
+        "seniority_direction": direction,
     }
 
 
 class Server:
+    """Every page is an open posting and every robots.txt a 404, unless routed otherwise."""
+
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
+        self.times: list[float] = []
+        self.routes: dict[str, Callable[[httpx.Request], httpx.Response] | httpx.Response] = {}
+        self.delay = 0.0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
+        with self._lock:
+            self.requests.append(request)
+            self.times.append(time.monotonic())
+        if self.delay:
+            time.sleep(self.delay)
+        target = self.routes.get(str(request.url.copy_with(query=None)))
+        if target is not None:
+            return target(request) if callable(target) else target
         if request.url.path == "/robots.txt":
             return httpx.Response(404)
         return httpx.Response(200, html=PAGE)
+
+    _lock = threading.Lock()
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -105,13 +123,22 @@ def add(
     label: str | None = None,
     app: str | None = None,
     closes: datetime | None = None,
+    direction: str = "match",
+    url: str | None = None,
 ) -> int:
     ts = NOW.isoformat()
     conn.execute(
         "INSERT INTO job (id, source_key, external_id, url, title, salary_stated, "
         "location_scope, closes_at, first_seen_at, last_seen_at) "
         "VALUES (?, 'wa', ?, ?, 'Analyst', 0, 'single', ?, ?, ?)",
-        (gid, str(gid), f"https://{host(gid)}/j/{gid}", closes and closes.isoformat(), ts, ts),
+        (
+            gid,
+            str(gid),
+            url or f"https://{host(gid)}/j/{gid}",
+            closes and closes.isoformat(),
+            ts,
+            ts,
+        ),
     )
     conn.execute(
         "INSERT INTO job_group (id, canonical_job_id, method, created_at) "
@@ -124,12 +151,7 @@ def add(
         (gid,),
     )
     if skills is not None:
-        conn.execute(
-            "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
-            "verdict, overall, dimensions, evidence, blockers, created_at) "
-            "VALUES (?, 'screen', 'm', 'p', 's', 'strong', 0, ?, '[]', '[]', ?)",
-            (gid, json.dumps(dims(skills)), ts),
-        )
+        score(conn, gid, skills, direction=direction)
     if label:
         conn.execute(
             "INSERT INTO label (job_group_id, label, labeled_at) VALUES (?, ?, ?)", (gid, label, ts)
@@ -141,6 +163,26 @@ def add(
             (gid, app, ts, ts),
         )
     return gid
+
+
+def score(conn, gid: int, skills: int, *, tier="screen", direction="match", at=NOW) -> None:
+    conn.execute(
+        "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
+        "verdict, overall, dimensions, evidence, blockers, created_at) "
+        "VALUES (?, ?, 'm', 'p', 's', 'strong', 0, ?, '[]', '[]', ?)",
+        (gid, tier, json.dumps(dims(skills, direction)), at.isoformat()),
+    )
+
+
+def member(conn, gid: int, n: int, url: str) -> None:
+    """Another posting in group ``gid`` (not canonical)."""
+    ts = NOW.isoformat()
+    conn.execute(
+        "INSERT INTO job (source_key, external_id, job_group_id, url, title, first_seen_at, "
+        "last_seen_at) VALUES ('wa', ?, ?, ?, 'Analyst', ?, ?)",
+        (f"{gid}-m{n}", gid, url, ts, ts),
+    )
+    conn.execute("UPDATE job_group SET member_count = member_count + 1 WHERE id = ?", (gid,))
 
 
 def linked(conn) -> set[int]:
@@ -336,3 +378,206 @@ def test_backfill_ingest_never_runs_the_pass():
     from jobhunter.pipeline import backfill
 
     assert "apply_links" not in backfill.INGEST_STAGES
+
+
+# ─── selection details (review of PR 186) ──────────────────────────────────
+
+
+def test_closed_shortlisted_posting_is_skipped(conn):
+    add(conn, 1, label="interesting", app="interested", closes=NOW - timedelta(hours=1))
+    still_open = add(conn, 2, label="interesting", app="interested", closes=NOW + timedelta(days=3))
+    assert [c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NOW)] == [still_open]
+
+
+def test_application_without_label_is_shortlisted(conn):
+    gid = add(conn, 1, app="interested")
+    picked = apply_pass.select_groups(conn, None, now=NOW)
+    assert [(c.group_id, c.why) for c in picked] == [(gid, "shortlist")]
+
+
+def test_bucket_c_is_not_selected(conn):
+    add(conn, 1, skills=90, direction="above")  # stretch up: C
+    a = add(conn, 2, skills=90)
+    assert [c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NOW)] == [a]
+
+
+def test_order_shortlist_newest_then_a_then_b_best_first(conn):
+    s1 = add(conn, 1, label="interesting")
+    s2 = add(conn, 2, app="preparing")
+    a99, a92 = add(conn, 10, skills=99), add(conn, 11, skills=92)
+    b75, b70 = add(conn, 12, skills=75), add(conn, 13, skills=70)
+    picked = apply_pass.select_groups(conn, PROFILE, now=NOW)
+    assert [c.group_id for c in picked] == [s2, s1, a99, a92, b75, b70]
+    assert [c.why for c in picked] == ["shortlist", "shortlist", "A", "A", "B", "B"]
+
+
+def test_deep_score_wins_over_a_newer_screen(conn):
+    up = add(conn, 1)
+    score(conn, up, 90, tier="deep", at=NOW - timedelta(days=2))
+    score(conn, up, 20, at=NOW)
+    down = add(conn, 2)
+    score(conn, down, 20, tier="deep", at=NOW - timedelta(days=2))
+    score(conn, down, 90, at=NOW)
+    assert [c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NOW)] == [up]
+
+
+# ─── user links, outages, deadline ─────────────────────────────────────────
+
+
+def test_link_set_by_hand_during_the_walk_is_kept_and_reported(conn, settings, factory, server):
+    gid = add(conn, 1, skills=90)
+    page = f"https://{host(gid)}/j/{gid}"
+
+    def user_sets_it(request: httpx.Request) -> httpx.Response:
+        applylink.set_user_link(conn, gid, "https://mine.example.com/apply", NOW)
+        return httpx.Response(200, html=PAGE)
+
+    server.routes[page] = user_sets_it
+    result = resolve(conn, settings, factory)
+    link = applylink.get_apply_link(conn, gid)
+    assert link.chosen_by == "user" and link.final_url == "https://mine.example.com/apply"
+    counts = result.counts()
+    assert counts["user_link"] == 1 and counts["live"] == 0
+
+
+def test_retry_after_outage_defers_instead_of_storing(conn, settings, factory, server):
+    gids = [add(conn, gid, skills=90, url=f"https://nlx.example.org/j/{gid}") for gid in (1, 2)]
+    held = httpx.Response(429, headers={"Retry-After": "3600"})
+    for gid in gids:
+        server.routes[f"https://nlx.example.org/j/{gid}"] = held
+    result = resolve(conn, settings, factory)
+    assert linked(conn) == set()  # nothing frozen
+    assert result.counts()["deferred"] == 2 and result.counts()["unresolved"] == 0
+    server.routes.clear()
+    reset_shared_state()  # the next night: a new process
+    resolve(conn, settings, factory)
+    assert {applylink.get_apply_link(conn, g).status.value for g in gids} == {"live"}
+
+
+def test_unreadable_robots_on_the_redirector_defers(conn, settings, factory, server):
+    gh = "https://boards.greenhouse.io/acme/jobs/567"
+    gid = add(conn, 1, skills=90, url="https://redirect.example.net/r/1")
+    member(conn, gid, 1, "https://copies.example.com/jobs/1")  # a plain copy of the posting
+    server.routes["https://redirect.example.net/robots.txt"] = httpx.Response(503)
+    server.routes["https://redirect.example.net/r/1"] = httpx.Response(
+        302, headers={"Location": gh}
+    )
+    result = resolve(conn, settings, factory)
+    assert result.counts()["deferred"] == 1 and linked(conn) == set()
+    del server.routes["https://redirect.example.net/robots.txt"]
+    reset_shared_state()
+    resolve(conn, settings, factory)
+    link = applylink.get_apply_link(conn, gid)
+    assert link.ats == "greenhouse" and link.status.value == "live"
+
+
+def test_no_group_starts_after_the_deadline(conn, settings, factory, server):
+    for gid in range(1, 6):
+        add(conn, gid, skills=90)
+    ticks = iter(range(0, 1000, 4))  # each look at the clock is 4 s later
+    result = apply_pass.resolve_likely(
+        conn,
+        settings,
+        PROFILE,
+        now=NOW,
+        limit=10,
+        max_seconds=10,
+        ctx_factory=factory,
+        clock=lambda: next(ticks),
+    )
+    counts = result.counts()
+    assert (counts["tried"], counts["late"], counts["left"]) == (2, 3, 3)
+    assert len(linked(conn)) == 2
+
+
+def test_run_passes_the_deadline(conn, factory, tmp_path, monkeypatch):
+    seen = {}
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return apply_pass.PassResult()
+
+    monkeypatch.setattr(apply_pass, "resolve_likely", spy)
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "c")}, "apply_links": {"max_minutes": 7}}
+    )
+    go(conn, s, factory)
+    assert seen["max_seconds"] == 7 * 60 and seen["limit"] == 200
+
+
+def test_no_url_is_logged(conn, settings, factory, caplog):
+    gid = add(conn, 1, skills=90, url="mailto:jobs@example.com")
+    with caplog.at_level("INFO", logger="jobhunter.pipeline.apply_pass"):
+        result = resolve(conn, settings, factory)
+    assert result.no_url == 1
+    assert any(
+        f"group {gid}" in r.getMessage() and "usable URL" in r.getMessage() for r in caplog.records
+    )
+
+
+# ─── threads: shared limiter, Ctrl-C ───────────────────────────────────────
+
+
+@pytest.fixture
+def file_db(tmp_path):
+    c = db.connect(tmp_path / "t.db")
+    db.migrate(c)
+    c.execute(
+        "INSERT INTO source (key, class, name, family, tier, entry, policy) "
+        "VALUES ('wa', 'B', 'WA', 'neogov', 'http', 'https://example.com', 'enabled')"
+    )
+    yield c
+    c.close()
+
+
+def live_transport(monkeypatch, server: Server) -> None:
+    """Workers' contexts get the mock transport and nothing else: the process-wide limiter,
+    the real clock and the pass's own sleep and cancel hooks."""
+
+    def ctx(s, conn, url, **kw):
+        assert set(kw) == {"sleep", "cancel"}
+        return fetch_context_for_url(s, conn, url, transport=server.transport, **kw)
+
+    monkeypatch.setattr(apply_pass, "fetch_context_for_url", ctx)
+
+
+def test_workers_share_the_per_host_limiter(file_db, tmp_path, server, monkeypatch):
+    for gid in range(1, 4):
+        add(file_db, gid, skills=90, url=f"https://one.example.org/j/{gid}")
+    live_transport(monkeypatch, server)
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "c")}, "fetch": {"default_rps": 5, "max_retries": 0}}
+    )
+    result = apply_pass.resolve_likely(file_db, s, PROFILE, now=NOW, limit=3, workers=3)
+    assert result.tried == 3 and result.errors == 0
+    assert len(server.times) == 4  # robots.txt once, three pages
+    gaps = [b - a for a, b in pairwise(server.times)]
+    assert min(gaps) >= 0.14  # 0.2 s apart, jitter at most -25%
+
+
+def test_ctrl_c_stops_within_about_one_request(file_db, tmp_path, server, monkeypatch):
+    quick = add(file_db, 1, label="interesting")  # one page: done first
+    for gid in (2, 3, 4):  # long redirect chains, a new host per hop
+        hops = [f"https://h{gid}-{i}.example.org/r" for i in range(7)]
+        add(file_db, gid, label="interesting", url=hops[0])
+        for a, b in pairwise(hops):
+            server.routes[a] = httpx.Response(302, headers={"Location": b})
+    server.delay = 0.05
+    live_transport(monkeypatch, server)
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "c")}, "fetch": {"default_rps": 1000}}
+    )
+    at: list[int] = []
+
+    def interrupt(self, r):
+        at.append(len(server.requests))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(apply_pass._Progress, "tick", interrupt)
+    t0 = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        apply_pass.resolve_likely(file_db, s, PROFILE, now=NOW, limit=10, workers=4)
+    assert time.monotonic() - t0 < 5
+    # Only requests already in flight finish: at most one per other worker.
+    assert len(server.requests) - at[0] <= 3
+    assert applylink.get_apply_link(file_db, quick) is not None

@@ -37,17 +37,25 @@ the Apply button do not wait on a slow site the next morning:
 - jobs not yet triaged whose fit is in bucket **A** or **B**, best first.
 
 Only jobs with no apply link yet are taken. A link you set by hand is never touched, and a job
-whose link stopped at a login page is not fetched again here (the resolve stage re-tries those
-at most once a night). Postings past their closing date are skipped. Requests respect
-robots.txt and each site's rate limit, and nothing is charged: no scorer runs in this stage.
+whose link already stopped at a login page is never fetched again, here or anywhere else: set
+the link by hand on the job page if you find the real one. Postings past their closing date
+are skipped. Requests respect robots.txt and each site's rate limit, and nothing is charged:
+no scorer runs in this stage.
 
-At most `apply_links.per_run` jobs per run (default 200; the rest wait for the next run), with
-`apply_links.workers` (default 4) at once. Set `per_run = 0` under `[apply_links]` in
-`config.toml` to turn the stage off. To leave it out of one run, name the stages you want:
-`jobhunter run --stage list,resolve,normalize,dedupe,prefilter,score`. What it did shows on
-[/log](/log) with each run (`apply_links: tried …, live …, errors …`); a failure in this stage
-is logged and never fails the run, and Ctrl-C stops it like the fetch stages. Jobs it did not
-reach still resolve when you open them.
+If a site is having trouble when the run reaches it (it answers 429 or a 5xx error, asks for a
+long pause, cannot be reached, or its robots.txt cannot be read) and no other link for the job
+settled it, nothing is saved for that job: it is counted as `deferred` and tried again next
+run, so a bad night never fixes a worse link in place.
+
+At most `apply_links.per_run` jobs per run (default 200), with `apply_links.workers`
+(default 4) at once, and no job starts after `apply_links.max_minutes` (default 20) so the run
+does not keep the 03:30 collect waiting (it waits for the run at most two hours). Jobs not
+reached wait for the next run (`left`, and `late` when time ran out). Set `per_run = 0` under
+`[apply_links]` in `config.toml` to turn the stage off. To leave it out of one run, name the
+stages you want: `jobhunter run --stage list,resolve,normalize,dedupe,prefilter,score`. What it did shows on
+[/log](/log) with each run (`apply_links: tried …, live …, deferred …, errors …`); a failure
+in this stage is logged and never fails the run. Ctrl-C stops it within about one request,
+like the fetch stages. Jobs it did not reach still resolve when you open them.
 
 Optional, to keep the timers running while you are logged out:
 `loginctl enable-linger $USER`. Without it, timers that never fire are reported as "timers not

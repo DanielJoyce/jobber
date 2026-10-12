@@ -113,6 +113,7 @@
 [apply_links]
 # per_run = 200          # groups resolved per run at most; 0 turns the pass off
 # workers = 4            # groups resolved at once
+# max_minutes = 20       # no group starts after this; the rest wait for the next run
 
 [capture]
 # Hosts where the browser extension never reads a page (suffix match).

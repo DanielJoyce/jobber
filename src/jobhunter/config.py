@@ -398,6 +398,9 @@ class ApplyLinks(BaseModel):
 
     per_run: int = Field(default=200, ge=0)
     workers: int = Field(default=4, ge=1)
+    # No group starts after this many minutes, so the run ends before the collect unit gives
+    # up waiting for the run lock.
+    max_minutes: float = Field(default=20, gt=0)
 
 
 class Settings(BaseModel):
@@ -1045,6 +1048,7 @@ RELOADABLE: frozenset[str] = frozenset(
         # read per run
         "apply_links.per_run",
         "apply_links.workers",
+        "apply_links.max_minutes",
         # read on use
         "mail.alerts_address",
         "mail.label",
@@ -1128,6 +1132,7 @@ SHOWN_VALUES: frozenset[str] = frozenset(
         "apply.api_entailment_model",
         "apply_links.per_run",
         "apply_links.workers",
+        "apply_links.max_minutes",
         "mail.label",
         "console.port",
         "console.public_port",

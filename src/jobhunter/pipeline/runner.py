@@ -604,6 +604,7 @@ def _apply_links_stage(
             now=now,
             limit=limit,
             workers=settings.apply_links.workers,
+            max_seconds=settings.apply_links.max_minutes * 60,
             ctx_factory=apply_ctx_factory,
         )
     except Exception as exc:  # never fail the run over apply links

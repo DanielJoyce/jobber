@@ -10,14 +10,21 @@ them ahead of time for the groups most likely to be opened:
   under the current profile, best first.
 
 Only groups with no ``apply_link`` row are taken, so a link you set by hand, a link already
-resolved, and a login-wall row (re-tried at most once a night by the resolve stage's
-login-wall pass, the same back-off as the console's) are never fetched here. Postings past
-their closing date are skipped. At most ``apply_links.per_run`` groups per run.
+resolved and a row already stopped at a login wall (``blocked``) are never fetched here; the
+pass never retries a blocked row. Postings past their closing date are skipped.
 
-Network only through ``FetchContext`` (``applylink.resolve_group``): robots.txt and per-host
-rate limits hold across threads. Nothing here spends credits. With a database file, up to
-``apply_links.workers`` groups resolve at once, each thread on its own connection (as the
-console's ``apply_bg`` does), since ``resolve_group`` reads and writes as it walks.
+Bounds: at most ``apply_links.per_run`` groups, and no group starts after
+``apply_links.max_minutes`` (the collect unit waits for the run lock only so long).
+
+An outage never freezes a worse link: when a start failed transiently (429, 5xx, a transport
+error, a host held by Retry-After, an unreachable robots.txt) and nothing settled the group,
+no row is written (``resolve_group(defer_transient=True)``) and the group stays eligible.
+
+Network only through ``FetchContext`` (``applylink.resolve_group``): robots.txt and the
+process-wide per-host rate limits hold across threads. Nothing here spends credits. With a
+database file, up to ``apply_links.workers`` groups resolve at once, each thread on its own
+connection (as the console's ``apply_bg`` does), since ``resolve_group`` reads and writes as
+it walks. Ctrl-C ends rate-limit waits at once and starts no new request (``cancel=``).
 """
 
 from __future__ import annotations
@@ -31,7 +38,6 @@ from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 
 from jobhunter.config import Settings
 from jobhunter.core import db
@@ -47,12 +53,14 @@ logger = logging.getLogger(__name__)
 
 PROGRESS_EVERY = 25  # a progress line every N groups or PROGRESS_SECONDS
 PROGRESS_SECONDS = 30.0
-SHORTLIST_STATUSES = ("interested", "preparing")
 LIKELY_BUCKETS = (Bucket.A, Bucket.B)
+USER_LINK = "user_link"
+DEFERRED = "deferred"
+LATE = "late"  # not started: the pass ran out of time
 
 
 class PassCancelled(BaseException):
-    """The run is stopping (Ctrl-C): fetch waits end and no new group starts."""
+    """The run is stopping (Ctrl-C): fetch waits end and no new request starts."""
 
 
 @dataclass
@@ -67,21 +75,25 @@ class PassResult:
     candidates: int = 0  # groups that qualified (no row yet), before the bound
     shortlist: int = 0
     ab: int = 0
-    tried: int = 0
-    statuses: Counter[str] = field(default_factory=Counter)
+    tried: int = 0  # groups started
+    outcomes: Counter[str] = field(default_factory=Counter)
     no_url: int = 0
     errors: int = 0
 
     def counts(self) -> dict[str, int]:
         """For ``run.counts``. /log shows the first eight keys, so the outcome comes first."""
+        o = self.outcomes
         return {
             "tried": self.tried,
-            "live": self.statuses["live"],
-            "unresolved": self.statuses["unresolved"],
-            "blocked": self.statuses["blocked"],
-            "expired": self.statuses["expired"],
+            "live": o["live"],
+            "unresolved": o["unresolved"],
+            "deferred": o[DEFERRED],
             "errors": self.errors,
+            "blocked": o["blocked"],
+            "expired": o["expired"],
             "left": max(0, self.candidates - self.tried),
+            "late": o[LATE],
+            "user_link": o[USER_LINK],
             "candidates": self.candidates,
             "shortlist": self.shortlist,
             "ab": self.ab,
@@ -141,13 +153,24 @@ def select_groups(
     return out + likely
 
 
-ResolveOne = Callable[[int], applylink.ApplyLink]
-
-
-def _resolver_for(
-    conn: sqlite3.Connection, ctx_factory: applylink.CtxFactory, now: datetime
-) -> ResolveOne:
-    return lambda gid: applylink.resolve_group(conn, gid, now=now, ctx_factory=ctx_factory)
+def resolve_one(
+    conn: sqlite3.Connection, group_id: int, *, now: datetime, ctx_factory: applylink.CtxFactory
+) -> str:
+    """Resolve one group; the outcome label: a stored status, ``user_link`` (a link set by
+    hand, before or during the walk, left as it is) or ``deferred`` (nothing written).
+    ``ValueError``: the group has no URL to start from."""
+    try:
+        link = applylink.resolve_group(
+            conn, group_id, now=now, ctx_factory=ctx_factory, defer_transient=True
+        )
+    except applylink.Deferred as exc:
+        logger.info("apply link: %s", exc)
+        return DEFERRED
+    if link.chosen_by != "user":
+        stored = applylink.get_apply_link(conn, group_id)
+        if stored is not None and stored.chosen_by == "user":
+            link = stored  # set while the walk ran: _save kept it
+    return USER_LINK if link.chosen_by == "user" else link.status.value
 
 
 def resolve_likely(
@@ -158,10 +181,13 @@ def resolve_likely(
     now: datetime,
     limit: int,
     workers: int = 1,
+    max_seconds: float | None = None,
     ctx_factory: applylink.CtxFactory | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> PassResult:
-    """Resolve up to ``limit`` likely groups' apply links. One group failing never stops the
-    others. ``ctx_factory`` (tests) runs everything on ``conn``, one group at a time."""
+    """Resolve up to ``limit`` likely groups' apply links, starting none after
+    ``max_seconds``. One group failing never stops the others. ``ctx_factory`` (tests) runs
+    everything on ``conn``, one group at a time."""
     result = PassResult()
     picked = select_groups(conn, profile, now=now)
     result.candidates = len(picked)
@@ -172,7 +198,7 @@ def resolve_likely(
     parallel = ctx_factory is None and path is not None and workers > 1 and len(todo) > 1
     n_workers = min(workers, len(todo)) if parallel else 1
     logger.info(
-        "apply links: %d groups qualify (%d shortlisted, %d A/B), resolving %d, %d at a time",
+        "apply links: %d groups qualify (%d shortlisted, %d A/B), resolving up to %d, %d at a time",
         result.candidates,
         result.shortlist,
         result.ab,
@@ -182,56 +208,70 @@ def resolve_likely(
     if not todo:
         return result
 
+    deadline = None if max_seconds is None else clock() + max_seconds
+    stop = threading.Event()
     progress = _Progress(len(todo))
 
-    def record(c: Candidate, outcome: applylink.ApplyLink | BaseException) -> None:
-        result.tried += 1
-        if isinstance(outcome, ValueError):
-            result.no_url += 1  # no member with a usable URL: nothing to fetch
-        elif isinstance(outcome, BaseException):
-            result.errors += 1
-            logger.warning("apply link for group %s failed: %s", c.group_id, outcome)
-        else:
-            result.statuses[outcome.status.value] += 1
-        progress.tick(result)
-
-    if not parallel:
-        resolve = _resolver_for(
-            conn, ctx_factory or applylink.default_ctx_factory(settings, conn), now
-        )
-        for c in todo:
-            try:
-                outcome: Any = resolve(c.group_id)
-            except Exception as exc:  # one group never stops the pass
-                outcome = exc
-            record(c, outcome)
-        return result
-
-    assert path is not None
-    stop = threading.Event()
+    def check() -> None:
+        if stop.is_set():
+            raise PassCancelled
 
     def stop_sleep(seconds: float) -> None:
         if stop.wait(max(0.0, seconds)):
             raise PassCancelled
 
-    def work(c: Candidate) -> applylink.ApplyLink:
-        if stop.is_set():
-            raise PassCancelled
+    def factory_on(c: sqlite3.Connection) -> applylink.CtxFactory:
+        if ctx_factory is not None:
+            return ctx_factory
+        return lambda url: fetch_context_for_url(settings, c, url, sleep=stop_sleep, cancel=check)
+
+    def work(cand: Candidate, c: sqlite3.Connection | None = None) -> str:
+        check()
+        if deadline is not None and clock() >= deadline:
+            return LATE
+        if c is not None:
+            return resolve_one(c, cand.group_id, now=now, ctx_factory=factory_on(c))
+        assert path is not None
         own = db.connect(path)
         try:
-
-            def factory(url: str) -> Any:
-                return fetch_context_for_url(settings, own, url, sleep=stop_sleep)
-
-            return _resolver_for(own, factory, now)(c.group_id)
+            return resolve_one(own, cand.group_id, now=now, ctx_factory=factory_on(own))
         finally:
             own.close()
 
+    def record(cand: Candidate, outcome: str | BaseException) -> None:
+        if outcome == LATE:
+            result.outcomes[LATE] += 1
+            return
+        result.tried += 1
+        if isinstance(outcome, ValueError):
+            result.no_url += 1
+            logger.info("apply link for group %s: %s", cand.group_id, outcome)
+        elif isinstance(outcome, BaseException):
+            result.errors += 1
+            logger.warning("apply link for group %s failed: %s", cand.group_id, outcome)
+        else:
+            result.outcomes[outcome] += 1
+        progress.tick(result)
+
+    if not parallel:
+        try:
+            for cand in todo:
+                try:
+                    outcome: str | BaseException = work(cand, conn)
+                except Exception as exc:  # one group never stops the pass
+                    outcome = exc
+                record(cand, outcome)
+        except BaseException:
+            stop.set()
+            raise
+        _log_late(result)
+        return result
+
     pool = ThreadPoolExecutor(max_workers=n_workers, thread_name_prefix="jobhunter-applylink")
-    futures: dict[Future[applylink.ApplyLink], Candidate] = {}
+    futures: dict[Future[str], Candidate] = {}
     try:
-        for c in todo:
-            futures[pool.submit(work, c)] = c
+        for cand in todo:
+            futures[pool.submit(work, cand)] = cand
         pending = set(futures)
         while pending:
             done, pending = wait(pending, return_when=FIRST_COMPLETED)
@@ -239,11 +279,20 @@ def resolve_likely(
                 exc = fut.exception()
                 record(futures[fut], exc if exc is not None else fut.result())
     except BaseException:
-        stop.set()
+        stop.set()  # waits end and no new request starts in the workers
         pool.shutdown(wait=True, cancel_futures=True)
         raise
     pool.shutdown(wait=True)
+    _log_late(result)
     return result
+
+
+def _log_late(result: PassResult) -> None:
+    if result.outcomes[LATE]:
+        logger.info(
+            "apply links: out of time (apply_links.max_minutes); %d groups wait for the next run",
+            result.outcomes[LATE],
+        )
 
 
 class _Progress:
@@ -258,9 +307,10 @@ class _Progress:
             return
         self.last = time.monotonic()
         logger.info(
-            "apply links: %d of %d groups tried, %d live, %d errors",
+            "apply links: %d of %d groups tried, %d live, %d deferred, %d errors",
             r.tried,
             self.total,
-            r.statuses["live"],
+            r.outcomes["live"],
+            r.outcomes[DEFERRED],
             r.errors,
         )
