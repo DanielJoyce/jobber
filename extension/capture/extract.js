@@ -224,7 +224,8 @@
     if (iframes.length >= MAX_IFRAMES) {
       break;
     }
-    const src = httpUrl(frame.getAttribute("src") || frame.getAttribute("data-src"), "iframes");
+    const src = httpUrl(frame.getAttribute("src"), "iframes")
+      || httpUrl(frame.getAttribute("data-src"), "iframes");
     if (src && !iframes.includes(src)) {
       iframes.push(src);
     }

@@ -559,17 +559,18 @@ def _embed_from_frame(src: str, parent_q: dict[str, str]) -> AtsEmbed | None:
         direct = paste.direct_board_url(src)
     except paste.PasteError:
         return None
-    q = {**parent_q, **_query(src)}
+    frame_q = _query(src)
     parts = [x for x in urlsplit(src).path.split("/") if x]
     jid: str | None = None
     if rule.name == "greenhouse":
         # /embed/job_board?for=<board> (+ gh_jid on the frame or the parent), or /<board>?gh_jid=
-        jid = q.get("token") or q.get("gh_jid")
-        board = q.get("for") or (parts[0] if parts and parts[0] != "embed" else None)
+        # "token" and "for" are the frame's own parameters; the parent page passes only gh_jid.
+        jid = frame_q.get("token") or frame_q.get("gh_jid") or parent_q.get("gh_jid")
+        board = frame_q.get("for") or (parts[0] if parts and parts[0] != "embed" else None)
         if not rule.is_posting(direct) and board and jid and _GH_JID.match(jid):
             direct = f"https://{host_of(src)}/{board}/jobs/{jid}"
     elif rule.name == "ashby":
-        jid = q.get("ashby_jid")
+        jid = frame_q.get("ashby_jid") or parent_q.get("ashby_jid")
         if not rule.is_posting(direct) and parts and jid and _ASHBY_JID.match(jid):
             direct = f"https://{host_of(src)}/{parts[0]}/{jid}"
     if not rule.is_posting(direct):
@@ -606,7 +607,7 @@ def _fetch_offer(
     whatever the page text was (the page text is not the posting); otherwise only for a page
     with little description."""
     if embed is not None:
-        if desc_source == "selection" or (
+        if (desc_source == "selection" and facts.trigger == "menu-selection") or (
             desc_source in ("jsonld", "microdata", "site") and len(description) >= MIN_DESCRIPTION
         ):
             return None
@@ -633,6 +634,8 @@ def _fetch_offer(
         direct = paste.direct_board_url(destination)
     except paste.PasteError:
         return None
+    if not rule.is_posting(direct):
+        return None  # a board page: the server refuses it, so no button
     if rule.name in FETCH_ATS:
         return FetchOffer(url=direct, host=host_of(direct), kind="fetch")
     if rule.name in SELECT_ATS:
@@ -682,6 +685,9 @@ def analyse(facts: Facts, posting_index: int | None = None) -> Analysis:
         description, desc_source = selection, "selection"
     elif structured_desc:
         description, desc_source = structured_desc, mapped.source  # type: ignore[union-attr]
+    elif embed is not None and selection:
+        # No page description exists to choose between: the top-frame selection is the text.
+        description, desc_source = selection, "selection"
     else:
         description, desc_source = page_description, "page"
 
@@ -694,9 +700,11 @@ def analyse(facts: Facts, posting_index: int | None = None) -> Analysis:
         reasons.append("no structured posting data; check the page text")
     elif desc_source != "selection" and len(description) < MIN_DESCRIPTION:
         reasons.append("the structured description is short; check it")
+    if desc_source == "selection" and facts.trigger != "menu-selection":
+        reasons.append("the description is your selected text; check it")
     if not structured_title:
         reasons.append("no structured title and employer; check them")
-    if selection and facts.trigger != "menu-selection":
+    if selection and facts.trigger != "menu-selection" and page_description:
         reasons.append("you have text selected: choose the page's description or it")
 
     board = page_board_id(page_url)

@@ -200,6 +200,20 @@ def test_gh_jid_in_the_page_url_alone_is_an_ats_posting_without_page_text(site):
     assert a.description == "" and a.fetch is not None and a.fetch.kind == "select"
 
 
+def test_placeholder_src_falls_back_to_data_src(site):
+    html = (
+        "<!doctype html><title>Lazy</title><main><p>x</p>"
+        '<iframe src="about:blank" data-src="'
+        'https://job-boards.greenhouse.io/embed/job_app?for=exampleboard&token=4012345">'
+        "</iframe></main>"
+    )
+    page = site.open(f"{EMP}/careers/lazy", html)
+    result, _ = site.extract(page)
+    assert result["iframes"] == [
+        "https://job-boards.greenhouse.io/embed/job_app?for=exampleboard&token=4012345"
+    ]
+
+
 def test_a_2_mb_description_is_truncated(site):
     big = "Synthetic duty. " * 140_000  # about 2.2 MB
     html = (

@@ -1054,7 +1054,7 @@ def test_a_page_with_no_embed_keeps_its_page_text():
 
 
 def test_preview_carries_the_text_source(conn):
-    r = cap(conn, embed_facts(iframes=[GH_EMBED], selection=LONG))
+    r = cap(conn, embed_facts(iframes=[GH_EMBED]))
     assert r.outcome == "previewed" and r.preview is not None
     assert r.preview.text_source == "" and r.preview.description == ""
     assert r.fetch is not None and r.fetch.url == GH_DIRECT
@@ -1107,3 +1107,40 @@ def test_fetch_refuses_a_board_page_that_is_not_one_posting(conn, url):
             lambda u: paste.Fetched("x"),
             now=NOW,
         )
+
+
+def test_toolbar_capture_on_an_embed_page_uses_the_selection(conn):
+    r = cap(conn, embed_facts(iframes=[GH_EMBED], selection=LONG))
+    assert r.outcome == "previewed" and r.preview is not None
+    assert r.preview.description == LONG and r.preview.text_source == "your selection"
+    assert not any("choose the page's description" in x for x in r.preview.reasons)
+    assert r.fetch is not None  # fetching the ATS posting is still offered
+    r2 = cap(conn, embed_facts(url=EMP_PAGE + "?gh_jid=4012345", selection=LONG))
+    assert r2.preview is not None and r2.preview.description == LONG
+
+
+def test_an_unrelated_page_token_never_builds_a_posting_url(conn):
+    facts_ = embed_facts(
+        url=EMP_PAGE + "?token=123456",
+        iframes=["https://boards.greenhouse.io/embed/job_board?for=exampleboard"],
+    )
+    a = capture.analyse(facts_)
+    assert a.embed is None and a.ats_url is None and a.fetch is None
+    ingested(conn, 1, url="https://boards.greenhouse.io/exampleboard/jobs/123456", title="Other")
+    r = cap(conn, facts_)
+    assert r.outcome != "existing"
+
+
+def test_no_fetch_button_for_a_board_page_destination():
+    a = capture.analyse(
+        Facts(
+            url="https://www.linkedin.com/jobs/view/4012345678",
+            page_text="short",
+            apply_control={
+                "kind": "offsite",
+                "label": "Apply",
+                "href": "https://jobs.lever.co/acme",
+            },
+        )
+    )
+    assert a.fetch is None
