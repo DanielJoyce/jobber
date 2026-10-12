@@ -158,6 +158,7 @@ def test_wait_running_out_exits_75_so_onfailure_fires(env, hold):
     assert result.exit_code == 75
     assert "gave up after waiting" in result.output
     assert env.run == 0
+    assert not (env.db_path.parent / "readiness.json").exists()  # 019 S4: nothing written
 
 
 def test_a_holder_older_than_six_hours_exits_75(env, hold):

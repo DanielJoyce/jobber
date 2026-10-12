@@ -368,3 +368,20 @@ def test_score_local_unknown_proceeds(conn, monkeypatch, tmp_path):
     assert built == ["local:some-model"]
     assert "no credential" not in "\n".join(report.messages)
     assert report.exit_code == 0
+
+
+def test_score_outcome_codes_and_trigger(conn, monkeypatch):
+    """The fixed codes readiness.json records (specs/019 S4); the run row keeps the trigger."""
+    for name in (
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR",
+        "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    ):  # fmt: skip
+        monkeypatch.delenv(name, raising=False)
+    assert go(conn, [row("a")], stages=["list"]).score_outcome == "not_run"
+    assert go(conn, [row("a")], profile=None).score_outcome == "no_profile"
+    report = go(conn, [row("a")], stages=["score"], trigger="timer")
+    assert report.score_outcome == "skipped_no_credential"
+    assert report.trigger == "timer"
+    triggers = [r[0] for r in conn.execute('SELECT "trigger" FROM run ORDER BY id')]
+    assert triggers == ["manual", "manual", "timer"]
+    assert go(conn, [row("a")], trigger="bogus").trigger == "manual"

@@ -242,6 +242,12 @@ class _Ctx:
     conn: sqlite3.Connection | None = None
     prefs: Any = None  # a PrefsState, computed once per call
     spend: bool = True  # False: no read of today's spend (the achievements gate)
+    # True for the run and `jobhunter-ctr`, which get the run's secrets: in a container, a
+    # secret they lack is missing, not "unseen" as it is for the console container (S4).
+    sees_run_secrets: bool = False
+
+    def unseen_here(self) -> bool:
+        return self.mode == CONTAINER and not self.sees_run_secrets
 
     def unit_dir(self) -> Path:
         from jobhunter.ops import preflight
@@ -462,7 +468,7 @@ def _presence(
     if state.state == secrets.INVALID:
         return _Presence("invalid", f"{env_name} {_describe(state, ctx)}", "invalid")
     if state.state == secrets.UNSET:
-        if ctx.mode == CONTAINER and not console_sees:
+        if ctx.unseen_here() and not console_sees:
             return _Presence("unseen", "not visible from this container", "")
         return _Presence("absent", f"{env_name} unset", "")
     source = {secrets.ENV: "env", secrets.FILE: "podman secret"}.get(state.state, state.state)
@@ -1245,7 +1251,7 @@ def _client_json(ctx: _Ctx) -> Check:
         return Check("mail.client", EMAIL, RECOMMENDED, OK, False, title, f"found ({where})",
                      unlocks, None, "file" if ctx.mode == HOST else "podman secret",
                      step=1)  # fmt: skip
-    if ctx.mode == CONTAINER:
+    if ctx.unseen_here():
         return Check("mail.client", EMAIL, RECOMMENDED, UNKNOWN, False, title,
                      "the console container never sees this file; the nightly run does",
                      unlocks, Fix("command", "jobhunter-ctr doctor"), step=1)  # fmt: skip
@@ -1312,7 +1318,7 @@ def _gmail_token(ctx: _Ctx) -> Check:
         unseen = False
     elif ctx.mode == CONTAINER:
         has_token = bool(ctx.environ.get(auth.TOKEN_FILE_VAR)) and auth.token_file_path().is_file()
-        unseen = not has_token
+        unseen = not has_token and ctx.unseen_here()
     else:
         try:
             file_present = auth.token_file_path().is_file()
@@ -1632,6 +1638,7 @@ def run_checks(
     spend: bool = True,
     use_snapshot: bool = True,
     viewer: str = "the console",
+    sees_run_secrets: bool = False,
 ) -> list[Check]:
     """Every local check, in display order. Read-only, no network, no subprocess.
 
@@ -1639,6 +1646,7 @@ def run_checks(
     a fresh ``readiness.json`` (``readiness_snapshot.effective``), so the console and doctor show
     what the nightly run saw. The writers of that file (``run``, ``doctor --snapshot``) pass
     False to record their own view. ``viewer`` names this process in a disagreement.
+    ``sees_run_secrets``: this process gets the run's secrets (the run itself, `jobhunter-ctr`).
 
     ``registry_rows`` are the registry rows loaded once at console start: the startup
     ``secrets.Report`` cannot tell which variables are USAJOBS's, and parsing the registry per
@@ -1660,6 +1668,7 @@ def run_checks(
         data_dir=data_dir,
         db_path=db_path,
         spend=spend,
+        sees_run_secrets=sees_run_secrets,
     )
     ctx.prefs = prefs_state(settings)
     ctx.conn = _open_ro(db_path)

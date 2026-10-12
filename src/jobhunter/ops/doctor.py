@@ -301,6 +301,8 @@ def gather(
     checks = readiness.run_checks(
         settings, secrets_report=secrets_report, now=now, mode=mode, home=home,
         use_snapshot=False,
+        # in a container doctor runs through `jobhunter-ctr`, which gets the run's secrets
+        sees_run_secrets=mode == readiness.CONTAINER,
     )  # fmt: skip
     if config_error is not None:
         checks = [_config_failed(config_error) if c.id == "config.file" else c for c in checks]

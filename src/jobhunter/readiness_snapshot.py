@@ -531,6 +531,7 @@ def record_run_inputs(
         registry_rows=registry_rows,
         environ=environ,
         use_snapshot=False,
+        sees_run_secrets=True,
     )
     section = inputs_section(checks, now=now, writer="run", trigger=trigger, mode=mode)
     return write_section(_data_dir(settings), RUN_INPUTS, section, timeout=timeout)
