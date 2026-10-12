@@ -81,9 +81,12 @@ INPUT_IDS = (
     "secrets.valid",
 )
 
-CONFIRM_SCORE = (
-    "or confirm now with `{cmd} run --stage prefilter,score`. This scores waiting jobs and "
-    "spends credits, up to the daily cap"
+# The rows whose fixes end with the paid confirm command (019 "Effective status").
+CONFIRM_IDS = ("scorer.screen", "profile.preferences", "profile.resume")
+CONFIRM_SCORE = "confirm now (this scores waiting jobs and spends credits, up to the daily cap)"
+REFRESH_FREE = (
+    "already fixed? The next run confirms it. To confirm now for free (it fetches and scores "
+    "nothing)"
 )
 
 _RANK = {rd.OK: 0, rd.OPTIONAL_STATUS: 0, rd.MISSING: 1, rd.BROKEN: 2}
@@ -91,6 +94,11 @@ _RANK = {rd.OK: 0, rd.OPTIONAL_STATUS: 0, rd.MISSING: 1, rd.BROKEN: 2}
 
 class LockTimeout(Exception):
     """Another writer held ``readiness.json.lock`` for longer than the timeout."""
+
+
+class Unreadable(Exception):
+    """``readiness.json`` exists but cannot be read or parsed; a writer refuses to replace it
+    rather than erase the other sections. Remove the file to start over."""
 
 
 # --- trigger -----------------------------------------------------------------------------------
@@ -117,6 +125,20 @@ def read(data_dir: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _read_for_write(data_dir: Path) -> dict[str, Any]:
+    """Like ``read``, but only a missing file is empty; anything else raises ``Unreadable``."""
+    try:
+        with path_for(data_dir).open(encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise Unreadable(f"{path_for(data_dir)}: {type(exc).__name__}") from None
+    if not isinstance(data, dict):
+        raise Unreadable(f"{path_for(data_dir)}: not a JSON object")
+    return data
 
 
 @contextlib.contextmanager
@@ -153,13 +175,14 @@ def write_section(
     """Replace one section under the lock; the others are kept as they are on disk.
 
     ``build`` is the new section, or a function of the current one (``None`` when absent).
-    Returns False, having written nothing, when the lock was not free within ``timeout``."""
+    Returns False, having written nothing, when the lock was not free within ``timeout``.
+    Raises ``Unreadable``, having written nothing, when the file exists but cannot be read."""
     if name not in SECTIONS:
         raise ValueError(f"unknown section {name!r}")
     data_dir = Path(data_dir)
     try:
         with _locked(data_dir, timeout):
-            data = read(data_dir)
+            data = _read_for_write(data_dir)
             current = data.get(name)
             section = (
                 build(current if isinstance(current, dict) else None) if callable(build) else build
@@ -314,11 +337,12 @@ def _rows(section: Any) -> dict[str, rd.Check]:
 
 
 def _clock(when: datetime) -> str:
-    return when.astimezone().strftime("%H:%M")
+    return when.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 def run_label(trigger: Any, when: datetime) -> str:
-    """ "the nightly run at 02:00" only for timer data; "the manual run at 14:03" otherwise."""
+    """ "the nightly run at 2026-10-11 02:00" only for timer data; "the manual run at ..."
+    otherwise."""
     if trigger == TIMER:
         return f"the nightly run at {_clock(when)}"
     if trigger == MANUAL:
@@ -335,15 +359,29 @@ def manual_label(section: Mapping[str, Any], when: datetime) -> str:
 # --- effective status ----------------------------------------------------------------------
 
 
-def _confirm_fix(fix: rd.Fix | None, mode: str) -> rd.Fix:
-    cmd = "jobhunter-ctr" if mode in (rd.CONTAINER, rd.HOST_MANAGING) else "jobhunter"
-    confirm = rd.Fix("command", CONFIRM_SCORE.format(cmd=cmd))
+def _cmd(mode: str) -> str:
+    return "jobhunter-ctr" if mode in (rd.CONTAINER, rd.HOST_MANAGING) else "jobhunter"
+
+
+def confirm_fix(mode: str) -> rd.Fix:
+    """The paid confirm command, always with its credit label."""
+    return rd.Fix("steps", CONFIRM_SCORE, (f"{_cmd(mode)} run --stage prefilter,score",))
+
+
+def _append(fix: rd.Fix | None, last: rd.Fix) -> rd.Fix:
+    """``last`` as the final alternative of ``fix`` (once)."""
     if fix is None:
-        return confirm
-    alt = fix.alt
-    if alt is None:
-        return replace(fix, alt=confirm)
-    return replace(fix, alt=replace(alt, alt=confirm))
+        return last
+    if fix == last:
+        return fix
+    return replace(fix, alt=_append(fix.alt, last))
+
+
+def _refresh_fix(check_id: str, mode: str) -> rd.Fix:
+    """This process sees the row fixed; only the run's older view disagrees. Any run writes
+    new run inputs, and ``--stage normalize`` fetches and scores nothing."""
+    alt = confirm_fix(mode) if check_id in CONFIRM_IDS else None
+    return rd.Fix("steps", REFRESH_FREE, (f"{_cmd(mode)} run --stage normalize",), alt)
 
 
 def _outcome_override(
@@ -371,7 +409,8 @@ def _outcome_override(
     inputs_at = fresh(inputs, now)
     if inputs_at is not None and inputs_at > score_at:
         rows = _rows(inputs)
-        if all(rows.get(i) is not None and rows[i].status == rd.OK for i in cleared_by):
+        # cleared when the newer row is not failing (``local:`` scorers are unknown)
+        if all(rows.get(i) is not None and rows[i].status not in rd.FAILING for i in cleared_by):
             return None
     label = run_label(outcome.get("score_trigger"), score_at)
     return replace(
@@ -379,7 +418,6 @@ def _outcome_override(
         status=rd.BROKEN,
         due=False,
         detail=f"{label} {why}; here: {check.detail}",
-        fix=_confirm_fix(check.fix, mode),
     )
 
 
@@ -457,7 +495,7 @@ def _host_row(check: rd.Check, snapshot: Mapping[str, Any], now: datetime) -> rd
         level=level,
         status=rd.BROKEN,
         detail=f"the host's preflight at {at} found problems: {titles}",
-        fix=rd.Fix("command", "jobhunter container preflight --dry-run (on the host)"),
+        fix=rd.Fix("command", "jobhunter doctor --containers --snapshot (on the host)"),
     )
 
 
@@ -474,6 +512,7 @@ def effective(
     out: list[rd.Check] = []
     for check in checks:
         if check.id in INPUT_IDS:
+            here = check
             if check.status == rd.UNKNOWN:
                 check = _from_snapshot(check, snapshot, now)
             else:
@@ -481,6 +520,13 @@ def effective(
             override = _outcome_override(check, snapshot, now, mode)
             if override is not None:
                 check = override
+            if check.status in rd.FAILING:
+                if here.status not in (*rd.FAILING, rd.UNKNOWN):
+                    # fixed here (the starter-prefs or upload button would only conflict):
+                    # say how the run confirms it, for free
+                    check = replace(check, fix=_refresh_fix(check.id, mode))
+                elif check.id in CONFIRM_IDS:
+                    check = replace(check, fix=_append(check.fix, confirm_fix(mode)))
         elif check.id == "containers.deployment" and check.status == rd.UNKNOWN:
             check = _host_row(check, snapshot, now)
         out.append(check)
@@ -499,7 +545,10 @@ def apply(
     snapshot = read(data_dir)
     if not snapshot:
         return checks
-    return effective(checks, snapshot, now=now, mode=mode, viewer=viewer)
+    try:
+        return effective(checks, snapshot, now=now, mode=mode, viewer=viewer)
+    except Exception:  # a hand-edited file must never take /setup or the banner down
+        return checks
 
 
 # --- writers ---------------------------------------------------------------------------------

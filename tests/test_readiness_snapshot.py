@@ -82,6 +82,15 @@ def put_outcome(settings, score, *, at, trigger="timer"):
     assert snap.write_section(data_dir(settings), snap.RUN_OUTCOME, build)
 
 
+def fixes(fix):
+    """A fix and its alternatives, in order."""
+    out = []
+    while fix is not None:
+        out.append(fix)
+        fix = fix.alt
+    return out
+
+
 # --- the file --------------------------------------------------------------------------------
 
 
@@ -151,8 +160,12 @@ def test_outcome_skipped_breaks_the_scorer_the_console_sees_until_newer_inputs(t
     row = rows["scorer.screen"]
     assert row.status == BROKEN
     assert "nightly run at" in row.detail and "did not score" in row.detail
-    texts = [row.fix.text] + [f.text for f in (row.fix.alt, row.fix.alt and row.fix.alt.alt) if f]
-    assert any("spends credits" in t and "run --stage prefilter,score" in t for t in texts)
+    chain = fixes(row.fix)
+    assert any("spends credits" in f.text and f.steps == ("jobhunter run --stage prefilter,score",)
+               for f in chain)  # fmt: skip
+    # the console sees the key: the first fix is the free refresh, not a secret to create
+    assert chain[0].steps == ("jobhunter run --stage normalize",)
+    assert not any(f.text.lower().startswith("or ") for f in chain)
     assert not essentials_ok(rows.values())
     # the banner (cheap rows) shows it too
     banner = evaluate(settings, key, cheap_only=True)
@@ -498,3 +511,136 @@ def test_preflight_plans_and_keeps_the_trigger_dropin(tmp_path):
     assert preflight._final_dropins(units, again) == set()
     # leave removes it with the rest
     assert all(p in preflight.our_dropins(units) for p in wanted)
+
+
+# --- review fixes (PR 150) -------------------------------------------------------------------
+
+
+def test_a_fixed_profile_row_says_the_next_run_confirms_it(tmp_path):
+    settings = good_settings(tmp_path)
+    write_resume(settings)
+    make_db(settings).close()
+    put_inputs(settings, {}, at=NOW - timedelta(hours=1))  # the run saw no preferences.yaml
+    write_prefs(settings)  # the user fixed it since
+    row = evaluate(settings)["profile.preferences"]
+    assert row.status == "missing"  # the worse of the two, per spec
+    chain = fixes(row.fix)
+    assert chain[0].steps == ("jobhunter run --stage normalize",)
+    assert "next run confirms it" in chain[0].text
+    assert all(f.text != "/setup/starter-prefs" for f in chain)  # that button would 409 now
+    assert any("spends credits" in f.text for f in chain)
+    put_inputs(settings, {}, at=NOW - timedelta(minutes=1), trigger="manual")
+    assert evaluate(settings)["profile.preferences"].status == OK
+
+
+def test_resume_fix_ends_with_the_confirm_hint(tmp_path):
+    settings = good_settings(tmp_path)
+    write_prefs(settings)
+    make_db(settings).close()
+    put_inputs(settings, {}, at=NOW - timedelta(hours=1))
+    row = evaluate(settings)["profile.resume"]
+    assert row.status == "missing"
+    chain = fixes(row.fix)
+    assert chain[0].text == "/setup/resume"
+    assert chain[-1].steps == ("jobhunter run --stage prefilter,score",)
+    assert "spends credits" in chain[-1].text
+
+
+def test_run_label_has_the_date():
+    assert "nightly run at 2026-10-11" in snap.run_label("timer", NOW + timedelta(hours=1))
+
+
+def test_outcome_clears_when_the_newer_scorer_row_is_not_failing(tmp_path):
+    settings = ready(tmp_path)
+    put_outcome(settings, snap.SKIPPED_NO_CREDENTIAL, at=NOW - timedelta(hours=2))
+    unknown = readiness.Check(
+        "scorer.screen", "Scoring", "essential", UNKNOWN, False, "Screen scorer", "local", "x"
+    )
+    body = snap.inputs_section(
+        [unknown], now=NOW - timedelta(hours=1), writer="run", trigger="manual", mode=HOST
+    )
+    snap.write_section(data_dir(settings), snap.RUN_INPUTS, body)
+    assert evaluate(settings, {"ANTHROPIC_API_KEY": FAKE_KEY})["scorer.screen"].status == OK
+
+
+def test_an_unreadable_file_is_never_overwritten(tmp_path):
+    d = tmp_path / "data"
+    d.mkdir()
+    damaged = '{"host": {"checked_at": "h"}, oops'
+    (d / "readiness.json").write_text(damaged)
+    with pytest.raises(snap.Unreadable):
+        snap.write_section(d, snap.RUN_INPUTS, {"checked_at": "r"})
+    assert (d / "readiness.json").read_text() == damaged
+    assert snap.read(d) == {}  # readers still treat it as empty
+
+
+def test_a_hand_edited_file_never_breaks_the_checks(tmp_path, monkeypatch):
+    settings = ready(tmp_path)
+    junk = [
+        {"id": "scorer.screen", "status": "broken", "fix": {"text": 3, "alt": []}},
+        "junk",
+        {"id": 5},
+    ]
+    (data_dir(settings) / "readiness.json").write_text(
+        json.dumps({"run_inputs": {"checked_at": NOW.isoformat(), "checks": junk}})
+    )
+    assert "scorer.screen" in evaluate(settings)
+
+    def boom(*a, **k):
+        raise RuntimeError("bad file")
+
+    monkeypatch.setattr(snap, "effective", boom)
+    rows = evaluate(settings, {"ANTHROPIC_API_KEY": FAKE_KEY})
+    assert rows["scorer.screen"].status == OK  # the console's own view, unmerged
+
+
+def test_doctor_snapshot_skips_writing_when_the_config_will_not_load(cli_env):
+    cfg = Path(os.environ["JOBHUNTER_CONFIG"])
+    cfg.write_text(cfg.read_text() + "\n[scoring\n")
+    result = runner.invoke(app, ["doctor", "--snapshot"])
+    assert "not written (the config file will not load)" in result.output
+    assert not (cli_env / "readiness.json").exists()
+
+
+def write_prefs_resume(data: Path) -> None:
+    import shutil
+
+    from test_readiness import EXAMPLE_PREFS
+
+    (data / "profile").mkdir(exist_ok=True)
+    shutil.copy(EXAMPLE_PREFS, data / "profile" / "preferences.yaml")
+    (data / "resume").mkdir(exist_ok=True)
+    (data / "resume" / "resume.md").write_text("# Synthetic\n")
+
+
+def test_stale_host_failure_does_not_outlive_a_passing_containers_run(cli_env, monkeypatch):
+    (cli_env / "deployment.toml").write_text("x\n")
+    # host-managing mode: the scorer key counts when preflight's drop-in exists
+    dropin = preflight.dropin_path(
+        preflight.default_unit_dir(Path(os.environ["HOME"])), preflight.RUN, "jobhunter_anthropic"
+    )
+    dropin.parent.mkdir(parents=True)
+    dropin.write_text(preflight.HEADER + "\n")
+    write_prefs_resume(cli_env)
+    holder = {"lines": [(preflight.FAIL, "quadlet", "quadlet")]}
+
+    def fake_run(ctx, **kwargs):
+        res = preflight.Result()
+        for status, text, pid in holder["lines"]:
+            res.add(status, text, id=pid)
+        res.marker_present = True
+        return res
+
+    monkeypatch.setattr(preflight, "run", fake_run)
+    monkeypatch.setattr(cli, "build_preflight_context", lambda *a, **k: object())
+    first = runner.invoke(app, ["doctor", "--containers", "--snapshot"])
+    assert first.exit_code == 1, first.output
+    assert "wrote host" in first.output
+    plain = {r["id"]: r for r in json.loads(runner.invoke(app, ["doctor", "--json"]).output)}
+    assert plain["containers.deployment"]["status"] == BROKEN
+    assert plain["containers.deployment"]["fix"]["text"] == (
+        "jobhunter doctor --containers --snapshot (on the host)"
+    )
+    holder["lines"] = [(preflight.OK, "quadlet ok", "quadlet")]
+    second = runner.invoke(app, ["doctor", "--containers"])
+    assert second.exit_code == 0, second.output

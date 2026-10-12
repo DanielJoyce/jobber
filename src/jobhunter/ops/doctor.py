@@ -260,6 +260,11 @@ def _write_note(section: str, write: Callable[[], bool]) -> str:
     """Write one readiness.json section; the line to print about it (no value, no path)."""
     try:
         written = write()
+    except snap.Unreadable:
+        return (
+            f"readiness.json: {section} not written (the file cannot be read; remove it and "
+            "run this again)"
+        )
     except OSError as exc:
         return f"readiness.json: {section} not written ({type(exc).__name__})"
     if not written:
@@ -308,7 +313,9 @@ def gather(
         checks = [_config_failed(config_error) if c.id == "config.file" else c for c in checks]
     notes: list[str] = []
     kw = {} if snapshot_timeout is None else {"timeout": snapshot_timeout}
-    if snapshot:
+    if snapshot and config_error is not None:
+        notes.append("readiness.json: not written (the config file will not load)")
+    elif snapshot:
         notes.append(
             _write_note(
                 "manual_inputs",
@@ -317,6 +324,9 @@ def gather(
         )
     viewer = "this container" if mode == readiness.CONTAINER else "this shell"
     data_dir = resolve_path(settings.paths.data_dir)
+    # The placeholder Containers row (unknown before the merge): --containers replaces it with
+    # this run's preflight rows, so an older host section must not keep it failing.
+    placeholder = {c.id for c in checks if c.id == "containers.deployment" and c.status == UNKNOWN}
     checks = snap.apply(checks, data_dir, now=now, mode=mode, viewer=viewer)
     checks.insert(1, layout_check(settings, home))
     at = next((i for i, c in enumerate(checks) if c.id == "models.choices"), None)
@@ -341,15 +351,13 @@ def gather(
                 report.preflight_ran = True
                 report.preflight_lines = list(result.lines)
                 mapped = map_preflight(result)
-                if snapshot:
+                if snapshot and config_error is None:
                     rows = mapped
                     report.snapshot_notes.append(
                         _write_note("host", lambda: snap.record_host(rows, settings, now=now, **kw))
                     )
         # The placeholder row said "run doctor --containers"; the real rows replace it.
-        checks = [
-            c for c in checks if not (c.id == "containers.deployment" and c.status == UNKNOWN)
-        ]
+        checks = [c for c in checks if c.id not in placeholder]
         report.checks = [*checks, *mapped]
     if wanted:
         report.checks = [c for c in report.checks if c.group == wanted]
