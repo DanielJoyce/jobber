@@ -24,12 +24,13 @@ Workday's step data comes with its own ticket (A11); its hosts and posting key a
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from jobhunter.apply import labels
 from jobhunter.pipeline.ats_rules import host_matches, match_ats
@@ -413,7 +414,6 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
         "are you legally authorized to work in the us",
         "are you authorized to work in the us",
         "are you legally eligible to work in the united states",
-        "work authorization",
     ),
 }  # fmt: skip
 _BY_LABEL: dict[str, str] = {s: key for key, syns in SYNONYMS.items() for s in syns}
@@ -462,9 +462,26 @@ def ats_of(url: str) -> str | None:
 @dataclass(frozen=True)
 class FieldMatch:
     answer: str | None  # the answer key, or None
-    via: Literal["never_store", "field", "synonym", "none"]
+    via: Literal["never_store", "other_person", "field", "synonym", "none"]
     field_key: str | None = None
     never_store: str | None = None  # the never-store category, when via == "never_store"
+
+
+# A field inside one of these blocks is about someone else (a reference, an emergency contact):
+# its Name, Email or Phone is never yours. Matched as whole words in the block's heading,
+# legend or group label, and in the field's own name or id.
+_OTHER_PERSON = re.compile(
+    r"\b(references?|referees?|emergency|next of kin|recommenders?|recommendation|"
+    r"supervisors?|manager'?s? contact|guardian|parent|spouse|relatives?)\b"
+)
+_OWN_ANSWERS = ("contact.", "links.")
+
+
+def _other_person(section: str, names: tuple[str, ...]) -> bool:
+    texts = [section, *names]
+    return any(
+        _OTHER_PERSON.search(re.sub(r"[\s_\-\[\]./]+", " ", labels.normalize(t))) for t in texts
+    )
 
 
 def field_for(
@@ -472,13 +489,24 @@ def field_for(
     names: tuple[str, ...] = (),
     options: tuple[str, ...] = (),
     variant: Variant | None = None,
+    section: str = "",
 ) -> FieldMatch:
     """Which answer a field takes. Never-store first (``labels.never_store`` on the label, the
     name and id, and a choice group's options); then the variant's named fields by exact name or
-    id; then the label synonyms. Anything else maps to nothing."""
+    id; then the label synonyms. ``section`` is the heading, legend or group label of the block
+    the field sits in: in a References or Emergency-contact block, no contact or link answer
+    maps (``other_person``). Anything else maps to nothing."""
     hit = labels.never_store(label, options=options, names=names)
     if hit is not None:
         return FieldMatch(None, "never_store", never_store=hit.category)
+    m = _mapped(label, names, variant)
+    own = m.answer is not None and m.answer.startswith(_OWN_ANSWERS)
+    if own and _other_person(section, names):
+        return FieldMatch(None, "other_person", field_key=m.field_key)
+    return m
+
+
+def _mapped(label: str, names: tuple[str, ...], variant: Variant | None) -> FieldMatch:
     if variant is not None:
         wanted = set(names)
         for f in variant.fields:
@@ -501,14 +529,24 @@ class Visibility(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    check_visibility: bool | None = None  # checkVisibility({checkOpacity, checkVisibilityCSS})
-    width: float | None = None
-    height: float | None = None
-    in_scroll_area: bool | None = None  # its box is inside the document's scroll area
-    aria_hidden: bool | None = None  # it or an ancestor has aria-hidden="true"
-    inert: bool | None = None  # it or an ancestor is inert
-    disabled: bool | None = None
-    read_only: bool | None = None
+    check_visibility: StrictBool | None = None  # checkVisibility({checkOpacity, ...})
+    width: float | None = Field(None, strict=True)
+    height: float | None = Field(None, strict=True)
+    in_scroll_area: StrictBool | None = None  # its box is inside the document's scroll area
+    aria_hidden: StrictBool | None = None  # it or an ancestor has aria-hidden="true"
+    inert: StrictBool | None = None  # it or an ancestor is inert
+    disabled: StrictBool | None = None
+    read_only: StrictBool | None = None
+
+
+def _box_ok(n: float | None) -> bool:
+    """At least 4 px and finite; NaN, infinity and anything not a number fail."""
+    return (
+        isinstance(n, (int, float))
+        and not isinstance(n, bool)
+        and math.isfinite(n)
+        and (n >= MIN_BOX_PX)
+    )
 
 
 def row0(v: Visibility | None) -> str | None:
@@ -518,7 +556,7 @@ def row0(v: Visibility | None) -> str | None:
         return "no visibility facts"
     if v.check_visibility is not True:
         return "not visible"
-    if v.width is None or v.height is None or v.width < MIN_BOX_PX or v.height < MIN_BOX_PX:
+    if not (_box_ok(v.width) and _box_ok(v.height)):
         return "smaller than 4 by 4 px"
     if v.in_scroll_area is not True:
         return "outside the page"

@@ -3216,7 +3216,7 @@
       "method": "POST",
       "request": {
         "additionalProperties": false,
-        "description": "Which job a form belongs to (specs/022 \"Matching the page to a job\"). Sent by the\nservice worker: ``tab_id`` is ``sender.tab.id`` for a content script, or the tab bound to\nthe side panel or popup window; never a value from the page. Unknown fields are refused,\nso nothing page-supplied can ride along as a tab id.",
+        "description": "Which job a form belongs to (specs/022 \"Matching the page to a job\"). Sent by the\nservice worker, never relayed from page content: ``frame_url`` is ``sender.url`` of the\nannouncing frame or the URL the worker's frame registry holds for it; ``tab_id`` is\n``sender.tab.id`` for a content script, or the tab bound to the side panel or popup window.\nUnknown fields are refused and the ids are strict integers, so nothing page-supplied can\nride along as a tab or session id.",
         "properties": {
           "frame_url": {
             "maxLength": 2048,
@@ -3401,7 +3401,7 @@
       "method": "POST",
       "request": {
         "additionalProperties": false,
-        "description": "Your pick (or Add this job) for the frame's posting: remembered in ``ats_posting_ref``.",
+        "description": "Your pick (or Add this job) for the frame's posting: remembered in ``ats_posting_ref``.\nSent from an extension page; ``frame_url`` is the frame's ``sender.url`` from the worker's\nframe registry, never a URL the page reported.",
         "properties": {
           "action_id": {
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",

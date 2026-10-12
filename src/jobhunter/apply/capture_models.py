@@ -37,6 +37,7 @@ ActionId = Annotated[
 GroupId = Annotated[int, Field(ge=1, le=2**53)]
 # chrome.tabs ids; TAB_ID_NONE (-1) is no tab
 TabId = Annotated[int, Field(strict=True, ge=0, le=2**31 - 1)]
+SessionId = Annotated[int, Field(strict=True, ge=1, le=2**53)]
 Trigger = Literal["menu-selection", "menu-page", "popup"]
 ApplyMode = Literal["easy_apply", "offsite", "unknown"]
 Outcome = Literal["added", "existing", "possible", "previewed", "linked", "same_job"]
@@ -188,17 +189,21 @@ class DraftGenerateRequest(Strict):
 
 class MatchRequest(Strict):
     """Which job a form belongs to (specs/022 "Matching the page to a job"). Sent by the
-    service worker: ``tab_id`` is ``sender.tab.id`` for a content script, or the tab bound to
-    the side panel or popup window; never a value from the page. Unknown fields are refused,
-    so nothing page-supplied can ride along as a tab id."""
+    service worker, never relayed from page content: ``frame_url`` is ``sender.url`` of the
+    announcing frame or the URL the worker's frame registry holds for it; ``tab_id`` is
+    ``sender.tab.id`` for a content script, or the tab bound to the side panel or popup window.
+    Unknown fields are refused and the ids are strict integers, so nothing page-supplied can
+    ride along as a tab or session id."""
 
     frame_url: Url
     tab_id: TabId | None = None
-    session_id: GroupId | None = None
+    session_id: SessionId | None = None
 
 
 class PickRequest(Strict):
-    """Your pick (or Add this job) for the frame's posting: remembered in ``ats_posting_ref``."""
+    """Your pick (or Add this job) for the frame's posting: remembered in ``ats_posting_ref``.
+    Sent from an extension page; ``frame_url`` is the frame's ``sender.url`` from the worker's
+    frame registry, never a URL the page reported."""
 
     action_id: ActionId
     frame_url: Url

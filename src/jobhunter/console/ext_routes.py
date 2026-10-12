@@ -938,7 +938,10 @@ def register(
     async def ext_match(request: Request) -> Response:
         def go(req: MatchRequest) -> Response:
             def inner(conn: sqlite3.Connection) -> Response:
-                m = page_match.match(conn, req.frame_url, req.tab_id, req.session_id, now=now())
+                try:
+                    m = page_match.match(conn, req.frame_url, req.tab_id, req.session_id, now=now())
+                except ValueError as exc:
+                    raise _Error(422, {"error": str(exc)}) from exc
                 return ok(
                     MatchResponse(
                         decided=m.decided,

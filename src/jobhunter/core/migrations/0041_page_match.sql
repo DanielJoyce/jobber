@@ -23,7 +23,7 @@ CREATE TABLE fill_session (
     packet_id      INTEGER REFERENCES application_packet(id),  -- NULL: no packet
     ats            TEXT NOT NULL,                              -- 'generic' on Fill this page
     posting_key    TEXT,                                       -- NULL on Fill this page
-    start_url      TEXT,                                       -- normalize_apply_url of the page
+    start_url      TEXT,                                       -- page_match.start_url_for (fragment kept)
     tab_id         INTEGER,                                    -- the Chrome tab, from the worker
     host           TEXT NOT NULL,
     ext_version    TEXT,

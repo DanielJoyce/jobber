@@ -12,10 +12,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from jobhunter.apply import page_match
-from jobhunter.apply.page_match import match, pick, posting_key
+from jobhunter.apply.page_match import match, pick, posting_key, start_url_for
 from jobhunter.core import db
 from jobhunter.pipeline.dedupe import _refresh_group
-from jobhunter.pipeline.dedupe_url import MergeResult, _absorb, normalize_apply_url
+from jobhunter.pipeline.dedupe_url import MergeResult, _absorb
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 ISO = NOW.isoformat()
@@ -202,7 +202,7 @@ def test_rule1_session_bound_to_job_a_on_job_bs_form_asks(conn):
 
 def test_rule1_generic_session_binds_its_own_tab_and_start_url(conn):
     a = group(conn)
-    start = normalize_apply_url(GENERIC)
+    start = start_url_for(GENERIC)
     sid = session(conn, a, ats="generic", start_url=start, tab_id=7)
     # Same tab, same page (tracking parameters and a trailing slash do not matter).
     for url in (GENERIC, GENERIC + "/?utm_source=x"):
@@ -231,7 +231,7 @@ def test_rule1_two_null_posting_keys_never_match(conn):
 
 def test_rule1_finished_session_is_not_found_by_tab(conn):
     a = group(conn)
-    session(conn, a, ats="generic", start_url=normalize_apply_url(GENERIC), tab_id=7,
+    session(conn, a, ats="generic", start_url=start_url_for(GENERIC), tab_id=7,
             finished=True)  # fmt: skip
     assert not m(conn, GENERIC, 7).decided
 
@@ -239,9 +239,9 @@ def test_rule1_finished_session_is_not_found_by_tab(conn):
 def test_the_tab_id_is_the_workers_never_the_pages(conn):
     """A page cannot name another tab: only the ``tab_id`` argument (the worker's) binds."""
     a = group(conn)
-    sid = session(conn, a, ats="generic", start_url=normalize_apply_url(GENERIC), tab_id=7)
+    sid = session(conn, a, ats="generic", start_url=start_url_for(GENERIC), tab_id=7)
     lure = GENERIC + "?tab=7&tab_id=7&tabId=7"
-    session(conn, a, ats="generic", start_url=normalize_apply_url(lure), tab_id=7)
+    session(conn, a, ats="generic", start_url=start_url_for(lure), tab_id=7)
     # The page claims tab 7 in its own URL; the worker says tab 3.
     assert not m(conn, lure, 3).decided
     assert not m(conn, lure, 3, sid).decided
@@ -421,3 +421,119 @@ def test_result_names_ats_variant_and_application(conn):
     assert (r.ats, r.variant, r.posting_key) == ("lever", "lever", f"lever:acme:{U1}")
     assert r.application_id == app
     assert [c.title for c in r.candidates] == ["Engineer"]
+
+
+# ─── review 175: Workday requisitions (B1) ─────────────────────────────────
+
+WD = "https://acme.wd5.myworkdayjobs.com/External/job"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"{WD}/Remote/Software-Engineer",  # a title slug is not a requisition
+        f"{WD}/Denver/Software-Engineer",
+        f"{WD}/Denver/Eng_R-1/login",  # a trailing word is not a requisition
+        f"{WD}/Denver/Eng_R-1",  # one digit is not a requisition
+        f"{WD}/Remote",
+    ],
+)
+def test_workday_without_a_requisition_has_no_key(url):
+    assert posting_key(url) is None
+
+
+def test_workday_requisition_shapes_and_duplicate_suffix():
+    def key(slug):
+        return posting_key(f"{WD}/Remote/{slug}").key
+
+    assert key("Engineer_R-12345") == "workday:acme:external:r-12345"
+    assert key("Engineer_R0012345") == "workday:acme:external:r0012345"
+    assert key("Engineer_JR-0012345") == "workday:acme:external:jr-0012345"
+    assert key("Engineer_REQ_12345") == "workday:acme:external:req_12345"
+    assert key("Engineer_12345") == "workday:acme:external:12345"
+    # A duplicate posting's _1 suffix is part of the key, never the requisition itself.
+    pk = posting_key(f"{WD}/Remote/Y_R-12345_1")
+    assert pk.key == "workday:acme:external:r-12345_1" and pk.needle == "r-12345"
+    assert pk.key != key("Y_R-12345")
+
+
+# ─── review 175: Fill this page decides only on one-posting addresses (B2) ──
+
+SPA = "https://spa.example/careers"
+HOME = "https%3A%2F%2Fcareers.acme.example%2F"
+
+
+def test_a_route_fragment_never_decides(conn):
+    group(conn, "https://board.example/1", page_url=SPA + "#/job/123")
+    r = m(conn, SPA + "#/job/456/apply", 1)
+    assert not r.decided and "route" in r.reason
+    assert not m(conn, SPA + "#/job/123", 1).decided
+
+
+def test_a_careers_home_never_decides_even_on_itself(conn):
+    group(conn, "https://board.example/1", page_url="https://careers.acme.example/careers")
+    assert not m(conn, "https://careers.acme.example/careers", 1).decided
+
+
+def test_wrapped_addresses_that_differ_only_inside_the_wrapper_never_decide(conn):
+    group(conn, "https://board.example/1", apply_url=f"https://acme.example/apply?jobId=1&u={HOME}")
+    assert not m(conn, f"https://acme.example/apply?jobId=2&u={HOME}", 1).decided
+    assert not m(conn, f"https://acme.example/apply?jobId=1&u={HOME}", 1).decided
+
+
+def test_a_stored_tracking_wrapper_around_a_posting_still_decides(conn):
+    wrapped = "https://track.example/c?url=https%3A%2F%2Fcareers.acme.example%2Fjobs%2F77%2Fapply"
+    gid = group(conn, "https://board.example/1", apply_url=wrapped)
+    r = m(conn, GENERIC, 1)
+    assert (r.decided, r.rule, r.group_id) == (True, 3, gid)
+
+
+def test_an_id_query_parameter_decides_and_a_plain_one_does_not(conn):
+    gid = group(conn, "https://careers.acme.example/apply?jobId=AB-7")
+    assert m(conn, "https://careers.acme.example/apply?jobId=AB-7&utm_source=x", 1).group_id == gid
+    group(conn, "https://careers.acme.example/apply?lang=en")
+    assert not m(conn, "https://careers.acme.example/apply?lang=en", 1).decided
+
+
+def test_generic_session_on_one_spa_route_does_not_bind_another(conn):
+    """The worst case: a session for job A on #/job/123 must not decide #/job/456 in tab 9."""
+    a = group(conn)
+    sid = session(conn, a, ats="generic", start_url=start_url_for(SPA + "#/job/123"), tab_id=9)
+    assert start_url_for(SPA + "#/job/123") != start_url_for(SPA + "#/job/456")
+    assert not m(conn, SPA + "#/job/456", 9, sid).decided
+    assert not m(conn, SPA + "#/job/456", 9).decided
+    assert m(conn, SPA + "#/job/123", 9, sid).rule == 1
+
+
+def test_generic_session_on_wrapped_addresses_keeps_them_apart(conn):
+    a = group(conn)
+    one = f"https://acme.example/apply?jobId=1&u={HOME}"
+    session(conn, a, ats="generic", start_url=start_url_for(one), tab_id=9)
+    assert m(conn, one, 9).rule == 1
+    assert not m(conn, f"https://acme.example/apply?jobId=2&u={HOME}", 9).decided
+
+
+# ─── review 175: Greenhouse embed parameters (N1), malformed URLs (N5) ──────
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "for=acme/x&token=4012345",
+        "for=ac me&token=4012345",
+        "for=acme&token=4012345x",
+        "for=acme&token=4012345/9",
+        "for=&token=4012345",
+        "for=acme%3Fq&token=1",
+    ],
+)
+def test_greenhouse_embed_with_odd_parameters_has_no_key(query):
+    assert posting_key(f"https://boards.greenhouse.io/embed/job_app?{query}") is None
+
+
+@pytest.mark.parametrize("url", ["http://[::1", "https://example.com:99999/jobs/1"])
+def test_a_malformed_frame_url_is_a_value_error(conn, url):
+    with pytest.raises(ValueError):
+        m(conn, url, 1)
+    with pytest.raises(page_match.PickError):
+        pick(conn, url, group(conn), now=NOW)

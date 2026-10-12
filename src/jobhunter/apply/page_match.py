@@ -5,15 +5,18 @@ the first that decides wins:
 
 1. The fill session already bound this tab and frame: on an ATS, the frame's posting key equals
    the session's (both non-NULL); on Fill this page (no posting key), the worker's ``tab_id``
-   equals the session's and the page URL, normalized by ``normalize_apply_url``, equals the
-   session's ``start_url``. An ATS session with a *different* posting key asks: the frame now
-   shows another job's form.
+   equals the session's and :func:`start_url_for` of the page equals the session's
+   ``start_url`` (tracking parameters dropped, the fragment kept, nothing unwrapped, so a
+   single-page app's ``#/job/123`` and ``#/job/456`` are two pages). An ATS session with a
+   *different* posting key asks: the frame now shows another job's form.
 2. An ``ats_posting_ref`` row for the posting key (your earlier pick or add). ATS pages only.
 3. On an ATS, the posting key equals the key of a group's ``apply_link`` final or start URL, a
    ``job.url``, ``job.apply_url`` or ``job.page_url``, or a ``job_board_ref.apply_url``. On Fill
    this page, the normalized page URL equals one of those URLs normalized the same way, and
-   ``capture.identifies_posting`` says the URL names one posting. Decides when exactly one
-   group matches; several ask.
+   :func:`generic_decidable` says the address names one posting: ``identifies_posting``, an
+   id-like token (an all-digit path segment, a run of 4 or more digits, or an id query
+   parameter) in what survives normalization, no route fragment (``#/``, ``#!``) and no
+   unwrapped redirect parameter. Decides when exactly one group matches; several ask.
 4. An ``apply_click`` in the last 24 hours whose final URL has this posting key: exactly one
    group decides.
 5. Anything else never decides: you pick, or Add this job.
@@ -35,10 +38,11 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from jobhunter.apply import ats_forms, capture, paste
-from jobhunter.pipeline.ats_rules import match_ats
+from jobhunter.pipeline import dedupe_url
+from jobhunter.pipeline.ats_rules import is_http_url, match_ats, unwrap
 from jobhunter.pipeline.dedupe_url import normalize_apply_url
 from jobhunter.pipeline.listing import from_iso, to_iso
 
@@ -72,6 +76,8 @@ _ASHBY_POSTING = re.compile(rf"^/([^/]+)/({_UUID})(?:/|$)")
 _ASHBY_BOARD = re.compile(r"^/([^/]+)(?:/embed)?/?$")
 _WORKABLE_POSTING = re.compile(r"^/([^/]+)/j/([0-9A-Za-z]+)(?:/|$)")
 _LOCALE = re.compile(r"^[a-z]{2}(?:-[A-Za-z]{2})?$")
+# _R-12345, _R0012345, _JR-0012345, _REQ_12345, _12345, each with an optional _1 suffix.
+_WORKDAY_REQ = re.compile(r"_((?:[a-z]{1,6}[-_]?)?\d{3,}(?:-\d+)?)(?:_(\d{1,3}))?$", re.I)
 _WORKDAY_STEPS = frozenset({"apply", "applymanually", "autofillwithresume", "usemylastapplication"})
 
 
@@ -83,10 +89,46 @@ def _direct(url: str) -> str | None:
         return None
 
 
+_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+_MAX_UNWRAP = 3
+
+
+def _unwrapped(url: str) -> str:
+    for _ in range(_MAX_UNWRAP):
+        try:
+            inner = unwrap(url)
+        except ValueError:
+            return url
+        if inner is None:
+            break
+        url = inner
+    return url
+
+
+def _embed_ok(url: str) -> bool:
+    """A Greenhouse embed's ``for`` must be a plain board slug and ``token`` all digits; any
+    other shape is refused before ``paste.direct_board_url`` builds a path from them."""
+    inner = _unwrapped(url)
+    try:
+        parts = urlsplit(inner)
+    except ValueError:
+        return False
+    rule = match_ats(inner) if is_http_url(inner) else None
+    if rule is None or rule.name != "greenhouse" or "/embed/" not in parts.path + "/":
+        return True
+    q = dict(parse_qsl(parts.query, keep_blank_values=True))
+    board, token = q.get("for"), q.get("token")
+    if board is None and token is None:
+        return True  # an embed board page, not a posting; no key either way
+    return bool(board and token and _SLUG.fullmatch(board) and token.isdigit())
+
+
 def posting_key(url: str | None) -> PostingKey | None:
     """The posting key of a URL on a supported ATS, or None (another site, or an ATS page that
     names no one posting: a board home, search, or a sign-in page)."""
     if not url or not isinstance(url, str):
+        return None
+    if not _embed_ok(url):
         return None
     direct = _direct(url)
     if direct is None:
@@ -133,7 +175,9 @@ def posting_key(url: str | None) -> PostingKey | None:
 def _workday_key(host: str, path: str) -> PostingKey | None:
     """``<tenant>.wdN.myworkdayjobs.com/[locale/]<site>/job/<location>/<title>_<req>[/apply...]``
     or ``wdN.myworkdaysite.com/[locale/]recruiting/<tenant>/<site>/job/...``; ``details`` in place
-    of ``job`` too. The requisition id is the part of the last posting segment after ``_``."""
+    of ``job`` too. The requisition id ends the last posting segment, after ``_``: letters
+    (``R``, ``JR``, ``REQ``), digits, ``R-12345`` or ``R0012345``, with a duplicate-posting
+    suffix such as ``_1`` kept as part of the key."""
     segs = [s for s in path.split("/") if s]
     if segs and _LOCALE.match(segs[0]):
         segs = segs[1:]
@@ -154,12 +198,14 @@ def _workday_key(host: str, path: str) -> PostingKey | None:
         posting.append(s)
     if not posting:
         return None
-    slug = posting[-1]
-    req = slug.rsplit("_", 1)[-1] if "_" in slug else slug
-    if not req:
+    # The requisition comes only from the last posting segment, after an underscore, in a
+    # requisition shape: never a title slug, a location or a trailing word such as "login".
+    m = _WORKDAY_REQ.search(posting[-1])
+    if m is None:
         return None
-    req = req.lower()
-    return PostingKey("workday", (tenant.lower(), site.lower(), req), req)
+    req = m.group(1).lower()
+    full = req + (f"_{m.group(2)}" if m.group(2) else "")
+    return PostingKey("workday", (tenant.lower(), site.lower(), full), req)
 
 
 # ─── results ───────────────────────────────────────────────────────────────
@@ -239,12 +285,101 @@ def _groups_by_key(conn: sqlite3.Connection, pk: PostingKey) -> list[int]:
     return sorted(found)
 
 
-def _groups_by_url(conn: sqlite3.Connection, page: str) -> list[int]:
+def _groups_by_url(conn: sqlite3.Connection, page: str) -> tuple[list[int], set[int]]:
+    """Groups with a stored URL that normalizes to ``page``, and those of them whose stored URL
+    itself names one posting (no route fragment, nothing unwrapped, an id-like token)."""
     host = urlsplit(page).hostname or ""
     if not host:
-        return []
-    found = {gid for gid, url in _url_rows(conn, host) if _norm(url) == page}
-    return sorted(found)
+        return [], set()
+    found: set[int] = set()
+    clean: set[int] = set()
+    for gid, url in _url_rows(conn, host):
+        if _norm(url) == page:
+            found.add(gid)
+            if _stored_clean(url):
+                clean.add(gid)
+    return sorted(found), clean
+
+
+_ID_PARAM = re.compile(
+    r"(?:^|[_-])(?:id|jid|job_?id|jobid|req|req_?id|requisition(?:_?id)?|posting(?:_?id)?|"
+    r"job_?req(?:_?id)?|opening(?:_?id)?|vacancy(?:_?id)?|position(?:_?id)?)$",
+    re.I,
+)
+_DIGITS = re.compile(r"\d{4,}")
+
+
+def _has_id_token(normalized: str) -> bool:
+    parts = urlsplit(normalized)
+    for seg in parts.path.split("/"):
+        if seg.isdigit() or _DIGITS.search(seg):
+            return True
+    return any(v.strip() and _ID_PARAM.search(k) for k, v in parse_qsl(parts.query))
+
+
+def _stored_clean(url: str) -> bool:
+    """A stored URL counts for a decision only if what it normalizes to still names one
+    posting: no route fragment, and an id-like token in the normalized form (a tracking
+    wrapper around a posting URL is fine; one whose own parameters held the job id is not)."""
+    try:
+        frag = urlsplit(url).fragment
+        norm = normalize_apply_url(url)
+    except ValueError:
+        return False
+    if norm is None or frag.startswith(("/", "!")):
+        return False
+    return capture.identifies_posting(norm) and _has_id_token(norm)
+
+
+def generic_decidable(url: str | None) -> tuple[bool, str]:
+    """Whether a page address off the supported ATSs may decide a match by itself (rule 3 on
+    Fill this page), and why not. Stricter than ``capture.identifies_posting``: what
+    ``normalize_apply_url`` keeps must still name one posting."""
+    if not url:
+        return False, "not a web page"
+    try:
+        parts = urlsplit(url)
+        norm = normalize_apply_url(url)
+    except ValueError:
+        return False, "not a web page"
+    if norm is None:
+        return False, "not a web page"
+    if parts.fragment.startswith(("/", "!")):
+        return False, "this page's job is in its #/ route, which jobhunter does not compare"
+    if _unwrapped(url) != url:
+        return False, "this address carries another address inside it"
+    if not capture.identifies_posting(url):
+        return False, "this address does not name one posting"
+    if not _has_id_token(norm):
+        return False, "this address has no job number or id in it"
+    return True, ""
+
+
+def start_url_for(url: str | None) -> str | None:
+    """A Fill-this-page session's ``start_url`` and what rule 1 compares with it: scheme and
+    host lowercased, default port and trailing slash dropped, ``utm_*`` and tracking
+    parameters dropped, other parameters sorted, the fragment **kept**, and nothing unwrapped,
+    so two single-page-app routes or two wrapped addresses never compare equal."""
+    if not url or not isinstance(url, str):
+        return None
+    try:
+        p = urlsplit(url.strip())
+        port = p.port
+    except ValueError:
+        return None
+    if p.scheme.lower() not in ("http", "https") or not p.hostname:
+        return None
+    scheme, host = p.scheme.lower(), p.hostname.lower()
+    if port and (scheme, port) not in (("http", 80), ("https", 443)):
+        host = f"{host}:{port}"
+    pairs = sorted(
+        (k, v)
+        for k, v in parse_qsl(p.query, keep_blank_values=True)
+        if not k.lower().startswith("utm_") and k.lower() not in dedupe_url._TRACKING_PARAMS
+    )
+    query = urlencode(pairs)
+    out = f"{scheme}://{host}{p.path.rstrip('/')}" + (f"?{query}" if query else "")
+    return out + (f"#{p.fragment}" if p.fragment else "")
 
 
 def _groups_by_click(conn: sqlite3.Connection, pk: PostingKey, now: datetime) -> list[int]:
@@ -309,6 +444,15 @@ def _application(conn: sqlite3.Connection, gid: int) -> int | None:
     return row[0] if row else None
 
 
+def _check_url(url: str) -> None:
+    """A malformed address (bad port, broken IPv6 host) is the caller's error, not ours."""
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018  (raises on an out-of-range port)
+    except ValueError as exc:
+        raise ValueError(f"that frame URL is not valid ({exc})") from exc
+
+
 def match(
     conn: sqlite3.Connection,
     frame_url: str,
@@ -321,6 +465,7 @@ def match(
 
     ``tab_id`` is the worker's: ``sender.tab.id`` for a content script, the tab bound to the
     panel or popup window for an extension page. Never a value the page supplied."""
+    _check_url(frame_url)
     ats = ats_forms.ats_of(frame_url)
     pk = posting_key(frame_url) if ats else None
     variant = ats_forms.variant_for(frame_url) if ats else None
@@ -335,6 +480,7 @@ def match(
         page_url=page,
         identifies_posting=bool(page) and capture.identifies_posting(frame_url),
     )
+    start = start_url_for(frame_url)
 
     def decide(rule: int, gid: int, reason: str, sid: int | None = None) -> MatchResult:
         res.decided, res.rule, res.group_id, res.reason = True, rule, gid, reason
@@ -363,8 +509,8 @@ def match(
             and s_key is None
             and tab_id is not None
             and s_tab == tab_id
-            and page is not None
-            and s_start == page
+            and start is not None
+            and s_start == start
         ):
             return decide(RULE_SESSION, s_gid, "this tab's fill session", sid)
 
@@ -395,11 +541,14 @@ def match(
     # Fill this page: rule 3 on the normalized URL, deciding only for one posting.
     if page is None:
         return ask("not a web page", [])
-    by_url = _groups_by_url(conn, page)
-    if not res.identifies_posting:
-        return ask("this address does not name one posting", by_url)
-    if len(by_url) == 1:
+    by_url, clean = _groups_by_url(conn, page)
+    ok, why = generic_decidable(frame_url)
+    if not ok:
+        return ask(why, by_url)
+    if len(by_url) == 1 and by_url[0] in clean:
         return decide(RULE_URL, by_url[0], "a saved link to this page")
+    if len(by_url) == 1:
+        return ask("the saved link does not name one posting by itself", by_url)
     if len(by_url) > 1:
         return ask("several jobs link to this page", by_url)
     return ask("no saved job links to this page", [])
@@ -433,6 +582,10 @@ def pick(
     no posting key (Fill this page) remembers nothing."""
     if set_by not in ("pick", "add"):
         raise PickError(f"set_by must be pick or add, not {set_by!r}")
+    try:
+        _check_url(frame_url)
+    except ValueError as exc:
+        raise PickError(str(exc)) from exc
     jobs = [
         r[0]
         for r in conn.execute(

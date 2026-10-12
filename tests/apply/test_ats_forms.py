@@ -330,3 +330,52 @@ def test_ats_form_fixture_has_no_personal_data(path):
     for m in EMAIL.finditer(text):
         assert m.group(0).lower().endswith("@example.com"), m.group(0)
     assert not PHONE.search(text)
+
+
+# ─── review 175: strict visibility facts (N4), other people's details (N8) ──
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"width": float("nan")}, {"height": float("nan")}, {"width": float("inf")},
+     {"height": float("-inf")}],
+)  # fmt: skip
+def test_row0_refuses_nan_and_infinite_boxes(change):
+    assert row0(Visibility(**{**SHOWN, **change})) is not None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"check_visibility": "true"}, {"check_visibility": 1}, {"disabled": "false"},
+     {"read_only": 0}, {"width": "200"}, {"height": True}],
+)  # fmt: skip
+def test_visibility_accepts_only_real_booleans_and_numbers(change):
+    with pytest.raises(ValueError):
+        Visibility(**{**SHOWN, **change})
+
+
+@pytest.mark.parametrize(
+    "label, section, names",
+    [
+        ("Name", "References", ()),
+        ("Email", "Professional reference 1", ()),
+        ("Phone number", "Emergency contact", ()),
+        ("Full name", "Next of kin", ()),
+        ("Email", "", ("reference_1_email",)),
+        ("LinkedIn profile", "Referee details", ()),
+    ],
+)
+def test_contact_labels_in_someone_elses_block_never_map(label, section, names):
+    m = field_for(label, names=names, section=section)
+    assert m.answer is None and m.via in ("other_person", "never_store")  # never yours
+
+
+def test_contact_labels_in_your_own_block_still_map():
+    assert field_for("Name", section="Contact information").answer == "contact.full_name"
+    assert field_for("Email", section="Personal details").answer == "contact.email"
+    # Not a contact answer: unaffected by the section.
+    assert field_for("Are you willing to relocate?", section="References").answer == "relocation"
+
+
+def test_bare_work_authorization_label_is_not_mapped():
+    assert field_for("Work authorization").answer is None

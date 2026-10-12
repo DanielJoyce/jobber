@@ -11,11 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jobhunter.apply import ext_pairing
+from jobhunter.apply.page_match import start_url_for
 from jobhunter.config import Console, Paths, Settings
 from jobhunter.console.app import create_app
 from jobhunter.core import db
 from jobhunter.pipeline.dedupe import _refresh_group
-from jobhunter.pipeline.dedupe_url import normalize_apply_url
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 ISO = NOW.isoformat()
@@ -149,7 +149,7 @@ def test_generic_session_binds_only_the_workers_tab(client, token, conn):
     sid = conn.execute(
         "INSERT INTO fill_session (application_id, ats, start_url, tab_id, host, started_at, "
         "last_seen_at) VALUES (?, 'generic', ?, 7, 'careers.acme.example', ?, ?)",
-        (app, normalize_apply_url(lure), ISO, ISO),
+        (app, start_url_for(lure), ISO, ISO),
     ).lastrowid
     conn.commit()
     other = post(client, token, "match", {"frame_url": lure, "tab_id": 3, "session_id": sid})
@@ -183,3 +183,14 @@ def test_pick_on_a_generic_page_or_a_gone_group(client, token, conn):
     r = post(client, token, "match/pick",
              {"action_id": "not-a-uuid", "frame_url": GH, "group_id": a})  # fmt: skip
     assert r.status_code == 422
+
+
+@pytest.mark.parametrize("url", ["http://[::1", "https://example.com:99999/jobs/1"])
+def test_a_malformed_frame_url_is_422_not_500(client, token, url):
+    assert post(client, token, "match", {"frame_url": url, "tab_id": 1}).status_code == 422
+
+
+def test_session_id_must_be_a_real_integer(client, token):
+    for bad in ("5", 5.0, True):
+        r = post(client, token, "match", {"frame_url": PAGE, "tab_id": 1, "session_id": bad})
+        assert r.status_code == 422, bad

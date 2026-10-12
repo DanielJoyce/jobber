@@ -38,8 +38,9 @@ form is for. The console decides only from strong evidence, in this order:
    tab and the same page address you started on.
 2. Your earlier pick for this posting.
 3. Exactly one saved job links to this posting (its posting, apply or page address, or the link
-   jobhunter resolved). On other sites the page address must name one posting, not a careers
-   home page.
+   jobhunter resolved). On other sites the page address must name one posting by itself: it
+   needs a job number or id, and an address whose job is in a `#/` route or inside a redirect
+   link never decides, so you pick instead.
 4. Exactly one **Open application** click from jobhunter in the last 24 hours led here.
 
 Otherwise it asks you to pick the job, or to add it. Employer and job title never decide a
