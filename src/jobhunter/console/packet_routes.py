@@ -228,6 +228,8 @@ def register(
                 k: packet_docs.host_draft_command(p.id, k)
                 for k in ("resume", "cover_letter", "question_draft")
             },
+            # An invalid [apply] key in models.toml fell back to config.toml (specs/020).
+            "models_notices": getattr(settings, "models_notices", []),
             "gen": gen,
             "doc_message": doc_message,
             "numeric": numeric,

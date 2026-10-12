@@ -337,6 +337,17 @@ def test_malformed_scorer_spec_is_broken(tmp_path):
     assert evaluate(settings)["scorer.screen"].status == BROKEN
 
 
+def test_a_scorer_blocked_by_models_toml_is_broken_and_says_where(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "models.toml").write_text(
+        '[scoring]\nscreen_scorer = "anthropic:claude-opus-5-5"\n'
+    )
+    row = evaluate(good_settings(tmp_path))["scorer.screen"]
+    assert row.status == BROKEN and row.source == "models.toml"
+    assert "models.toml screen_scorer is invalid" in row.detail
+    assert row.fix is not None and "jobhunter models" in row.fix.text
+
+
 def test_default_scorer_is_labelled_default_and_explicit_is_config(tmp_path):
     assert evaluate(good_settings(tmp_path))["scorer.screen"].source == "default"
     explicit = good_settings(tmp_path, scoring={"screen_scorer": "anthropic:claude-haiku-5-5"})

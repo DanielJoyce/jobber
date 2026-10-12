@@ -598,6 +598,12 @@ def run_request(
     if row is None or row["status"] != "pending":
         raise RescoreRefused(f"re-score #{request_id} is not pending")
     planned = row["group_ids"] is not None
+    # One that follows the configured scorer, which an invalid models.toml may block, is
+    # skipped and left pending rather than run on another provider (specs/020 Storage). A
+    # request that carries its own scorer (confirmed, or kept on the old model) still runs.
+    follows = not scorer and not row["scorer"]
+    if follows and (problem := scoring.scorer_problems().get("screen_scorer")):
+        raise RescoreRefused(f"{problem}; the re-score stays queued")
     if planned:
         spec = row["scorer"] or scoring.screen_scorer
         if scorer and scorer != spec:

@@ -524,6 +524,14 @@ def _scorer_row(
     explicit = field_name in scoring.model_fields_set
     where = "config.toml" if explicit else "default"
     problem = scoring.scorer_problems().get(field_name)
+    if problem and field_name in scoring._blocked:
+        # models.toml set it to an invalid value: the use is blocked, not fallen back
+        # (specs/020 Storage). M10 adds the full "Model choices" row.
+        return Check(
+            check_id, SCORING, level, BROKEN, False, title, problem, unlocks,
+            Fix("command", "jobhunter models show, then jobhunter models reset or set"),
+            "models.toml", reads_at_start=True,
+        )  # fmt: skip
     if problem:
         return Check(
             check_id, SCORING, level, BROKEN, False, title,
