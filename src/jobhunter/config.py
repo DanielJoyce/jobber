@@ -585,6 +585,14 @@ def shown_value(value: object) -> str | None:
     return value
 
 
+def hidden_label(value: str) -> str:
+    """A stand-in for a hidden value that tells two different hidden values apart without
+    revealing either (a short digest), for panels, history and confirm forms."""
+    import hashlib
+
+    return "(hidden value " + hashlib.sha256(value.encode()).hexdigest()[:8] + ")"
+
+
 def usable_model_text(value: object) -> bool:
     """Whether ``models.toml`` and /models may keep ``value``: well-formed and not key-shaped.
     A value that is merely hidden from display (``_long_run_segment``) is still usable."""
@@ -704,7 +712,7 @@ def check_model_key(section: str, key: str, value: object) -> str | None:
     reason = catalog.use_rule_problem(use, value, key)
     if reason is None:
         return None
-    if not usable_model_text(value):
+    if shown_value(value) is None:  # the reason may quote the value: never a hidden one
         return "not a usable model name"
     return reason
 

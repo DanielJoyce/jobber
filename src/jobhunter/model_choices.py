@@ -41,8 +41,10 @@ from jobhunter.config import (
     MODELS_FILE_NAME,
     Scoring,
     check_model_key,
+    hidden_label,
     read_models_file,
     shown_value,
+    usable_model_text,
 )
 from jobhunter.pipeline.listing import to_iso
 
@@ -153,7 +155,15 @@ def to_text(value: Any) -> str | None:
         return None
     if isinstance(value, bool):
         return "true" if value else "false"
-    return shown_value(value) or INVALID_TEXT
+    return value if usable_model_text(value) else INVALID_TEXT
+
+
+def display_text(text: str | None) -> str | None:
+    """A stored history text as it may be shown: a hidden (key-shaped) value, which history
+    keeps so Revert works, appears as a short digest label."""
+    if text is None or shown_value(text) is not None or text == INVALID_TEXT:
+        return text
+    return hidden_label(text)
 
 
 def from_text(name: str, text: str | None) -> Any:
@@ -448,6 +458,17 @@ def history(conn: sqlite3.Connection, limit: int = HISTORY_LIMIT) -> list[sqlite
     cur = conn.execute("SELECT * FROM model_change ORDER BY id DESC LIMIT ?", (limit,))
     cur.row_factory = sqlite3.Row
     return cur.fetchall()
+
+
+def masked_history(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """``history`` rows for display: old and new values pass through :func:`display_text`."""
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["old_value"] = display_text(item["old_value"])
+        item["new_value"] = display_text(item["new_value"])
+        out.append(item)
+    return out
 
 
 _NAME_OF_FIELD = {".".join(v): k for k, v in NAMES.items()}
