@@ -377,6 +377,17 @@ def _append(fix: rd.Fix | None, last: rd.Fix) -> rd.Fix:
     return replace(fix, alt=_append(fix.alt, last))
 
 
+def _without_routes(fix: rd.Fix | None) -> rd.Fix | None:
+    """``fix`` and its alternatives without console routes (a starter-prefs or upload form
+    conflicts once this process sees the file)."""
+    if fix is None:
+        return None
+    rest = _without_routes(fix.alt)
+    if fix.kind == "route":
+        return rest
+    return replace(fix, alt=rest)
+
+
 def _refresh_fix(check_id: str, mode: str) -> rd.Fix:
     """This process sees the row fixed; only the run's older view disagrees. Any run writes
     new run inputs, and ``--stage normalize`` fetches and scores nothing."""
@@ -522,9 +533,11 @@ def effective(
                 check = override
             if check.status in rd.FAILING:
                 if here.status not in (*rd.FAILING, rd.UNKNOWN):
-                    # fixed here (the starter-prefs or upload button would only conflict):
-                    # say how the run confirms it, for free
-                    check = replace(check, fix=_refresh_fix(check.id, mode))
+                    # fixed here: keep the run's fix (e.g. the key into ~/.env and a restart,
+                    # which the run may still lack) minus console routes that would only
+                    # conflict now (starter-prefs, upload), then the free refresh last
+                    kept = _without_routes(check.fix)
+                    check = replace(check, fix=_append(kept, _refresh_fix(check.id, mode)))
                 elif check.id in CONFIRM_IDS:
                     check = replace(check, fix=_append(check.fix, confirm_fix(mode)))
         elif check.id == "containers.deployment" and check.status == rd.UNKNOWN:

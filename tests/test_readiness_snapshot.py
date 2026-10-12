@@ -163,8 +163,11 @@ def test_outcome_skipped_breaks_the_scorer_the_console_sees_until_newer_inputs(t
     chain = fixes(row.fix)
     assert any("spends credits" in f.text and f.steps == ("jobhunter run --stage prefilter,score",)
                for f in chain)  # fmt: skip
-    # the console sees the key: the first fix is the free refresh, not a secret to create
-    assert chain[0].steps == ("jobhunter run --stage normalize",)
+    # the console sees the key, the run did not: the run's own fix (the key into ~/.env and a
+    # restart) stays first, and the free refresh is offered after it
+    assert "ANTHROPIC_API_KEY" in chain[0].text and "~/.env" in chain[0].text
+    assert any("restart" in step for step in chain[0].steps)
+    assert any(f.steps == ("jobhunter run --stage normalize",) for f in chain[1:])
     assert not any(f.text.lower().startswith("or ") for f in chain)
     assert not essentials_ok(rows.values())
     # the banner (cheap rows) shows it too
@@ -525,7 +528,7 @@ def test_a_fixed_profile_row_says_the_next_run_confirms_it(tmp_path):
     row = evaluate(settings)["profile.preferences"]
     assert row.status == "missing"  # the worse of the two, per spec
     chain = fixes(row.fix)
-    assert chain[0].steps == ("jobhunter run --stage normalize",)
+    assert chain[0].steps == ("jobhunter run --stage normalize",)  # the route was dropped
     assert "next run confirms it" in chain[0].text
     assert all(f.text != "/setup/starter-prefs" for f in chain)  # that button would 409 now
     assert any("spends credits" in f.text for f in chain)
