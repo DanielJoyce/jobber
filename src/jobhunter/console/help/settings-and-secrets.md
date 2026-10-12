@@ -184,20 +184,26 @@ Apply and Restart work only from a browser on the machine running the console. O
 **Restart console** appears in the bar and on Details when a change needs a restart. It
 starts the console again with `config.toml`, `models.toml` and every `.env` file read afresh:
 
-1. It checks the new files in a separate process first. If the console would not start with
-   them, it says what is wrong (the setting and the problem, never the value) and keeps
-   running.
-2. It refuses while a re-score, a Score now or a draft runs, and lists what is running. Press
-   it again when that is done. Once a restart is under way, a new re-score, Score now or draft
-   gets "console restarting".
-3. The page waits for the new console and reloads when it answers. If the console does not come
+1. It first checks, in a separate process, what a new console would read: `config.toml`,
+   `models.toml` and the `.env` files, whether `config.toml` would go missing or empty (for
+   example a `.env` that points `JOBHUNTER_CONFIG` elsewhere), the database path, and a moved
+   host or port. If it finds a problem it says what is wrong (the setting and the problem,
+   never the value) and keeps running. The check catches common mistakes, not everything: a
+   console that still fails to start says why in its terminal, and you start it again by hand.
+   While `config.toml` has errors the button is hidden.
+2. It refuses while a re-score, a deep pass, a Score now, a draft or a live check runs, and
+   lists what is running. Press it again when that is done. Once a restart is under way, any
+   of those gets "console restarting". Ctrl-C in the console's terminal during a restart stops
+   it instead.
+3. The page waits for the new console and goes back to where you were when it answers
+   (reloading the waiting page does not restart again). If the console does not come
    back within 90 seconds, the page says so: look at the terminal it runs in (or
    `journalctl --user -u jobhunter-console`).
 
 On the host the console restarts in place, as the same process, with the same command line.
 It runs the code that is on disk now; Details says so when that differs from the code it
 started with. It does not run `uv sync`, so after a `git pull` that changes dependencies run
-`uv sync` first (the check in step 1 catches a missing module). In containers the console exits
+`uv sync` first (the check in step 1 catches a missing module, not every dependency change). In containers the console exits
 and systemd starts it again; the unit needs three lines that preflight adds (see
 [Containers](containers.md#restart-from-the-console)). A browser on another machine
 (`--allow-remote`) gets the command instead of the button.

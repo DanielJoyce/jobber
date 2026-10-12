@@ -14,6 +14,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -81,14 +82,28 @@ class Console:
             self.app.state.restart_shutdown = lambda: self.stopped.append(True)
             self.app.state.restart_kind = rs.EXEC
 
-        def check() -> list[str]:
+        self.require: list[bool] = []
+
+        def check(*, require_settings: bool = False) -> list[str]:
             self.checks.append(True)
+            self.require.append(require_settings)
             return list(self.check_lines)
 
         self.app.state.restart_preflight = check
+        self.app.state.restart_delay = 0
+        self.busy_ports: set[int] = set()
+        self.app.state.port_free = lambda host, port: port not in self.busy_ports
 
     def client(self, peer: tuple[str, int] = LOOPBACK) -> TestClient:
         return TestClient(self.app, client=peer, follow_redirects=False)
+
+    def restart(self, data: dict | None = None) -> tuple[Any, Any]:
+        """POST Restart; when accepted (303), also GET the waiting page it points at."""
+        r = self.client().post("/config/restart", data=data or {})
+        if r.status_code != 303:
+            return r, None
+        assert r.headers["location"].startswith("/config/restarting?")
+        return r, self.client().get(r.headers["location"])
 
     def write(self, extra: str) -> None:
         self.cfg.write_text(self.base + extra)
@@ -164,15 +179,21 @@ def test_registry_check_and_flag_are_one_step():
 
 def test_restart_is_accepted_and_stops_the_server_after_the_response(tmp_path):
     console = Console(tmp_path)
-    r = console.client().post("/config/restart", data={"next": "/inbox"})
-    assert r.status_code == 202
+    r, page = console.restart({"next": "/inbox"})
+    assert r.status_code == 303  # a GET page: reloading it never posts again
     assert console.checks == [True]  # the child check ran first
+    assert console.require == [True]  # the running file had settings
     assert console.stopped == [True]  # the background task, after the response
     assert console.app.state.work.restarting
-    assert 'id="restart-wait"' in r.text
-    assert f'data-boot="{console.app.state.boot_id}"' in r.text
-    assert 'data-next="/inbox"' in r.text and 'data-same="1"' in r.text
-    assert f'data-giveup="{rs.GIVE_UP_S}"' in r.text
+    assert page.status_code == 200 and 'id="restart-wait"' in page.text
+    assert f'data-boot="{console.app.state.boot_id}"' in page.text
+    assert 'data-next="/inbox"' in page.text and 'data-same="1"' in page.text
+    assert f'data-giveup="{rs.GIVE_UP_S}"' in page.text
+    # The waiting page has no bar: the old console's Apply/Restart buttons must not show.
+    assert 'id="activity"' not in page.text and 'action="/config/restart"' not in page.text
+    # Reloading the waiting page is a GET: nothing is stopped twice.
+    assert console.client().get(r.headers["location"]).status_code == 200
+    assert console.stopped == [True]
     # A second press while it stops: refused, nothing stopped twice.
     again = console.client().post("/config/restart")
     assert again.status_code == 409 and console.stopped == [True]
@@ -180,7 +201,7 @@ def test_restart_is_accepted_and_stops_the_server_after_the_response(tmp_path):
 
 def test_paid_entry_points_get_503_once_a_restart_is_accepted(tmp_path):
     console = Console(tmp_path)
-    assert console.client().post("/config/restart").status_code == 202
+    assert console.client().post("/config/restart").status_code == 303
     with pytest.raises(Restarting):
         console.app.state.work.enter("a re-score")
 
@@ -223,7 +244,7 @@ def test_registered_work_gives_409_listing_it_and_the_button_stays(tmp_path):
     bar = console.client().get("/activity").text
     assert 'action="/config/restart"' in bar
     console.app.state.work.leave(token)
-    assert console.client().post("/config/restart").status_code == 202
+    assert console.client().post("/config/restart").status_code == 303
 
 
 def test_a_replaced_file_in_a_container_asks_first_and_skips_the_check(tmp_path, monkeypatch):
@@ -237,23 +258,31 @@ def test_a_replaced_file_in_a_container_asks_first_and_skips_the_check(tmp_path,
     assert "jobhunter-ctr doctor" in r.text
     assert console.checks == [] and console.stopped == []
     r = console.client().post("/config/restart", data={"unchecked": "1"})
-    assert r.status_code == 202 and console.checks == [] and console.stopped == [True]
+    assert r.status_code == 303 and console.checks == [] and console.stopped == [True]
 
 
 def test_a_port_change_polls_the_new_address(tmp_path):
     console = Console(tmp_path)
     console.write("[console]\nport = 8810\n")
-    r = console.client().post("/config/restart")
-    assert r.status_code == 202
-    assert 'data-base="http://127.0.0.1:8810"' in r.text and 'data-same="0"' in r.text
+    _, page = console.restart()
+    assert 'data-base="http://127.0.0.1:8810"' in page.text and 'data-same="0"' in page.text
 
 
 def test_next_is_a_local_path_only(tmp_path):
     console = Console(tmp_path)
     for bad in ("https://evil.example/", "//evil.example/x", "javascript:alert(1)"):
-        r = console.client().post("/config/restart", data={"next": bad})
-        assert 'data-next="/"' in r.text
+        _, page = console.restart({"next": bad})
+        assert 'data-next="/"' in page.text
         console.app.state.work.cancel_restart()
+
+
+def test_the_waiting_page_polls_only_a_loopback_address(tmp_path):
+    console = Console(tmp_path)
+    for bad in ("https://evil.example:8810", "http://127.0.0.1:8810/x", "javascript:x"):
+        page = console.client().get("/config/restarting", params={"base": bad, "boot": "ab"})
+        assert 'data-base="http://127.0.0.1:8808"' in page.text  # this console's own
+    page = console.client().get("/config/restarting", params={"boot": "<script>"})
+    assert 'data-boot=""' in page.text
 
 
 def test_healthz_carries_the_boot_id(tmp_path):
@@ -323,17 +352,38 @@ def test_setup_restart_notes_point_at_the_button(tmp_path):
 # --- the child preflight ---------------------------------------------------------------------
 
 
-def run_child_code(monkeypatch, tmp_path: Path, config_text: str) -> tuple[int, str]:
-    """PREFLIGHT_CODE run in-process (no subprocess) against a temp config and no .env."""
+def run_child_code(
+    monkeypatch,
+    tmp_path: Path,
+    config_text: str | None,
+    *,
+    require: bool = False,
+    dotenv: str | None = None,
+    db_path: Path | None = None,
+) -> tuple[int, str]:
+    """PREFLIGHT_CODE run in-process (no subprocess) against a temp config. ``config_text``
+    None: no file. ``dotenv``: the .env file's text (it may point JOBHUNTER_CONFIG away)."""
     home = tmp_path / "home"
     home.mkdir()
     cfg = tmp_path / "child-config.toml"
-    cfg.write_text(config_text)
-    monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
-    monkeypatch.setenv("JOBHUNTER_ENV_FILE", str(tmp_path / "absent.env"))
+    if config_text is not None:
+        cfg.write_text(config_text)
+    # Registered with monkeypatch first, so whatever the .env loads is removed afterwards.
+    for name in ("JOBHUNTER_CONFIG", "JOBHUNTER_DB_PATH"):
+        monkeypatch.setenv(name, "x")
+        monkeypatch.delenv(name)
+    if dotenv is None:
+        monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
+    envf = tmp_path / "child.env"
+    if dotenv is not None:
+        envf.write_text(dotenv)
+    monkeypatch.setenv("JOBHUNTER_ENV_FILE", str(envf))
+    if db_path is not None:
+        monkeypatch.setenv("JOBHUNTER_DB_PATH", str(db_path))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(secrets, "LAST_REPORT", secrets.LAST_REPORT)
+    monkeypatch.setattr(sys, "argv", ["-c", *([rs.REQUIRE_SETTINGS_ARG] if require else [])])
     out = io.StringIO()
     monkeypatch.setattr(sys, "stdout", out)
     code = 0
@@ -382,7 +432,7 @@ def test_a_failing_child_gives_409_with_no_value(monkeypatch, tmp_path, bad):
     assert lines and SENTINEL not in " ".join(lines)
     (tmp_path / "c").mkdir()
     console = Console(tmp_path / "c")
-    console.app.state.restart_preflight = lambda: rs.run_preflight({}, tmp_path, run=run)
+    console.app.state.restart_preflight = lambda **kw: rs.run_preflight({}, tmp_path, run=run)
     r = console.client().post("/config/restart")
     assert r.status_code == 409 and SENTINEL not in r.text and console.stopped == []
 
@@ -628,3 +678,174 @@ def test_preflight_writes_the_restart_dropin_with_the_same_sections(tmp_path):
     preflight.apply_dropins(plan)
     again = preflight.plan_dropins(units, [], [])
     assert path in again.keep and path not in again.remove  # kept, never pruned
+
+
+# --- B1: never boot on the defaults -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("text", ["", "# only a comment\n", None])
+def test_the_child_refuses_an_empty_or_missing_file_when_the_running_one_had_settings(
+    monkeypatch, tmp_path, text
+):
+    code, out = run_child_code(monkeypatch, tmp_path, text, require=True)
+    run, _ = fake_run(code, out)
+    lines = rs.run_preflight({}, tmp_path, run=run, require_settings=True)
+    assert code == 1 and lines and ("missing" in lines[0] or "empty" in lines[0])
+
+
+def test_without_settings_at_start_an_empty_file_is_fine(monkeypatch, tmp_path):
+    code, _ = run_child_code(monkeypatch, tmp_path, "", require=False)
+    assert code == 0
+
+
+def test_a_dotenv_that_points_the_config_at_a_missing_file_is_refused(monkeypatch, tmp_path):
+    missing = tmp_path / "moved" / "config.toml"
+    code, out = run_child_code(
+        monkeypatch, tmp_path, "[scoring]\ndaily_cap_usd = 3.0\n",
+        require=True, dotenv=f"JOBHUNTER_CONFIG={missing}\n",
+    )  # fmt: skip
+    assert code == 1 and "check JOBHUNTER_CONFIG" in out and str(missing) not in out
+
+
+def test_an_unusable_database_path_is_refused(monkeypatch, tmp_path):
+    folder = tmp_path / "db-is-a-folder"
+    folder.mkdir()
+    code, out = run_child_code(monkeypatch, tmp_path, "", db_path=folder)
+    assert code == 1 and "paths.db_path is not a file" in out and str(folder) not in out
+
+
+def test_the_route_refuses_while_config_toml_is_empty_or_missing(tmp_path):
+    console = Console(tmp_path)
+    console.write("[scoring]\ndaily_cap_usd = 9.0\n")
+    console.cfg.write_text("")
+    console.clock.t += 3
+    r, _ = console.restart()
+    assert r.status_code == 409 and "config.toml is empty" in r.text
+    assert console.checks == [] and console.stopped == []
+    assert 'action="/config/restart"' not in console.client().get("/activity").text
+    console.cfg.unlink()
+    console.clock.t += 3
+    r, _ = console.restart()
+    assert r.status_code == 409 and "config.toml is missing" in r.text
+    assert console.stopped == [] and not console.app.state.work.restarting
+
+
+def test_the_bar_hides_restart_while_the_file_has_errors(tmp_path):
+    console = Console(tmp_path)
+    console.write('[console]\nport = 8810\n[scoring]\ndaily_cap_usd = "x"\n')
+    bar = console.client().get("/activity").text
+    assert "config.toml has errors" in bar and 'action="/config/restart"' not in bar
+    r, _ = console.restart()
+    assert r.status_code == 409 and "scoring.daily_cap_usd" in r.text
+
+
+# --- N1: a moved host or port ----------------------------------------------------------------
+
+
+def test_a_non_loopback_host_is_refused_without_allow_remote(tmp_path):
+    console = Console(tmp_path)
+    console.write('[console]\nhost = "192.0.2.7"\n')
+    r, _ = console.restart()
+    assert r.status_code == 409 and "console.host: not a loopback address" in r.text
+    assert "192.0.2.7" not in r.text and console.stopped == []
+
+
+def test_a_moved_port_already_in_use_is_refused(tmp_path):
+    console = Console(tmp_path)
+    console.busy_ports = {8810}
+    console.write("[console]\nport = 8810\n")
+    r, _ = console.restart()
+    assert r.status_code == 409 and "console.port: that port is already in use" in r.text
+    assert console.checks == [] and console.stopped == []
+
+
+def test_port_free_sees_a_bound_port():
+    import socket
+
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen()
+        port = held.getsockname()[1]
+        assert not rs.port_free("127.0.0.1", port)
+    assert rs.port_free("127.0.0.1", port)
+
+
+# --- N2, N3: Ctrl-C, the post-serve join, cancel ---------------------------------------------
+
+
+def test_ctrl_c_during_an_accepted_restart_exits_instead(monkeypatch, stubbed_exits):
+    monkeypatch.delenv("JOBHUNTER_CONTAINER", raising=False)
+
+    class Interrupted(FakeServer):
+        def run(self):
+            super().run()  # the restart was accepted
+            raise KeyboardInterrupt  # then Ctrl-C while it drained
+
+    uv = SimpleNamespace(
+        Config=lambda app, **kw: SimpleNamespace(app=app, **kw), Server=lambda c: Interrupted(c)
+    )
+    app_ = fake_app()
+    cli._serve(app_, "127.0.0.1", 8808, uv)
+    assert app_.state.restart_requested
+    assert stubbed_exits == {"exit": [], "exec": []}
+
+
+def test_the_post_serve_join_waits_for_work_before_re_exec(monkeypatch, stubbed_exits):
+    monkeypatch.delenv("JOBHUNTER_CONTAINER", raising=False)
+    app_ = fake_app()
+    seen_at_exec: list[list[str]] = []
+    monkeypatch.setattr(rs.os, "execve", lambda *a: seen_at_exec.append(app_.state.work.labels()))
+
+    class Late(FakeServer):
+        def run(self):
+            token = app_.state.work.enter("a draft (packet 1)")  # left over at shutdown
+            threading.Timer(0.1, app_.state.work.leave, args=(token,)).start()
+            super().run()
+
+    uv = SimpleNamespace(
+        Config=lambda app, **kw: SimpleNamespace(app=app, **kw), Server=lambda c: Late(c)
+    )
+    cli._serve(app_, "127.0.0.1", 8808, uv)
+    assert seen_at_exec == [[]]  # joined before the re-exec
+
+
+def test_cancel_restart_lets_work_start_again():
+    work = WorkRegistry()
+    assert work.begin_restart() == []
+    with pytest.raises(Restarting):
+        work.enter("a re-score")
+    work.cancel_restart()
+    assert not work.restarting
+    with work.running("a re-score"):
+        assert work.labels() == ["a re-score"]
+
+
+def test_a_failure_after_accepting_cancels_the_restart(tmp_path, monkeypatch):
+    console = Console(tmp_path)
+
+    def broken(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(config_routes, "urlencode", broken)
+    with pytest.raises(RuntimeError):
+        console.client().post("/config/restart")
+    assert not console.app.state.work.restarting and console.stopped == []
+    with console.app.state.work.running("a re-score"):
+        pass
+
+
+# --- P1 ------------------------------------------------------------------------------------
+
+
+def test_startup_log_never_quotes_a_key_shaped_scorer_spec(tmp_path, caplog):
+    from jobhunter.config import Paths, Scoring, Settings
+
+    key = "sk-or-v1-" + "a" * 40
+    settings = Settings(
+        paths=Paths(data_dir=tmp_path / "d", cache_dir=tmp_path / "c", profile_dir=tmp_path),
+        scoring=Scoring(screen_scorer=key),
+    )
+    with caplog.at_level("WARNING"):
+        create_app(settings, lambda: db.connect(tmp_path / "x.db"), clock=lambda: NOW)
+    text = caplog.text
+    assert "scoring.screen_scorer" in text and key not in text and "sk-or" not in text

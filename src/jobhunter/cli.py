@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import contextvars
 import json
 import sys
@@ -1301,12 +1300,17 @@ def _serve(app_, bind_host: str, bind_port: int, uvicorn) -> None:
 
         app_.state.restart_shutdown = shutdown
     app_.state.restart_kind = how
+    app_.state.bind_host = bind_host
     app_.state.started_commit = version.build_commit()[0]
-    with contextlib.suppress(KeyboardInterrupt):  # as uvicorn.run does
+    interrupted = False
+    try:
         server.run()
+    except KeyboardInterrupt:  # uvicorn re-raises a captured Ctrl-C after it has stopped
+        interrupted = True
     if not server.started:
         raise typer.Exit(3)  # uvicorn's STARTUP_FAILURE, never EXIT_RESTART
-    if app_.state.restart_requested and how is not None:
+    # Ctrl-C wins over an accepted restart: you asked the console to stop, so it stops.
+    if app_.state.restart_requested and how is not None and not interrupted:
         restart.after_serve(
             how=how, leftover=app_.state.work.wait_idle, drain=restart.drain_seconds()
         )

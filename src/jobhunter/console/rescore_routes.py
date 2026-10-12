@@ -107,11 +107,11 @@ def take_run_lock(settings: Any) -> runlock.RunLock:
 class RescoreManager:
     """One background run at a time, in this process."""
 
-    def __init__(self, work: WorkRegistry | None = None) -> None:
+    def __init__(self, work: WorkRegistry) -> None:
         self._lock = threading.Lock()
         # The console's work registry (019 S12b): a run is registered before its thread starts
         # and leaves when the thread ends, so a console Restart waits for it.
-        self.work = work if work is not None else WorkRegistry()
+        self.work = work
         self._thread: threading.Thread | None = None
         self.current: int | None = None
 

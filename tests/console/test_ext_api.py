@@ -936,7 +936,8 @@ def test_ext_routes_never_go_through_the_same_origin_check(client, token, monkey
 def restart_client(client) -> TestClient:
     """A browser on the machine running the console, with a stubbed shutdown."""
     app = client.app
-    app.state.restart_preflight = lambda: []
+    app.state.restart_preflight = lambda **kw: []
+    app.state.restart_delay = 0
     app.state.stopped = []
     app.state.restart_shutdown = lambda: app.state.stopped.append(True)
     return TestClient(app, base_url=BASE, client=("127.0.0.1", 50000), follow_redirects=False)
@@ -958,7 +959,7 @@ def test_restart_is_409_while_an_extension_score_runs(client, token, captured, c
         t.join(10)
     assert client.app.state.work.labels() == []  # the thread left the registry
     assert count(conn, "fit_score") == 1  # nothing lost
-    assert local.post("/config/restart").status_code == 202
+    assert local.post("/config/restart").status_code == 303
     assert client.app.state.stopped == [True]
 
 

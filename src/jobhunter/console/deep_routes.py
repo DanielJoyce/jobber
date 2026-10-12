@@ -24,6 +24,7 @@ from fastapi.templating import Jinja2Templates
 from jobhunter import container
 from jobhunter.config import resolve_path
 from jobhunter.console.inbox_routes import load_console_profile
+from jobhunter.console.work import Restarting, WorkRegistry, refused
 from jobhunter.core import runlock
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.scoring import deep_run as dr
@@ -83,10 +84,13 @@ class DeepManager:
     """One deep run at a time, in this process. A re-score and a deep run never run at once:
     both hold the run lock."""
 
-    def __init__(self) -> None:
+    def __init__(self, work: WorkRegistry) -> None:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self.current: int | None = None
+        # The console's work registry (019 S12b): a run enters before its thread starts and
+        # leaves in the thread's ``finally``, so a console Restart answers 409 meanwhile.
+        self.work = work
 
     def busy(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -114,9 +118,12 @@ class DeepManager:
 
         Raises DeepBusy (one is running: a double click lands here), DeepPlanChanged (the plan
         built now is not the one confirmed, or no token), DeepRefused (the plan refuses, or
-        the run lock is held). Nothing is written and no client is built in any of these.
+        the run lock is held), or Restarting (a console restart was accepted). Nothing is
+        written and no client is built in any of these.
         """
         with self._lock:
+            if self.work.restarting:
+                raise Restarting()
             if self.busy() and self.current is not None:
                 raise dr.DeepBusy(self.current)
             live = dr.running_request(conn, now())
@@ -131,27 +138,36 @@ class DeepManager:
                 raise dr.DeepRefused(plan.refusal)
             if not plan.group_ids:
                 raise dr.DeepRefused(plan.note or "Nothing to deep-score.")
-            lock = take_run_lock(settings)
+            token = self.work.enter("a deep pass")  # before the run lock and the DB row
+            try:
+                lock = take_run_lock(settings)
+            except BaseException:
+                self.work.leave(token)
+                raise
             try:
                 rid = dr.create_request(conn, plan, now())
                 self.current = rid
-                # 019 S12b's work registry is not on main yet. When it lands, the run enters
-                # ``app.state.work`` here, before its thread starts, and leaves it in
-                # ``_work``'s ``finally``, so a config-watch Restart answers 409 meanwhile.
                 self._thread = threading.Thread(
                     target=self._work,
-                    args=(conn_factory, rid, profile, settings, now, client_factory, lock),
+                    args=(conn_factory, rid, profile, settings, now, client_factory, lock, token),
                     name=f"deep-{rid}",
                     daemon=True,
                 )
                 self._thread.start()
             except BaseException:
                 lock.release()
+                self.work.leave(token)
                 raise
             return rid
 
+    def _work(self, conn_factory, rid, profile, settings, now, client_factory, lock, token):
+        try:
+            self._run(conn_factory, rid, profile, settings, now, client_factory, lock)
+        finally:
+            self.work.leave(token)
+
     @staticmethod
-    def _work(conn_factory, rid, profile, settings, now, client_factory, lock):
+    def _run(conn_factory, rid, profile, settings, now, client_factory, lock):
         conn = None
         try:
             conn = conn_factory()  # its own connection: never the request's
@@ -207,7 +223,7 @@ def register(
     now: Callable[[], datetime],
 ) -> None:
     Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
-    app.state.deep = DeepManager()
+    app.state.deep = DeepManager(app.state.work)
     app.state.deep_client_factory = None  # tests inject a fake; None builds anthropic.Anthropic
     templates.env.globals["deep_model_label"] = dr.model_label
     templates.env.globals["deep_again_url"] = again_url
@@ -305,6 +321,8 @@ def register(
                 now=now,
                 client_factory=request.app.state.deep_client_factory,
             )
+        except Restarting as exc:
+            return refused(render_panel(request, conn, message=str(exc), **kw))
         except dr.DeepBusy as exc:
             return render_panel(
                 request,

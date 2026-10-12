@@ -20,10 +20,12 @@ browser sees the command instead of the button. Dismiss needs only the middlewar
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local annotations.
 import logging
+import re
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
@@ -272,21 +274,27 @@ def register(
         # In a container that cannot see the new file, the child cannot see it either: no
         # check, so ask first.
         skip_check = state.replaced and container.is_container()
+        not_starting = (
+            "The console would not start with the files as they are now, so it keeps "
+            "running. Fix these and try again:"
+        )
+        if state.errors and not skip_check:
+            # An empty, missing or broken config.toml: a new process would start on the
+            # defaults or not at all. The watcher already says why, without values.
+            return restart_page(
+                request, 409, why=not_starting, lines=list(state.errors), next=back_to
+            )
         if skip_check and unchecked != "1":
             return restart_page(request, 409, confirm_unchecked=True, next=back_to)
+        if bind_lines := bind_problems(request, state):
+            return restart_page(request, 409, why=not_starting, lines=bind_lines, next=back_to)
         if not skip_check:
+            watch = watcher_of(request)
             check = request.app.state.restart_preflight or rs.run_preflight
-            lines = check()
+            lines = check(require_settings=watch is not None and watch.start_has_settings)
             if lines:
                 logger.warning("console restart refused: the new settings do not load")
-                return restart_page(
-                    request,
-                    409,
-                    why="The console would not start with the files as they are now, so it "
-                    "keeps running. Fix these and try again:",
-                    lines=lines,
-                    next=back_to,
-                )
+                return restart_page(request, 409, why=not_starting, lines=lines, next=back_to)
         running = request.app.state.work.begin_restart()
         if running:
             return restart_page(
@@ -297,31 +305,70 @@ def register(
                 next=back_to,
             )
         try:
-            response = _accepted(request, shutdown, state, back_to)
+            # 303 to a GET page: reloading the waiting page never posts a second restart.
+            target = "/config/restarting?" + urlencode(
+                {
+                    "boot": request.app.state.boot_id,
+                    "base": new_base(request, state),
+                    "next": back_to,
+                }
+            )
+            response = RedirectResponse(target, status_code=303)
+            delay = request.app.state.restart_delay
+            # After the response is sent, and a moment later so the browser can fetch the
+            # waiting page first; uvicorn then drains in-flight requests and stops.
+            response.background = BackgroundTask(_stop_after, delay, shutdown)
         except BaseException:
             request.app.state.work.cancel_restart()  # never leave paid work refused for nothing
             raise
         logger.warning("console restart: accepted; stopping the server")
         return response
 
-    def _accepted(
-        request: Request, shutdown: Callable[[], None], state: cw.State, back_to: str
+    @app.get("/config/restarting", response_class=HTMLResponse)
+    def config_restarting(
+        request: Request, boot: str = "", base: str = "", next: str = "/"
     ) -> HTMLResponse:
-        base = new_base(request, state)
-        response = restart_page(
+        """The page that waits for the new process. Reading it changes nothing."""
+        boot_id = boot if re.fullmatch(r"[0-9a-f]{1,64}", boot) else ""
+        target = checked_base(request, base)
+        return restart_page(
             request,
-            202,
+            200,
             accepted=True,
-            base=base,
-            same_origin=base == own_base(request),
-            boot=request.app.state.boot_id,
+            base=target,
+            same_origin=target == own_base(request),
+            boot=boot_id,
             give_up=rs.GIVE_UP_S,
-            next=back_to,
+            next=safe_next(next),
             code_note=code_note(request),
+            hide_activity=True,
         )
-        # After the response is sent: uvicorn then drains in-flight requests and stops.
-        response.background = BackgroundTask(shutdown)
-        return response
+
+    def bind_problems(request: Request, state: cw.State) -> list[str]:
+        """A moved host or port the new console could not use."""
+        moved = {f.field for f in state.fields if f.cls == cw.RESTART}
+        new = state.new_settings
+        if new is None or not moved & {"console.host", "console.port"}:
+            return []
+        from jobhunter.console.app import check_host  # app imports this module
+
+        running = request.app.state.settings.console
+        host = new.console.host if "console.host" in moved else running.host
+        if "console.host" not in moved:
+            host = request.app.state.bind_host or host
+        port = new.console.port if "console.port" in moved else running.port
+        if "console.host" in moved:
+            interlock = container.published_loopback_only() and host == "0.0.0.0"
+            try:
+                check_host(host, request.app.state.allow_remote or interlock)
+            except ValueError:
+                return [
+                    "console.host: not a loopback address, so the new console would refuse "
+                    "to start (it needs --allow-remote)"
+                ]
+        if "console.port" in moved and not request.app.state.port_free(host, port):
+            return ["console.port: that port is already in use"]
+        return []
 
     @app.post("/config/apply")
     def config_apply(request: Request, key: str = Form("")) -> Response:
@@ -388,3 +435,35 @@ def new_base(request: Request, state: cw.State) -> str:
         port = new.console.port
     shown = f"[{host}]" if ":" in host else host
     return f"{url.scheme}://{shown}:{port}" if port else f"{url.scheme}://{shown}"
+
+
+def _stop_after(delay: float, shutdown: Callable[[], None]) -> None:
+    if delay > 0:
+        time.sleep(delay)
+    shutdown()
+
+
+def checked_base(request: Request, base: str) -> str:
+    """The address the waiting page polls: a loopback (or this console's own) host only,
+    so the query string cannot send the browser elsewhere."""
+    from jobhunter.console.app import is_loopback  # app imports this module
+
+    try:
+        parts = urlsplit(base)
+        port = parts.port
+    except ValueError:
+        return own_base(request)
+    host = parts.hostname or ""
+    if (
+        parts.scheme not in ("http", "https")
+        or not host
+        or not (is_loopback(host) or host == request.url.hostname)
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+        or parts.username
+        or parts.password
+    ):
+        return own_base(request)
+    shown = f"[{host}]" if ":" in host else host
+    return f"{parts.scheme}://{shown}:{port}" if port else f"{parts.scheme}://{shown}"

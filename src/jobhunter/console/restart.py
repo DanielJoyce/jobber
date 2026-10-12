@@ -22,6 +22,7 @@ import contextlib
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -45,7 +46,9 @@ UNIT_SERVICE_LINES = (
 HOST_DRAIN_S = 200
 CONTAINER_DRAIN_S = 30
 PREFLIGHT_TIMEOUT_S = 60
-GIVE_UP_S = 90  # the 202 page stops polling after this
+GIVE_UP_S = 90  # the waiting page stops polling after this
+# The server stops this long after the 303, so the browser can fetch the waiting page first.
+SHUTDOWN_DELAY_S = 1.0
 
 EXEC, EXIT = "exec", "exit"
 
@@ -91,23 +94,83 @@ def say(ok, lines=()):
     sys.stdout.flush()
 try:
     import jobhunter.console.app  # noqa: F401  the code on disk imports
-    from jobhunter import config_watch, secrets
-    from jobhunter.config import load_env_files, load_settings
+    from jobhunter.console.restart import child_check
 except ModuleNotFoundError as exc:
     say(False, ["missing module %s; run uv sync" % (exc.name or "?")])
     sys.exit(1)
 except BaseException as exc:
     say(False, ["the console code could not be imported (%s)" % type(exc).__name__])
     sys.exit(1)
-def load():
-    secrets.startup(load_settings, load_env_files, lambda line: None)
-    return load_settings()
-settings, lines = config_watch.load_errors(load)
-if settings is None:
+lines = child_check("require-settings" in sys.argv[1:])
+if lines:
     say(False, lines)
     sys.exit(1)
 say(True)
 """
+
+REQUIRE_SETTINGS_ARG = "require-settings"
+
+
+def child_check(require_settings: bool) -> list[str]:
+    """Runs in the child: what would stop (or quietly change) a console started now. Fixed
+    text and setting names only, never a value or a path.
+
+    ``require_settings``: the running console's ``config.toml`` set something, so a new
+    process that would find no file, or an empty one, must not start on the defaults (higher
+    caps, other scorers), e.g. after a ``.env`` change points ``JOBHUNTER_CONFIG`` elsewhere.
+    """
+    from jobhunter import config_watch, secrets
+    from jobhunter.config import config_file, load_env_files, load_settings
+
+    def load() -> Any:
+        secrets.startup(load_settings, load_env_files, lambda line: None)
+        return load_settings()
+
+    settings, lines = config_watch.load_errors(load)
+    if settings is None:
+        return list(lines)
+    if require_settings:
+        path = config_file(None)
+        if not path.is_file():
+            return [
+                "config.toml is missing where the new console would read it (the running "
+                "console's file had settings); check JOBHUNTER_CONFIG and your .env files"
+            ]
+        if config_watch._is_blank(path):
+            return ["config.toml is empty; save it again"]
+    return db_problems(settings)
+
+
+def db_problems(settings: Any) -> list[str]:
+    """A database path the new console could not open (cheap checks only)."""
+    from jobhunter.config import resolve_path
+
+    path = resolve_path(settings.paths.db_path)
+    if path.exists():
+        if not path.is_file():
+            return ["paths.db_path is not a file"]
+        if not os.access(path, os.R_OK | os.W_OK):
+            return ["paths.db_path cannot be read and written"]
+        return []
+    folder = path.parent
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent
+    if not folder.is_dir() or not os.access(folder, os.W_OK | os.X_OK):
+        return ["paths.db_path: its folder cannot be created"]
+    return []
+
+
+def port_free(host: str, port: int) -> bool:
+    """Could a new console bind ``host:port`` now? Only asked for a moved port."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
 
 Runner = Callable[..., Any]
 
@@ -116,12 +179,17 @@ def run_preflight(
     env: Mapping[str, str] | None = None,
     cwd: Path | None = None,
     run: Runner = subprocess.run,
+    *,
+    require_settings: bool = False,
 ) -> list[str]:
     """Check the files a restarted console would read; ``[]`` when it would start. The lines
     never carry a value: they come from the child's JSON line, never from its stderr."""
+    argv = [sys.executable, "-c", PREFLIGHT_CODE]
+    if require_settings:
+        argv.append(REQUIRE_SETTINGS_ARG)
     try:
         out = run(
-            [sys.executable, "-c", PREFLIGHT_CODE],
+            argv,
             env=dict(pristine_env() if env is None else env),
             cwd=str(cwd or Path.cwd()),
             timeout=PREFLIGHT_TIMEOUT_S,

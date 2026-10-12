@@ -203,8 +203,9 @@ or on a container host:
 systemctl --user restart jobhunter-console
 ```
 
-If Restart says work is running, wait for the re-score, Score now or draft it names and press
-it again. If it says the console would not start, fix the lines it shows and save again.
+If Restart says work is running, wait for the work it names (a re-score, deep pass, Score now,
+draft or live check) and press it again. If it says the console would not start, fix the lines
+it shows and save again.
 
 [Settings and secrets](settings-and-secrets.md#config-changes-while-the-console-runs) has the
 full table. `/setup` in the console and `jobhunter doctor` show what the restarted console will

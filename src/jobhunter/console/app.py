@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from jobhunter import container
 from jobhunter.achievements import engine as achievements
 from jobhunter.apply import cli_runner, ext_pairing
-from jobhunter.config import Settings, resolve_path
+from jobhunter.config import Settings, resolve_path, shown_value
 from jobhunter.console import (
     achievements_routes,
     activity_routes,
@@ -44,6 +44,7 @@ from jobhunter.console import (
     proposals_routes,
     rejections_routes,
     rescore_routes,
+    restart,
     setup_routes,
     tracking_routes,
 )
@@ -214,8 +215,16 @@ def create_app(
     (default ``console.public_port``, else ``console.port``); ``/ext/`` requests must name a
     loopback ``Host`` on it, even with ``allow_remote``.
     """
-    for problem in settings.scoring.scorer_problems().values():
-        logger.warning("console: %s (fix config.toml and restart the console)", problem)
+    for name in settings.scoring.scorer_problems():
+        # The name, and the spec only when it is safe to show: a key pasted into the spec
+        # must never reach the log.
+        shown = shown_value(getattr(settings.scoring, name, None))
+        logger.warning(
+            "console: scoring.%s %s cannot be used (fix config.toml or /models and restart "
+            "the console)",
+            name,
+            repr(shown) if shown is not None else "(value not shown)",
+        )
     db.prime_migrations()  # this process's known migrations: the code it started with
     factory: ConnFactory = conn_factory or (lambda: db.connect(settings.paths.db_path))
     get_profile: ProfileLoader = profile_loader or default_profile_loader(settings)
@@ -294,6 +303,9 @@ def create_app(
     app.state.restart_requested = False
     app.state.restart_kind = None
     app.state.restart_preflight = None  # tests inject; None runs the child check
+    app.state.restart_delay = restart.SHUTDOWN_DELAY_S
+    app.state.port_free = restart.port_free  # tests inject
+    app.state.bind_host = None  # set by the console command
     app.state.started_commit = None
     app.state.boot_id = secrets.token_hex(8)
     # In-process only (specs/021): the last achievements fingerprint and the cached on/off

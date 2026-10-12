@@ -32,6 +32,7 @@ from jobhunter.config import Settings, resolve_path
 from jobhunter.console import help as helpdocs
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.console.prefs_routes import _WRITE_LOCK
+from jobhunter.console.work import Restarting, refused
 from jobhunter.mail import auth
 from jobhunter.scoring.profile import (
     PREFERENCES_FILE,
@@ -550,6 +551,19 @@ def register(
             resp = page(request, show_all=True, live_results={check_id: held})
             resp.status_code = 429
             return resp
+        # Registered work (019 S12b): a console Restart waits for a check in flight, and a
+        # check asked for once a restart is under way gets 503.
+        try:
+            work = request.app.state.work.enter(f"a live check ({lc.TITLES[kind]})")
+        except Restarting as exc:
+            msg = lc.LiveResult(
+                kind, lc.TITLES[kind], lc.NOT_RUN, notes=(str(exc),), rows=(check_id,)
+            )
+            if request.headers.get("hx-request") == "true":
+                return refused(
+                    templates.TemplateResponse(request, "_setup_live.html", {"res": msg})
+                )
+            return refused(page(request, show_all=True, live_results={check_id: msg}))
         busy[kind] = INFLIGHT
         try:
             result = await run_in_threadpool(
@@ -557,6 +571,7 @@ def register(
             )
         finally:
             busy[kind] = mono()
+            request.app.state.work.leave(work)
         if result is None:
             raise HTTPException(404, "this row has no live check")
         if request.headers.get("hx-request") == "true":

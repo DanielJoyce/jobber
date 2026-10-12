@@ -317,9 +317,11 @@ systemctl --user restart jobhunter-console
 ```
 
 Until then the console shows no button, only the `systemctl --user restart jobhunter-console`
-command. Restart refuses while a re-score, a Score now or a draft runs, and says which. It
-first checks the new file in a separate process and keeps the console running if the file would
-not load. When the console cannot see a replaced `config.toml` (see
+command. Restart refuses while a re-score, a deep pass, a Score now, a draft or a live check
+runs, and says which. It first checks what a new console would read in a separate process and
+keeps this one running if it finds a problem; it catches common mistakes (a file that does not
+load, a missing or empty `config.toml`), not everything. If the new container still fails, the
+unit's normal `Restart=on-failure` and failure notification apply. When the console cannot see a replaced `config.toml` (see
 [Troubleshooting](#troubleshooting)), it cannot check the file, so it asks you to confirm.
 Check the file with `jobhunter-ctr doctor` first. The drain is short (30 s) so the health check
 does not kill the container mid-restart.

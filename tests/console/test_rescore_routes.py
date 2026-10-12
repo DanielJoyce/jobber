@@ -358,7 +358,8 @@ def test_restart_is_409_while_a_rescore_runs_and_the_run_finishes(client, conn):
     from fastapi.testclient import TestClient as Local
 
     app = client.app
-    app.state.restart_preflight = lambda: []
+    app.state.restart_preflight = lambda **kw: []
+    app.state.restart_delay = 0
     stopped: list[bool] = []
     app.state.restart_shutdown = lambda: stopped.append(True)
     local = Local(app, client=("127.0.0.1", 50000))
@@ -376,7 +377,7 @@ def test_restart_is_409_while_a_rescore_runs_and_the_run_finishes(client, conn):
     assert app.state.work.labels() == []
     # No lost work: the run the restart waited for finished and recorded its scores.
     assert conn.execute("SELECT status FROM rescore_request").fetchone()[0] == "done"
-    assert local.post("/config/restart", follow_redirects=False).status_code == 202
+    assert local.post("/config/restart", follow_redirects=False).status_code == 303
     assert stopped == [True]
 
 

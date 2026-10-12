@@ -298,3 +298,31 @@ def test_the_cooldown_ends(settings, rec):
     assert c.post("/setup/live/scorer.screen").status_code == 200
     now[0] += 6
     assert c.post("/setup/live/scorer.screen").status_code == 200
+
+
+# --- Console Restart: a live check is registered work (019 S12b) ----------------------------
+
+
+def test_a_live_check_is_registered_while_it_runs(settings, rec, monkeypatch):
+    app = make_app(settings, rec)
+    seen: list[list[str]] = []
+    real = lc.run_row
+
+    def recording(*a, **k):
+        seen.append(app.state.work.labels())
+        return real(*a, **k)
+
+    monkeypatch.setattr(lc, "run_row", recording)
+    r = client(app).post("/setup/live/scorer.screen", headers=HX)
+    assert r.status_code == 200
+    assert len(seen) == 1 and len(seen[0]) == 1 and seen[0][0].startswith("a live check (")
+    assert app.state.work.labels() == []
+
+
+def test_a_live_check_is_503_while_restarting(settings, rec, monkeypatch):
+    app = make_app(settings, rec)
+    monkeypatch.setattr(lc, "run_row", lambda *a, **k: pytest.fail("no check while restarting"))
+    assert app.state.work.begin_restart() == []
+    r = client(app).post("/setup/live/scorer.screen", headers=HX)
+    assert r.status_code == 503 and "console restarting" in r.text
+    assert r.headers["X-Jobhunter-Restarting"] == "1"

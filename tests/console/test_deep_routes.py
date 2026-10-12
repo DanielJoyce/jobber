@@ -627,3 +627,48 @@ def test_a_thread_that_cannot_open_its_connection_fails_the_row_at_once(pdir, db
     row = conn.execute("SELECT status, error FROM deep_request").fetchone()
     assert tuple(row) == ("failed", "OSError")
     assert runlock.RunLock(db_path, "probe").try_acquire()
+
+
+# ─── Console Restart: the deep pass is registered work (019 S12b) ───────────
+
+
+def test_restart_is_409_while_a_deep_pass_runs_and_nothing_is_lost(pdir, db_path, conn):
+    c = make_client(pdir, db_path)
+    app = c.app
+    app.state.restart_preflight = lambda **kw: []
+    app.state.restart_delay = 0
+    stopped: list[bool] = []
+    app.state.restart_shutdown = lambda: stopped.append(True)
+    gate = threading.Event()
+    fake = Factory(FakeClient(gate=gate))
+    app.state.deep_client_factory = fake
+    confirm(c, mode="next", n="10")
+    assert fake.client.entered.wait(10)
+    assert app.state.work.labels() == ["a deep pass"]
+    r = c.post("/config/restart", follow_redirects=False)
+    assert r.status_code == 409 and "a deep pass" in r.text and stopped == []
+    gate.set()
+    app.state.deep.join()
+    assert app.state.work.labels() == []
+    assert conn.execute("SELECT status FROM deep_request").fetchone()[0] == "done"
+    assert c.post("/config/restart", follow_redirects=False).status_code == 303
+    assert stopped == [True]
+
+
+def test_deep_pass_is_503_while_restarting_and_spends_nothing(client, conn):
+    html = client.get("/deep/panel", params={"mode": "next", "n": "10"}).text
+    assert client.app.state.work.begin_restart() == []
+    r = client.post("/deep/run", data={"mode": "next", "n": "10", "plan": token_of(html)})
+    assert r.status_code == 503 and "console restarting" in r.text
+    assert r.headers["X-Jobhunter-Restarting"] == "1"
+    assert counts(conn) == (0, 0)  # the forbid factory also proves no client was built
+
+
+def test_a_deep_pass_refused_by_the_run_lock_leaves_the_registry(
+    client, conn, db_path, run_lock_holder
+):
+    holder = run_lock_holder(db_path)
+    confirm(client, mode="next", n="10")
+    assert client.app.state.work.labels() == []
+    holder.release()
+    holder.wait()
