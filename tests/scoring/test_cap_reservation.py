@@ -124,14 +124,16 @@ def test_pending_batches_reserve_per_model(conn):
 
 
 def test_measured_history_above_table_price_is_used(conn, profile):
-    add_measured(conn, profile, SONNET, 0.009)
-    assert screen.reserve_per_request_usd(conn, SONNET) == pytest.approx(0.009)
+    # Above the no-cache-reuse floor too (about $0.012 for this profile), so it sets the hold.
+    assert cold_batch_usd(2.0, 10.0, cold_prefix(profile)) < 0.02
+    add_measured(conn, profile, SONNET, 0.02)
+    assert screen.reserve_per_request_usd(conn, SONNET, profile) == pytest.approx(0.02)
     add_groups(conn, profile, 50)
     client = FakeClient()
     screen.submit_batch(
         conn, client, profile, limit=100, now=NOW, scorer=SONNET, remaining_usd=lambda: 0.1
     )
-    assert sent(client) == 11  # 0.1 / 0.009, not 0.1 / 0.00507 = 19
+    assert sent(client) == 5  # 0.1 / 0.02, not 0.1 / 0.00507 = 19
 
 
 def test_measured_history_below_floor_keeps_the_floor(conn, profile):
@@ -213,8 +215,9 @@ def test_rescore_batch_priced_on_measured_history_below_table_sends_every_group(
     add_groups(conn, profile, 50)
     rid = _queue(conn, profile, SONNET)
     r = rescore.get_request(conn, rid)
-    assert r["cost_per_job_usd"] == pytest.approx(0.003)
-    assert r["max_usd"] < 50 * SONNET_TABLE  # the table price would cut this plan
+    # Priced at the no-cache-reuse floor (review B2), so the plan agrees with the hold and
+    # its confirmed ceiling covers every group at that price.
+    assert r["cost_per_job_usd"] == pytest.approx(cold_batch_usd(2.0, 10.0, cold_prefix(profile)))
     client = FakeClient()
     st = _run(conn, profile, SONNET, rid, client)
     assert sent(client) == 50 and st.attempted == 50

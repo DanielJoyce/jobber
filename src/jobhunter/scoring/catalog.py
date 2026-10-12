@@ -68,9 +68,11 @@ PRICES_CHECKED = "2026-10-11"
 # Per-model spend reservations are in on every screening path (git-bug 026b50c, PR 121, and
 # df51dff, PR 123): the cap reserves each job at the highest of the flat
 # ``screen.ESTIMATED_COST_PER_REQUEST_USD`` ($0.002), the model's measured mean and its table
-# price (``screen.reserve_per_job_usd``), so a dearer screening option no longer overruns a
-# cap on an estimate. 020 M5b (git-bug a322711) switched this on: every screening option is
-# within the reservation. Off, only options at or under the flat $0.002 are offered.
+# price (``screen.reserve_per_job_usd``), and an Anthropic model at no less than its price with
+# no cache reuse (020 M5b review). Guaranteed: no run sends more jobs than the cap covers at
+# that hold; longer than typical postings can still cost more than held. 020 M5b (git-bug
+# a322711) switched this on: every screening option is within the reservation. Off, only
+# options at or under the flat $0.002 are offered.
 RESERVATION_PER_MODEL = True
 FLAT_RESERVATION_USD = screen.ESTIMATED_COST_PER_REQUEST_USD
 

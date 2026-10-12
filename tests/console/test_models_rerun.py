@@ -570,9 +570,12 @@ def test_the_panel_says_when_the_cap_holds_more_than_the_estimate(tmp_path):
     conn.close()
     client = make_client(cfg)
     text = unescape(client.get("/models/screen/rescore", params={"scope": "all"}).text)
-    assert "at $0.00030 per job" in text  # measured
+    # Measured $0.0003 is below Haiku 5.5's no-cache-reuse floor, so it is priced there.
+    priced = re.search(r"at \$([0-9.]+) per job \(the price with no cache reuse", text)
+    assert priced and 0.0003 < float(priced.group(1)) < 0.002
     hold = re.search(r'<p class="hint" id="rescore-reserve">(.*?)</p>', text, re.S)
     assert hold, "the hold line is shown"
     assert "holds $0.0020 a job ($0.01 for all 3)" in hold.group(1)
     assert "Only 2 of 3 fit under the cap now" in hold.group(1)
+    assert "Spend cap remaining: $0.0040." in text  # under a cent: four decimals (N4)
     assert not re.search(r'id="rescore-run"[^>]* disabled', text)

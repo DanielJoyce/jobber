@@ -51,7 +51,7 @@
     <span class="cost">{% if o.scope == "none" %}$0.00{% else %}≈ ${{ "%.2f" | format(o.cost_usd) }}{% endif %}</span>
   </label>
   {% endfor %}
-  <p class="hint">At ${{ "%.4f" | format(estimate.cost_per_job) }} per job ({% if estimate.cost_source == "default" %}no spend measured yet; assumed{% else %}measured from {{ estimate.cost_source }}{% endif %}). Saving queues the re-score; run it from Re-score now on this page (or the nightly timer drains it). It counts against the spend cap.</p>
+  <p class="hint">At ${{ "%.4f" | format(estimate.cost_per_job) }} per job ({% if estimate.cost_source == "floor" %}the price with no cache reuse, above what was measured{% elif estimate.cost_source == "default" %}no spend measured yet; assumed{% else %}measured from {{ estimate.cost_source }}{% endif %}). Saving queues the re-score; run it from Re-score now on this page (or the nightly timer drains it). It counts against the spend cap.</p>
 </fieldset>
 {% endif %}
 <p class="actions"><a class="button" href="/prefs">Cancel</a> <button type="submit" form="prefs-form" class="button primary">{% if paid %}Save{% else %}Save — free{% endif %}</button></p>

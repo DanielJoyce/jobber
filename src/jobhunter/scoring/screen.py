@@ -79,11 +79,12 @@ _CUSTOM_ID = re.compile(r"^g(\d+)$")
 
 # The cached prefix of a screen request (``system`` = rubric + profile scoring inputs, plus the
 # output schema, which ``output_config`` also bills as input), sized from its text for the
-# spend hold of a model with no measured history (020 M5b review B1). Three characters a
-# token: the newer tokenizer counts about 30% more tokens than the old four characters a
-# token, so this errs high. Without a profile at hand, ``DEFAULT_PROFILE_CHARS`` stands in
+# floor of every Anthropic spend hold (020 M5b review B1, B2). 2.75 characters a token: the
+# newer tokenizer counts English prose at about 3.1 characters a token, but the JSON schema
+# at about 2.3, so 3 could undercount a schema-heavy prefix; 2.75 errs high on the mix (the
+# rubric is mostly prose). Without a profile at hand, ``DEFAULT_PROFILE_CHARS`` stands in
 # for the scoring inputs (a long resume and narrative).
-PREFIX_CHARS_PER_TOKEN = 3
+PREFIX_CHARS_PER_TOKEN = 2.75
 DEFAULT_PROFILE_CHARS = 12_000
 _PREFIX_FIXED_CHARS = len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA))
 
@@ -589,12 +590,12 @@ def reserve_per_job_usd(
     priced by its measured history when it has some, else by the ``unpriced_reserve_usd``
     guess: over the line only while nothing at all is known about its price.
 
-    An Anthropic model with no measured history is also held at no less than
-    ``cold_price_per_job_usd``: the prefix sized from ``profile`` and every cached token
-    written, none read (020 M5b review B1). ``TYPICAL_USAGE`` assumes a 3,900-token prefix
-    that always hits the cache; batch cache hits are best effort, so a new model's first
-    batch could otherwise cost about twice what was held. Once a collect records its real
-    cost, the measured mean takes over.
+    An Anthropic model is always held at no less than ``cold_price_per_job_usd``: the
+    prefix sized from ``profile`` and every cached token written, none read (020 M5b review
+    B1, B2). ``TYPICAL_USAGE`` assumes a 3,900-token prefix that always hits the cache, and a
+    measured mean only says what earlier batches happened to reuse; batch cache hits are best
+    effort (30-98% seen), so the next batch could otherwise cost two to three times its hold.
+    The floor is permanent: a measured mean above it still raises the hold.
     """
     if price is _LOOK_UP:
         price = list_price_per_job_usd(spec, scoring, batch=batch)
@@ -602,7 +603,7 @@ def reserve_per_job_usd(
     if price is None:
         price = measured if measured > 0 else unpriced_reserve_usd(spec, scoring, batch=batch)
     hold = max(ESTIMATED_COST_PER_REQUEST_USD, measured, price)
-    if measured <= 0 and _is_anthropic_spec(spec):
+    if _is_anthropic_spec(spec):
         hold = max(hold, cold_price_per_job_usd(spec, batch=batch, profile=profile))
     return hold
 
@@ -643,8 +644,8 @@ def reserve_per_request_usd(
     """What the spend cap reserves for one batched screen request to Anthropic ``scorer``.
 
     ``reserve_per_job_usd`` at batch prices: Haiku 5.5 reserves the flat $0.002; Sonnet 5.5
-    about $0.005 once measured, and its all-cache-writes price before (about $0.012 for a
-    6,000-token prefix); a model missing from the price table the table's dearest rates.
+    at least its all-cache-writes price (about $0.013 to $0.015 a job for a real profile);
+    a model missing from the price table the table's dearest rates.
     """
     return reserve_per_job_usd(conn, scorer, batch=True, profile=profile)
 
@@ -1618,7 +1619,7 @@ def _score_sync_packed(
             affordable = 0
             for pack in wave:
                 est = estimated_request_cost(conn, scorer, now, len(pack))
-                if remaining < est:
+                if jobs_affordable(remaining, est) < 1:  # one comparison everywhere (N6)
                     break
                 remaining -= est
                 affordable += 1

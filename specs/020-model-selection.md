@@ -244,10 +244,13 @@ are present (M5 switches it), so nothing else has to change when they land.
 option. Review of M5b (B1) found that the typical-token hold of `026b50c` assumes a
 3,900-token prefix that always hits the cache, while real prefixes are about 7,100 tokens and
 batch cache hits are best effort (30-98% seen), so a new model's first batch could cost about
-twice its hold. So an Anthropic model with **no measured history** is held at no less than its
-price with the cached prefix sized from the real rubric, schema and profile (three characters
-a token) and **all of it priced as cache writes** (`screen.cold_price_per_job_usd`); once a
-collect records its real cost, the measured mean takes over (006 "Cost"). Each batch stores the
+twice its hold. So an Anthropic model is held at no less than its price with the cached prefix
+sized from the real rubric, schema and profile (2.75 characters a token) and **all of it priced
+as cache writes** (`screen.cold_price_per_job_usd`). Re-verification (B2) showed a measured
+mean is not safe either (one batch at 98% hits, the next at 30% overran 2.3-2.9x), so the floor
+is **permanent**: the hold is `max(cold, measured, $0.002)`, and re-score plans, Score now,
+`/prefs` and `jobhunter backfill` price from the same floor (B3: backfill also passes its budget
+to `submit_batch` as the cap). Each batch stores the
 hold it was admitted at (`score_batch.reserve_per_request_usd`, migration 0042) and stays held
 at that until collected. The 1-hour cache TTL was considered and not adopted here: it would
 double the write price for a hit rate the batch service still does not promise.

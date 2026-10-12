@@ -800,10 +800,11 @@ def test_screen_price_line_has_no_hold_when_it_equals_the_estimate(tmp_path):
                 "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, "
                 "scoring_version, verdict, overall, dimensions, evidence, cost_usd, created_at) "
                 "VALUES (?, 'screen', 'anthropic:claude-sonnet-5-5', 'p', 'v', 'weak', 10, "
-                "'{}', '[]', 0.006, 'x')",
+                "'{}', '[]', 0.03, 'x')",
                 (gid,),
             )
     conn.close()
     row = unescape(row_html(client.get("/models").text, "screen"))
-    assert "About $6.00 per 1,000 jobs (measured over 2 jobs)." in row
+    # Measured above the no-cache-reuse floor (about $0.012), so that is what the cap holds.
+    assert "About $30.00 per 1,000 jobs (measured over 2 jobs)." in row
     assert "the spend cap holds" not in row  # measured, and that is what the cap holds

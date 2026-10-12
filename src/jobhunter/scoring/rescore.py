@@ -140,9 +140,10 @@ def cost_per_job(
 ) -> tuple[float, str]:
     """Measured screen cost per job for this scorer, else a per-kind default.
 
-    With nothing measured, an Anthropic model is priced at no less than its all-cache-writes
-    price for ``profile``'s prefix (``screen.cold_price_per_job_usd``), the figure its first
-    batch is held at, so the plan and the hold agree (020 M5b review B1).
+    An Anthropic model is always priced at no less than its all-cache-writes price for
+    ``profile``'s prefix (``screen.cold_price_per_job_usd``), the floor of every hold it
+    gets, so the plan and the hold agree (020 M5b review B1, B2). When that floor is above
+    the measured mean, the source is ``"floor"``.
 
     Measured from ``fit_score``, where each row carries that job's share of its request's cost.
     Not from ``llm_spend``: it counts one call per request, and packed and Jev requests carry
@@ -154,7 +155,12 @@ def cost_per_job(
         (spec,),
     ).fetchone()
     if row[1]:
-        return float(row[0]), "fit_score"
+        measured = float(row[0])
+        if is_anthropic(spec):
+            floor = screen.cold_price_per_job_usd(spec, batch=True, profile=profile)
+            if floor > measured:
+                return floor, "floor"
+        return measured, "fit_score"
     if is_decisions(spec):
         return DECISIONS_FALLBACK_COST, "default"
     # Nothing measured: the old flat default, or the model's list price at typical tokens
@@ -803,7 +809,7 @@ def _execute(
             # all-cache-writes price, 020 M5b review B1). A plan priced on measured history
             # keeps its measured price, so it sends every group the user confirmed.
             per_job = max(per_job, screen.reserve_per_request_usd(conn, spec, profile))
-        fits = len(ids) if per_job <= 0 else math.floor(plan.max_usd / per_job + 1e-9)
+        fits = len(ids) if per_job <= 0 else screen.jobs_affordable(plan.max_usd, per_job)
         if fits <= 0:
             st.notes.append(f"nothing submitted: ${plan.max_usd:.2f} confirmed covers no job")
             return
@@ -846,7 +852,7 @@ def _execute(
         # measured cost per job, and send only what fits under max_usd.
         per_job = max(plan.cost_per_job, st.cost_usd / st.attempted if st.attempted else 0.0)
         room = plan.max_usd - st.cost_usd
-        fits = len(batch) if per_job <= 0 else int(room // per_job + 1e-9)
+        fits = len(batch) if per_job <= 0 else screen.jobs_affordable(room, per_job)
         if fits <= 0:
             stop = f"stopped at the confirmed spend of ${plan.max_usd:.2f}"
             break

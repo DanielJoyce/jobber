@@ -35,15 +35,16 @@ SALARY_FLOOR = 987654  # a marker: must never appear in a prompt
 
 
 def cold_prefix(profile: Profile) -> int:
-    """The cached prefix in tokens, worked out here from the texts at three characters a
-    token (rubric, the output schema and the profile's scoring inputs), not by the code."""
+    """The cached prefix in tokens, worked out here from the texts at 2.75 characters a
+    token (rubric, the output schema and the profile's scoring inputs), not by the code:
+    ceil(chars / 2.75) == ceil(chars * 4 / 11), in whole numbers."""
     chars = len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA)) + len(scoring_inputs(profile))
-    return -(-chars // 3)
+    return -(-chars * 4 // 11)
 
 
 def default_prefix() -> int:
     """``cold_prefix`` with no profile at hand: 12,000 characters stand in for its inputs."""
-    return -(-(len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA)) + 12_000) // 3)
+    return -(-(len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA)) + 12_000) * 4 // 11)
 
 
 def cold_batch_usd(in_rate: float, out_rate: float, prefix: int) -> float:

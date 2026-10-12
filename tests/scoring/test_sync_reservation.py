@@ -394,9 +394,10 @@ def test_prefs_estimate_prices_the_configured_scorer(conn, profile, tmp_path):
         "default",
     )
     # Measured history for the configured model wins, as on the Re-score panel.
+    # Measured below its no-cache-reuse floor: priced at the floor (review B2).
     assert pf.cost_per_job(conn, Scoring(screen_scorer=HAIKU55)) == (
-        pytest.approx(0.0001),
-        "fit_score",
+        pytest.approx(cold_batch_usd(0.10, 0.50, default_prefix())),
+        "floor",
     )
     est = pf.rescore_estimate(conn, profile, NOW, Scoring(screen_scorer=SONNET))
     assert est["cost_per_job"] == pytest.approx(cold_batch_usd(2.0, 10.0, cold_prefix(profile)))

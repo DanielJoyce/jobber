@@ -15,6 +15,7 @@ test_screen), not by calling the pricing code under test.
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -36,7 +37,7 @@ from jobhunter.apply import score as group_score
 from jobhunter.config import OpenRouter, Scoring
 from jobhunter.scoring import catalog, deep, deep_run, rescore, screen
 from jobhunter.scoring.profile import scoring_inputs
-from jobhunter.scoring.rubric import RUBRIC_TEXT
+from jobhunter.scoring.rubric import RUBRIC_TEXT, SCREEN_SCHEMA
 
 HAIKU55 = "anthropic:claude-haiku-5-5"
 SONNET = "anthropic:claude-sonnet-5-5"
@@ -51,9 +52,9 @@ def add_groups(conn, profile, n: int, start: int = 1) -> list[int]:
     return [add_group(conn, i, profile) for i in range(start, start + n)]
 
 
-def add_measured(conn, profile, model: str, cost: float, n: int = 3) -> None:
+def add_measured(conn, profile, model: str, cost: float, n: int = 3, start: int = 20_000) -> None:
     for i in range(n):
-        gid = add_group(conn, 20_000 + i, profile, passed=False)
+        gid = add_group(conn, start + i, profile, passed=False)
         conn.execute(
             "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
             "verdict, overall, dimensions, evidence, cost_usd, created_at) "
@@ -98,11 +99,18 @@ def test_the_holds_in_numbers(conn, profile):
     assert p > screen.TYPICAL_USAGE.cache_read_input_tokens  # the rubric alone is ~5,200
 
 
-def test_with_history_the_measured_mean_takes_over(conn, profile):
-    add_measured(conn, profile, SONNET, 0.009)
-    assert screen.reserve_per_request_usd(conn, SONNET, profile) == pytest.approx(0.009)
+def test_the_cold_floor_stays_after_history(conn, profile):
+    """Review B2: a measured mean below the no-cache-reuse price does not lower the hold or
+    the plan's price; one above it raises both."""
+    cold = cold_batch_usd(2.0, 10.0, cold_prefix(profile))
+    add_measured(conn, profile, SONNET, 0.005)
+    assert screen.reserve_per_request_usd(conn, SONNET, profile) == pytest.approx(cold)
+    assert rescore.cost_per_job(conn, SONNET, profile=profile) == (pytest.approx(cold), "floor")
+    add_measured(conn, profile, SONNET, 0.05, n=30, start=30_000)  # mean now above it
+    mean = (3 * 0.005 + 30 * 0.05) / 33
+    assert screen.reserve_per_request_usd(conn, SONNET, profile) == pytest.approx(mean)
     assert rescore.cost_per_job(conn, SONNET, profile=profile) == (
-        pytest.approx(0.009),
+        pytest.approx(mean),
         "fit_score",
     )
 
@@ -119,7 +127,7 @@ def test_the_prefix_is_sized_from_the_real_profile(profile):
     big = profile.model_copy(update={"resume_text": "x" * 30_000})
     assert screen.prefix_tokens(big) == cold_prefix(big) > screen.prefix_tokens(profile)
     # The rubric and schema are counted, not assumed.
-    assert screen.prefix_tokens(profile) * 3 >= len(RUBRIC_TEXT) + len(scoring_inputs(profile))
+    assert screen.prefix_tokens(profile) * 2.75 >= len(RUBRIC_TEXT) + len(scoring_inputs(profile))
 
 
 # ─── B1: the reviewer's case ────────────────────────────────────────────────
@@ -128,14 +136,14 @@ def test_the_prefix_is_sized_from_the_real_profile(profile):
 def _real_profile(profile):
     """A profile whose prefix is about the 7,100 tokens measured on real data, taking the
     newer tokenizer at 3.08 characters a token (4 / 1.3)."""
-    fixed = cold_prefix(profile) * 3 - len(scoring_inputs(profile))  # rubric + schema chars
+    fixed = len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA))
     pad = int(7100 * 3.08) - fixed
     return profile.model_copy(update={"resume_text": "y" * pad})
 
 
-def _billed(custom_id: str):
+def _billed(custom_id: str, reads: int = 2130, writes: int = 4970):
     """A Sonnet answer billed as on real data: 2,600 posting tokens, a 7,100-token prefix
-    with 30% read from the cache and 70% written, 455 out."""
+    (by default 30% read from the cache and 70% written), 455 out."""
     message = {
         "id": "msg_x",
         "type": "message",
@@ -147,8 +155,8 @@ def _billed(custom_id: str):
         "usage": {
             "input_tokens": 2600,
             "output_tokens": 455,
-            "cache_read_input_tokens": 2130,
-            "cache_creation_input_tokens": 4970,
+            "cache_read_input_tokens": reads,
+            "cache_creation_input_tokens": writes,
         },
     }
     from anthropic.types.messages import MessageBatchIndividualResponse
@@ -192,6 +200,53 @@ def test_a_new_models_first_batch_stays_under_the_cap_at_a_30pc_cache_hit_rate(c
     assert spent(conn) <= 2.0  # what it really cost stays under the cap
 
 
+def _sonnet_job(reads: int, writes: int) -> float:
+    """By hand: one Sonnet batch job billed with ``reads`` and ``writes`` of the prefix."""
+    return (2600 * 2.0 + writes * 2.0 * 1.25 + reads * 2.0 * 0.05 + 455 * 10.0) * 0.5 / 1e6
+
+
+@pytest.mark.parametrize(("reads", "writes"), [(2130, 4970), (0, 7100)])
+def test_a_lucky_first_collect_does_not_lower_the_next_hold(conn, profile, reads, writes):
+    """Review B2: a first batch collected at 98% cache hits made the measured mean cheap,
+    and the next batch at 30% or 0% hits overran the cap 2.3-2.9x. The cold floor stays."""
+    real = _real_profile(profile)
+    add_groups(conn, real, 800)
+    client = FakeClient()
+    lucky = screen.submit_batch(
+        conn, client, real, limit=50, now=NOW, scorer=SONNET, remaining_usd=lambda: 100.0
+    )
+    client.messages.batches.results_by_id[lucky] = [
+        _billed(r["custom_id"], reads=6958, writes=142) for r in client.messages.batches.created[-1]
+    ]
+    screen.collect_batch(conn, client, lucky, real, now=NOW)
+    lucky_job = _sonnet_job(6958, 142)
+    assert screen.measured_cost_per_job_usd(conn, SONNET) == pytest.approx(lucky_job)
+    before = spent(conn)
+
+    # The next day's $2 cap, and the cache mostly misses this time.
+    cap = 2.0
+    nxt = screen.submit_batch(
+        conn,
+        client,
+        real,
+        limit=1000,
+        now=NOW,
+        scorer=SONNET,
+        remaining_usd=lambda: cap - screen._pending_batch_usd(conn),
+    )
+    n = len(client.messages.batches.created[-1])
+    assert n < math.floor(cap / lucky_job)  # the measured mean would have let this many go
+    client.messages.batches.results_by_id[nxt] = [
+        _billed(r["custom_id"], reads=reads, writes=writes)
+        for r in client.messages.batches.created[-1]
+    ]
+    screen.collect_batch(conn, client, nxt, real, now=NOW)
+    cost = spent(conn) - before
+    assert cost == pytest.approx(n * _sonnet_job(reads, writes))
+    assert cost <= 1.2 * cap
+    assert cost <= cap  # in fact inside it: the floor prices every prefix token as a write
+
+
 def test_save_rerun_all_on_a_new_model_is_planned_at_the_cold_hold(conn, profile):
     """The flow the review named: "Save + re-score -> All" on a model with no history."""
     real = _real_profile(profile)
@@ -207,12 +262,14 @@ def test_save_rerun_all_on_a_new_model_is_planned_at_the_cold_hold(conn, profile
 
 
 def test_a_measured_price_below_the_reservation_is_shown_with_it(conn, profile):
-    add_measured(conn, profile, SONNET, 0.003)  # below the warm 0.00507 table price
+    add_measured(conn, profile, HAIKU55, 0.0001)  # below its floors
     add_groups(conn, profile, 10)
-    plan = rescore.make_plan(conn, profile, scoring_with(100.0, SONNET), "all", SONNET, NOW)
-    assert plan.cost_per_job == pytest.approx(0.003) and plan.cost_source == "fit_score"
-    assert plan.reserve_per_job == pytest.approx(SONNET_WARM)
-    assert plan.reserve_differs and plan.reserved_usd == pytest.approx(10 * SONNET_WARM)
+    plan = rescore.make_plan(conn, profile, scoring_with(100.0), "all", HAIKU55, NOW)
+    # Priced at its no-cache-reuse floor (about $0.0006), held at the $0.002 floor.
+    cold = cold_batch_usd(0.10, 0.50, cold_prefix(profile))
+    assert plan.cost_per_job == pytest.approx(cold) and plan.cost_source == "floor"
+    assert plan.reserve_per_job == pytest.approx(0.002)
+    assert plan.reserve_differs and plan.reserved_usd == pytest.approx(10 * 0.002)
     assert plan.refusal is None and plan.fits_now == 10
 
 
@@ -309,31 +366,38 @@ def test_sync_admission_stops_exactly_at_the_cap(conn, profile, tmp_path):
 
 
 def test_plan_fits_now_at_the_boundary(conn, profile):
-    add_groups(conn, profile, 10)
-    add_measured(conn, profile, HAIKU55, 0.0001)  # the estimate; the cap holds $0.002
-    # The estimate ($0.001 for 10) fits a $0.01 cap, but only 5 jobs fit the $0.002 hold.
-    plan = rescore.make_plan(conn, profile, scoring_with(0.01), "all", HAIKU55, NOW)
-    assert plan.estimated_usd == pytest.approx(0.001)
-    assert plan.refusal is None and plan.fits_now == 5
-    # Less than one job's hold left: refused up front instead of sending nothing after Run.
+    # Haiku 5.5: estimated at its no-cache-reuse floor (about $0.0006), held at $0.002.
+    cold = cold_batch_usd(0.10, 0.50, cold_prefix(profile))
+    assert 2 * cold < 0.0019
+    add_groups(conn, profile, 2)
+    add_measured(conn, profile, HAIKU55, 0.0001)
+    # The estimate for 2 fits, but less than one job's hold is left: refused up front
+    # instead of sending nothing after Run.
     plan = rescore.make_plan(conn, profile, scoring_with(0.0019), "all", HAIKU55, NOW)
+    assert plan.estimated_usd == pytest.approx(2 * cold)
     assert plan.fits_now == 0
     assert plan.refusal and "holds $0.0020 a job" in plan.refusal
     assert "$0.0019 is left" in plan.refusal  # under a cent: four decimals, not "$0.00"
     # Exactly one job's hold: one fits, not refused.
     plan = rescore.make_plan(conn, profile, scoring_with(0.002), "all", HAIKU55, NOW)
     assert plan.refusal is None and plan.fits_now == 1
+    # Ten groups: the estimate fits a $0.01 cap, but only 5 jobs fit the $0.002 hold.
+    add_groups(conn, profile, 8, start=3)
+    plan = rescore.make_plan(conn, profile, scoring_with(0.01), "all", HAIKU55, NOW)
+    assert plan.estimated_usd == pytest.approx(10 * cold)
+    assert plan.refusal is None and plan.fits_now == 5
 
 
 def test_score_now_is_refused_when_the_hold_does_not_fit(conn, profile):
     gid = add_group(conn, 1, profile)
     add_measured(conn, profile, HAIKU55, 0.0003)
+    cold = cold_batch_usd(0.10, 0.50, cold_prefix(profile))  # about $0.0006, the estimate
     est = group_score.estimate(conn, profile, scoring_with(0.001), gid, NOW)
-    assert est.estimated_usd == pytest.approx(0.0003)  # the estimate fits the $0.001 left
+    assert est.estimated_usd == pytest.approx(cold) and cold < 0.001  # fits the $0.001 left
     assert est.reserve_usd == pytest.approx(0.002) and est.reserve_differs
     # Review N4: it is the hold that is over, and it says so.
     assert est.refusal and est.refusal.startswith("the spend cap holds $0.0020 for this job")
-    assert "estimated $0.0003" in est.refusal and "the $0.0010 left" in est.refusal
+    assert f"estimated ${cold:.4f}" in est.refusal and "the $0.0010 left" in est.refusal
     assert "is over the remaining" not in est.refusal
     est = group_score.estimate(conn, profile, scoring_with(0.002), gid, NOW)
     assert est.refusal is None  # exactly the hold: admitted

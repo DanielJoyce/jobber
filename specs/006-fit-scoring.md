@@ -450,10 +450,12 @@ tokenizer):
 per batched job, the highest of $0.002 (`screen.ESTIMATED_COST_PER_REQUEST_USD`), the mean
 measured for that model, and the model's table price at these typical tokens, batched
 (`screen.reserve_per_request_usd`). For Haiku 5.5 that is the $0.002 floor, deliberately high;
-a dearer model reserves its own price (Sonnet 5.5 about $0.005 once measured; before that, 020
-M5b holds an Anthropic model with its real prefix priced as cache writes, about $0.012-$0.014 for
-Sonnet 5.5; Haiku 4.5 about $0.0026 where
-it used to reserve $0.002), so no priced model overruns a cap on an estimate. Uncollected
+a dearer model reserves its own price. Since 020 M5b every Anthropic hold is also floored, for
+good, at the model's price with the real cached prefix (rubric, schema and profile, at 2.75
+characters a token) priced as cache writes, because batch cache reuse is best effort and varies
+from batch to batch: Sonnet 5.5 holds about $0.012-$0.015 a job, Haiku 4.5 about $0.006-$0.008.
+What is guaranteed: a run never sends more jobs than the cap covers at its hold, and the hold
+assumes no cache reuse; longer than typical postings or answers can still cost more than held. Uncollected
 batches are reserved the same way, by the model each was submitted with. A confirmed Anthropic
 re-score batch is cut to what its confirmed ceiling covers at the planned price per job (the
 table price instead, when higher, for a plan confirmed at the old flat $0.002).
