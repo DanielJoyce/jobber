@@ -62,6 +62,21 @@ uv sync
 scripts/setup-hooks.sh     # secret-scanning git hooks; asks before downloading Go
 ```
 
+## First run
+
+After the install above:
+
+```bash
+uv run jobhunter init      # the data directory (0700) and an empty database (0600)
+uv run jobhunter console   # then open http://127.0.0.1:8808/setup
+uv run jobhunter doctor    # the same checks as /setup, in the terminal
+```
+
+`/setup` lists what is set up and what is still missing. `doctor` exits 0 when every essential
+item is ok. For the order the steps come in, read [Getting started](http://127.0.0.1:8808/help/getting-started)
+in the console (the same page as `src/jobhunter/console/help/getting-started.md`). Containers
+instead of a host install: see *Running in containers* below.
+
 ## Help
 
 User help lives in `src/jobhunter/console/help/`, one Markdown file per topic. The same
