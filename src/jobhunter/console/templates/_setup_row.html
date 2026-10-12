@@ -1,0 +1,81 @@
+{% macro cmd(text) -%}
+<span class="su-cmd"><code>{{ text }}</code><button type="button" class="su-copy" data-copy="{{ text }}" aria-label="Copy command">Copy</button></span>
+{%- endmacro %}
+
+{% macro fix(f) -%}
+  {% if f.kind == "route" and f.text == "/setup/starter-prefs" %}
+    <form method="post" action="/setup/starter-prefs" class="su-form">
+      <button type="submit">Create a starter preferences file</button>
+      <span class="muted">Then fill it in on Prefs.</span>
+    </form>
+  {% elif f.kind == "route" and f.text == "/setup/resume" %}
+    {# the row itself renders the upload form #}
+  {% elif f.kind == "route" and f.text != "/setup" %}
+    <a href="{{ f.text }}">Open {{ f.text }}</a>
+  {% elif f.kind == "link" and (f.text.startswith("https://") or f.text.startswith("/")) %}
+    <a href="{{ f.text }}" rel="noopener noreferrer">{{ f.text }}</a>
+  {% elif f.kind == "command" %}
+    {% if f.text.startswith(COMMAND_PREFIXES) %}{{ cmd(f.text) }}{% else %}<span>{{ f.text | replace("`", "") }}</span>{% endif %}
+  {% elif f.kind == "steps" %}
+    <span>{{ f.text | replace("`", "") }}</span>
+    {% if f.steps %}
+    <ol class="su-steps">
+      {% for s in f.steps %}
+      <li>{% if s.startswith(COMMAND_PREFIXES) %}{{ cmd(s) }}{% else %}{{ s | replace("`", "") }}{% endif %}</li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+  {% endif %}
+  {% if f.alt %}<div class="su-alt"><span class="muted">or</span> {{ fix(f.alt) }}</div>{% endif %}
+{%- endmacro %}
+
+{% set c = r.check %}
+{% macro body() %}
+  <p class="su-unlocks">{{ c.unlocks | replace("`", "") }}</p>
+  <p class="su-detail">{{ r.detail }}</p>
+  {% if c.source or r.restart %}<p class="su-source muted">{% if c.source %}From: {{ c.source }}. {% endif %}{% if r.restart %}Read when the console started ({{ started.isoformat() | localtime }}); after a change, restart: <code>{{ r.restart }}</code>.{% endif %}</p>{% endif %}
+  {% if r.waiting_on %}
+    <p class="su-wait">Waiting on step {{ r.waiting_on }}.</p>
+  {% else %}
+    {% if c.fix and not r.quiet %}
+    <div class="su-fix"><strong>Fix:</strong> {{ fix(c.fix) }}</div>
+    {% endif %}
+    {% if r.cloud_steps %}
+    <details class="su-cloud" open>
+      <summary>Create the Google OAuth client (about ten minutes, free)</summary>
+      <ol class="su-steps">
+        {% for s in r.cloud_steps %}
+        <li>{% if s.startswith("Then run: ") %}Then run: {{ cmd(s[10:]) }}{% else %}{{ s[3:] if s[0].isdigit() else s }}{% endif %}</li>
+        {% endfor %}
+      </ol>
+      <p class="muted">Google Cloud console: <a href="https://console.cloud.google.com/" rel="noopener noreferrer">console.cloud.google.com</a></p>
+    </details>
+    {% endif %}
+  {% endif %}
+  {% if c.id == "profile.resume" %}
+    <form method="post" action="/setup/resume" enctype="multipart/form-data" class="su-form"
+          hx-post="/setup/resume" hx-encoding="multipart/form-data" hx-target="#row-profile-resume" hx-swap="outerHTML">
+      <label>Resume (.md or .txt, up to 1 MB) <input type="file" name="file" accept=".md,.markdown,.txt"></label>
+      <button type="submit">Upload</button>
+    </form>
+  {% endif %}
+  {% if r.upload_error %}<p class="su-error" role="alert">{{ r.upload_error }}</p>{% endif %}
+  {% if r.dismissible %}
+  <form method="post" action="/setup/dismiss" class="su-form su-hide">
+    <input type="hidden" name="check_id" value="{{ c.id }}">
+    <button type="submit" class="linklike">Hide this for now</button> <span class="muted">(it returns if its status changes)</span>
+  </form>
+  {% endif %}
+{% endmacro %}
+
+<article class="su-row su-{{ c.status }}{% if c.due %} su-due{% endif %}" id="row-{{ c.id | replace('.', '-') }}"{% if c.step %} data-step="{{ c.step }}"{% endif %}>
+{% if r.quiet and not show_all %}
+  <details>
+    <summary><span class="su-icon" aria-hidden="true">{{ r.icon }}</span> <span class="su-word">{{ r.word }}</span> <span class="su-title">{% if c.step %}Step {{ c.step }}: {% endif %}{{ c.title }}</span> <span class="su-brief muted">{{ r.detail }}</span></summary>
+    {{ body() }}
+  </details>
+{% else %}
+  <header class="su-head"><span class="su-icon" aria-hidden="true">{{ r.icon }}</span> <span class="su-word">{{ r.word }}</span> <span class="su-title">{% if c.step %}Step {{ c.step }}: {% endif %}{{ c.title }}</span> <span class="su-level muted">{{ c.level }}</span></header>
+  {{ body() }}
+{% endif %}
+</article>

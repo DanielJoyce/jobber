@@ -1,0 +1,7 @@
+<p class="muted" id="su-summary"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if not essentials_ok %}Something essential is missing; rows marked missing or broken need action.
+  {% elif todo_count %}Everything essential is in place. {{ todo_count }} item{{ "" if todo_count == 1 else "s" }} could still use attention.
+  {% else %}Everything checks out.{% endif %}
+  {% if mode == "container" %}Paths show the host path with the container path in brackets.{% endif %}
+  {% if show_all %}<a href="/setup">Collapse finished items</a>{% else %}<a href="/setup?all=1">Show everything</a>{% endif %}
+</p>
