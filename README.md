@@ -84,9 +84,9 @@ pages are served by the console at `http://127.0.0.1:8808/help`.
 
 ## Choosing a scorer
 
-`scoring.screen_scorer` and `deep_scorer` in `config.toml` take `<provider>:<model>`. The
-providers, keys, the `jev:` rule and the Anthropic key are in
-[Choosing a scorer](src/jobhunter/console/help/scorers.md).
+Moved to the help page *Choosing a scorer* (see the Help table above, and
+`/help/scorers` in the console). It covers `scoring.screen_scorer` and `deep_scorer`, the
+providers and keys, the `jev:` rule and the Anthropic key.
 
 ## Running in containers
 
