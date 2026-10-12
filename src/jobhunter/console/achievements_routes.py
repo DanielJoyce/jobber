@@ -112,9 +112,7 @@ def register(
 
     @app.post("/achievements/seen")
     def achievements_seen(conn: Conn, form: MultiForm) -> Response:
-        ids = [
-            int(x) for v in form.get("ids", []) for x in v.split(",") if x.strip().isdigit()
-        ]
+        ids = [int(x) for v in form.get("ids", []) for x in v.split(",") if x.strip().isdigit()]
         engine.mark_seen(conn, ids, now())
         return Response(status_code=204, headers={"HX-Trigger": "jh-activity"})
 
