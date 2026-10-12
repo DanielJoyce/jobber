@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><title>Job Application for Synthetic Engineer at Acme Synthetic</title></head>
+<body>
+<div id="app_body">
+  <h1 class="app-title">Synthetic Engineer</h1>
+  <a id="apply_button" class="button" href="#app">Apply Now</a>
+  <div id="application">
+    <form id="application_form" action="/acme/jobs/4012345" method="post">
+      <div class="field"><label for="first_name">First Name *</label>
+        <input id="first_name" name="job_application[first_name]" type="text"></div>
+      <div class="field"><label for="last_name">Last Name *</label>
+        <input id="last_name" name="job_application[last_name]" type="text"></div>
+      <div class="field"><label for="email">Email *</label>
+        <input id="email" name="job_application[email]" type="text"></div>
+      <div class="field"><label for="phone">Phone</label>
+        <input id="phone" name="job_application[phone]" type="text"></div>
+      <div class="field"><label for="job_application_location">Location (City)</label>
+        <input id="job_application_location" name="job_application[location]" type="text"></div>
+      <div id="resume_fieldset" class="field"><label>Resume/CV *</label>
+        <div id="s3_upload_for_resume"><input type="file" name="file"></div>
+        <button type="button" data-source="attach">Attach</button>
+        <a href="#" data-source="paste">or enter manually</a></div>
+      <div id="cover_letter_fieldset" class="field"><label>Cover Letter</label>
+        <div id="s3_upload_for_cover_letter"><input type="file" name="file"></div>
+        <button type="button" data-source="attach">Attach</button>
+        <a href="#" data-source="paste">or enter manually</a>
+        <textarea id="cover_letter_text" name="job_application[cover_letter_text]"></textarea>
+      </div>
+      <div class="field"><label for="q0">LinkedIn Profile</label>
+        <input id="q0" name="job_application[answers_attributes][0][text_value]" type="text"></div>
+      <div class="field"><label for="q1">What are your salary expectations?</label>
+        <input id="q1" name="job_application[answers_attributes][1][text_value]" type="text"></div>
+      <input id="submit_app" type="button" value="Submit Application">
+    </form>
+  </div>
+</div>
+</body></html>

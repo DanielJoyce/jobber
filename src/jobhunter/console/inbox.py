@@ -367,13 +367,15 @@ def _remove_label(conn: sqlite3.Connection, group_id: int) -> None:
         ).fetchone()[0]
         # A mail proposal about this application keeps it (accepting it needs the row), and so
         # does an assisted-apply packet (specs/017): it is work the user started on it. So does
-        # a follow-up history (specs/021 followup_log), like a contact.
+        # a follow-up history (specs/021 followup_log), like a contact, and a fill session
+        # (specs/022).
         others = conn.execute(
             "SELECT (SELECT COUNT(*) FROM contact WHERE application_id = :a) + "
             "(SELECT COUNT(*) FROM attachment WHERE application_id = :a) + "
             "(SELECT COUNT(*) FROM mail_proposal WHERE application_id = :a) + "
             "(SELECT COUNT(*) FROM application_packet WHERE application_id = :a) + "
-            "(SELECT COUNT(*) FROM followup_log WHERE application_id = :a)",
+            "(SELECT COUNT(*) FROM followup_log WHERE application_id = :a) + "
+            "(SELECT COUNT(*) FROM fill_session WHERE application_id = :a)",
             {"a": app["id"]},
         ).fetchone()[0]
         mine = conn.execute(

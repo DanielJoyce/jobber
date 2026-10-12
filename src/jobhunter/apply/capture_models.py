@@ -35,6 +35,9 @@ ActionId = Annotated[
     ),
 ]
 GroupId = Annotated[int, Field(ge=1, le=2**53)]
+# chrome.tabs ids; TAB_ID_NONE (-1) is no tab
+TabId = Annotated[int, Field(strict=True, ge=0, le=2**31 - 1)]
+SessionId = Annotated[int, Field(strict=True, ge=1, le=2**53)]
 Trigger = Literal["menu-selection", "menu-page", "popup"]
 ApplyMode = Literal["easy_apply", "offsite", "unknown"]
 Outcome = Literal["added", "existing", "possible", "previewed", "linked", "same_job"]
@@ -182,6 +185,30 @@ class DraftGenerateRequest(Strict):
     runner: Runner | None = None
     token: Short
     confirm_paid: bool = False
+
+
+class MatchRequest(Strict):
+    """Which job a form belongs to (specs/022 "Matching the page to a job"). Sent by the
+    service worker, never relayed from page content: ``frame_url`` is ``sender.url`` of the
+    announcing frame or the URL the worker's frame registry holds for it; ``tab_id`` is
+    ``sender.tab.id`` for a content script, or the tab bound to the side panel or popup window.
+    Unknown fields are refused and the ids are strict integers, so nothing page-supplied can
+    ride along as a tab or session id."""
+
+    frame_url: Url
+    tab_id: TabId | None = None
+    session_id: SessionId | None = None
+
+
+class PickRequest(Strict):
+    """Your pick (or Add this job) for the frame's posting: remembered in ``ats_posting_ref``.
+    Sent from an extension page; ``frame_url`` is the frame's ``sender.url`` from the worker's
+    frame registry, never a URL the page reported."""
+
+    action_id: ActionId
+    frame_url: Url
+    group_id: GroupId
+    set_by: Literal["pick", "add"] = "pick"
 
 
 class PairRequest(Strict):
@@ -356,6 +383,34 @@ class VersionResponse(Strict):
     notice_hosts: list[str]  # regular expressions over the host, JS-compatible
 
 
+class MatchCandidate(Strict):
+    group_id: int
+    title: str
+    employer: str
+
+
+class MatchResponse(Strict):
+    decided: bool
+    rule: int  # 1-4: the matching rule that decided; 5: nothing decided, you pick
+    kind: Literal["ats", "generic"]
+    ats: str
+    variant: str | None = None
+    posting_key: str | None = None
+    identifies_posting: bool
+    group_id: int | None = None
+    application_id: int | None = None
+    session_id: int | None = None
+    reason: str
+    candidates: list[MatchCandidate] = Field(default_factory=list)
+
+
+class PickResponse(Strict):
+    group_id: int
+    job_id: int
+    posting_key: str | None = None
+    remembered: bool
+
+
 class PairResponse(Strict):
     token: str
     extension_id: str
@@ -443,6 +498,8 @@ ROUTES: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
     "packets/{id}/estimate": (DraftRequest, (DraftEstimateResponse, DraftError)),
     "packets/{id}/generate": (DraftGenerateRequest, (DraftAccepted, DraftError)),
     "packets/{id}/draft-status": (DraftRequest, (DraftStatusResponse, DraftError)),
+    "match": (MatchRequest, (MatchResponse,)),
+    "match/pick": (PickRequest, (PickResponse, GoneResponse)),
 }
 
 

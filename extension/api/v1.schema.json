@@ -3212,6 +3212,297 @@
         }
       }
     },
+    "/ext/v1/match": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "Which job a form belongs to (specs/022 \"Matching the page to a job\"). Sent by the\nservice worker, never relayed from page content: ``frame_url`` is ``sender.url`` of the\nannouncing frame or the URL the worker's frame registry holds for it; ``tab_id`` is\n``sender.tab.id`` for a content script, or the tab bound to the side panel or popup window.\nUnknown fields are refused and the ids are strict integers, so nothing page-supplied can\nride along as a tab or session id.",
+        "properties": {
+          "frame_url": {
+            "maxLength": 2048,
+            "title": "Frame Url",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740992,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "tab_id": {
+            "anyOf": [
+              {
+                "maximum": 2147483647,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tab Id"
+          }
+        },
+        "required": [
+          "frame_url"
+        ],
+        "title": "MatchRequest",
+        "type": "object"
+      },
+      "responses": {
+        "MatchResponse": {
+          "$defs": {
+            "MatchCandidate": {
+              "additionalProperties": false,
+              "properties": {
+                "employer": {
+                  "title": "Employer",
+                  "type": "string"
+                },
+                "group_id": {
+                  "title": "Group Id",
+                  "type": "integer"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "group_id",
+                "title",
+                "employer"
+              ],
+              "title": "MatchCandidate",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "application_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Application Id"
+            },
+            "ats": {
+              "title": "Ats",
+              "type": "string"
+            },
+            "candidates": {
+              "items": {
+                "$ref": "#/$defs/MatchCandidate"
+              },
+              "title": "Candidates",
+              "type": "array"
+            },
+            "decided": {
+              "title": "Decided",
+              "type": "boolean"
+            },
+            "group_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Group Id"
+            },
+            "identifies_posting": {
+              "title": "Identifies Posting",
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "ats",
+                "generic"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "posting_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Posting Key"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "rule": {
+              "title": "Rule",
+              "type": "integer"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "variant": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Variant"
+            }
+          },
+          "required": [
+            "decided",
+            "rule",
+            "kind",
+            "ats",
+            "identifies_posting",
+            "reason"
+          ],
+          "title": "MatchResponse",
+          "type": "object"
+        }
+      }
+    },
+    "/ext/v1/match/pick": {
+      "method": "POST",
+      "request": {
+        "additionalProperties": false,
+        "description": "Your pick (or Add this job) for the frame's posting: remembered in ``ats_posting_ref``.\nSent from an extension page; ``frame_url`` is the frame's ``sender.url`` from the worker's\nframe registry, never a URL the page reported.",
+        "properties": {
+          "action_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "frame_url": {
+            "maxLength": 2048,
+            "title": "Frame Url",
+            "type": "string"
+          },
+          "group_id": {
+            "maximum": 9007199254740992,
+            "minimum": 1,
+            "title": "Group Id",
+            "type": "integer"
+          },
+          "set_by": {
+            "default": "pick",
+            "enum": [
+              "pick",
+              "add"
+            ],
+            "title": "Set By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "frame_url",
+          "group_id"
+        ],
+        "title": "PickRequest",
+        "type": "object"
+      },
+      "responses": {
+        "GoneResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "current_group": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Group"
+            },
+            "gone": {
+              "const": true,
+              "title": "Gone",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "title": "GoneResponse",
+          "type": "object"
+        },
+        "PickResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "group_id": {
+              "title": "Group Id",
+              "type": "integer"
+            },
+            "job_id": {
+              "title": "Job Id",
+              "type": "integer"
+            },
+            "posting_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Posting Key"
+            },
+            "remembered": {
+              "title": "Remembered",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "group_id",
+            "job_id",
+            "remembered"
+          ],
+          "title": "PickResponse",
+          "type": "object"
+        }
+      }
+    },
     "/ext/v1/packets/{id}/draft-status": {
       "method": "POST",
       "request": {
