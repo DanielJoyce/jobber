@@ -96,6 +96,7 @@ CHECK_IDS = (
     "scorer.screen",
     "scorer.caps",
     "scorer.deep",
+    "models.choices",
     "source.usajobs",
     "run.schedule",
     "run.last",
@@ -521,8 +522,13 @@ def _scorer_row(
     unlocks: str,
 ) -> Check:
     scoring = ctx.settings.scoring
-    explicit = field_name in scoring.model_fields_set
-    where = "config.toml" if explicit else "default"
+    layers = ctx.settings.models_layers
+    if layers is not None:
+        where = layers.source("scoring", field_name)
+        if where in ("override", "models.toml (invalid)"):
+            where = "models.toml" if where != "override" else "config.toml"
+    else:
+        where = "config.toml" if field_name in scoring.model_fields_set else "default"
     problem = scoring.scorer_problems().get(field_name)
     if problem and field_name in scoring._blocked:
         # models.toml set it to an invalid value: the use is blocked, not fallen back
@@ -532,13 +538,15 @@ def _scorer_row(
             Fix("command", "jobhunter models show, then jobhunter models reset or set"),
             "models.toml", reads_at_start=True,
         )  # fmt: skip
+    if problem and where == "default":
+        where = "config.toml"  # an invalid value was written somewhere; code defaults are valid
     if problem:
         return Check(
             check_id, SCORING, level, BROKEN, False, title,
-            f"{field_name} is not a valid scorer spec ({where}); fix it in config.toml",
+            f"{field_name} is not a valid scorer spec ({where}); fix it in {where}",
             unlocks,
-            Fix("command", "edit [scoring] in config.toml"),
-            "config.toml", reads_at_start=True,
+            Fix("command", f"edit [scoring] in {where}"),
+            where, reads_at_start=True,
         )  # fmt: skip
     cred = _credential(ctx, spec)
     provider = _provider(spec)
@@ -552,7 +560,7 @@ def _scorer_row(
             presence = _presence(ctx, var, None)
             how, source = presence.detail, presence.source or "env"
         else:
-            how, source = cred.note, "config.toml"
+            how, source = cred.note, where
         note = f"; {cred.note}" if cred.note and cred.note != scorers.SDK_NOTE and var else ""
         return Check(
             check_id, SCORING, level, OK, False, title, f"{spec}; {how}{note}", unlocks,
@@ -844,6 +852,35 @@ def _screen_scorer(ctx: _Ctx) -> Check:
         spec=ctx.settings.scoring.screen_scorer, field_name="screen_scorer", level=ESSENTIAL,
         unlocks="Fit scores and buckets for new jobs",
     )  # fmt: skip
+
+
+def _models_choices(ctx: _Ctx) -> Check:
+    """The 019 inventory row "Model choices": models.toml unreadable, a key it holds that is
+    invalid (a spending use blocked, a drafting key fallen back), or a key this version does
+    not know. Messages come from ``load_layers`` and never carry a value other than a scorer
+    spec or model id (019 B)."""
+    title, unlocks = "Model choices", "Choosing models on /models and `jobhunter models`"
+    layers = ctx.settings.models_layers
+    if layers is None or not layers.exists:
+        return Check("models.choices", SCORING, RECOMMENDED, OK, False, title,
+                     "no models.toml; config.toml and the defaults decide", unlocks, None,
+                     "default", reads_at_start=True)  # fmt: skip
+    fix = Fix("command", "jobhunter models show, then jobhunter models reset or set")
+    if layers.broken or layers.blocked or layers.notices or layers.invalid:
+        lines = [p.message for p in layers.problems if p.kind != "unknown"]
+        lines += list(layers.blocked.values()) + layers.notices
+        detail = "; ".join(dict.fromkeys(lines)) or "models.toml has invalid settings"
+        return Check("models.choices", SCORING, RECOMMENDED, BROKEN, False, title, detail,
+                     unlocks, fix, "models.toml", reads_at_start=True)  # fmt: skip
+    unknown = [p.message for p in layers.problems if p.kind == "unknown"]
+    if unknown:
+        return Check("models.choices", SCORING, RECOMMENDED, OK, False, title,
+                     "; ".join(unknown) + " (ignored)", unlocks, None, "models.toml",
+                     reads_at_start=True)  # fmt: skip
+    count = sum(len(v) for v in layers.layer.values())
+    return Check("models.choices", SCORING, RECOMMENDED, OK, False, title,
+                 f"models.toml sets {count} setting{'s' if count != 1 else ''}", unlocks, None,
+                 "models.toml", reads_at_start=True)  # fmt: skip
 
 
 def _caps(ctx: _Ctx) -> Check:
@@ -1416,6 +1453,7 @@ _CHECKS: tuple[tuple[Callable[[_Ctx], Check], bool], ...] = (
     (_screen_scorer, True),
     (_caps, True),
     (_deep_scorer, True),
+    (_models_choices, True),
     (_usajobs, True),
     (_schedule, True),
     (_last_run, True),
