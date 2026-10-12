@@ -18,7 +18,13 @@ Rules (specs/020 "Console rules"):
 - No value other than a model id or scorer spec is ever rendered (``config.shown_value``): an
   invalid value in models.toml, or something key-shaped in config.toml, shows as a placeholder.
 
-Save + re-run is M5, the banners on other pages M7, the live S6 checks 019 S6.
+Save + re-run (M5) on the screening and deep rows saves exactly like Save, then opens that
+use's existing confirm step inline and never runs anything by itself: the re-score panel for
+the saved screening model (its Run posts to ``/models/screen/rescore/run``, which checks the
+saved value is still in effect and runs the confirmed plan token through the one
+``RescoreManager``), or the deep panel (M11's ``GET /deep/panel``) when that route exists, else
+the CLI commands. These paid routes need a loopback peer and are refused under
+``--allow-remote``. The banners on other pages are M7, the live S6 checks 019 S6.
 """
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local annotations.
@@ -77,6 +83,8 @@ ALSO_USED_BY = {
 # Typical request sizes for the drafting estimate, as the packet page uses (packet_docs).
 TYPICAL_CHARS = {"resume": 32_000, "cover_letter": 36_000, "question_draft": 20_000}
 KIND_WORDS = {"resume": "a resume", "cover_letter": "a letter", "question_draft": "an answer"}
+RERUN_ROWS = ("screen", "deep")
+DEEP_PANEL_URL = "/deep/panel"  # 020 M11's deep panel; used only when the route exists
 LOCAL_IDS_MAX = 50
 LOCAL_ID_CHARS = 200
 HIDDEN = "<a value that cannot be shown>"
@@ -192,6 +200,10 @@ class RowState:
     # honoured only for exactly that value: a changed value is judged again.
     approve: dict[str, str] = field(default_factory=dict)
     effect: list[str] = field(default_factory=list)
+    rerun: bool = False  # Save + re-run was pressed and a question is pending: carry it
+    rerun_open: str = ""  # the row whose confirm step is open after a Save + re-run
+    rescore: dict[str, Any] | None = None  # the re-score panel's context (screening)
+    deep_panel: str = ""  # the deep panel's URL when the console has one (M11)
 
 
 @dataclass
@@ -989,6 +1001,75 @@ def register(
         context["primary"] = row or "history"
         return render("_models_write.html", request, context, outcome.status)
 
+    # ── Save + re-run (M5) ──
+
+    def rerun_refusal(request: Request) -> Response | None:
+        """Save + re-run opens a paid confirm step: loopback peer only, and off under
+        ``--allow-remote`` (the CLI asks its own y/N there)."""
+        if not peer_is_loopback(request):
+            return refuse_peer()
+        if request.app.state.allow_remote:
+            return PlainTextResponse(
+                "refused: a re-score or deep pass from /models is off under --allow-remote; "
+                "run `jobhunter score --rescore recent` (or `--deep N`) on the machine running "
+                "the console, which shows the estimate and asks first",
+                status_code=403,
+            )
+        return None
+
+    def has_deep_panel(request: Request) -> bool:
+        return any(getattr(r, "path", None) == DEEP_PANEL_URL for r in request.app.routes)
+
+    def open_rerun(request: Request, conn: sqlite3.Connection, row: str, state: RowState) -> None:
+        """After a successful Save + re-run: put the use's confirm step on the row. Plans
+        only (the re-score panel's free prefilter catch-up); never starts a run."""
+        state.rerun_open = row
+        if row == "screen":
+            spec = request.app.state.settings.scoring.screen_scorer
+            state.rescore = request.app.state.rescore_panel_context(
+                request, conn, fixed=spec, via="models"
+            )
+        elif has_deep_panel(request):
+            state.deep_panel = DEEP_PANEL_URL
+
+    def screen_panel(request: Request, conn: sqlite3.Connection, **kw: Any) -> Response:
+        spec = request.app.state.settings.scoring.screen_scorer
+        return request.app.state.rescore_render_panel(request, conn, fixed=spec, via="models", **kw)
+
+    @app.get("/models/screen/rescore", response_class=HTMLResponse)
+    def models_rescore_panel(request: Request, conn: Conn, scope: str | None = None) -> Response:
+        """The /models re-score panel for the screening model in effect (a scope change)."""
+        if (refusal := rerun_refusal(request)) is not None:
+            return refusal
+        return screen_panel(request, conn, scope=scope)
+
+    @app.post("/models/screen/rescore/run", response_class=HTMLResponse)
+    async def models_rescore_run(request: Request, conn: Conn) -> Response:
+        """The confirm of a Save + re-run. Runs only when the model the panel was built for
+        (``saved``) is still the screening model in effect and the plan token matches the plan
+        built now; the cap check, the run lock and single flight are ``RescoreManager``'s."""
+        if (refusal := rerun_refusal(request)) is not None:
+            return refusal
+        form, _getlist = await read_form(request)
+        saved = str(form.get("saved") or "")
+        scope = str(form.get("scope") or "recent")
+        token = str(form.get("plan") or "")
+        current = request.app.state.settings.scoring.screen_scorer
+        if not saved or saved != current:
+            shown = text_of(current) or "a blocked value"
+            return screen_panel(
+                request,
+                conn,
+                scope=scope,
+                message=(
+                    f"The screening model changed since this re-score was planned (it is now "
+                    f"{shown}). Nothing was run; check the new numbers and confirm again."
+                ),
+            )
+        return request.app.state.rescore_run_confirmed(
+            request, conn, scope=scope, spec=saved, token=token, fixed=saved, via="models"
+        )
+
     # Registered last (below): "/models/{row}" would otherwise match /models/load and friends.
     async def models_save(request: Request, row: str) -> Response:
         if row not in ROWS:
@@ -996,6 +1077,9 @@ def register(
         if not peer_is_loopback(request):
             return refuse_peer()
         form, getlist = await read_form(request)
+        rerun = str(form.get("rerun", "")) == "1" and row in RERUN_ROWS
+        if rerun and (refusal := rerun_refusal(request)) is not None:
+            return refusal  # before anything is written
         values, shown, refused = candidate_from(form, getlist, row)
         local_ids = clean_local_ids(getlist("local_id")) or None
 
@@ -1024,6 +1108,10 @@ def register(
                         queued=str(form.get("queued", "")), approved=approved_from(form),
                         local_ids=local_ids, state=state, action=f"/models/{row}",
                     )  # fmt: skip
+                if rerun and outcome.saved:
+                    open_rerun(request, conn, row, outcome.state)
+                elif rerun:
+                    outcome.state.rerun = True  # a question is pending: answer it, then open
                 return write_response(request, conn, outcome, row=row, local_ids=local_ids,
                                       posted_digest=digest_of(form))  # fmt: skip
             except mc.ModelsFileError as exc:

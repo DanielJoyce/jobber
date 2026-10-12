@@ -41,6 +41,9 @@ SCOPE_LABELS = {
 }
 ANTHROPIC_HAIKU = "anthropic:claude-haiku-5-5"
 LIVE = ("pending", "running")
+# The /models Save + re-run variant of the panel (specs/020 M5) posts to its own routes.
+VIA_RUN_URL = {"models": "/models/screen/rescore/run"}
+VIA_PANEL_URL = {"models": "/models/screen/rescore"}
 
 
 def available_scorers(scoring: Any, env: Mapping[str, str] | None = None) -> list[tuple[str, str]]:
@@ -284,11 +287,21 @@ def register(
         message: str | None = None,
         active_id: int | None = None,
         request_id: int | None = None,
+        fixed: str | None = None,
+        via: str = "",
     ) -> dict[str, Any]:
+        """The panel's context. ``fixed`` (with ``via="models"``) is the /models Save + re-run
+        variant (specs/020 M5): the scorer is the model just saved, with no picker, and the
+        form posts to the /models route that checks it is still the saved value."""
         settings = request.app.state.settings
         st = state_of(request)
-        scorers = available_scorers(settings.scoring)
-        spec = scorer if scorer in dict(scorers) else scorers[0][0]
+        if fixed is not None:
+            scorers = [(fixed, "just saved on /models")]
+            spec = fixed
+            request_id = None  # queued requests are run from /prefs
+        else:
+            scorers = available_scorers(settings.scoring)
+            spec = scorer if scorer in dict(scorers) else scorers[0][0]
         scope = scope if scope in rs.SCOPES else "recent"
         queued = rs.get_request(conn, request_id) if request_id is not None else None
         if queued is not None and queued["status"] != "pending":
@@ -327,6 +340,10 @@ def register(
             "pending": conn.execute(
                 "SELECT * FROM rescore_request WHERE status = 'pending' ORDER BY id DESC"
             ).fetchall(),
+            "via": via,
+            "fixed": fixed is not None,
+            "run_url": VIA_RUN_URL.get(via, "/prefs/rescore/run"),
+            "panel_url": VIA_PANEL_URL.get(via, "/prefs/rescore/panel"),
         }
 
     def render_panel(request: Request, conn: sqlite3.Connection, **kw: Any) -> HTMLResponse:
@@ -359,16 +376,37 @@ def register(
         token = pf.form_value(form, "plan", "")
         queued_id = int(raw_id) if raw_id.isdigit() else None
         settings = request.app.state.settings
-        st = state_of(request)
-        if st.kind != "ok":
+        if state_of(request).kind != "ok":
             return render_panel(request, conn, message="Fix the preferences file first.")
         spec = (
             spec_in
             if spec_in in dict(available_scorers(settings.scoring))
             else (settings.scoring.screen_scorer)
         )
+        return run_confirmed(request, conn, scope=scope, spec=spec, token=token,
+                             queued_id=queued_id)  # fmt: skip
+
+    def run_confirmed(
+        request: Request,
+        conn: sqlite3.Connection,
+        *,
+        scope: str,
+        spec: str,
+        token: str,
+        queued_id: int | None = None,
+        **variant: Any,
+    ) -> HTMLResponse:
+        """Start the run the user confirmed (``token`` is that plan's), through the one
+        ``RescoreManager``: single flight, the run lock, the plan's cap check and ``max_usd``.
+        ``variant`` (``fixed``, ``via``) renders the /models panel instead of the /prefs one."""
+        settings = request.app.state.settings
+        st = state_of(request)
+        if st.kind != "ok":
+            return render_panel(request, conn, message="Fix the preferences file first.",
+                                **variant)  # fmt: skip
         if problem := _spec_problem(spec, scoring=settings.scoring):
-            return render_panel(request, conn, scope=scope, scorer=spec, message=problem)
+            return render_panel(request, conn, scope=scope, scorer=spec, message=problem,
+                                **variant)  # fmt: skip
         try:
             rid = request.app.state.rescore.start(
                 conn,
@@ -387,26 +425,36 @@ def register(
             return refused(render_panel(request, conn, scope=scope, scorer=spec, message=str(exc)))
         except rs.RescoreBusy as exc:
             return render_panel(
-                request, conn, message=f"{exc} Showing its progress.", active_id=exc.request_id
-            )
+                request, conn, message=f"{exc} Showing its progress.", active_id=exc.request_id,
+                **variant,
+            )  # fmt: skip
         except (rs.RescoreRefused, ScorerError) as exc:
             return render_panel(
-                request, conn, scope=scope, scorer=spec, message=str(exc), request_id=queued_id
-            )
-        return render_panel(request, conn, active_id=rid, scope=scope, scorer=spec)
+                request, conn, scope=scope, scorer=spec, message=str(exc), request_id=queued_id,
+                **variant,
+            )  # fmt: skip
+        return render_panel(request, conn, active_id=rid, scope=scope, scorer=spec, **variant)
+
+    app.state.rescore_run_confirmed = run_confirmed
+    app.state.rescore_render_panel = render_panel
 
     @app.get("/prefs/rescore/progress/{request_id}", response_class=HTMLResponse)
-    def progress(request: Request, conn: Conn, request_id: int) -> HTMLResponse:
+    def progress(request: Request, conn: Conn, request_id: int, via: str = "") -> HTMLResponse:
         rs.running_request(conn, now())  # a run whose thread died is shown as interrupted
         row = rs.get_request(conn, request_id)
+        via = via if via in VIA_RUN_URL else ""
         if request.headers.get("hx-request") and (row is None or row["status"] not in LIVE):
             # The poll saw the run end: redraw the whole panel (the form comes back and the
-            # "a re-score is running" line goes), not just this fragment.
-            response = render_panel(request, conn, active_id=request_id)
+            # "a re-score is running" line goes), not just this fragment. From /models, the
+            # /models variant for the screening model in effect now.
+            variant: dict[str, Any] = {}
+            if via:
+                variant = {"fixed": request.app.state.settings.scoring.screen_scorer, "via": via}
+            response = render_panel(request, conn, active_id=request_id, **variant)
             response.headers["HX-Retarget"] = "#rescore-panel"
             response.headers["HX-Reswap"] = "innerHTML"
             return response
-        return templates.TemplateResponse(request, "_rescore_progress.html", {"r": row})
+        return templates.TemplateResponse(request, "_rescore_progress.html", {"r": row, "via": via})
 
     @app.post("/prefs/rescore/{request_id}/cancel", response_class=HTMLResponse)
     def cancel(request: Request, conn: Conn, request_id: int) -> HTMLResponse:

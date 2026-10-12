@@ -51,10 +51,18 @@
   </div>
   {% endif %}
 </form>
+{% set s = r.state %}
+{% if s.rerun_open == "screen" and s.rescore %}
+<div class="mo-rerun" id="models-rerun-screen">
+  <h3>Re-score with {{ s.rescore.scorer_shown }}</h3>
+  <p class="muted">Nothing runs until you press Re-score now and confirm. The model stays saved either way.</p>
+  <div id="rescore-panel">{% with rs = s.rescore %}{% include "_rescore_panel.html" %}{% endwith %}</div>
+</div>
+{% endif %}
 {% if r.key == "deep" %}
-{#- The deep pass panel (specs/020 M11): loads on click and only plans; a run needs its own confirm. -#}
+{#- The deep pass panel (specs/020 M11): loads on click, or right after Save + deep-score (M5), and only plans; a run needs its own confirm. -#}
 <div class="deep-section" id="models-deep-run">
-  <div id="deep-panel" hx-get="/deep/panel?mode=next" hx-trigger="click from:#deep-open" hx-swap="innerHTML">
+  <div id="deep-panel" hx-get="/deep/panel?mode=next" hx-trigger="{% if s.rerun_open == 'deep' %}load, {% endif %}click from:#deep-open" hx-swap="innerHTML">
     <p class="muted">Run the deep pass with the saved model. It may use more money than screening, and runs only when you confirm.</p>
     <button type="button" class="button" id="deep-open">Deep-score&hellip;</button>
   </div>

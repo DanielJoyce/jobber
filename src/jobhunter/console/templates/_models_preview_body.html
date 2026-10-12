@@ -17,6 +17,7 @@
 {% set verb = "Reset" if action.endswith("/reset") else "Save" %}
 <div class="mo-actions">
   {% for name, value in s.approve.items() %}<input type="hidden" name="force_for_{{ name }}" value="{{ value }}">{% endfor %}
+  {% if s.rerun and (s.queued_line or s.reasons) %}<input type="hidden" name="rerun" value="1">{% endif %}
   {% if s.queued_line %}
     <button type="submit" name="queued" value="new" formaction="{{ action }}" hx-post="{{ action }}" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids" hx-sync="closest form:queue all">{{ verb }}; queued re-scores use the new model</button>
     {% if s.queued_old %}
@@ -26,6 +27,9 @@
     <button type="submit" class="mo-anyway">Save anyway</button>
   {% else %}
     <button type="submit" class="mo-save">Save</button>
+    {% if r.key in ("screen", "deep") and not ctx.allow_remote %}
+    <button type="submit" name="rerun" value="1" class="mo-rerun-button">{{ "Save + re-score" if r.key == "screen" else "Save + deep-score" }}&hellip;</button>
+    {% endif %}
   {% endif %}
   {% if r.can_reset %}
     <button type="submit" formaction="/models/{{ r.key }}/reset" hx-post="/models/{{ r.key }}/reset" hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest" hx-sync="closest form:queue all">Reset</button>
