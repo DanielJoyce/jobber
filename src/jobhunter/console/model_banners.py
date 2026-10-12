@@ -31,7 +31,10 @@ HELP_LINKS = {
         "Help: Claude Code login",
     ),
 }
-BLOCKED_HELP = ("/help/troubleshooting#a-model-use-is-blocked-by-the-saved-choice", "Help: troubleshooting")
+BLOCKED_HELP = (
+    "/help/troubleshooting#a-model-use-is-blocked-by-the-saved-choice",
+    "Help: troubleshooting",
+)
 FIELD_OF_USE = {ma.SCREEN: "screen_scorer", ma.DEEP: "deep_scorer"}
 COMMAND = "jobhunter models show"
 
