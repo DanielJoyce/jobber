@@ -16,8 +16,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from jobhunter.apply import paste
-from jobhunter.console import capture_routes, detail
-from jobhunter.core.models import ApplyStatus
+from jobhunter.console import apply_bg, capture_routes, detail
+from jobhunter.core.models import ApplyLink, ApplyStatus
 from jobhunter.pipeline import applylink
 from jobhunter.pipeline.apply_rank import HostClasses
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
@@ -41,6 +41,39 @@ def register(
         injected = getattr(app.state, "ctx_factory", None)
         return injected or applylink.default_ctx_factory(app.state.settings, conn)
 
+    # Network work for apply links runs off the request thread (bug e0d047b): a request
+    # waits at most apply_bg.WAIT_S, then answers with the stored link.
+    worker = apply_bg.ApplyLinkWorker(lambda: app.state.conn_factory(), ctx_factory)
+    app.state.apply_link_worker = worker
+
+    def walk(group_id: int, legacy: bool, at: datetime) -> apply_bg.Work:
+        """Resolve a group with no row, or again for an older login-wall row (334d9eb).
+        Returns whether it settled the link (else the worker backs the group off)."""
+
+        def work(c: sqlite3.Connection, cf: applylink.CtxFactory) -> bool:
+            if legacy:
+                link = applylink.reresolve_legacy(c, group_id, now=at, ctx_factory=cf)
+                return link is not None and not applylink.needs_reresolve(link)
+            try:
+                applylink.resolve_group(c, group_id, now=at, ctx_factory=cf)
+            except ValueError:
+                return False  # no usable URL: Open posting stays
+            return True
+
+        return work
+
+    def reverify(group_id: int, at: datetime) -> apply_bg.Work:
+        def work(c: sqlite3.Connection, cf: applylink.CtxFactory) -> None:
+            applylink.reverify(c, group_id, now=at, ctx_factory=cf, max_age_hours=MAX_VERIFY_AGE_H)
+
+        return work
+
+    def freshen(group_id: int, link: ApplyLink | None, at: datetime) -> None:
+        """A stale live link on show: re-verify it in the background, without waiting, so a
+        click finds it fresh (bug e0d047b review F2c)."""
+        if link is not None and applylink.reverify_due(link, at, MAX_VERIFY_AGE_H):
+            worker.run(group_id, reverify(group_id, at), wait_s=0)
+
     def require_job(conn: sqlite3.Connection, group_id: int) -> sqlite3.Row:
         job = detail.group_job(conn, group_id)
         if job is None:
@@ -54,6 +87,7 @@ def register(
         if d is None:
             raise HTTPException(404, "no such job group")
         extras = capture_routes.job_extras(request, conn, d, now())
+        freshen(group_id, applylink.get_apply_link(conn, group_id), now())
         return templates.TemplateResponse(
             request,
             "job.html",
@@ -64,20 +98,16 @@ def register(
     def apply_button(request: Request, conn: Conn, group_id: int) -> HTMLResponse:
         require_job(conn, group_id)
         link = applylink.get_apply_link(conn, group_id)
-        if link is not None and applylink.needs_reresolve(link):
-            # An older row that took a login wall for the posting (334d9eb).
-            link = applylink.reresolve_legacy(
-                conn, group_id, now=now(), ctx_factory=ctx_factory(conn)
-            )
-        elif link is None:
-            try:
-                link = applylink.resolve_group(
-                    conn, group_id, now=now(), ctx_factory=ctx_factory(conn)
-                )
-            except ValueError:
-                link = applylink.get_apply_link(conn, group_id)
+        outcome: apply_bg.Outcome = "done"
+        if link is None or applylink.needs_reresolve(link):
+            # No row yet, or an older row that took a login wall for the posting (334d9eb).
+            outcome = worker.run(group_id, walk(group_id, link is not None, now()), walk=True)
+            link = applylink.get_apply_link(conn, group_id)
+        else:
+            freshen(group_id, link, now())
         btn = detail.apply_button(conn, group_id, now(), link, fetch_link=False)
-        btn.pending = False
+        # Still resolving: the fragment asks again (hx-trigger=load) and shows the stored link.
+        btn.pending = btn.pending and outcome == "pending"
         return templates.TemplateResponse(request, "_apply_button.html", {"b": btn})
 
     @app.get("/job/{group_id}/did-apply", response_class=HTMLResponse)
@@ -98,23 +128,25 @@ def register(
         if link is None and not is_http_url(detail.posting_url(job)):
             # A posting pasted without a URL (specs/017): its url is a placeholder, never opened.
             raise HTTPException(404, "this posting has no URL to open")
-        if link is not None and applylink.needs_reresolve(link):
-            # An older row that took a login wall for the posting (334d9eb): resolve it now,
-            # so Open application on a packet goes to the employer, not the sign-in page.
-            link = applylink.reresolve_legacy(
-                conn, group_id, now=current, ctx_factory=ctx_factory(conn)
-            )
-        if link is not None and link.status == ApplyStatus.live:
-            link = applylink.reverify(
-                conn,
-                group_id,
-                now=current,
-                ctx_factory=ctx_factory(conn),
-                max_age_hours=MAX_VERIFY_AGE_H,
-            )
+        legacy = link is not None and applylink.needs_reresolve(link)
+        if link is not None and (legacy or applylink.reverify_due(link, current, MAX_VERIFY_AGE_H)):
+            # An older row that took a login wall for the posting (334d9eb) resolves again,
+            # so Open application on a packet goes to the employer, not the sign-in page; a
+            # stale live link is re-verified. A walk waits at most apply_bg.WAIT_S, a
+            # re-verify (one host, two requests) apply_bg.REVERIFY_WAIT_S; then the work
+            # carries on in the background (bug e0d047b): the click goes to the best link
+            # already known instead of hanging on slow sites.
+            if legacy:
+                outcome = worker.run(group_id, walk(group_id, True, current), walk=True)
+            else:
+                outcome = worker.run(
+                    group_id, reverify(group_id, current), wait_s=apply_bg.REVERIFY_WAIT_S
+                )
+            if outcome == "done":
+                link = applylink.get_apply_link(conn, group_id)
         if link is not None and link.status == ApplyStatus.expired:
             original = link.final_url or link.start_url
-            detail.log_click(conn, group_id, original, "expired", current)
+            log_click(conn, group_id, original, "expired", current)
             # Only an ATS or the employer's site speaks for the job; a dead tracker or board
             # copy is just a link that stopped working (334d9eb).
             employer_page = HostClasses.load(conn, group_id).employer_or_ats(original)
@@ -136,8 +168,13 @@ def register(
         target = (link.final_url or link.start_url) if link else detail.posting_url(job)
         if link is not None and applylink.needs_reresolve(link):
             target = link.start_url  # an older row whose final URL is a login wall
-        detail.log_click(conn, group_id, target, "redirected", current)
+        log_click(conn, group_id, target, "redirected", current)
         return RedirectResponse(target, status_code=302)
+
+    def log_click(
+        conn: sqlite3.Connection, group_id: int, url: str, outcome: str, at: datetime
+    ) -> None:
+        apply_bg.log_click_safely(conn, app.state.conn_factory, group_id, url, outcome, at)
 
     @app.post("/job/{group_id}/apply-link")
     async def set_apply_link(request: Request, conn: Conn, group_id: int) -> Response:
