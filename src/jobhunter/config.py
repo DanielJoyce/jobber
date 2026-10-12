@@ -209,7 +209,7 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
 
     def q(text: str) -> str:
         # A message never quotes a value that looks like a key (019 B).
-        return "(value not shown)" if hidden_value(text) else text
+        return "(value not shown)" if text and shown_value(text) is None else text
 
     inner, inner_sep, rest = model.partition(":")
     if not sep:
@@ -505,43 +505,35 @@ _CHOICES = {"runner": ("cli", "api"), "effort": ("low", "medium", "high")}
 # A value may be echoed in a message only when it looks like a scorer spec or model id
 # (019 B: never a value except SHOWN_VALUES), and never when it looks like a key.
 _SHOWABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
-# A key prefix at the start or after a provider or path separator ("openrouter:sk-or-..."), with
-# enough characters after it to be a key: the long, distinctive prefixes need 8, the short ones
-# that a model name could begin with ("hf_tiny", "pat-7b", "rk_model") need 20.
-_ORIGINAL_PREFIXES = ("sk-", "sk_", "key-", "ghp_", "xox", "bearer")  # always hidden, as before
-_STRONG_PREFIXES = (
-    "gho_", "ghs_", "github_pat_", "glpat-", "aiza",
-    "pplx-", "fireworks_", "csk-", "nvapi-", "ya29.", "akia", "asia", "xai-", "gsk_",
-)  # fmt: skip
-_WEAK_PREFIXES = (
-    "key_", "hf_", "r8_", "fw_", "eyj", "pat-", "pa-", "tgp_", "rk_", "pk_", "sess-",
-)  # fmt: skip
-
-
-def _prefix_alt(prefixes: tuple[str, ...], tail: int) -> str:
-    return "(?:" + "|".join(re.escape(p) for p in prefixes) + f")[A-Za-z0-9_.+=-]{{{tail},}}"
-
-
+# What main always refused (and hid): these prefixes at the start or after ``:`` or ``/``, and the
+# words secret, token and password anywhere. Never widened: an existing models.toml must keep
+# loading after an upgrade.
+_ORIGINAL_PREFIXES = ("sk-", "sk_", "key-", "ghp_", "xox", "bearer")
 _SECRET_LOOKING = re.compile(
     r"(?i)(?:^|[:/])(?:"
     + "|".join(re.escape(p) for p in _ORIGINAL_PREFIXES)
-    + "|"
-    + _prefix_alt(_STRONG_PREFIXES, 8)
-    + "|"
-    + _prefix_alt(_WEAK_PREFIXES, 20)
     + r")|secret|token|password"
 )
+# Exact, case-sensitive key shapes, also refused. Each needs a separator-free tail of key length,
+# so model names that merely start like a prefix ("Aizawa-Llama-3-8B-JP", "hf_llama_3_8b",
+# "xai-grok-2-vision-1212", "pa-legal-assistant-7b") stay valid.
+_START = r"(?:^|[:/])"
+_EXACT_KEY_SHAPES = re.compile(
+    _START
+    + r"(?:(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}"
+    + r"|(?:hf_|pa-|pat-|key_|rk_|pk_|sess-|fw_|r8_|tgp_|gho_|ghs_|csk-)[A-Za-z0-9]{30,}"
+    + r"|github_pat_[A-Za-z0-9_]{50,}"
+    + r"|(?:xai-|nvapi-|pplx-|glpat-|gsk_)[A-Za-z0-9]{20,}"
+    + r"|ya29\.[A-Za-z0-9_-]{30,})(?![A-Za-z0-9_-])"
+)
 _HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
+_PINNED_HEX = re.compile(r"(?:@|sha\d+:)[0-9a-fA-F]{32,}")  # a commit pin or digest: legitimate
 _JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*")
 _SEGMENT_SPLIT = re.compile(r"[:/@_.+=-]")
+_LONG_BASE64 = re.compile(r"[A-Za-z0-9+/]{40,}")
 
 
-def is_key_shaped(value: str) -> bool:
-    """A value that is surely a key: a known key prefix (or the words secret, token, password),
-    32 or more hex digits, a UUID, or a JWT. ``models.toml`` refuses these. Quantised model
-    names (``Q4_K_M``, ``W8A8``) never match."""
-    if _SECRET_LOOKING.search(value) or _JWT.search(value):
-        return True
+def _hex_shaped(value: str) -> bool:
     for unit in re.split(r"[:/@]", value):
         if _HEX_RUN.fullmatch(re.sub(r"[^A-Za-z0-9]", "", unit)):  # hex, or a UUID
             return True
@@ -550,18 +542,34 @@ def is_key_shaped(value: str) -> bool:
     return False
 
 
+def is_key_shaped(value: str) -> bool:
+    """A value that is surely a key: a known key prefix (or the words secret, token, password),
+    an exact key shape, 32 or more hex digits (not a commit pin or digest), a UUID, or a JWT.
+    ``models.toml`` refuses these. Quantised model names (``Q4_K_M``, ``W8A8``) never match."""
+    if _SECRET_LOOKING.search(value) or _EXACT_KEY_SHAPES.search(value) or _JWT.search(value):
+        return True
+    return _hex_shaped(_PINNED_HEX.sub("", value))
+
+
 def _long_run_segment(value: str) -> bool:
     """A segment of 32 or more characters with both letters and digits (a bare Mistral-style
     key). Display only: it hides the value but never makes it invalid."""
-    return any(
+    if any(
         len(seg) >= 32 and any(c.isdigit() for c in seg) and any(c.isalpha() for c in seg)
         for seg in _SEGMENT_SPLIT.split(value)
-    )
+    ):
+        return True
+    # An unbroken 40+ run of base64 characters with all three classes (an AWS secret key).
+    return any(
+        any(c.isupper() for c in run) and any(c.islower() for c in run)
+        and any(c.isdigit() for c in run)
+        for run in _LONG_BASE64.findall(value)
+    )  # fmt: skip
 
 
 def hidden_value(value: str) -> bool:
     """Whether a message must not echo ``value``: surely a key, or looks like one."""
-    return is_key_shaped(value) or _long_run_segment(value)
+    return is_key_shaped(value) or _hex_shaped(value) or _long_run_segment(value)
 
 
 def shown_value(value: object) -> str | None:

@@ -104,11 +104,16 @@ looks like a key: a known key prefix (`AIza`, `glpat-`, `gsk_`, `hf_`, `xai-` an
 or more hex digits, a UUID, a JWT, or a segment of 32 or more letters and digits. Such a name is
 shown as "(value not shown)".
 
-Only the first group is also **refused**: `/models` and `jobhunter models set` will not save a
-name with a key prefix, a long hex run, a UUID or a JWT. A name that is merely hidden (a long
-unbroken segment) is still saved and still works; it just is not printed. Ordinary quantised
-names such as `DeepSeek-R1-Distill-Qwen-7B-Q4_K_M` or `...-W8A8-FP8` are never hidden. A name
-you cannot save can still be set in `config.toml`; it works there but is never printed.
+Only some of these are also **refused**: `/models` and `jobhunter models set` will not save a
+name with a key prefix (`sk-`, `AKIA...`, `AIza...`, `hf_...` followed by a long unbroken run and
+the like), a long hex run, a UUID or a JWT. A name containing `secret`, `token` or `password` is
+hidden and refused, and so is any name with a character outside `A-Z a-z 0-9 . _ : / @ + -`. A
+name that is merely hidden (a long unbroken segment, a 40-character base64 run, a commit pin
+after `@` or a `sha256:` digest) is still saved and still works; it just is not printed.
+Ordinary quantised names such as `DeepSeek-R1-Distill-Qwen-7B-Q4_K_M` or `...-W8A8-FP8` are
+never hidden, and neither are names that only start like a prefix, such as `hf_llama_3_8b`
+or `xai-grok-2-vision-1212`. A name you cannot save can still be set in `config.toml`; it works
+there but is never printed.
 
 ## The Models page
 

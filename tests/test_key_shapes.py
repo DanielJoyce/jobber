@@ -15,7 +15,7 @@ KEY_SHAPES = [
     "AIza" + "SyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStUvW",
     "glpat" + "-aB3dE6gH9jK2mN5pQ8sT",
     "gsk_aB3dE6gH9jK2mN5pQ8sT1vW4xY7z",
-    "hf_aB3dE6gH9jK2mN5pQ8sT1vW4xY7z",
+    "hf_aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o",
     "xai-aB3dE6gH9jK2mN5pQ8sT1vW4xY7z",
     "sk-or-v1-0123456789abcdef",
     "ghp_aB3dE6gH9jK2mN5pQ8sT1vW4xY7z",
@@ -29,7 +29,25 @@ KEY_SHAPES = [
     "jev:0123456789abcdef0123456789abcdef",
     "openrouter:pa-aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0oPq2Rs",
     "local:sk-or-v1-0123456789abcdef",
+    "AKIA" + "ABCDEFGHIJKLMNOP",
+    "ASIA" + "ABCDEFGHIJ234567",
 ]
+
+# Real names that only start like a key prefix: shown and valid.
+NEW_REAL_NAMES = [
+    "Aizawa-Llama-3-8B-JP", "Asia-Pacific-Legal-13B", "hf_llama_3_8b_instruct_finetuned",
+    "pa-legal-assistant-7b-instruct-v2", "xai-grok-2-vision-1212", "nvapi-llama3-70b-instruct",
+    "pplx-70b-online", "key_value_store_model", "AKIAlike-7b", "local:Aizawa-Llama-3-8B-JP",
+    "openrouter:pplx-70b-online", "glpat-style-model-v2",
+]  # fmt: skip
+# Hidden for display, never refused: commit pins, digests and an AWS-secret-shaped run.
+PINNED = [
+    "org/model@0123456789abcdef0123456789abcdef01234567",
+    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+]
+AWS_SECRET = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY" + "Ab3dE6gH9jK2"
+# A bare Mistral-style key is hidden, not refused.
+HIDDEN_ONLY = ["aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o", "openrouter:aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o"]
 
 REAL_IDS = [
     "openai-compat:my_gpt4o_deployment_2024",
@@ -70,7 +88,7 @@ def model_id_corpus() -> list[str]:
         "Qwen/Qwen2.5-72B-Instruct-Turbo", "mistralai/Mixtral-8x22B-Instruct-v0.1",
         "gpt-4o-mini-2024-07-18", "decisions:acme/model-v2",
     }  # fmt: skip
-    ids |= set(REAL_IDS)
+    ids |= set(REAL_IDS) | set(NEW_REAL_NAMES)
     ids |= set(catalog.ANTHROPIC_MODELS) | set(catalog.CLI_ALIASES)
     for name in dir(spend):
         table = getattr(spend, name)
@@ -143,7 +161,7 @@ def test_scorer_messages_never_quote_a_key_shaped_spec():
                 assert key not in str(err)
 
 
-@pytest.mark.parametrize("key", KEY_SHAPES[:5] + KEY_SHAPES[7:])
+@pytest.mark.parametrize("key", [k for k in KEY_SHAPES[:5] + KEY_SHAPES[7:]])
 def test_verbose_doctor_never_prints_a_key_shaped_model_value(tmp_path, monkeypatch, key):
     settings = complete_setup(tmp_path, monkeypatch)
     cfg = tmp_path / "config.toml"
@@ -156,3 +174,39 @@ def test_verbose_doctor_never_prints_a_key_shaped_model_value(tmp_path, monkeypa
     )
     for args in ([], ["-v"], ["--json"], ["-v", "--json"]):
         assert key not in run_doctor(*args).output, args
+
+
+def main_refuses(value: str) -> bool:
+    """The rule on main before this change, to prove refusals were not widened."""
+    import re
+
+    showable = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
+    secret = re.compile(r"(?i)(?:^|[:/])(?:sk-|sk_|key-|ghp_|xox|bearer)|secret|token|password")
+    return not showable.fullmatch(value) or bool(secret.search(value))
+
+
+def test_nothing_main_accepted_is_refused_now():
+    from jobhunter.config import usable_model_text
+
+    corpus = set(model_id_corpus()) | set(NEW_REAL_NAMES) | set(REAL_IDS)
+    for base in BASE_NAMES:
+        corpus |= {base + suffix for suffix in SUFFIXES}
+    corpus |= {f"{p}:{n}" for n in list(corpus) for p in ("local", "openai-compat")}
+    for name in corpus:
+        if not main_refuses(name):
+            assert usable_model_text(name), name
+
+
+@pytest.mark.parametrize("value", [*PINNED, AWS_SECRET, "local:" + AWS_SECRET, *HIDDEN_ONLY])
+def test_hidden_for_display_but_not_refused(value):
+    from jobhunter.config import usable_model_text
+
+    assert shown_value(value) is None
+    assert usable_model_text(value)
+
+
+@pytest.mark.parametrize("value", [k for k in KEY_SHAPES if k not in HIDDEN_ONLY])
+def test_exact_key_shapes_are_refused(value):
+    from jobhunter.config import usable_model_text
+
+    assert not usable_model_text(value)
