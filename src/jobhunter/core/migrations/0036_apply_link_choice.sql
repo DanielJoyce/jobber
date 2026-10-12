@@ -1,4 +1,4 @@
--- 0035_apply_link_choice: who chose a group's apply link and why (bug 334d9eb).
+-- 0036_apply_link_choice: who chose a group's apply link and why (bug 334d9eb).
 --
 -- chosen_by: NULL when the resolver ranked it (specs/015), 'capture' when an extension capture
 -- of the employer page (or a board's off-site Apply) supplied it, 'user' when it was set by hand

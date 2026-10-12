@@ -259,6 +259,13 @@ def resolve_url(
         seen.add(key)
         res.chain.append(ApplyHop(url=target, host=host_of(target), method=method))
         if is_login_wall(target):
+            here = match_ats(url)
+            if here is not None and match_ats(target) is here:
+                # The ATS's own sign-in step on the way to its application (Taleo's
+                # jobapply.ftl -> login.jsf): the ATS page was reached, so it is the link.
+                res.status, res.ats, res.fetched = ApplyStatus.live, here.name, True
+                res.final_url = here.canonical(url)
+                return False
             _stop_at_login(res, url, target)  # never requested
             return False
         url = target
@@ -382,7 +389,9 @@ def _candidates(conn: sqlite3.Connection, group_id: int, classes: HostClasses) -
         c.capture = c.capture or capture
 
     def employer_page(url: str | None) -> bool:
-        return bool(url) and not classes.is_aggregator(host_of(url or ""))
+        # Only a page on an ATS or a host naming the employer counts as the employer's page;
+        # a capture on builtin.com, wellfound.com or a state bank is just another board copy.
+        return bool(url) and classes.employer_or_ats(url)
 
     ids = [m["id"] for m in members]
     marks = ",".join("?" * len(ids))
@@ -455,7 +464,7 @@ def _capture_wins(cand: Candidate, res: Resolution, classes: HostClasses) -> boo
         cand.capture
         and not res.login
         and res.status != ApplyStatus.expired
-        and classes.tier(res.final_url) not in (HostTier.tracker, HostTier.aggregator)
+        and classes.employer_or_ats(res.final_url)
     )
 
 
@@ -470,21 +479,26 @@ def rank_results(
     results: list[tuple[Candidate, Resolution]], classes: HostClasses
 ) -> list[tuple[Candidate, Resolution]]:
     """Best first (bug 334d9eb): never a login wall while anything else exists; a capture of
-    the employer's page; then by final host (ATS, employer, other, tracker, board); then
-    status (live, expired, blocked, unresolved); then how many members reached the same final
-    URL; then the most recently seen member."""
+    the employer's page; a closed page only on an ATS or the employer's site counts before
+    live links (a dead tracker or board copy says nothing about the job, so it goes after
+    every live one); then by final host (ATS, employer, other, tracker, board); then status
+    (live, expired, blocked, unresolved); then how many members reached the same final URL;
+    then the most recently seen member."""
     agree: dict[str, set[int]] = {}
     for cand, res in results:
         if res.final_url and not res.login:
             agree.setdefault(normalize_url(res.final_url), set()).update(cand.members)
 
-    def key(cr: tuple[Candidate, Resolution]) -> tuple[int, int, int, int, int, float, int]:
+    def key(cr: tuple[Candidate, Resolution]) -> tuple[int, int, int, int, int, int, float, int]:
         cand, res = cr
         n = len(agree.get(normalize_url(res.final_url), ())) if res.final_url else 0
+        tier = classes.tier(res.final_url)
+        dead_copy = res.status == ApplyStatus.expired and tier > HostTier.employer
         return (
             int(res.login),
             0 if _capture_wins(cand, res, classes) else 1,
-            int(classes.tier(res.final_url)),
+            int(dead_copy),
+            int(tier),
             _RANK[res.status],
             -n,
             -_ts(cand.seen_at),
@@ -502,8 +516,10 @@ def _why(cand: Candidate, res: Resolution, classes: HostClasses, tried: int, tot
         return f"{route} · {res.error}; no other link reached the posting"
     if _capture_wins(cand, res, classes):
         reason = "from your capture of the employer's page"
-    elif res.status == ApplyStatus.expired:
+    elif res.status == ApplyStatus.expired and classes.employer_or_ats(res.final_url):
         reason = "the posting is closed there"
+    elif res.status == ApplyStatus.expired:
+        reason = "this link no longer works, and no live copy was found"
     else:
         reason = TIER_LABEL[classes.tier(res.final_url)]
     checked = f" · {tried} of {total} links checked" if total > 1 else ""
@@ -569,6 +585,7 @@ def resolve_group(
     ctx_factory: CtxFactory,
     browser_fallback: BrowserFallback | None = None,
     max_fetches: int = MAX_FETCH_STARTS,
+    only_if_settled: bool = False,
 ) -> ApplyLink:
     """Resolve a job group's apply link and upsert its ``apply_link`` row.
 
@@ -576,6 +593,10 @@ def resolve_group(
     in ``_fetch_order``, until one settles it (a live ATS posting, or a capture of the
     employer's page) or ``max_fetches`` starts that cost requests have been tried; the results
     are ranked by ``rank_results``.
+
+    ``only_if_settled`` (re-resolving an existing row): the new result replaces the row only
+    when it is an answer (live, expired, or a real login stop), so a transient failure, such as
+    an unreachable robots.txt, leaves the old row to be tried again later.
     """
     existing = get_apply_link(conn, group_id)
     if existing is not None and existing.chosen_by == "user":
@@ -584,7 +605,6 @@ def resolve_group(
     cands = _candidates(conn, group_id, classes)
     if not cands:
         raise ValueError(f"job_group {group_id} has no member with a usable URL")
-    classes = classes.with_capture_hosts(host_of(c.url) for c in cands if c.capture)
     results: list[tuple[Candidate, Resolution]] = []
     fetches = 0
     for cand in _fetch_order(cands, classes):
@@ -623,6 +643,9 @@ def resolve_group(
         chosen_by="capture" if capture else None,
         why=_why(win_cand, best, classes, len(results), len(cands)),
     )
+    answered = best.status in (ApplyStatus.live, ApplyStatus.expired) or best.login
+    if only_if_settled and existing is not None and not answered:
+        return existing
     _save(conn, link)
     return link
 
@@ -696,14 +719,26 @@ def reresolve_login_walls(
 ) -> list[ApplyLink]:
     """Resolve again the groups whose stored link is a login wall taken for the posting.
 
-    Nightly (``runner``, resolve stage): network only through ``ctx_factory``, no paid work."""
+    Nightly (``runner``, resolve stage): network only through ``ctx_factory``, no paid work.
+    A group whose new result is no answer (a fetch failed) keeps its row and is tried again
+    next time. Returns the rows that were replaced."""
     done: list[ApplyLink] = []
     for gid in login_wall_groups(conn, limit):
-        try:
-            done.append(resolve_group(conn, gid, now=now, ctx_factory=ctx_factory))
-        except ValueError:
-            continue
+        link = reresolve_legacy(conn, gid, now=now, ctx_factory=ctx_factory)
+        if link is not None and not needs_reresolve(link):
+            done.append(link)
     return done
+
+
+def reresolve_legacy(
+    conn: sqlite3.Connection, group_id: int, *, now: datetime, ctx_factory: CtxFactory
+) -> ApplyLink | None:
+    """Resolve a group again in place of an older row that took a login wall for the posting
+    (nightly, the job page, and a click on Apply). The old row stays when nothing answered."""
+    try:
+        return resolve_group(conn, group_id, now=now, ctx_factory=ctx_factory, only_if_settled=True)
+    except ValueError:
+        return get_apply_link(conn, group_id)
 
 
 def pending_groups(conn: sqlite3.Connection, limit: int) -> list[int]:

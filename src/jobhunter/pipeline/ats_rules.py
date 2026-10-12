@@ -262,40 +262,63 @@ TRACKER_HOSTS: tuple[str, ...] = (
     "*.joveo.com",
     "*.pandologic.com",
     "*.clickcastnow.com",
-    "*.jobsyn.org",
 )
 
-# Job boards, aggregators and state job banks (``*.x`` covers subdomains only, so the apex is
-# listed too). Hosts of class A sources (the state job banks) are added at run time from the
-# source table (``apply_rank.HostClasses``). LinkedIn and Indeed are in ``board_ids``.
+
+def _apex_and_subdomains(*domains: str) -> tuple[str, ...]:
+    return tuple(p for d in domains for p in (d, f"*.{d}"))
+
+
+# THE list of job boards, aggregators and state job banks: ranked last for apply links
+# (``apply_rank``), and never taken for the employer's page by a capture (``apply/capture``).
+# Hosts of class A sources (the state job banks in the registry) are added at run time from the
+# source table (``apply_rank.HostClasses``). LinkedIn and Indeed are in ``board_ids`` (never
+# requested) and count as boards everywhere too.
 AGGREGATOR_HOSTS: tuple[str, ...] = (
-    "usnlx.com",
-    "*.usnlx.com",
-    "*.nlx.org",
-    "monster.com",
-    "*.monster.com",
-    "ziprecruiter.com",
-    "*.ziprecruiter.com",
-    "glassdoor.com",
-    "*.glassdoor.com",
-    "simplyhired.com",
-    "*.simplyhired.com",
-    "careerbuilder.com",
-    "*.careerbuilder.com",
-    "dice.com",
-    "*.dice.com",
-    "talent.com",
-    "*.talent.com",
-    "jooble.org",
-    "*.jooble.org",
-    "adzuna.com",
-    "*.adzuna.com",
+    # national boards and aggregators
+    *_apex_and_subdomains(
+        "monster.com",
+        "ziprecruiter.com",
+        "glassdoor.com",
+        "simplyhired.com",
+        "careerbuilder.com",
+        "dice.com",
+        "talent.com",
+        "jooble.org",
+        "adzuna.com",
+        "builtin.com",
+        "wellfound.com",
+        "angel.co",
+        "jobright.ai",
+        "hiring.cafe",
+        "otta.com",
+        "welcometothejungle.com",
+        "remoteok.com",
+        "weworkremotely.com",
+        "flexjobs.com",
+        "snagajob.com",
+        "lensa.com",
+        "jobgether.com",
+        "himalayas.app",
+        "usajobs.gov",
+        "clearancejobs.com",
+        "theladders.com",
+        "getwork.com",
+    ),
+    # DirectEmployers / NLx mirrors (state "jobs" sites, employer-branded dejobs.org mirrors)
+    *_apex_and_subdomains("usnlx.com", "nlx.org", "dejobs.org", "jobsyn.org"),
+    # state job banks seen as apply links in NLx and state feeds
     "jobs.utah.gov",
-    "*.mitalent.org",
-    "*.ohiomeansjobs.com",
+    *_apex_and_subdomains("mitalent.org", "ohiomeansjobs.com", "connectingcolorado.com"),
     "ohiomeansjobs.ohio.gov",
     "worksource.my.site.com",
+    *_apex_and_subdomains("worksourcewa.com"),
+    "jobs.connectingcolorado.gov",
+    "labor.eightfold.ai",
 )
+# Not aggregators (they host employers' own postings, and NEOGOV is an ATS), but their
+# og:site_name names the site, not the employer (``apply/capture``).
+SITE_NAMED_HOSTS: tuple[str, ...] = _apex_and_subdomains("governmentjobs.com", "schooljobs.com")
 
 
 def host_in(host: str, patterns: tuple[str, ...]) -> bool:
@@ -339,6 +362,9 @@ def is_login_wall(url: str | None) -> bool:
         return True
     if host_in(host, LOGIN_HOSTS):
         return True
+    rule = match_ats(url)
+    if rule is not None and rule.is_posting(url):
+        return False  # an ATS's own apply step on the posting path (iCIMS .../jobs/1/x/login)
     return bool(_LOGIN_PATH.search(parts.path))
 
 

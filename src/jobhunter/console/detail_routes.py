@@ -19,7 +19,8 @@ from jobhunter.apply import paste
 from jobhunter.console import capture_routes, detail
 from jobhunter.core.models import ApplyStatus
 from jobhunter.pipeline import applylink
-from jobhunter.pipeline.ats_rules import is_http_url
+from jobhunter.pipeline.apply_rank import HostClasses
+from jobhunter.pipeline.ats_rules import host_of, is_http_url
 from jobhunter.scoring.profile import Profile
 
 MAX_VERIFY_AGE_H = 24
@@ -63,8 +64,12 @@ def register(
     def apply_button(request: Request, conn: Conn, group_id: int) -> HTMLResponse:
         require_job(conn, group_id)
         link = applylink.get_apply_link(conn, group_id)
-        if link is None or applylink.needs_reresolve(link):
-            # No link yet, or an older row that took a login wall for the posting (334d9eb).
+        if link is not None and applylink.needs_reresolve(link):
+            # An older row that took a login wall for the posting (334d9eb).
+            link = applylink.reresolve_legacy(
+                conn, group_id, now=now(), ctx_factory=ctx_factory(conn)
+            )
+        elif link is None:
             try:
                 link = applylink.resolve_group(
                     conn, group_id, now=now(), ctx_factory=ctx_factory(conn)
@@ -93,6 +98,12 @@ def register(
         if link is None and not is_http_url(detail.posting_url(job)):
             # A posting pasted without a URL (specs/017): its url is a placeholder, never opened.
             raise HTTPException(404, "this posting has no URL to open")
+        if link is not None and applylink.needs_reresolve(link):
+            # An older row that took a login wall for the posting (334d9eb): resolve it now,
+            # so Open application on a packet goes to the employer, not the sign-in page.
+            link = applylink.reresolve_legacy(
+                conn, group_id, now=current, ctx_factory=ctx_factory(conn)
+            )
         if link is not None and link.status == ApplyStatus.live:
             link = applylink.reverify(
                 conn,
@@ -104,6 +115,9 @@ def register(
         if link is not None and link.status == ApplyStatus.expired:
             original = link.final_url or link.start_url
             detail.log_click(conn, group_id, original, "expired", current)
+            # Only an ATS or the employer's site speaks for the job; a dead tracker or board
+            # copy is just a link that stopped working (334d9eb).
+            employer_page = HostClasses.load(conn, group_id).employer_or_ats(original)
             return templates.TemplateResponse(
                 request,
                 "apply_closed.html",
@@ -114,6 +128,8 @@ def register(
                     "group_id": group_id,
                     "job_title": job["title"],
                     "original": original,
+                    "employer_page": employer_page,
+                    "original_host": host_of(original),
                 },
             )
         # live, or unresolved/blocked: hand over the best known link

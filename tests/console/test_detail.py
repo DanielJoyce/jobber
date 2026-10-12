@@ -518,8 +518,10 @@ def test_legacy_login_wall_row_resolves_again_on_the_job_page(client, conn, page
     add_link(conn, 1, "live", final=LOGIN, ats="unknown")
     t = client.get("/job/1").text
     assert 'hx-get="/job/1/apply-button"' in t and "id.utah.gov" not in t
+    # Nothing answers yet: Apply falls back to the start URL, never the login page, and the
+    # old row is kept to be tried again.
     r = client.get("/apply/1")
-    assert r.headers["location"] == "https://nlx.example/start"  # never the login page
+    assert r.headers["location"] == "https://nlx.example/start"
     pages.responses["https://example.com/1"] = httpx.Response(302, headers={"Location": WD})
     pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
     frag = client.get("/job/1/apply-button").text
@@ -527,3 +529,31 @@ def test_legacy_login_wall_row_resolves_again_on_the_job_page(client, conn, page
     assert not any("utah.gov" in h for h in pages.hits)
     row = conn.execute("SELECT final_url, why FROM apply_link WHERE job_group_id = 1").fetchone()
     assert row["final_url"] == WD + "/apply" and row["why"]
+
+
+def test_open_application_on_a_legacy_login_row_resolves_on_click(client, conn, pages):
+    """The reported path: a packet's Open application is /apply/{id}. Right after the upgrade,
+    with no visit to the job page and no nightly run, it must reach the employer's ATS."""
+    add_link(conn, 1, "live", final=LOGIN, ats="unknown")
+    pages.responses["https://example.com/1"] = httpx.Response(302, headers={"Location": WD})
+    pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    r = client.get("/apply/1")
+    assert r.status_code == 302 and r.headers["location"] == WD + "/apply"
+    assert not any("utah.gov" in h for h in pages.hits)
+    click = conn.execute("SELECT final_url FROM apply_click WHERE job_group_id = 1").fetchone()
+    assert click["final_url"] == WD + "/apply"
+
+
+def test_closed_page_does_not_blame_the_employer_for_a_dead_board_link(client, conn):
+    dead = "https://www.aplitrak.com/?adid=synthetic"
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, status, "
+        "resolved_at) VALUES (3, ?, ?, '[]', 'unknown', 'expired', ?)",
+        (dead, dead, NOW.isoformat()),
+    )
+    t = client.get("/apply/3").text
+    assert "This link no longer works" in t and "www.aplitrak.com" in t
+    assert "employer's page" not in t and "does not mean the job has closed" in t
+    add_link(conn, 4, "expired")  # on the employer's ATS: the posting really closed
+    t = client.get("/apply/4").text
+    assert "This posting has closed" in t and "employer's page" in t

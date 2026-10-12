@@ -507,32 +507,61 @@ def test_robots_disallow_on_the_tracker_is_respected(conn, factory, server):
 # ─── a capture and the user's own link win ─────────────────────────────────
 
 
-def _capture_job(conn, gid: int, url: str) -> int:
+EMPLOYER_PAGE = "https://www.example-employer.com/careers/staff-software-engineer"
+BUILTIN = "https://builtin.com/job/staff-software-engineer-agent-tools/1234567"
+WELLFOUND = "https://wellfound.com/jobs/1234567-staff-software-engineer"
+
+
+def _capture_job(conn, gid: int, url: str, employer: str = "Example Employer") -> int:
     jid = conn.execute(
         "INSERT INTO job (source_key, external_id, job_group_id, url, title, employer, "
-        "first_seen_at, last_seen_at) VALUES ('wa', ?, ?, ?, 'Staff Software Engineer', 'Acme', "
-        "?, ?)",
-        (f"cap-{gid}", gid, url, NOW.isoformat(), NOW.isoformat()),
+        "first_seen_at, last_seen_at) VALUES ('wa', ?, ?, ?, 'Staff Software Engineer', ?, ?, ?)",
+        (f"cap-{gid}-{url}", gid, url, employer, NOW.isoformat(), NOW.isoformat()),
     ).lastrowid
     conn.execute(
         "INSERT INTO capture_log (action_id, route, job_group_id, job_id, captured_at, host, "
         "method, outcome) VALUES (?, 'capture', ?, ?, ?, ?, 'jsonld', 'added')",
-        (f"a-{gid}", gid, jid, NOW.isoformat(), url.split("/")[2]),
+        (f"a-{gid}-{url}", gid, jid, NOW.isoformat(), url.split("/")[2]),
     )
     return jid
 
 
 def test_linked_capture_of_the_employer_page_wins(conn, factory, server):
-    page = "https://www.example-employer.com/careers/staff-software-engineer"
+    server.page(EMPLOYER_PAGE)
+    server.redirect(APLI_A, ASHBY)
+    server.page(ASHBY, ASHBY_HTML)
+    gid = add_group(conn, (NLX.format(4), APLI_A), employer="Example Employer")
+    _capture_job(conn, gid, EMPLOYER_PAGE)
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.final_url, link.chosen_by) == (EMPLOYER_PAGE, "capture")
+    assert "capture" in (link.why or "")
+    assert server.pages() == [EMPLOYER_PAGE]  # the capture settles it: nothing else requested
+
+
+@pytest.mark.parametrize("board_page", [BUILTIN, WELLFOUND])
+def test_a_capture_on_a_board_site_is_just_a_copy(conn, factory, server, board_page):
+    """A capture made on builtin.com or wellfound.com is not the employer's page: it neither
+    wins nor stops resolution, and the employer's ATS posting is found and chosen."""
+    server.page(board_page)
+    server.redirect(APLI_A, ASHBY)
+    server.page(ASHBY, ASHBY_HTML)
+    gid = add_group(conn, (NLX.format(4), APLI_A), employer="Example Employer")
+    _capture_job(conn, gid, board_page)
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.final_url, link.chosen_by) == (ASHBY + "/application", None)
+    assert "capture" not in (link.why or "")
+    assert ASHBY in server.pages()
+
+
+def test_a_capture_on_a_host_not_naming_the_employer_does_not_win(conn, factory, server):
+    page = "https://jobs.some-reposter.example/staff-software-engineer"
     server.page(page)
     server.redirect(APLI_A, ASHBY)
     server.page(ASHBY, ASHBY_HTML)
-    gid = add_group(conn, (NLX.format(4), APLI_A))
+    gid = add_group(conn, (NLX.format(4), APLI_A), employer="Example Employer")
     _capture_job(conn, gid, page)
     link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
-    assert (link.final_url, link.chosen_by) == (page, "capture")
-    assert "capture" in (link.why or "")
-    assert server.pages() == [page]  # the capture settles it: nothing else is requested
+    assert link.final_url == ASHBY + "/application" and link.chosen_by is None
 
 
 def test_closed_capture_does_not_win(conn, factory, server):
@@ -540,21 +569,81 @@ def test_closed_capture_does_not_win(conn, factory, server):
     server.page(page, "<p>Not found</p>", status=404)
     server.redirect(APLI_A, ASHBY)
     server.page(ASHBY, ASHBY_HTML)
-    gid = add_group(conn, (NLX.format(4), APLI_A))
+    gid = add_group(conn, (NLX.format(4), APLI_A), employer="Example Employer")
     _capture_job(conn, gid, page)
     link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
     assert link.final_url == ASHBY + "/application" and link.chosen_by is None
 
 
-def test_capture_host_counts_as_the_employer_domain(conn):
-    gid = add_group(conn, (NLX.format(1), None), employer="Someone Else")
+def _pasted(conn, url: str, employer: str = "Example Employer") -> int:
     conn.execute(
-        "INSERT INTO capture_log (action_id, route, job_group_id, captured_at, host, outcome) "
-        "VALUES ('x1', 'capture', ?, ?, 'www.example-employer.com', 'existing')",
-        (gid, NOW.isoformat()),
+        "INSERT OR IGNORE INTO source (key, class, name, family, tier, entry, policy) "
+        "VALUES ('paste-manual', 'C', 'Pasted', 'manual', 'manual', 'console', 'manual')"
     )
-    c = HostClasses.load(conn, gid)
-    assert c.tier("https://jobs.example-employer.com/1") == HostTier.employer
+    from jobhunter.apply import paste
+
+    return paste.insert_pasted_posting(
+        conn,
+        url=url,
+        text="Build agent tools. " * 20,
+        employer=employer,
+        title="Staff Software Engineer",
+        now=NOW,
+    )
+
+
+def _live_ashby_group(conn) -> int:
+    gid = add_group(conn, (NLX.format(1), ASHBY), employer="Example Employer")
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, status, "
+        "resolved_at, verified_at) VALUES (?, ?, ?, '[]', 'ashby', 'live', ?, ?)",
+        (gid, ASHBY, ASHBY + "/application", NOW.isoformat(), NOW.isoformat()),
+    )
+    return gid
+
+
+@pytest.mark.parametrize("board_page", [BUILTIN, WELLFOUND])
+def test_linking_a_board_site_capture_keeps_the_verified_ats_link(conn, board_page):
+    live = _live_ashby_group(conn)
+    cap = _pasted(conn, board_page)
+    capture._mark_capture_link(conn, cap)
+    assert get_apply_link(conn, cap).chosen_by is None  # a board page is no employer capture
+    kept = capture.link_same_job(conn, live, cap, NOW)
+    link = get_apply_link(conn, kept)
+    assert (link.final_url, link.status, link.chosen_by) == (
+        ASHBY + "/application",
+        ApplyStatus.live,
+        None,
+    )
+
+
+def test_linking_an_employer_page_capture_keeps_the_capture_link(conn):
+    board = add_group(conn, (NLX.format(1), MONSTER), employer="Example Employer")
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, status, resolved_at) "
+        "VALUES (?, ?, ?, '[]', 'live', ?)",
+        (board, MONSTER, MONSTER, NOW.isoformat()),
+    )
+    cap = _pasted(conn, EMPLOYER_PAGE)
+    capture._mark_capture_link(conn, cap)
+    assert get_apply_link(conn, cap).chosen_by == "capture"
+    kept = capture.link_same_job(conn, board, cap, NOW)
+    link = get_apply_link(conn, kept)
+    assert (link.start_url, link.chosen_by) == (EMPLOYER_PAGE, "capture")
+
+
+def test_board_site_list_is_shared_with_capture():
+    for host in (
+        "builtin.com",
+        "wellfound.com",
+        "jobright.ai",
+        "hiring.cafe",
+        "amazon.dejobs.org",
+        "www.linkedin.com",
+        "www.governmentjobs.com",
+    ):
+        assert capture.is_board_site(host), host
+    assert not capture.is_board_site("www.example-employer.com")
 
 
 def test_user_link_wins_and_is_never_replaced(conn, factory, server):
@@ -610,9 +699,134 @@ def test_merge_keeps_the_user_link_then_the_capture_link(conn):
     set_user_link(conn, a, "https://www.example-employer.com/careers/42", NOW)
     _merge_apply_link(conn, s, a)
     assert get_apply_link(conn, s).chosen_by == "user"
+    # the capture half: a capture's link loses to the user's, and beats a live resolved one
+    b = add_group(conn, (NLX.format(3), None))
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, chain, status, resolved_at, chosen_by) "
+        "VALUES (?, ?, '[]', 'unresolved', ?, 'capture')",
+        (b, EMPLOYER_PAGE, NOW.isoformat()),
+    )
+    _merge_apply_link(conn, s, b)
+    assert get_apply_link(conn, s).chosen_by == "user"
+    c = add_group(conn, (NLX.format(4), None))
+    d = add_group(conn, (NLX.format(5), None))
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, status, resolved_at) "
+        "VALUES (?, ?, ?, '[]', 'live', ?)",
+        (c, ASHBY, ASHBY, NOW.isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, chain, status, resolved_at, chosen_by) "
+        "VALUES (?, ?, '[]', 'unresolved', ?, 'capture')",
+        (d, EMPLOYER_PAGE, NOW.isoformat()),
+    )
+    _merge_apply_link(conn, c, d)
+    assert get_apply_link(conn, c).start_url == EMPLOYER_PAGE
 
 
 def test_other_ats_hosts_are_named():
     assert ats_name("https://acme.bamboohr.com/careers/12") == "bamboohr"
     assert ats_name(ASHBY) == "ashby"
     assert ats_name("https://other.example/") is None
+
+
+# ─── review fixes: dead copies, ATS sign-in steps, retries, more boards ─────
+
+
+def test_a_dead_tracker_never_beats_a_live_board_copy(conn, factory, server):
+    server.page(MONSTER)
+    server.page(APLI_A, "<p>Not found</p>", status=404)
+    gid = add_group(conn, (NLX.format(1), MONSTER), (NLX.format(2), APLI_A))
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.final_url, link.status) == (MONSTER, ApplyStatus.live)
+    classes = HostClasses.load(conn, gid)
+    other_dead = _res("https://other.example/j/1", ApplyStatus.expired)
+    order = rank_results(
+        [(_cand("other-404", 0), other_dead), (_cand("board-live", 1), _res(MONSTER))], classes
+    )
+    assert order[0][0].url == "board-live"
+
+
+def test_a_dead_tracker_alone_does_not_say_the_posting_closed(conn, factory, server):
+    server.page(APLI_A, "<p>Not found</p>", status=404)
+    gid = add_group(conn, (NLX.format(1), APLI_A))
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory, max_fetches=1)
+    assert link.status == ApplyStatus.expired
+    assert "no longer works" in link.why and "closed" not in link.why
+
+
+def test_icims_apply_step_on_the_posting_path_is_not_a_wall(conn, factory, server):
+    icims = "https://careers-acme.icims.com/jobs/12345/staff-software-engineer/login"
+    assert not is_login_wall(icims)
+    server.page(MONSTER)
+    server.page(icims)
+    gid = add_group(conn, (NLX.format(1), MONSTER), (NLX.format(2), icims))
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.ats, link.status) == ("icims", ApplyStatus.live)
+    assert "job board copy" not in link.why
+
+
+def test_taleo_sign_in_step_keeps_the_ats_link(conn, factory, server):
+    apply_ = "https://acme.taleo.net/careersection/ex/jobapply.ftl?job=12345"
+    wall = "https://acme.taleo.net/careersection/iam/accessmanagement/login.jsf?lang=en"
+    server.redirect(apply_, wall)
+    server.page(MONSTER)
+    gid = add_group(conn, (NLX.format(1), MONSTER), (NLX.format(2), apply_))
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.final_url, link.ats, link.status) == (apply_, "taleo", ApplyStatus.live)
+    assert wall not in server.pages()
+
+
+def _legacy_row(conn, gid: int) -> None:
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, employer_host, "
+        "status, resolved_at) VALUES (?, ?, ?, '[]', 'unknown', 'id.utah.gov', 'live', ?)",
+        (gid, UT_JOB, ID_LOGIN, NOW.isoformat()),
+    )
+
+
+def test_legacy_rows_are_retried_after_a_transient_failure(conn, factory, server):
+    gid = group_317(conn)
+    _legacy_row(conn, gid)
+    down = httpx.Response(503)
+    for host in (
+        "www.aplitrak.com",
+        "jobs.utah.gov",
+        "usnlx.com",
+        "kyjobs.usnlx.com",
+        "jobseeker.ohiomeansjobs.monster.com",
+        "jobs.mitalent.org",
+        "worksource.my.site.com",
+    ):
+        server.routes[f"https://{host}/robots.txt"] = down
+        server.routes[f"http://{host}/robots.txt"] = down
+    assert reresolve_login_walls(conn, now=NOW, ctx_factory=factory) == []
+    assert get_apply_link(conn, gid).final_url == ID_LOGIN  # kept, to be tried again
+    assert applylink.login_wall_groups(conn, 10) == [gid]
+    # the next night the network is back
+    reset_shared_state()
+    server.routes.clear()
+    utah_chain(server)
+    server.redirect(APLI_A, ASHBY)
+    server.page(ASHBY, ASHBY_HTML)
+    done = reresolve_login_walls(conn, now=NOW + timedelta(days=1), ctx_factory=factory)
+    assert [d.job_group_id for d in done] == [gid]
+    assert get_apply_link(conn, gid).final_url == ASHBY + "/application"
+
+
+def test_class_a_www_entry_hosts_and_more_state_banks_are_boards(conn):
+    conn.execute(
+        "INSERT INTO source (key, class, name, family, tier, entry, policy) VALUES "
+        "('nc-ncworks', 'A', 'NC', 'vos', 'http', 'https://www.ncworks.gov/vosnet/Default.aspx', "
+        "'enabled')"
+    )
+    gid = add_group(conn, (NLX.format(1), None), employer="Amazon")
+    c = HostClasses.load(conn, gid)
+    for url in (
+        "https://www.ncworks.gov/jobs/1",
+        "https://ncworks.gov/jobs/1",
+        "https://amazon.dejobs.org/x/job/1",
+        "https://jobs.connectingcolorado.gov/j/1",
+        "https://labor.eightfold.ai/careers/job/1",
+    ):
+        assert c.tier(url) == HostTier.aggregator, url
