@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "jobhunter spike 022 A1",
+  "version": "0.0.1",
+  "description": "Throwaway spike extension for spec 022 A1. Not the product extension.",
+  "permissions": ["sidePanel", "storage", "scripting", "tabs"],
+  "host_permissions": [
+    "https://jobs.example-employer.test/*",
+    "https://boards.greenhouse.io/*",
+    "https://job-boards.greenhouse.io/*"
+  ],
+  "optional_host_permissions": ["https://*.myworkdayjobs.com/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "spike", "default_popup": "panel.html"},
+  "side_panel": {"default_path": "panel.html"},
+  "content_scripts": [
+    {
+      "matches": [
+        "https://jobs.example-employer.test/*",
+        "https://boards.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*"
+      ],
+      "all_frames": true,
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

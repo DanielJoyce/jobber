@@ -281,7 +281,9 @@ it (A1 checks this on a React fixture). The buttons answer only `isTrusted` clic
 granted ATS hosts (`chrome.tabs.query` with those URL patterns, allowed by the host permissions,
 then `scripting.executeScript` with `allFrames: true`). **Orphan removal:** each content script
 opens a long-lived `chrome.runtime.connect` port to the worker at start. A reload disconnects
-it; the script's `port.onDisconnect` handler checks `chrome.runtime?.id`, and when it is gone
+it; the script's `port.onDisconnect` handler **waits about 250 ms** and then checks
+`chrome.runtime?.id` (A1 found the id is still set inside the handler after a reload and clears
+within about 50 ms, so an immediate check would keep the orphan); when it is gone the script
 removes its overlay host element and every listener it added (it keeps them in one list for
 this). Each overlay click handler also checks `chrome.runtime?.id` first, so a click on a stale
 button does nothing. An idle worker stop (Chrome stops the worker after about 30 seconds) also
@@ -849,6 +851,73 @@ call. The browser network is blocked by `--host-resolver-rules`, as 1e.
 buttons sit on the right fields, Fill fills only what it should, the attach is accepted, the
 outline is on the real Submit, and after you submit the question appears and your answer is
 logged. Confirmation rules are adjusted from what those submits show.
+
+## A1 spike findings
+
+Ticket A1 (`9e2c202`), run 2026-10-12 offline in Playwright's Chromium 153, headless, on
+hand-written fixtures. The runnable proof is `tests/e2e/test_spike_022_a1.py` with its throwaway
+extension and pages in `tests/e2e/spike_022_a1/` (`uv run pytest -m e2e tests/e2e/test_spike_022_a1.py -s`
+prints each measurement as a `SPIKE` line; it takes about 2 minutes because of the 5-second
+activation waits). Fixtures encode our model of an ATS and a render-everything-again stand-in for
+React (React is not vendored), so the live check still decides real ATS behaviour.
+
+| Question | Result | Consequence |
+|---|---|---|
+| Content scripts on ATS hosts and in an embedded iframe | Run in the top frame and in a cross-origin `boards.greenhouse.io` iframe on an employer page, each with its own `sender.url` and `frameId` (host permissions granted by the manifest) | As designed |
+| `frameId` across a frame navigation | Same `frameId`, new `documentId` | Key sessions on tab and `frameId`; never on the document |
+| `responseStatus` in an ATS frame | A request made by the page is in the frame's timeline with its status (200, 422). A cross-origin one without `Timing-Allow-Origin` reads 0. A `fetch` the content script makes itself is **not in the page timeline at all** | The confirmation watch can use the page's own same-origin requests only; it must not rely on its own fetches |
+| `sidePanel.open` from a relayed click | Works when called first in the worker's message handler. With one `await` before it: "may only be called in response to a user gesture". Also works when the click woke a stopped worker | The synchronous rule stays and is now a tested requirement; lint it |
+| Window fallback | `chrome.windows.create({type: "popup"})` works with no permission | Kept as the fallback |
+| Panel observable headless | Not as a Playwright page (`context.pages` never lists it). It is visible through `chrome.runtime.getContexts({contextTypes: ["SIDE_PANEL"]})` (the context outlives the tab) and through the panel page's own `runtime.sendMessage` to the worker | e2e asserts on the panel's hello message, not on a page; the fallback window is an ordinary page and can be driven |
+| `action.openPopup()` without a gesture | Resolves with no error (Chrome 127 and later). Headless shows nothing to observe | Keep the call best-effort; the badge and overlay prompt carry the question; real behaviour is a live check |
+| Overlay on a re-rendering form | One host under `body`, outside the framework's root. Five full re-renders: no duplicate, same placement. A banner that shifts the layout: the button follows. The page clearing `body` removes the host and the `MutationObserver` re-adds exactly one | As designed; the observer must re-add a removed host |
+| Re-injection after a reload | The worker's `onInstalled` handler re-injects with `scripting.executeScript({allFrames: true, files})` into open tabs on granted hosts, top frame and iframe; the new script replaces the host (marker attribute) and the orphan's is gone, never two | As designed |
+| Orphan removal | `port.onDisconnect` fires on a reload, but `chrome.runtime.id` is **still set inside the handler** and is undefined 50 ms later | **Design change:** defer the id check (about 250 ms), now in [After an extension reload](#where-the-buttons-appear) |
+| Idle worker stop | Every port disconnects, `runtime.id` stays set, the overlay stays, no reconnect until the next need; the next click reconnects (second port) and the message goes through | As designed |
+| `setAccessLevel` on `storage.local` | Default: a content script reads the token. After `TRUSTED_CONTEXTS`: content-script reads and writes fail ("Access to storage is not allowed from this context"); extension pages still read it | The worker sets it on startup, before any content script can ask; A2 tests it |
+| Base64 file transfer, `DataTransfer` | 64 KB and 3 MB arrive byte-identical (SHA-256 computed by the page's own `change` handler); `input.files` set, the page sees `change`, no submit | Works; sizes beyond a few MB were not tried (message limit is much larger) |
+| `safeDispatch` | A helper that refuses a form, any button without `type="button"`, `input` submit and image, `formaction`, `[type=submit]`, a label for one, a wrapper containing one, and any element whose text reads submit, apply or send, refused all 11 submit-like targets and allowed the 9 safe ones; refuses `submit` events and Enter keydown; nothing reached the page's submit or click listeners | The A2/A3 helper starts from this classification |
+| `registerContentScripts` for an optional host | Registers without error even when the host is not granted, but nothing injects (`permissions.contains` is false). With the host granted (a test manifest stand-in), the registered script injects. `permissions.request` cannot be driven headless (no answer without a prompt) | A11 registers only after `permissions.request` resolves true; the grant itself is a live check |
+| `isTrusted` and `userActivation` on submits | See below | **Design change** to the A9 signals |
+
+**Submit signals, measured** (page and content script saw identical values):
+
+| How the form was submitted | `click.isTrusted` | `submit.isTrusted` | `userActivation.isActive` at submit | `submitter` |
+|---|---|---|---|---|
+| Real click on Submit | true | **true** | true | the button |
+| Real click on a button outside the form (`form=`) | true | true | true | that button |
+| Enter in a text field | true (synthesized default-button click) | true | true | the default button |
+| Page `button.click()` / content-script untrusted click | **false** | **true** | false | the button |
+| `form.requestSubmit()` (page or content script) | no click | **true** | false | null |
+| `form.requestSubmit(button)` | no click | true | false | the button |
+| `form.submit()` | none | **no event** | none | none |
+| `requestSubmit()` within 5 s of any real click elsewhere | none | true | **true** | null |
+
+Consequences for A9:
+- `submit.isTrusted` is **useless**: the browser dispatches a trusted `submit` event even for
+  script-made submissions. The test is the `click` that caused it (`isTrusted` true) or, with no
+  click, a null `submitter` plus no activation.
+- `userActivation.isActive` alone is not enough: any real click in the last 5 seconds makes a
+  scripted `requestSubmit()` look active. Require **trusted click on the submitter, or an
+  Enter keydown, immediately before the submit event**, and a non-null `submitter`.
+- `form.submit()` fires no event, so the submit listener never sees it. Such a submission is
+  caught only by the navigation or confirmation watch; with neither, it is not recorded, which
+  is the safe direction.
+- A browser-initiated navigation and a runtime message from a gesture-carrying sender both
+  activate the receiving frame for about 5 seconds (this is how the relayed click opens the
+  panel), so a page that has just loaded counts as active.
+
+**Harness notes for A2.** (1) Playwright's `page.evaluate` runs with a user gesture, and a
+`page.goto` activates the frame for 5 seconds: a test that wants an inactive script submit must
+defer it past 5 seconds with `setTimeout` inside the page, and a content script must delay its
+own action, because the driver's message carries the gesture. (2) `chrome.runtime.reload()` leaves
+the extension unloaded in this headless Chromium and a `--load-extension` one cannot be
+uninstalled; load the extension through the browser CDP session (`Extensions.loadUnpacked`, with
+`ignore_default_args=["--disable-extensions"]`) and reload with `Extensions.uninstall` then
+`loadUnpacked` (a pinned `key` keeps the ID). (3) Serialise the test worker's `storage.session`
+log writes; concurrent read-modify-writes lose entries. (4) A form `action` URL must be routed,
+and a form that navigates its tab breaks later lookups; give the fixture form a hidden target
+iframe.
 
 ## Failure modes
 
