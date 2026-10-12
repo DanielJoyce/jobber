@@ -33,9 +33,16 @@ logger = logging.getLogger(__name__)
 RUN_LOCK_LABEL = "console deep pass"
 
 
+FORWARDED_HEADERS = ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip")
+
+
 def loopback_peer(request: Request) -> bool:
     """True when the TCP peer is this machine. ``--allow-remote`` does not change this: a
-    deep run spends your credits, so only a browser on this machine may start one."""
+    deep run spends your credits, so only a browser on this machine may start one. A request
+    that names a forwarding header came through a proxy on this machine on someone else's
+    behalf, so it counts as remote too."""
+    if any(h in request.headers for h in FORWARDED_HEADERS):
+        return False
     host = request.client.host if request.client else ""
     if host == "localhost":
         return True
@@ -144,26 +151,37 @@ class DeepManager:
 
     @staticmethod
     def _work(conn_factory, rid, profile, settings, now, client_factory, lock):
+        conn = None
         try:
             conn = conn_factory()  # its own connection: never the request's
-            try:
-                dr.run_request(
-                    conn, rid, profile, settings.scoring, now=now, client_factory=client_factory
-                )
-            except Exception as exc:
-                logger.exception("deep pass #%s failed", rid)
-                try:
-                    conn.execute(
-                        "UPDATE deep_request SET status = 'failed', error = ?, done_at = ? "
-                        "WHERE id = ? AND status = 'running'",
-                        (type(exc).__name__, to_iso(now()), rid),
-                    )
-                except sqlite3.Error:
-                    logger.exception("could not record the deep pass failure")
-            finally:
-                conn.close()
+            dr.run_request(
+                conn, rid, profile, settings.scoring, now=now, client_factory=client_factory
+            )
+        except Exception as exc:
+            logger.exception("deep pass #%s failed", rid)
+            DeepManager._mark_failed(conn, conn_factory, rid, type(exc).__name__, now)
         finally:
+            if conn is not None:
+                conn.close()
             lock.release()
+
+    @staticmethod
+    def _mark_failed(conn, conn_factory, rid, error, now) -> None:
+        """End the row now, not after 15 minutes of no heartbeat. When the thread's own
+        connection never opened, try a fresh one."""
+        fresh = None
+        try:
+            target = conn if conn is not None else (fresh := conn_factory())
+            target.execute(
+                "UPDATE deep_request SET status = 'failed', error = ?, done_at = ? "
+                "WHERE id = ? AND status = 'running'",
+                (error, to_iso(now()), rid),
+            )
+        except Exception:
+            logger.exception("could not record the deep pass failure")
+        finally:
+            if fresh is not None:
+                fresh.close()
 
 
 def _int(value: Any, default: int | None) -> int | None:
@@ -209,8 +227,10 @@ def register(
             "mode": plan.mode if plan else mode,
             "n": plan.n if plan else n,
             "group_id": group_id,
-            "n_choices": [c for c in dr.N_CHOICES if c <= settings.scoring.deep_shortlist]
-            or [settings.scoring.deep_shortlist],
+            "n_choices": sorted(
+                {c for c in dr.N_CHOICES if c <= settings.scoring.deep_shortlist}
+                | {plan.n if plan else n}
+            ),
             "model": dr.model_label(settings.scoring.deep_scorer),
             "profile_error": error,
             "running": running,
@@ -247,6 +267,10 @@ def register(
         form = pf.parse_form(await request.body())
         group_id = _int(pf.form_value(form, "group"), None)
         mode = "group" if group_id is not None else pf.form_value(form, "mode", "next")
+        if mode not in ("next", "rerun", "group"):
+            raise HTTPException(400, "mode is next, rerun or group")
+        if mode == "group" and group_id is None:
+            raise HTTPException(400, "which job? group is missing")
         n = _int(pf.form_value(form, "n"), dr.DEFAULT_N) or dr.DEFAULT_N
         token = pf.form_value(form, "plan", "")
         settings = request.app.state.settings

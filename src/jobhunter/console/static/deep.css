@@ -1,0 +1,38 @@
+/* The deep pass panel (specs/020 M11) on Today, the job page and /models. Scoped to
+   .deep-section so it never restyles the host page; colors come from app.css tokens, so light
+   and dark both follow them. */
+.deep-section { margin: 16px 0; }
+.deep-section h2, .deep-section h3 { font-size: 1rem; margin: 0 0 6px; }
+.deep-section .deep-warning { margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--status-warning); background: var(--surface-1); font-size: 0.875rem; }
+.deep-section .muted, .deep-section .hint { color: var(--text-muted); font-size: 0.8125rem; margin: 0 0 8px; }
+.deep-section .field-error { color: var(--status-critical); font-size: 0.8125rem; margin: 0 0 8px; }
+.deep-section .banner { border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; border: 1px solid var(--border); background: var(--surface-1); }
+.deep-section .banner-error { border-color: var(--status-critical); }
+.deep-section .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; align-items: start; }
+.deep-section label { display: block; font-size: 0.875rem; margin: 0 0 6px; }
+.deep-section select {
+  font: inherit; font-size: 0.9375rem; color: var(--text-primary); background: var(--page);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 100%;
+}
+.deep-section .deep-mode { border: 0; padding: 0; margin: 0; min-width: 0; }
+.deep-section .deep-mode label { display: flex; gap: 6px; align-items: baseline; }
+.deep-section .plain { list-style: none; padding: 0; margin: 4px 0 8px; font-size: 0.875rem; }
+.deep-section .plain li { padding: 1px 0; overflow-wrap: anywhere; }
+.deep-section .deep-list summary { cursor: pointer; font-size: 0.875rem; }
+.deep-section #deep-estimate { font-size: 0.875rem; overflow-wrap: anywhere; }
+.deep-section .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; }
+.deep-section .button {
+  font: inherit; font-size: 0.875rem; display: inline-block; padding: 4px 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer;
+  max-width: 100%; white-space: normal;
+}
+.deep-section .button.primary { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--btn-primary-text); }
+.deep-section .button.primary:hover:not(:disabled) { background: var(--btn-primary-hover); border-color: var(--btn-primary-hover); }
+.deep-section .button:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.deep-section .button.small { padding: 1px 8px; font-size: 0.75rem; }
+.deep-section .button:disabled, .deep-section .button[disabled] {
+  background: var(--surface-1); border-color: var(--border); color: var(--text-muted); cursor: not-allowed; opacity: 0.6;
+}
+.deep-section .deep-progress { margin: 0 0 12px; }
+.deep-section .deep-progress progress { width: 100%; }
+.deep-section code { overflow-wrap: anywhere; }

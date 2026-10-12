@@ -34,7 +34,7 @@
 {%- if cfg -%}
 <span class="activity-item activity-config{% if cfg.errors or cfg.replaced %} activity-failed{% endif %}"><span>{{ cfg_summary }}
 {%- for line in cfg.bar_errors %} <code>{{ line }}</code>{% endfor -%}
-{%- if cfg.can_apply and running %} A running re-score keeps the settings it started with.{% endif -%}
+{%- if cfg.can_apply and (running or deep_running) %} {% if running and deep_running %}A running re-score and deep pass keep the settings they started with.{% elif deep_running %}A running deep pass keeps the settings it started with.{% else %}A running re-score keeps the settings it started with.{% endif %}{% endif -%}
 {%- if cfg_restart %} {% if cfg.needs_restart %}Restart needed{% else %}Or restart to pick it up{% endif %}: <code>{{ cfg_restart }}</code>{% if cfg.replaced %} (check the file first: <code>{{ cfg_ctr_doctor }}</code>){% endif %}.{% endif -%}
 </span>
 {%- if cfg.can_apply -%}

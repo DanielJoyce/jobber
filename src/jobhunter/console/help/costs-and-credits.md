@@ -92,7 +92,8 @@ The deep pass reads the full posting for your top screened jobs and writes a rep
 default model, against a small fraction of a cent for screening. It runs only when you ask.
 
 **In the console.** Press **Deep-score top N** on Today (the Inbox's **Deep pass** link goes
-there), or **Deep-score this job** on a job page (the Inbox's `d` key opens it). The panel says
+there), **Deep-score…** under the Deep pass row on [Models](/models), or **Deep-score this job**
+on a job page (the Inbox's `d` key opens it). The panel says
 plainly that this may use more money than screening, and shows, before anything is spent:
 
 - which jobs it would deep-score: the top N by screen score with no deep report yet, or (Re-run
@@ -121,7 +122,9 @@ jobhunter score --deep-group 1234
 **The worst case.** One call can produce up to 32,000 tokens, and a model that falls back to
 another can bill at the dearer model's rates: about $0.83 on the default model. So a deep call
 starts only when what is left of the scoring cap still covers that worst case, in the console
-and in the CLI alike; otherwise it stops with `spend cap reached`, and the message says why. The
+and in the CLI alike; otherwise it stops with `spend cap reached`, and the message names the cap
+that binds (daily or weekly) and what to change. When it stops before deep-scoring anything,
+`jobhunter score --deep` exits with status 1. The
 last ~$0.83 of a day's cap therefore goes unused by deep runs, and **with a daily cap below
 about $0.83 the deep pass cannot run at all**: raise `[scoring] daily_cap_usd` if you want it.
 A console run also has a ceiling, the estimate plus 25% plus one worst-case call, and starts no

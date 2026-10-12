@@ -137,6 +137,50 @@ class DeepPlan:
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+def cap_text(
+    daily_cap: float, weekly_cap: float, daily_left: float, weekly_left: float, worst: float
+) -> str:
+    """Why no deep call can start under the caps, naming the cap that binds.
+
+    A cap set below one call's worst case can never admit a call, so it says to raise it
+    rather than to wait.
+    """
+    if daily_cap < worst:
+        return (
+            f"Your daily cap ${daily_cap:.2f} is below one call's worst case ${worst:.2f}; "
+            f"raise [scoring] daily_cap_usd to at least ${worst:.2f}."
+        )
+    if weekly_cap < worst:
+        return (
+            f"Your weekly cap ${weekly_cap:.2f} is below one call's worst case ${worst:.2f}; "
+            f"raise [scoring] weekly_cap_usd to at least ${worst:.2f}."
+        )
+    if weekly_left < daily_left:
+        name, key, cap, left = "weekly", "weekly_cap_usd", weekly_cap, weekly_left
+        when = "when older spend leaves the seven-day window"
+    else:
+        name, key, cap, left = "daily", "daily_cap_usd", daily_cap, daily_left
+        when = "tomorrow"
+    return (
+        f"Only ${max(left, 0):.2f} of your {name} cap (${cap:.2f}) is left, below one call's "
+        f"worst case ${worst:.2f}, so no deep call can start. A call starts only when the cap "
+        f"still covers its worst case. Try again {when}, or raise [scoring] {key}."
+    )
+
+
+def cap_message(
+    conn: sqlite3.Connection, scoring: Scoring, now: datetime, scorer: str | None = None
+) -> str:
+    """``cap_text`` for the caps as they stand now, for ``scorer`` (else the deep scorer)."""
+    return cap_text(
+        scoring.daily_cap_usd,
+        scoring.weekly_cap_usd,
+        screen.remaining_daily_budget(conn, scoring.daily_cap_usd, now),
+        screen.weekly_remaining(conn, scoring.weekly_cap_usd, now),
+        deep.worst_case_usd(scorer or scoring.deep_scorer),
+    )
+
+
 def fits(remaining: float, per_job: float, worst: float, n: int) -> int:
     """How many of ``n`` calls the cap admits now, each costing ``per_job`` and each admitted
     only while ``worst`` still fits."""
@@ -243,11 +287,8 @@ def make_plan(
     plan.max_usd = round(rs.max_usd_for(plan.estimated_usd) + plan.worst_usd, 2)
     plan.fit_now = fits(plan.remaining_usd, est.usd, plan.worst_usd, plan.total)
     if plan.total and plan.remaining_usd < plan.worst_usd:
-        plan.refusal = (
-            f"Only ${max(plan.remaining_usd, 0):.2f} of the scoring cap is left, and one deep "
-            f"call can cost up to ${plan.worst_usd:.2f}. A deep call starts only when the cap "
-            "still covers its worst case, so none can start now. Try again tomorrow or raise "
-            "[scoring] daily_cap_usd."
+        plan.refusal = cap_text(
+            plan.daily_cap, plan.weekly_cap, plan.daily_left, plan.weekly_left, plan.worst_usd
         )
     return plan
 
@@ -409,7 +450,7 @@ def run_request(
                 logger.exception("deep pass #%s group %s failed", request_id, gid)
                 break
             if res.status == "capped":
-                pr.notes.append(res.detail)
+                pr.notes.append(f"spend cap reached: {cap_message(conn, scoring, now(), scorer)}")
                 break
             pr.done += 1
             pr.spent += res.cost_usd

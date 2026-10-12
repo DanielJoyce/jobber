@@ -401,10 +401,25 @@ def test_cap_below_one_worst_case_disables_and_refuses(pdir, db_path, conn):
     c.app.state.deep_client_factory = Factory(forbid=True)
     html = c.get("/deep/panel", params={"n": "10"}).text
     assert 'id="deep-run" disabled' in html
-    assert "one deep call can cost up to $0.83" in html
+    want = (
+        "Your daily cap $0.50 is below one call&#39;s worst case $0.83; "
+        "raise [scoring] daily_cap_usd to at least $0.83."
+    )
+    assert want in html and "Try again" not in html
     r = c.post("/deep/run", data={"mode": "next", "n": "10", "plan": token_of(html)})
-    assert "none can start now" in r.text
+    assert "Your daily cap $0.50 is below" in r.text
     assert counts(conn) == (0, 0)
+
+
+def test_the_weekly_cap_is_named_when_it_binds(pdir, db_path, conn):
+    conn.execute(
+        "INSERT INTO llm_spend (day, model, tier, calls, cost_usd) VALUES (?, 'x', 'deep', 1, 9.5)",
+        (NOW.date().isoformat(),),
+    )
+    c = make_client(pdir, db_path, daily_cap_usd=20.0)
+    html = c.get("/deep/panel").text
+    assert "Only $0.50 of your weekly cap ($10.00) is left" in html
+    assert "raise [scoring] weekly_cap_usd" in html
 
 
 def test_plan_says_how_many_fit_under_the_cap(pdir, db_path):
@@ -508,3 +523,106 @@ def test_an_api_error_stops_the_run_with_a_fixed_reason(pdir, db_path, conn):
     assert row["status"] == "failed" and row["error"] == "API error: AuthenticationError"
     assert len(fake.client.calls) == 1
     assert "Deep pass failed: API error: AuthenticationError" in c.get("/activity").text
+
+
+# ─── Review round 1 ─────────────────────────────────────────────────────────
+
+
+def test_a_stale_running_request_is_marked_failed(client, conn, pdir):
+    from datetime import timedelta
+
+    from jobhunter.pipeline.listing import to_iso
+
+    profile = load_profile(pdir)
+    plan = deep_run.make_plan(conn, profile, Scoring(), mode="next", n=10, now=NOW)
+    rid = deep_run.create_request(conn, plan, NOW - timedelta(minutes=20))
+    conn.execute(
+        "UPDATE deep_request SET heartbeat_at = ? WHERE id = ?",
+        (to_iso(NOW - timedelta(minutes=16)), rid),
+    )
+    assert "Deep pass failed: interrupted" in client.get("/activity").text
+    row = deep_run.get_request(conn, rid)
+    assert row["status"] == "failed" and row["error"].startswith("interrupted")
+    # The panel offers a plan again instead of showing a run in progress.
+    assert 'id="deep-run"' in client.get("/deep/panel").text
+
+
+def test_a_live_heartbeat_is_not_stale(conn, pdir):
+    from datetime import timedelta
+
+    profile = load_profile(pdir)
+    plan = deep_run.make_plan(conn, profile, Scoring(), mode="next", n=10, now=NOW)
+    rid = deep_run.create_request(conn, plan, NOW - timedelta(minutes=5))
+    assert deep_run.running_request(conn, NOW)["id"] == rid
+
+
+@pytest.mark.parametrize(
+    "header", [{"X-Forwarded-For": "203.0.113.9"}, {"Forwarded": "for=203.0.113.9"}]
+)
+def test_a_forwarded_request_counts_as_remote(client, conn, header):
+    html = client.get("/deep/panel", params={"n": "10"}, headers=header).text
+    assert 'id="deep-run"' not in html and "jobhunter score --deep 10" in html
+    data = {"mode": "next", "n": "10", "plan": token_of(html)}
+    assert client.post("/deep/run", data=data, headers=header).status_code == 403
+    assert counts(conn) == (0, 0)
+
+
+def test_group_mode_without_a_group_is_a_400(client, conn):
+    assert client.post("/deep/run", data={"mode": "group", "plan": "x"}).status_code == 400
+    assert client.post("/deep/run", data={"mode": "bogus", "plan": "x"}).status_code == 400
+    assert counts(conn) == (0, 0)
+
+
+def test_the_n_select_shows_a_planned_n_outside_the_presets(client):
+    html = client.get("/deep/panel", params={"n": "7"}).text
+    assert '<option value="7" selected>7</option>' in html
+
+
+def test_changing_n_or_mode_does_not_inherit_the_spend_confirm(client):
+    from jobhunter.console.app import TEMPLATES_DIR
+
+    assert 'hx-disinherit="hx-confirm"' in client.get("/deep/panel").text
+    rescore = (TEMPLATES_DIR / "_rescore_panel.html").read_text()
+    assert '<form id="rescore-form" class="rescore-form" hx-disinherit="hx-confirm"' in rescore
+
+
+def test_done_is_not_shown_beside_a_running_line(pdir, db_path, conn):
+    c = make_client(pdir, db_path)
+    gate = threading.Event()
+    fake = Factory(FakeClient(gate=gate))
+    c.app.state.deep_client_factory = fake
+    started = confirm(c, mode="next", n="10").text
+    assert "You can leave this page" in started  # inside the live progress fragment
+    gate.set()
+    c.app.state.deep.join()
+    rid = conn.execute("SELECT id FROM deep_request").fetchone()[0]
+    done = c.get(f"/deep/{rid}/progress").text
+    assert "Done." in done and "You can leave this page" not in done
+    assert "A deep pass is running" not in done
+
+
+def test_the_pages_load_the_deep_styles(client):
+    for path in ("/", "/job/1", "/models"):
+        assert "deep.css" in client.get(path).text, path
+
+
+def test_a_thread_that_cannot_open_its_connection_fails_the_row_at_once(pdir, db_path, conn):
+    c = make_client(pdir, db_path)
+    c.app.state.deep_client_factory = Factory()
+    real = c.app.state.conn_factory
+    params = {"mode": "next", "n": "10"}
+    token = token_of(c.get("/deep/panel", params=params).text)
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 2:  # 1: the POST's own connection; 2: the run thread's
+            raise OSError("disk gone")
+        return real()
+
+    c.app.state.conn_factory = flaky
+    c.post("/deep/run", data={**params, "plan": token})
+    c.app.state.deep.join()
+    row = conn.execute("SELECT status, error FROM deep_request").fetchone()
+    assert tuple(row) == ("failed", "OSError")
+    assert runlock.RunLock(db_path, "probe").try_acquire()

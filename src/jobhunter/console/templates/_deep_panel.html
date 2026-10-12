@@ -7,9 +7,8 @@
 {% if dp.profile_error %}
 <p class="muted">Fix the preferences file first: {{ dp.profile_error }}</p>
 {% elif dp.running %}
-<p class="muted">A deep pass is running; you can leave this page, it keeps going while the console is open.</p>
 {% elif p %}
-<form id="deep-form" class="deep-form" hx-post="/deep/run" hx-target="#deep-panel" hx-swap="innerHTML" hx-disabled-elt="#deep-run"
+<form id="deep-form" class="deep-form" hx-disinherit="hx-confirm" hx-post="/deep/run" hx-target="#deep-panel" hx-swap="innerHTML" hx-disabled-elt="#deep-run"
       hx-confirm="Deep-score {{ p.total }} job{{ '' if p.total == 1 else 's' }} with {{ p.model }}? Estimated ${{ '%.2f' | format(p.estimated_usd) }}, up to ${{ '%.2f' | format(p.max_usd) }}. This spends API credits and costs more than screening.">
   <input type="hidden" name="plan" value="{{ p.token }}">
   {% if p.mode == 'group' %}

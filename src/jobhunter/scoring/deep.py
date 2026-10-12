@@ -51,9 +51,12 @@ BETAS = ["server-side-fallback-2026-07-01"]
 # reference; the spend-cap admission uses ``worst_case_usd`` (specs/020 M11).
 ESTIMATED_COST_PER_REQUEST_USD = 0.08
 # Server-side fallback targets per deep model (``BETAS``, ``fallbacks: "default"``): a refused
-# request may be answered, and billed, by one of these at its own rates.
+# request may be answered, and billed, by one of these at its own rates. Per the platform docs
+# ("Migrating to Claude Opus 5.5", "... Sonnet 5.5", "... Opus 5", checked 2026-10-11): Opus 5.5
+# falls back to Claude Opus 5 or Opus 4.8, Opus 5 (cyber) to Opus 4.8, Sonnet 5.5 to Sonnet 5.
 FALLBACK_TARGETS: dict[str, tuple[str, ...]] = {
-    "claude-opus-5-5": ("claude-opus-4-8",),
+    "claude-opus-5-5": ("claude-opus-4-8", "claude-opus-5"),
+    "claude-opus-5": ("claude-opus-4-8",),
     "claude-sonnet-5-5": ("claude-sonnet-5",),
 }
 # Typical input for one deep call (specs/006 "Cost", Stage 3): 5,000 in + 3,000 cached.

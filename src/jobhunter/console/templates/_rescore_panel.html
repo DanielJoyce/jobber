@@ -8,7 +8,7 @@
 <p class="muted">A re-score is running; you can leave this page, it keeps going while the console is open.</p>
 {% elif p %}
 {% if p.batch %}{% set spend = "Estimated cost $%.2f, billed when the batch is collected." | format(p.estimated_usd) %}{% else %}{% set spend = "Estimated cost $%.2f; the run stops before it spends more than $%.2f." | format(p.estimated_usd, p.max_usd) %}{% endif %}
-<form id="rescore-form" class="rescore-form" hx-post="/prefs/rescore/run" hx-target="#rescore-panel" hx-swap="innerHTML"
+<form id="rescore-form" class="rescore-form" hx-disinherit="hx-confirm" hx-post="/prefs/rescore/run" hx-target="#rescore-panel" hx-swap="innerHTML"
       hx-confirm="{% if rs.queued %}Run queued re-score #{{ rs.queued.id }}: re-score{% else %}Re-score{% endif %} {{ p.total }} job groups with {{ p.scorer }}? {{ spend }} This spends credits.">
   <input type="hidden" name="plan" value="{{ p.token }}">
   {% if rs.queued %}<input type="hidden" name="request_id" value="{{ rs.queued.id }}">

@@ -26,8 +26,11 @@ Prices are in [Costs and credits](costs-and-credits.md). The scorer formats (`an
 
 A **Save + re-run** button, which would open the re-score or deep-pass panel with the new model
 selected, is planned for a later update. Until then, to re-score existing jobs with a new
-screening model, use the re-score on [Prefs](/prefs) or `jobhunter score --rescore`. To re-run
-the deep pass on groups it has already done, use `jobhunter score --deep-group GID`.
+screening model, use the re-score on [Prefs](/prefs) or `jobhunter score --rescore`. To run the
+deep pass with the saved model, press **Deep-score…** under the Deep pass row: pick N and either
+the next unscored groups or **Re-run my top groups** (those with a report from another model),
+then confirm the estimate. See [The deep pass](costs-and-credits.md#the-deep-pass). One group:
+its job page, or `jobhunter score --deep-group GID`.
 
 Drafting and the fact check have no bulk re-run. Each draft is a click with its own estimate, so
 the next **Generate** on a packet uses the new choice.
