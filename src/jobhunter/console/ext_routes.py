@@ -46,6 +46,7 @@ from jobhunter.apply import (
     paste,
 )
 from jobhunter.apply import score as group_score
+from jobhunter.apply.ats_forms import forms_payload
 from jobhunter.apply.capture_models import (
     API_VERSION,
     MAX_BODY_BYTES,
@@ -61,6 +62,8 @@ from jobhunter.apply.capture_models import (
     ErrorResponse,
     EstimateResponse,
     FetchRequest,
+    FormsRequest,
+    FormsResponse,
     GoneResponse,
     GroupRequest,
     LinkRequest,
@@ -268,6 +271,14 @@ def register(
             )
 
         return await run(request, VersionRequest, go)
+
+    @app.post(f"{PREFIX}forms")
+    async def ext_forms_route(request: Request) -> Response:
+        def go(_req: FormsRequest) -> Response:
+            payload = forms_payload()
+            return ok(FormsResponse(version=str(payload["version"]), forms=payload))
+
+        return await run(request, FormsRequest, go)
 
     # ─── capture and its follow-up actions ─────────────────────────────────
 

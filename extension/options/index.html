@@ -21,9 +21,19 @@
     <p><button type="submit" class="primary" id="pair">Pair</button>
       <button type="button" id="unpair">Unpair</button></p>
   </form>
-  <p class="muted">The extension reads a page only when you click its icon, press Alt+Shift+J or use
-    the right-click <strong>Send to jobhunter</strong>, and sends it only to your console on
-    127.0.0.1. Nothing is scored until you confirm.</p>
+  <h2>Application forms</h2>
+  <p class="muted">On Greenhouse, Lever, Ashby and Workable application pages jobhunter draws small
+    buttons beside the resume and cover letter fields. <strong>Show buttons</strong> controls them.
+    <strong>Record submits</strong> controls watching for your own submit so jobhunter can ask
+    whether you applied. They are independent, and each ATS has its own.</p>
+  <table class="card" id="switches">
+    <thead><tr><th scope="col">Site</th><th scope="col">Show buttons</th><th scope="col">Record submits</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted">A posting is read only when you click the toolbar icon, press Alt+Shift+J or use
+    the right-click <strong>Send to jobhunter</strong>, and sent only to your console on
+    127.0.0.1. Nothing is scored until you confirm. On the application pages above the extension
+    runs on load, but writes nothing into the form and sends nothing about the page.</p>
   <script src="options.js" type="module"></script>
 </body>
 </html>

@@ -470,6 +470,21 @@ def test_version_returns_tracking_params_and_host_lists(env):
     assert len(v["notice_hosts"]) == 2
 
 
+def test_forms_serves_the_form_data_and_needs_the_token(client, token):
+    r = post(client, token, "forms")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["version"] == body["forms"]["version"]
+    assert set(body["forms"]["ats"]) >= {"greenhouse", "lever", "ashby", "workable"}
+    for ats in body["forms"]["ats"].values():
+        for variant in ats["variants"]:
+            assert variant["hosts"] and variant["path"]
+            for field in variant["fields"]:
+                assert field["selector"] and "value" not in field  # selectors, never values
+    assert post(client, "wrong-token", "forms").status_code == 401
+    assert post(client, token, "forms", Host="evil.example:8808").status_code == 403
+
+
 # ─── capture through the routes ────────────────────────────────────────────
 
 

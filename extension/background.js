@@ -3,6 +3,10 @@
 // matters in globals: Chrome stops an idle worker after about 30 seconds, and the console's
 // own state is the truth (the popup rebuilds from /status).
 //
+// Besides capture, the worker serves the ATS content scripts (specs/022): it answers their
+// hello and form-data requests, relays the panel open, re-injects them after a reload, and
+// refuses every message that MESSAGE_POLICY does not allow from that sender.
+//
 // Capture runs only on a user gesture (the toolbar icon or Alt+Shift+J, which open the popup,
 // or the right-click menu), under activeTab, and stops before any script runs in the page when
 // the console is not paired or not reachable, the host is on the off list, or the LinkedIn /
@@ -422,7 +426,7 @@ async function updateEntry(key, resp) {
   recent.delete(key);
 }
 
-// ── messages from the extension's own pages (popup, options) ─────────────────
+// ── messages: the sender policy (specs/022 "Sender policy") ──────────────────
 
 async function openConsole(path) {
   if (!CONSOLE_PATHS.test(path)) {
@@ -432,88 +436,464 @@ async function openConsole(path) {
   await chrome.tabs.create({url: "http://127.0.0.1:" + port + path});
 }
 
-async function handle(msg) {
-  switch (msg.type) {
-    case "open":
-      return captureTab(msg.tab, {trigger: "popup", again: false});
-    case "again":
-      return captureTab(msg.tab, {trigger: "popup", again: true});
-    case "acceptNotice":
-      await acceptNotice(msg.board);
-      return captureTab(msg.tab, {trigger: "popup", again: true});
-    case "add": {
-      const r = await api("capture/add", msg.body);
-      if (r.status === 200) {
-        await updateEntry(msg.key, r.data);
+// The one table of who may send what. Kinds: "ats" (a content script on a granted ATS host, in a
+// frame that announced itself), "generic" (a frame this worker injected into after your click on
+// a non-ATS site), "page" (the extension's own pages). Anything not here, or from a kind not
+// listed, is refused. No spend or write type, and no mode or pairing type, lists a content
+// script (tests/test_extension_message_policy.py keeps it so).
+const MESSAGE_POLICY = {
+  "frame/hello": ["ats", "generic"],
+  "forms/get": ["ats", "generic"],
+  "frame/bye": ["ats", "generic"],
+  "panel/open": ["ats"],
+  "submit/attempt": ["ats"],
+  "submit/outcome": ["ats"],
+  "ask/answer": ["ats"],
+  "applied/undo": ["ats"],
+  "open": ["page"],
+  "again": ["page"],
+  "acceptNotice": ["page"],
+  "add": ["page"],
+  "describe": ["page"],
+  "link": ["page"],
+  "fetch": ["page"],
+  "estimate": ["page"],
+  "status": ["page"],
+  "prepare": ["page"],
+  "score": ["page"],
+  "openConsole": ["page"],
+  "pair": ["page"],
+  "pairStatus": ["page"],
+  "unpair": ["page"],
+  "panel/state": ["page"],
+  "switches/get": ["page"],
+  "switches/set": ["page"],
+  "session/start": ["page"],
+  "fill/write": ["page"],
+  "match/pick": ["page"],
+  "draft/estimate": ["page"],
+  "draft/generate": ["page"],
+  "packet/ready": ["page"],
+  "file/attach": ["page"],
+  "text/insert": ["page"],
+  "ats/mode": ["page"]
+};
+
+// The required ATS hosts, from pipeline/ats_rules.py (a test keeps this and the manifest equal
+// to it). Workday joins when you grant it (ticket A11).
+const ATS_HOSTS = {
+  greenhouse: ["boards.greenhouse.io", "job-boards.greenhouse.io", "job-boards.eu.greenhouse.io"],
+  lever: ["jobs.lever.co", "jobs.eu.lever.co"],
+  ashby: ["jobs.ashbyhq.com"],
+  workable: ["apply.workable.com"],
+};
+const FORMS_TTL_MS = 10 * 60 * 1000;
+const PANEL_PATH = "panel/index.html";
+const SWITCH_DEFAULT = {show_buttons: true, record_submits: true};
+
+function atsOfUrl(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch (e) {
+    return null;
+  }
+  if (u.protocol !== "https:") {
+    return null;
+  }
+  for (const [ats, hosts] of Object.entries(ATS_HOSTS)) {
+    if (hosts.includes(u.hostname.toLowerCase())) {
+      return ats;
+    }
+  }
+  return null;
+}
+
+// What can be known without awaiting: this extension's id, the page kind, the frame facts.
+function syncKind(sender) {
+  if (!sender || sender.id !== chrome.runtime.id) {
+    return null;
+  }
+  if (typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""))) {
+    return "page";
+  }
+  if (!sender.tab || typeof sender.frameId !== "number" || !sender.documentId
+      || typeof sender.url !== "string") {
+    return null;
+  }
+  return atsOfUrl(sender.url) ? "ats" : "other";
+}
+
+// ── the frame registry (storage.session: survives an idle worker stop) ───────
+
+const frameKey = (tabId, frameId) => tabId + ":" + frameId;
+
+async function sessionMap(name) {
+  const got = await chrome.storage.session.get(name);
+  return got[name] || {};
+}
+
+function updateMap(name, fn) {
+  return serial(async () => {
+    const map = await sessionMap(name);
+    fn(map);
+    await chrome.storage.session.set({[name]: map});
+  });
+}
+
+// The full check, with the registry: a frame is "ats" only if it announced itself with the
+// document id it now sends from; "generic" only on a document we injected into ourselves.
+async function classify(type, sender) {
+  const kind = syncKind(sender);
+  if (kind === "page" || kind === null) {
+    return kind;
+  }
+  const reg = (await sessionMap("frames"))[frameKey(sender.tab.id, sender.frameId)];
+  const announced = Boolean(reg) && reg.documentId === sender.documentId;
+  if (kind === "ats") {
+    return type === "frame/hello" || (announced && !reg.generic) ? "ats" : "unannounced";
+  }
+  const injected = (await sessionMap("genericDocs"))[sender.tab.id];
+  if (sender.frameId !== 0 || injected !== sender.documentId) {
+    return null;
+  }
+  return type === "frame/hello" || (announced && reg.generic) ? "generic" : "unannounced";
+}
+
+// Never logs a payload: the type and the sender kind only.
+function refused(type, kind) {
+  console.warn("jobhunter: refused message", String(type).slice(0, 40), kind);
+}
+
+const HANDLERS = {};
+const notBuilt = async () => ({state: "unavailable", message: "not built yet"});
+
+HANDLERS["frame/hello"] = async (msg, sender, kind) => {
+  await updateMap("frames", (frames) => {
+    frames[frameKey(sender.tab.id, sender.frameId)] = {
+      documentId: sender.documentId,
+      host: hostOf(sender.url),
+      ats: kind === "ats" ? atsOfUrl(sender.url) : null,
+      generic: kind === "generic",
+      at: Date.now(),
+    };
+  });
+  return {state: "ok", frameId: sender.frameId};
+};
+
+HANDLERS["frame/bye"] = async (msg, sender) => {
+  await updateMap("frames", (frames) => {
+    const key = frameKey(sender.tab.id, sender.frameId);
+    if (frames[key] && frames[key].documentId === sender.documentId) {
+      delete frames[key];
+    }
+  });
+  return {state: "ok"};
+};
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  updateMap("frames", (frames) => {
+    for (const key of Object.keys(frames)) {
+      if (key.startsWith(tabId + ":")) {
+        delete frames[key];
       }
-      return r;
     }
-    case "describe": {
-      const r = await api("groups/" + Number(msg.group) + "/describe", msg.body);
-      if (r.status === 200) {
-        await updateEntry(msg.key, {outcome: "existing", group: r.data.group});
-      }
-      return r;
+  }).catch(() => {});
+  updateMap("genericDocs", (docs) => {
+    delete docs[tabId];
+  }).catch(() => {});
+  updateMap("panelField", (fields) => {
+    delete fields[tabId];
+  }).catch(() => {});
+});
+
+// ── form data (the console's `forms` route, cached) and the switches ─────────
+
+async function formsData() {
+  if (!(await config()).token) {
+    throw new ApiError("unpaired", "Pair the extension first: open its options page.");
+  }
+  const {formsCache} = await chrome.storage.local.get("formsCache");
+  if (formsCache && Date.now() - formsCache.at < FORMS_TTL_MS) {
+    return formsCache;
+  }
+  try {
+    const r = await api("forms", {});
+    if (r.status === 200 && r.data && r.data.forms) {
+      const fresh = {at: Date.now(), version: String(r.data.version), forms: r.data.forms};
+      await chrome.storage.local.set({formsCache: fresh});
+      return fresh;
     }
-    case "link": {
-      const r = await api("link", msg.body);
-      if (msg.key) {
-        recent.delete(msg.key);
-        if (r.status === 200) {
-          await forget(msg.key); // the stored answer named a group that may be gone now
-        }
-      }
-      return r;
+  } catch (e) {
+    if (e && e.state === "unpaired") {
+      throw e;
     }
-    case "fetch":
-      return api("capture/fetch", msg.body);
-    case "estimate":
-    case "status":
-    case "prepare":
-      return api("groups/" + Number(msg.group) + "/" + msg.type, {job_id: msg.job || null});
-    case "score":
-      return api("groups/" + Number(msg.group) + "/score", msg.body);
-    case "openConsole":
-      await openConsole(msg.path);
-      return {ok: true};
-    case "pair": {
-      const port = Number(msg.port) || DEFAULT_PORT;
-      await chrome.storage.local.set({port});
-      await chrome.storage.session.remove("cached");
-      const r = await api("pair", {code: String(msg.code || "")}, {auth: false});
-      if (r.status === 200 && r.data && r.data.token) {
-        await chrome.storage.local.set({token: r.data.token});
-        return {paired: true};
-      }
-      return {paired: false, message: (r.data && r.data.error) || ("console answered " + r.status)};
-    }
-    case "pairStatus": {
-      const {token, port} = await config();
-      return {paired: Boolean(token), port};
-    }
-    case "unpair":
-      await chrome.storage.local.remove("token");
-      await chrome.storage.session.remove("cached");
-      return {paired: false};
-    default:
-      throw new ApiError("error", "unknown request");
+  }
+  if (formsCache) {
+    return formsCache; // console down or refused: the overlay is drawn from what we have
+  }
+  throw new ApiError("unreachable", "No form data yet: start the jobhunter console.");
+}
+
+async function switchesAll() {
+  const {switches} = await chrome.storage.local.get("switches");
+  const out = {};
+  for (const ats of Object.keys(ATS_HOSTS)) {
+    const mine = (switches && switches[ats]) || {};
+    out[ats] = {
+      show_buttons: typeof mine.show_buttons === "boolean" ? mine.show_buttons
+        : SWITCH_DEFAULT.show_buttons,
+      record_submits: typeof mine.record_submits === "boolean" ? mine.record_submits
+        : SWITCH_DEFAULT.record_submits,
+    };
+  }
+  return out;
+}
+
+// Tells every frame we know of to ask for its form data and switches again.
+async function broadcastFormsChanged() {
+  const frames = await sessionMap("frames");
+  const tabs = new Set(Object.keys(frames).map((k) => Number(k.split(":")[0])));
+  for (const id of tabs) {
+    chrome.tabs.sendMessage(id, {type: "forms/changed"}).catch(() => {});
   }
 }
 
-// Only the extension's own pages may ask: never a script in a web page, even this
-// extension's own (the token's powers are for trusted contexts, like the token).
-const OWN_PAGES = [chrome.runtime.getURL("popup/"), chrome.runtime.getURL("options/")];
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  const own = sender.id === chrome.runtime.id && typeof sender.url === "string"
-    && OWN_PAGES.some((prefix) => sender.url.startsWith(prefix));
-  if (!own || !msg || typeof msg.type !== "string") {
-    return false;
+// The ATS and the host come from the sender's URL, never from the payload.
+HANDLERS["forms/get"] = async (msg, sender, kind) => {
+  const ats = kind === "ats" ? atsOfUrl(sender.url) : null;
+  let data;
+  try {
+    data = await formsData();
+  } catch (e) {
+    return {state: (e && e.state) || "error", message: String((e && e.message) || e)};
   }
-  handle(msg).then(sendResponse, (err) => sendResponse({
+  const forms = data.forms || {};
+  const off = {show_buttons: false, record_submits: false};
+  return {
+    state: "ok",
+    ats,
+    version: data.version,
+    forms: ats ? (forms.ats || {})[ats] || null : null,
+    generic: kind === "generic" ? forms.generic || null : null,
+    switches: ats ? (await switchesAll())[ats] : off,
+  };
+};
+
+HANDLERS["switches/get"] = async () => ({state: "ok", switches: await switchesAll()});
+
+HANDLERS["switches/set"] = async (msg) => {
+  if (!Object.hasOwn(ATS_HOSTS, msg.ats)) {
+    throw new ApiError("error", "unknown ATS");
+  }
+  const all = await switchesAll();
+  for (const key of ["show_buttons", "record_submits"]) {
+    if (typeof msg[key] === "boolean") {
+      all[msg.ats][key] = msg[key];
+    }
+  }
+  await chrome.storage.local.set({switches: all});
+  await broadcastFormsChanged();
+  return {state: "ok", switches: all};
+};
+
+// ── the side panel, bound to a tab ───────────────────────────────────────────
+
+// Called from the message listener before any await: chrome.sidePanel.open keeps the click's
+// user gesture only when it is the first thing the handler does (A1 measured; the lint keeps it).
+function openPanel(tabId) {
+  const path = PANEL_PATH + "?tab=" + tabId;
+  chrome.sidePanel.setOptions({tabId, path, enabled: true}).catch(() => {});
+  chrome.sidePanel.open({tabId}).catch(() => {
+    // Without a gesture the panel cannot open: the same page in a small extension window.
+    chrome.windows.create({url: chrome.runtime.getURL(path), type: "popup", width: 420,
+      height: 680}).catch(() => {});
+  });
+}
+
+HANDLERS["panel/state"] = async (msg) => {
+  const tab = Number(msg.tab);
+  if (!Number.isInteger(tab)) {
+    throw new ApiError("error", "no tab");
+  }
+  const frames = Object.entries(await sessionMap("frames"))
+    .filter(([key]) => key.startsWith(tab + ":"))
+    .map(([key, f]) => ({frameId: Number(key.split(":")[1]), host: f.host, ats: f.ats}));
+  const ats = (frames.find((f) => f.ats) || {}).ats || null;
+  const top = frames.find((f) => f.frameId === 0);
+  const pending = (await sessionMap("panelField"))[tab] || null;
+  return {state: "ok", tab, ats, host: top ? top.host : (frames[0] || {}).host || null, frames,
+    field: pending && pending.field};
+};
+
+// ── re-injection after an extension reload or first install ──────────────────
+
+// Content scripts are not injected into tabs that were already open. The tabs on a granted ATS
+// host are found by their address (the host permissions allow the query) and get the script in
+// every frame. An ATS iframe on an employer page is not reached: Chrome refuses an all-frames
+// injection when the top frame's host is not granted, and finding the frame ids would need
+// `webNavigation`, which stays off. Reload such a page once after reloading the extension.
+async function reinject() {
+  const patterns = Object.values(ATS_HOSTS).flat().map((h) => "https://" + h + "/*");
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({url: patterns});
+  } catch (e) {
+    return;
+  }
+  for (const t of tabs) {
+    try {
+      await chrome.scripting.executeScript({target: {tabId: t.id, allFrames: true},
+        files: ["content/frame.js"]});
+    } catch (e) {
+      // the tab is gone or navigated away
+    }
+  }
+}
+
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "install" || details.reason === "update") {
+    reinject();
+  }
+});
+
+// Fill this page (ticket A6) injects into frame 0 only, after the icon click; the worker notes
+// the document so the sender policy can tell it from any other script.
+async function injectGeneric(tab) {
+  const res = await chrome.scripting.executeScript({target: {tabId: tab.id},
+    files: ["content/frame.js"]});
+  const doc = res && res[0] && res[0].documentId;
+  if (doc) {
+    await updateMap("genericDocs", (docs) => {
+      docs[tab.id] = doc;
+    });
+  }
+  return {documentId: doc || null};
+}
+
+// The long-lived port each content script opens only lets it detect an orphaned state; it
+// carries nothing. Anything but a content script is hung up on.
+chrome.runtime.onConnect.addListener((port) => {
+  const kind = syncKind(port.sender);
+  if (kind !== "ats" && kind !== "other") {
+    port.disconnect();
+  }
+});
+
+// ── the handlers for the extension's own pages (popup, options, panel) ───────
+
+HANDLERS["open"] = (msg) => captureTab(msg.tab, {trigger: "popup", again: false});
+HANDLERS["again"] = (msg) => captureTab(msg.tab, {trigger: "popup", again: true});
+HANDLERS["acceptNotice"] = async (msg) => {
+  await acceptNotice(msg.board);
+  return captureTab(msg.tab, {trigger: "popup", again: true});
+};
+HANDLERS["add"] = async (msg) => {
+  const r = await api("capture/add", msg.body);
+  if (r.status === 200) {
+    await updateEntry(msg.key, r.data);
+  }
+  return r;
+};
+HANDLERS["describe"] = async (msg) => {
+  const r = await api("groups/" + Number(msg.group) + "/describe", msg.body);
+  if (r.status === 200) {
+    await updateEntry(msg.key, {outcome: "existing", group: r.data.group});
+  }
+  return r;
+};
+HANDLERS["link"] = async (msg) => {
+  const r = await api("link", msg.body);
+  if (msg.key) {
+    recent.delete(msg.key);
+    if (r.status === 200) {
+      await forget(msg.key); // the stored answer named a group that may be gone now
+    }
+  }
+  return r;
+};
+HANDLERS["fetch"] = (msg) => api("capture/fetch", msg.body);
+for (const name of ["estimate", "status", "prepare"]) {
+  HANDLERS[name] = (msg) => api("groups/" + Number(msg.group) + "/" + name,
+    {job_id: msg.job || null});
+}
+HANDLERS["score"] = (msg) => api("groups/" + Number(msg.group) + "/score", msg.body);
+HANDLERS["openConsole"] = async (msg) => {
+  await openConsole(msg.path);
+  return {ok: true};
+};
+HANDLERS["pair"] = async (msg) => {
+  const port = Number(msg.port) || DEFAULT_PORT;
+  await chrome.storage.local.set({port});
+  await chrome.storage.session.remove("cached");
+  const r = await api("pair", {code: String(msg.code || "")}, {auth: false});
+  if (r.status === 200 && r.data && r.data.token) {
+    await chrome.storage.local.set({token: r.data.token});
+    await broadcastFormsChanged();
+    return {paired: true};
+  }
+  return {paired: false, message: (r.data && r.data.error) || ("console answered " + r.status)};
+};
+HANDLERS["pairStatus"] = async () => {
+  const {token, port} = await config();
+  return {paired: Boolean(token), port};
+};
+HANDLERS["unpair"] = async () => {
+  await chrome.storage.local.remove(["token", "formsCache"]);
+  await chrome.storage.session.remove("cached");
+  await broadcastFormsChanged();
+  return {paired: false};
+};
+// Spend and write types and the submit watch land with their tickets; listed already so the
+// policy table is complete and the refusals can be tested.
+for (const name of ["session/start", "fill/write", "match/pick", "draft/estimate",
+  "draft/generate", "packet/ready", "file/attach", "text/insert", "ats/mode",
+  "submit/attempt", "submit/outcome", "ask/answer", "applied/undo"]) {
+  HANDLERS[name] = notBuilt;
+}
+
+HANDLERS["panel/open"] = async () => ({state: "ok"}); // the listener itself answers it
+
+function fail(err) {
+  return {
     state: err && err.state ? err.state : "error",
     message: String((err && err.message) || err),
-  }));
+  };
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || typeof msg.type !== "string" || !Object.hasOwn(MESSAGE_POLICY, msg.type)) {
+    refused(msg && msg.type, syncKind(sender));
+    sendResponse({state: "refused", message: "not a request this extension accepts"});
+    return false;
+  }
+  const allowed = MESSAGE_POLICY[msg.type];
+  if (msg.type === "panel/open") {
+    // Synchronously, before any await, so the click's gesture is still there (the registry
+    // check would need an await; the facts checked here are the sender's own).
+    const kind = syncKind(sender);
+    if (!allowed.includes(kind)) {
+      refused(msg.type, kind);
+      sendResponse({state: "refused", message: "not allowed from here"});
+      return false;
+    }
+    openPanel(sender.tab.id);
+    updateMap("panelField", (fields) => {
+      fields[sender.tab.id] = {field: String(msg.field || "").slice(0, 80), at: Date.now()};
+    }).catch(() => {});
+    sendResponse({state: "ok"});
+    return false;
+  }
+  classify(msg.type, sender).then((kind) => {
+    if (kind === "unannounced") {
+      sendResponse({state: "unannounced"});
+    } else if (!allowed.includes(kind)) {
+      refused(msg.type, kind);
+      sendResponse({state: "refused", message: "not allowed from here"});
+    } else {
+      HANDLERS[msg.type](msg, sender, kind).then(sendResponse, (err) => sendResponse(fail(err)));
+    }
+  }, (err) => sendResponse(fail(err)));
   return true;
 });
 
@@ -539,3 +919,5 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 self.jobhunterCapture = (tab, opts) => captureTab(tab, opts || {trigger: "popup"});
 // The context-menu handler itself (the e2e cannot click a context menu).
 self.jobhunterMenu = (info, tab) => onMenu(info, tab);
+// Fill this page's injection (ticket A6 calls it after the icon click) and the e2e harness.
+self.jobhunterInjectGeneric = (tab) => injectGeneric(tab);

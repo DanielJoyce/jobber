@@ -3,8 +3,10 @@
 No JavaScript toolchain: a small lexer here strips comments, strings, template literals and
 regular expressions so the rules look at code only.
 
-- manifest: exactly the 1e permissions and the console host, pinned key, no content scripts,
-  no web-accessible resources or external connections, ``_execute_action`` on Alt+Shift+J;
+- manifest: exactly the 022 permissions and hosts (the console plus the seven ATS hosts of
+  ``pipeline/ats_rules.py``; Workday only optional), one content-script entry, pinned key, no
+  web-accessible resources or external connections, ``_execute_action`` on Alt+Shift+J;
+- ``content/``: no network API, no HTML sinks, a trusted-click check in every overlay handler;
 - ``capture/extract.js``: one self-invoking expression with no top-level declaration, and none
   of the DOM-writing, event, timer or network APIs (it reads the page and nothing else);
 - everywhere: no HTML sinks, no ``eval``, no external messaging, no ``chrome.debugger``;
@@ -22,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from jobhunter.apply.ext_pairing import EXTENSION_ID
+from jobhunter.pipeline.ats_rules import ATS_RULES
 from jobhunter.pipeline.board_ids import _INDEED_HOST, _LINKEDIN_HOST
 
 EXT = Path(__file__).resolve().parents[1] / "extension"
@@ -29,16 +32,16 @@ MANIFEST = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
 JS_FILES = sorted(EXT.rglob("*.js"))
 HTML_FILES = sorted(EXT.rglob("*.html"))
 
-PERMISSIONS = {"activeTab", "scripting", "storage", "contextMenus"}
+PERMISSIONS = {"activeTab", "scripting", "storage", "contextMenus", "sidePanel"}
+ATS_NAMES = ("greenhouse", "lever", "ashby", "workable")
+REQUIRED_ATS_HOSTS = [h for rule in ATS_RULES if rule.name in ATS_NAMES for h in rule.hosts]
+WORKDAY_HOSTS = [h for rule in ATS_RULES if rule.name == "workday" for h in rule.hosts]
 FORBIDDEN_PERMISSIONS = {
     "<all_urls>", "tabs", "webNavigation", "cookies", "webRequest", "declarativeNetRequest",
     "debugger", "tabCapture", "desktopCapture", "downloads", "history", "clipboardRead",
-    "notifications", "sidePanel",
+    "notifications",
 }  # fmt: skip
-FORBIDDEN_KEYS = {
-    "content_scripts", "web_accessible_resources", "externally_connectable",
-    "optional_host_permissions", "optional_permissions",
-}  # fmt: skip
+FORBIDDEN_KEYS = {"web_accessible_resources", "externally_connectable", "optional_permissions"}
 
 # ─── a minimal JavaScript lexer ─────────────────────────────────────────────
 
@@ -220,6 +223,15 @@ EVERYWHERE_DENY = [
 ]  # fmt: skip
 
 
+CONTENT_DENY = [
+    r"\bfetch\b", r"\bXMLHttpRequest\b", r"\bWebSocket\b", r"\bEventSource\b",
+    r"\bsendBeacon\b", r"\bimportScripts\b", r"\bimport\s*\(", r"\bnew\s+Image\b",
+    r"\bchrome\s*\.\s*(?:storage|tabs|scripting|cookies|webRequest|sidePanel|windows)\b",
+    r"\bpreventDefault\b", r"\bstopPropagation\b", r"\bstopImmediatePropagation\b",
+    r"\.(?:submit|requestSubmit)\s*\(", r"\.click\s*\(", r"\.dispatchEvent\s*\(",
+]  # fmt: skip
+
+
 def violations(code: str, rules: list[str]) -> list[str]:
     return [rule for rule in rules if re.search(rule, code)]
 
@@ -268,12 +280,76 @@ def test_single_iife_detector():
 # ─── the extension ─────────────────────────────────────────────────────────
 
 
-def test_manifest_permissions_are_exactly_the_1e_list():
+def test_manifest_permissions_are_exactly_the_022_list():
     assert set(MANIFEST["permissions"]) == PERMISSIONS
     assert not set(MANIFEST["permissions"]) & FORBIDDEN_PERMISSIONS
-    assert MANIFEST["host_permissions"] == ["http://127.0.0.1/*"]
+    assert MANIFEST["host_permissions"] == ["http://127.0.0.1/*"] + [
+        f"https://{h}/*" for h in REQUIRED_ATS_HOSTS
+    ]
+    assert len(REQUIRED_ATS_HOSTS) == 7
+    assert MANIFEST["optional_host_permissions"] == [f"https://{h}/*" for h in WORKDAY_HOSTS]
     assert not FORBIDDEN_KEYS & set(MANIFEST)
     assert MANIFEST["manifest_version"] == 3
+    assert "optional_permissions" not in MANIFEST
+
+
+def test_manifest_has_one_content_script_entry_on_the_ats_hosts():
+    entries = MANIFEST["content_scripts"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["matches"] == [f"https://{h}/*" for h in REQUIRED_ATS_HOSTS]
+    assert entry["js"] == ["content/frame.js"]
+    assert entry["all_frames"] is True
+    assert entry["run_at"] == "document_idle"
+    assert entry["match_about_blank"] is False
+    assert entry.get("world", "ISOLATED") == "ISOLATED"
+    assert "css" not in entry
+    for match in entry["matches"]:
+        assert "*" not in match.removeprefix("https://").removesuffix("/*")  # no host wildcard
+
+
+def test_manifest_side_panel_and_description():
+    assert MANIFEST["side_panel"] == {"default_path": "panel/index.html"}
+    assert (EXT / "panel" / "index.html").is_file()
+    assert MANIFEST["description"] == (
+        "Send job postings to your local jobhunter console and fill application forms on "
+        "your click. Never submits."
+    )
+
+
+def test_worker_ats_hosts_equal_ats_rules():
+    text = (EXT / "background.js").read_text(encoding="utf-8")
+    block = text.split("const ATS_HOSTS = {", 1)[1].split("};", 1)[0]
+    found = {
+        name: re.findall(r'"([^"]+)"', hosts)
+        for name, hosts in re.findall(r"(\w+): \[([^\]]*)\]", block)
+    }
+    expected = {rule.name: list(rule.hosts) for rule in ATS_RULES if rule.name in ATS_NAMES}
+    assert found == expected
+
+
+def test_panel_open_calls_the_side_panel_before_any_await():
+    text = (EXT / "background.js").read_text(encoding="utf-8")
+    code = strip_js(text)
+    open_panel = code.split("function openPanel(", 1)[1].split("\n}\n", 1)[0]
+    assert "sidePanel.open(" in open_panel and "await" not in open_panel
+    listener = code.split("chrome.runtime.onMessage.addListener(", 1)[1]
+    branch = listener.split('msg.type === ""', 1)[1].split("classify(", 1)[0]
+    assert "openPanel(" in branch and "await" not in branch
+
+
+def test_content_scripts_use_no_network_and_trust_only_real_clicks():
+    for path in sorted((EXT / "content").rglob("*.js")):
+        code = strip_js(path.read_text(encoding="utf-8"))
+        assert violations(code, CONTENT_DENY) == [], path.name
+        # every click handler checks isTrusted before it does anything (read from the source:
+        # the lexer blanks strings)
+        text = path.read_text(encoding="utf-8")
+        clicks = list(re.finditer(r'addEventListener\("click",\s*\(?\w*\)?\s*=>\s*\{', text))
+        assert clicks, "the overlay button handler was not found"
+        for m in clicks:
+            assert "isTrusted" in text[m.end() : m.end() + 200], path.name
+        assert "isTrusted" in text
 
 
 def test_manifest_pins_the_extension_id():
