@@ -1100,3 +1100,42 @@ def test_paths_use_tilde_through_a_symlinked_home_and_for_dotenv_and_file_states
     )
     assert "~/resume.md" in by_id["profile.resume"].detail
     assert by_id["secrets.valid"].fix.text == "chmod 600 ~/.env"
+
+
+def test_cheap_essentials_match_the_full_check_and_read_no_spend(tmp_path, monkeypatch):
+    settings = good_settings(tmp_path)
+    write_prefs(settings)
+    write_resume(settings)
+    make_db(settings).close()
+    environ = {"ANTHROPIC_API_KEY": FAKE_KEY}
+    states = secrets.resolve(
+        secrets.known_names(settings), set(environ), {}, lambda line: None, environ=environ
+    )
+    report = secrets.Report(states, [])
+    home = Path(os.environ["HOME"])
+    cheap = readiness.essentials_ok_cheap(
+        settings, secrets_report=report, now=NOW, mode=HOST, registry_rows=[],
+        environ=environ, home=home,
+    )  # fmt: skip
+    full = evaluate(settings, environ, mode=HOST, home=home)
+    assert cheap is True and essentials_ok(full.values()) is True
+
+    fresh = readiness.essentials_ok_cheap(
+        make_settings(tmp_path / "fresh"), secrets_report=None, now=NOW, mode=HOST,
+        registry_rows=[], environ={}, home=home,
+    )  # fmt: skip
+    assert fresh is False
+
+    reads = []
+    real = readiness.run_checks
+
+    def spying(*args, **kwargs):
+        reads.append(kwargs.get("spend"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(readiness, "run_checks", spying)
+    readiness.essentials_ok_cheap(
+        settings, secrets_report=report, now=NOW, mode=HOST, registry_rows=[],
+        environ=environ, home=home,
+    )  # fmt: skip
+    assert reads == [False]

@@ -26,7 +26,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -36,6 +36,9 @@ from jobhunter.achievements import catalog, facts, rules
 logger = logging.getLogger(__name__)
 
 WRITE_BUSY_MS = 250
+# Rules whose input the caller supplies (``essentials``). Without it they are unknown: no unlock,
+# and no revocation either.
+NEEDS_ESSENTIALS = frozenset({"setup.ready"})
 REVOKE_WINDOW = timedelta(hours=24)
 
 ENABLED = "enabled"
@@ -179,11 +182,14 @@ class Computation:
     series: dict[str, rules.Series]
     rhythm: rules.RhythmStatus
     reached: dict[tuple[str, int], Reached]
+    unknown: frozenset[str] = frozenset()  # ids whose input is unknown: never revoked
 
 
-def compute(conn: sqlite3.Connection, now: datetime, tz: tzinfo) -> Computation:
+def compute(
+    conn: sqlite3.Connection, now: datetime, tz: tzinfo, essentials: bool | None = None
+) -> Computation:
     """Every rule from scratch (the read phase; no writes)."""
-    snapshot = facts.load(conn, now, tz)
+    snapshot = facts.load(conn, now, tz, essentials=essentials)
     r = rules.Rules(snapshot)
     series = {a.id: rules.rule_for(r, a.id) for a in catalog.CATALOG}
     reached: dict[tuple[str, int], Reached] = {}
@@ -194,7 +200,8 @@ def compute(conn: sqlite3.Connection, now: datetime, tz: tzinfo) -> Computation:
                 break
             evidence = json.dumps(s.evidence(threshold), sort_keys=True, default=str)
             reached[(a.id, tier)] = Reached(_iso(s.items[threshold - 1].at), evidence)
-    return Computation(series, r.rhythm_status(), reached)
+    unknown = frozenset() if essentials is not None else NEEDS_ESSENTIALS
+    return Computation(series, r.rhythm_status(), reached, unknown)
 
 
 @dataclass
@@ -208,7 +215,12 @@ class Diff:
         return not (self.insert or self.revoke or self.refresh)
 
 
-def diff(reached: dict[tuple[str, int], Reached], rows: list[Unlock], now: datetime) -> Diff:
+def diff(
+    reached: dict[tuple[str, int], Reached],
+    rows: list[Unlock],
+    now: datetime,
+    unknown: frozenset[str] = frozenset(),
+) -> Diff:
     have = {(u.achievement_id, u.tier): u for u in rows}
     insert = {k: v for k, v in reached.items() if k not in have}
     revoke: set[int] = set()
@@ -217,6 +229,8 @@ def diff(reached: dict[tuple[str, int], Reached], rows: list[Unlock], now: datet
     for u in rows:
         if u.achievement_id not in catalog.BY_ID:
             continue  # a later (or earlier) catalog's id: never touched here
+        if u.achievement_id in unknown:
+            continue  # its input is unknown this time: keep the row as it is
         if not _recent(u, now):
             continue
         fresh = reached.get((u.achievement_id, u.tier))
@@ -245,20 +259,33 @@ def _recent(u: Unlock, now: datetime) -> bool:
 # --- evaluate ----------------------------------------------------------------------------
 
 
-def evaluate(conn: sqlite3.Connection, now: datetime, tz: tzinfo | None = None) -> list[Unlock]:
-    """Bring ``achievement_unlock`` up to date; returns the newly written rows."""
+def evaluate(
+    conn: sqlite3.Connection,
+    now: datetime,
+    tz: tzinfo | None = None,
+    *,
+    essentials: bool | None = None,
+) -> list[Unlock]:
+    """Bring ``achievement_unlock`` up to date; returns the newly written rows.
+
+    ``essentials`` is 019's ``essentials_ok`` as the caller computed it (None: unknown, so
+    ``setup.ready`` is neither unlocked nor revoked)."""
     tz = tz or local_tz()
     settings = read_settings(conn)
     if not settings.enabled:
         return []
-    comp = compute(conn, now, tz)
-    if diff(comp.reached, stored(conn), now).empty and settings.backfilled_at:
+    comp = compute(conn, now, tz, essentials)
+    if diff(comp.reached, stored(conn), now, comp.unknown).empty and settings.backfilled_at:
         return []
-    return _write(conn, now, tz)
+    return _write(conn, now, tz, essentials)
 
 
 def _write(
-    conn: sqlite3.Connection, now: datetime, tz: tzinfo, busy_ms: int = WRITE_BUSY_MS
+    conn: sqlite3.Connection,
+    now: datetime,
+    tz: tzinfo,
+    essentials: bool | None = None,
+    busy_ms: int = WRITE_BUSY_MS,
 ) -> list[Unlock]:
     if conn.in_transaction:
         raise RuntimeError("achievements.evaluate needs a connection outside a transaction")
@@ -267,7 +294,7 @@ def _write(
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            new = _apply(conn, now, tz)
+            new = _apply(conn, now, tz, essentials)
         except BaseException:
             conn.execute("ROLLBACK")
             raise
@@ -277,13 +304,15 @@ def _write(
         conn.execute(f"PRAGMA busy_timeout = {int(old_timeout)}")
 
 
-def _apply(conn: sqlite3.Connection, now: datetime, tz: tzinfo) -> list[Unlock]:
+def _apply(
+    conn: sqlite3.Connection, now: datetime, tz: tzinfo, essentials: bool | None = None
+) -> list[Unlock]:
     """Inside the write transaction: re-read, recompute, apply."""
     settings = read_settings(conn)
     if not settings.enabled:
         return []
-    comp = compute(conn, now, tz)
-    d = diff(comp.reached, stored(conn), now)
+    comp = compute(conn, now, tz, essentials)
+    d = diff(comp.reached, stored(conn), now, comp.unknown)
     detected = _iso(now)
     backfill = not settings.backfilled_at
     for uid in d.revoke:
@@ -408,6 +437,8 @@ class Gate:
         self._strip_last: tuple[int, NextUp | None] | None = None
         self._lock = threading.Lock()
         self._running = threading.Lock()  # one evaluation at a time per process
+        self._ess: bool | None = None  # the essentials value judged at fingerprint _ess_fp
+        self._ess_fp: tuple[object, ...] | None = None
 
     def zone(self) -> tzinfo:
         return self.tz or local_tz()
@@ -424,9 +455,13 @@ class Gate:
         *,
         force: bool = False,
         wait: bool = True,
+        essentials: Callable[[], bool | None] | None = None,
     ) -> list[Unlock]:
         """``evaluate`` when the fingerprint changed (or ``force``). A ``sqlite3.Error``
         propagates and leaves the fingerprint unchanged, so the next call retries.
+
+        ``essentials`` is called at most once per fingerprint (a forced refresh reuses the
+        value judged for the same fingerprint); an exception in it means unknown.
 
         ``wait=False`` (the polled ``/activity``): when another request in this process is
         already evaluating, return ``[]`` at once instead of queueing a second read phase
@@ -439,12 +474,26 @@ class Gate:
         if not self._running.acquire(blocking=wait):
             return []
         try:
-            new = evaluate(conn, now, tz)
+            ess: bool | None = None
+            if essentials is not None:
+                if self._ess_fp != fp:
+                    self._ess, self._ess_fp = self._judge(essentials), fp
+                ess = self._ess
+            new = evaluate(conn, now, tz, essentials=ess)
         finally:
             self._running.release()
         with self._lock:
             self._fp = fp
         return new
+
+    @staticmethod
+    def _judge(essentials: Callable[[], bool | None]) -> bool | None:
+        try:
+            value = essentials()
+        except Exception:  # a readiness bug must not take the board down
+            logger.exception("achievements: essentials check failed; setup.ready not judged")
+            return None
+        return None if value is None else bool(value)
 
     def strip_cache(self, fp: tuple[object, ...]) -> tuple[int, NextUp | None] | None:
         with self._lock:
@@ -524,7 +573,12 @@ def _earned(conn: sqlite3.Connection, settings: Settings) -> int:
     )
 
 
-def today_strip(gate: Gate, conn: sqlite3.Connection, now: datetime) -> Strip | None:
+def today_strip(
+    gate: Gate,
+    conn: sqlite3.Connection,
+    now: datetime,
+    essentials: Callable[[], bool | None] | None = None,
+) -> Strip | None:
     """What the Today strip shows, or None when achievements are off. Never raises: on a
     busy database or a rule bug it renders from the stored rows and the last cached rhythm
     and next. Evaluation goes through ``Gate.refresh(wait=False)``, the same one-at-a-time
@@ -540,7 +594,7 @@ def today_strip(gate: Gate, conn: sqlite3.Connection, now: datetime) -> Strip | 
         if cached is None:
             ok = True
             try:
-                gate.refresh(conn, now, wait=False)
+                gate.refresh(conn, now, wait=False, essentials=essentials)
             except sqlite3.Error as exc:
                 logger.info("achievements: strip evaluate skipped: %s", exc)
                 ok = False

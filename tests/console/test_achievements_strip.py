@@ -161,3 +161,14 @@ def test_pick_next_picks_closest_tier_and_skips_hidden_and_finished():
     assert got is not None and got.progress == 4 and got.target == 5
     assert engine.pick_next({"apply.momentum": _series(4)}, ["apply"]) is None
     assert engine.pick_next({"follow.plan": _series(15)}, ()) is None  # last tier reached
+
+
+def test_all_set_is_judged_when_the_today_strip_evaluates_first(client, db_path, monkeypatch):
+    """The strip can be the first evaluation on a new fingerprint: it must judge the essentials
+    too, or All set would wait for a change that never comes."""
+    from jobhunter import readiness
+
+    monkeypatch.setattr(readiness, "essentials_ok_cheap", lambda *a, **k: True)
+    assert client.get("/").status_code == 200
+    rows = run(db_path, "SELECT tier FROM achievement_unlock WHERE achievement_id = 'setup.ready'")
+    assert [tuple(r) for r in rows] == [(1,)]
