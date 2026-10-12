@@ -306,6 +306,7 @@ def _merge_application(
         "rejection",
         "mail_proposal",
         "followup_log",
+        "fill_session",  # specs/022: a fill session follows its application
     ):
         conn.execute(
             f"UPDATE {table} SET application_id = ? WHERE application_id = ?",

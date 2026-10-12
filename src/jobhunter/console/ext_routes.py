@@ -42,6 +42,7 @@ from jobhunter.apply import (
     generator,
     labels,
     packets,
+    page_match,
     paste,
 )
 from jobhunter.apply import score as group_score
@@ -63,8 +64,13 @@ from jobhunter.apply.capture_models import (
     GoneResponse,
     GroupRequest,
     LinkRequest,
+    MatchCandidate,
+    MatchRequest,
+    MatchResponse,
     PairRequest,
     PairResponse,
+    PickRequest,
+    PickResponse,
     PrepareResponse,
     ScoreAccepted,
     ScoreRequest,
@@ -925,3 +931,58 @@ def register(
             "entail_no": sum(1 for i in items if i.get("entail") == "no"),
             "entail_partly": sum(1 for i in items if i.get("entail") == "partly"),
         }
+
+    # ─── which job a form belongs to (specs/022) ───────────────────────────
+
+    @app.post(f"{PREFIX}match")
+    async def ext_match(request: Request) -> Response:
+        def go(req: MatchRequest) -> Response:
+            def inner(conn: sqlite3.Connection) -> Response:
+                m = page_match.match(conn, req.frame_url, req.tab_id, req.session_id, now=now())
+                return ok(
+                    MatchResponse(
+                        decided=m.decided,
+                        rule=m.rule,
+                        kind=m.kind,  # type: ignore[arg-type]
+                        ats=m.ats or "generic",
+                        variant=m.variant,
+                        posting_key=m.posting_key,
+                        identifies_posting=m.identifies_posting,
+                        group_id=m.group_id,
+                        application_id=m.application_id,
+                        session_id=m.session_id,
+                        reason=m.reason,
+                        candidates=[
+                            MatchCandidate(group_id=c.group_id, title=c.title, employer=c.employer)
+                            for c in m.candidates
+                        ],
+                    )
+                )
+
+            return with_conn(inner)
+
+        return await run(request, MatchRequest, go)
+
+    @app.post(f"{PREFIX}match/pick")
+    async def ext_match_pick(request: Request) -> Response:
+        def go(req: PickRequest) -> Response:
+            def inner(conn: sqlite3.Connection) -> Response:
+                gone(conn, req.group_id, None)
+                try:
+                    p = page_match.pick(
+                        conn, req.frame_url, req.group_id, set_by=req.set_by, now=now()
+                    )
+                except page_match.PickError as exc:
+                    raise _Error(422, {"error": str(exc)}) from exc
+                return ok(
+                    PickResponse(
+                        group_id=p.group_id,
+                        job_id=p.job_id,
+                        posting_key=p.posting_key,
+                        remembered=p.written,
+                    )
+                )
+
+            return with_conn(inner)
+
+        return await run(request, PickRequest, go)
