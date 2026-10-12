@@ -1,0 +1,30 @@
+/* Help pages (specs/019 Addendum A). Colours come from the app.css tokens, so light and dark
+   follow the theme. At phone width the topic list is a <details> above the page. */
+.help-layout { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 24px; align-items: start; }
+.help-topics > summary { display: none; }
+.help-nav ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.help-nav li { margin: 0; }
+.help-nav a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--text-secondary); text-decoration: none; }
+.help-nav a:hover { color: var(--text-primary); background: var(--grid); }
+.help-nav a[aria-current="page"] { color: var(--text-primary); background: var(--grid); font-weight: 600; }
+.help-page { min-width: 0; max-width: 52rem; overflow-wrap: anywhere; }
+.help-page h1 { margin-top: 0; }
+.help-page h2 { margin-top: 1.6em; padding-top: 0.4em; border-top: 1px solid var(--border); }
+.help-page h2, .help-page h3 { scroll-margin-top: 1em; }
+.help-page pre { overflow-x: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+.help-page pre code { background: none; padding: 0; overflow-wrap: normal; }
+.help-page :not(pre) > code { background: var(--surface-1); border-radius: 4px; padding: 1px 4px; }
+.help-table { overflow-x: auto; margin: 1em 0; }
+.help-table table { border-collapse: collapse; font-size: 0.875rem; }
+.help-table th, .help-table td { border-bottom: 1px solid var(--grid); padding: 6px 10px; text-align: left; vertical-align: top; }
+.help-table th { color: var(--text-secondary); }
+.help-start { font-size: 1.125rem; }
+.help-entry h2 { border-top: 0; margin-bottom: 4px; font-size: 1.125rem; }
+.help-entry p { margin: 0 0 4px; }
+.help-entry ul { margin: 4px 0 0; padding-left: 1.2em; columns: 2 16rem; }
+.help-entry li.lvl3 { margin-left: 1em; list-style: circle; }
+@media (max-width: 760px) {
+  .help-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .help-topics { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+  .help-topics > summary { display: list-item; cursor: pointer; color: var(--text-secondary); }
+}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ static_url('help.css') }}">{% endblock %}
+{% block main %}
+<div class="help-layout">
+  <details class="help-topics">
+    <summary>Help topics</summary>
+    {% include "_help_nav.html" %}
+  </details>
+  <article class="help-page">
+    {{ page.html | safe }}
+  </article>
+</div>
+{% endblock %}

@@ -62,6 +62,26 @@ uv sync
 scripts/setup-hooks.sh     # secret-scanning git hooks; asks before downloading Go
 ```
 
+## Help
+
+User help lives in `src/jobhunter/console/help/`, one Markdown file per topic. The same
+pages are served by the console at `http://127.0.0.1:8808/help`.
+
+| Topic | What |
+|---|---|
+| [Getting started](src/jobhunter/console/help/getting-started.md) | The order a fresh install meets things |
+| [Profile and resume](src/jobhunter/console/help/profile-and-resume.md) | Preferences, the resume, what re-scores |
+| [Choosing a scorer](src/jobhunter/console/help/scorers.md) | Providers, keys and models |
+| [OpenRouter and Jev](src/jobhunter/console/help/openrouter.md) | An account, a key and credits |
+| [Costs and credits](src/jobhunter/console/help/costs-and-credits.md) | What spends money, and the caps |
+| [Email alerts](src/jobhunter/console/help/email-alerts.md) | Gmail, step by step |
+| [Browser extension](src/jobhunter/console/help/browser-extension.md) | Send a posting to the console |
+| [Drafting](src/jobhunter/console/help/drafting.md) | The Claude Code login and the API runner |
+| [Settings and secrets](src/jobhunter/console/help/settings-and-secrets.md) | config.toml, keys and environment variables |
+| [Nightly runs](src/jobhunter/console/help/nightly-runs.md) | Scheduled runs and their logs |
+| [Containers](src/jobhunter/console/help/containers.md) | Rootless podman on Fedora atomic |
+| [Troubleshooting](src/jobhunter/console/help/troubleshooting.md) | Common errors and fixes |
+
 ## Choosing a scorer
 
 `scoring.screen_scorer` in `config.toml` is `<provider>:<model>` (no bare model names).
@@ -88,69 +108,6 @@ rejects it). Config changes need a console restart.
 
 Optional: run the console and the nightly jobs as rootless podman containers on Fedora atomic.
 Start at the *First run checklist* in [docs/containers.md](docs/containers.md).
-
-## Running nightly
-
-The nightly run is a systemd **user** timer, not cron, so logs go to the journal and a failure
-triggers a notification. The unit templates live in `src/jobhunter/ops/units/`; the install
-command fills in absolute paths (the project venv's `jobhunter` and this checkout).
-
-| Unit | When | Runs |
-|---|---|---|
-| `jobhunter-run.timer` | 02:00 local, up to 10 min random delay | `jobhunter run` (ingest through score submit) |
-| `jobhunter-collect.timer` | 03:30 local | `jobhunter score --collect-pending` |
-| `jobhunter-verify.timer` | Sunday 04:00 local | `jobhunter sources verify` (still a stub on main; reports "not implemented") |
-
-Timers use `Persistent=true`, so a run missed while the machine was off catches up. Every
-service has `OnFailure=jobhunter-notify@%n.service`, which sends a `notify-send` notification
-when it is installed and always writes to the journal.
-
-```bash
-jobhunter schedule install --dry-run   # print the units and systemctl commands; write nothing
-jobhunter schedule install             # write ~/.config/systemd/user/jobhunter-*; print the commands
-jobhunter schedule install --enable    # same, then run daemon-reload and enable --now the timers
-jobhunter schedule status              # systemctl --user list-timers 'jobhunter-*' (read-only)
-jobhunter schedule uninstall           # disable the timers and remove the unit files
-```
-
-Install does not run `systemctl` unless you pass `--enable`. Logs for a unit:
-`journalctl --user -u jobhunter-run.service -n 20`.
-
-Optional, to keep the timers running while you are logged out:
-`loginctl enable-linger $USER`.
-
-If you move the checkout or reinstall the venv, run `jobhunter schedule install` again so the
-units point at the new paths.
-
-## Browser extension
-
-"Send to jobhunter" captures the job posting you are viewing into your local console, where you
-confirm before it is scored. It reads a page only when you click (activeTab), never on page load,
-and it never fills or submits forms.
-
-1. Chrome 120 or newer. Open `chrome://extensions`, turn on **Developer mode**, click **Load
-   unpacked**, and choose the `extension/` folder of this checkout. There is no build step.
-2. The manifest pins the extension ID, so it stays the same across reloads. After `git pull`,
-   press the reload icon on its card.
-3. Start the console (`jobhunter console`). On `/prefs`, open **Browser extension** and click
-   **Pair browser extension**, or run `jobhunter ext pair`. The code works once, for 10 minutes.
-4. Open the extension's options page (right-click its toolbar icon, then **Options**). Enter the
-   console port (default 8808, or the port you run the console on) and the code.
-5. Check or revoke the pairing from the terminal:
-
-```bash
-jobhunter ext status    # whether it is paired; never prints the token
-jobhunter ext unpair    # revoke the token on the console
-```
-
-To send a page, use the toolbar icon, the right-click menu **Send to jobhunter**, or
-Alt+Shift+J (change the shortcut at `chrome://extensions/shortcuts`). On LinkedIn and Indeed
-pages, a one-time notice comes first, and nothing is read until you accept it.
-
-Containers: if the console runs in a container that publishes a different host port, set
-`public_port` under `[console]` to that host port, the one the browser connects to. The extension
-API accepts only a loopback Host on that port; unset, it uses `console.port`. For general container
-setup, see [docs/containers.md](docs/containers.md).
 
 ## Work tracking
 

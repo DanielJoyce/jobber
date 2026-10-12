@@ -27,6 +27,7 @@ from jobhunter.console import (
     capture_routes,
     detail_routes,
     ext_routes,
+    help_routes,
     inbox_routes,
     packet_routes,
     pages_routes,
@@ -83,6 +84,7 @@ PAGES: list[tuple[str, str | None, str]] = [
     ("/costs", "Costs", "Costs"),
     ("/prefs", "Prefs", "Preferences"),
     ("/alerts", None, "Alerts"),
+    ("/help", "Help", "Help"),
 ]
 NAV = [(path, label) for path, label, _ in PAGES if label]
 
@@ -323,6 +325,7 @@ def create_app(
     inbox_routes.register(app, templates, get_conn, NAV)
     tracking_routes.register(app, templates, get_conn, NAV, now)
     pages_routes.register(app, templates, get_conn, NAV, now)
+    help_routes.register(app, templates, NAV)
 
     def table_context(
         conn: sqlite3.Connection,

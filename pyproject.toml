@@ -22,6 +22,7 @@ dependencies = [
     "google-api-python-client>=2.201.0",
     "keyring>=25.7.0",
     "python-multipart>=0.0.32",
+    "markdown-it-py>=4",
 ]
 
 [project.optional-dependencies]
