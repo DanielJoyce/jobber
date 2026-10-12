@@ -424,7 +424,12 @@ def _score_stage(
         report.messages.append("score: screen stage not installed; skipped")
         return
     from jobhunter.scoring import rescore
-    from jobhunter.scoring.scorers import privacy_notice, scorer_from_string
+    from jobhunter.scoring.scorers import (
+        MISSING,
+        credential_for,
+        privacy_notice,
+        scorer_from_string,
+    )
 
     # new_only: the daily run scores new jobs (and pasted descriptions) only. Re-scoring jobs
     # already scored under another scoring_version, model or prompt costs money, so it runs only
@@ -434,6 +439,14 @@ def _score_stage(
     if problem := settings.scoring.scorer_problems().get("screen_scorer"):
         report.messages.append(f"score: skipped ({problem}); survivors stay queued")
         logger.warning("score skipped: %s", problem)
+        return
+    cred = credential_for(spec, settings.scoring)
+    if cred.status == MISSING:  # 'unknown' (e.g. local:) and 'present' try as today
+        names = ", ".join(cred.names)
+        hint = f" (set {names})" if names else ""
+        report.messages.append(
+            f"score: skipped: no credential for {spec}{hint}; survivors stay queued"
+        )
         return
     if notice := privacy_notice(spec, settings.scoring):
         report.messages.append(notice)

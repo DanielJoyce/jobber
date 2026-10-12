@@ -333,6 +333,17 @@ def _fresh_secrets_report(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(secrets, "LAST_REPORT", None)
 
 
+@pytest.fixture(autouse=True)
+def _placeholder_scorer_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The score stage and ``score --submit`` skip or exit 2 when no Anthropic credential is
+    found (specs/019 S7), before any client is built. Tests that mock the client would hit that
+    check on a machine with no key, so give them a placeholder. It never reaches a network: the
+    guard above refuses non-loopback connections. Tests of the missing case delete it."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-placeholder-for-tests")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder-for-tests")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "placeholder-for-tests")
+
+
 class RealClaudeBlocked(RuntimeError):
     """Raised when a test tries to launch a `claude` that is not the test's fake."""
 

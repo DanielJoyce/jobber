@@ -563,6 +563,14 @@ def _score_mode(
         _score_rescore(settings, profile, rescore, scorer_override, yes, paid_lock)
         return
     screening = submit or collect is not None
+    if submit:
+        from jobhunter.scoring.scorers import MISSING, credential_for
+
+        cred = credential_for(scorer, settings.scoring)
+        if cred.status == MISSING:
+            hint = f" (set {', '.join(cred.names)})" if cred.names else ""
+            typer.echo(f"scorer error: no credential for {scorer}{hint}", err=True)
+            raise typer.Exit(2)
     if screening and (notice := privacy_notice(scorer, settings.scoring)):
         typer.echo(notice, err=True)
     conn = db.connect(settings.paths.db_path)

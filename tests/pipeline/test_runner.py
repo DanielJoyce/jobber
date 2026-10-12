@@ -299,3 +299,72 @@ def test_bad_scorer_spec_still_fetches_and_ingests(conn, spec):
 def test_default_profile_loader_missing_dir(tmp_path):
     s = Settings(paths=Paths(profile_dir=tmp_path / "nope"))
     assert runner.default_profile_loader(s)() is None
+
+
+def _no_client(monkeypatch):
+    from jobhunter.scoring import scorers
+
+    def boom(*a, **k):
+        raise AssertionError("scorer/client constructed")
+
+    monkeypatch.setattr(scorers, "scorer_from_string", boom)
+    monkeypatch.setattr("anthropic.Anthropic", boom)
+
+
+def _clear_anthropic_env(monkeypatch, tmp_path):
+    import os
+
+    for name in list(os.environ):
+        if name.startswith("ANTHROPIC_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+
+def test_score_skipped_when_credential_missing(conn, monkeypatch, tmp_path):
+    _clear_anthropic_env(monkeypatch, tmp_path)
+    _no_client(monkeypatch)
+    FakeAdapter.stubs = {"a": [stub("a", 1)]}
+    report = go(conn, [row("a")])
+    text = "\n".join(report.messages)
+    assert "score: skipped: no credential for anthropic:" in text
+    assert "(set ANTHROPIC_API_KEY)" in text
+    assert "survivors stay queued" in text
+    assert report.exit_code == 0
+    assert conn.execute("SELECT COUNT(*) FROM job").fetchone()[0] == 1
+
+
+def test_score_proceeds_when_credential_present(conn, monkeypatch, tmp_path):
+    _clear_anthropic_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    calls = []
+
+    def fake_client(*a, **k):
+        calls.append(1)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr("anthropic.Anthropic", fake_client)
+    report = go(conn, [row("a")])
+    text = "\n".join(report.messages)
+    assert calls and "no Anthropic client" in text
+    assert "no credential" not in text
+    assert report.exit_code == 0
+
+
+def test_score_local_unknown_proceeds(conn, monkeypatch, tmp_path):
+    from jobhunter.config import Scoring
+    from jobhunter.scoring import scorers
+
+    _clear_anthropic_env(monkeypatch, tmp_path)
+    built = []
+
+    def fake_factory(spec, scoring=None):
+        built.append(spec)
+        raise scorers.ScorerError("server down")
+
+    monkeypatch.setattr(scorers, "scorer_from_string", fake_factory)
+    settings = Settings(scoring=Scoring(screen_scorer="local:some-model"))
+    report = go(conn, [row("a")], settings=settings)
+    assert built == ["local:some-model"]
+    assert "no credential" not in "\n".join(report.messages)
+    assert report.exit_code == 0
