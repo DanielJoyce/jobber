@@ -3,7 +3,7 @@
 Kept outside ``jobhunter.console.help`` on purpose: that package renders before anything is
 set up and must not import settings or the database. These functions read only constants of
 the code (no settings values, no environment, no secrets), so what they return is the same on
-every machine. ``jobhunter.console.help`` registers them in ``BLOCKS``; regenerate the pages
+every machine. Importing this module registers them in ``help.BLOCKS``; regenerate the pages
 with ``uv run python -m jobhunter.console.help``.
 """
 
@@ -13,6 +13,7 @@ from collections.abc import Callable
 
 from jobhunter import config, secrets
 from jobhunter.apply import cli_runner
+from jobhunter.console import help as helpdocs
 from jobhunter.mail import auth
 from jobhunter.ops import ctr
 from jobhunter.xdg import CACHE_HOME_VAR, CONFIG_HOME_VAR, DATA_HOME_VAR
@@ -43,8 +44,20 @@ SECRET_USE = {
 # Anything from the environment is read once at start, so it needs a console restart.
 UNITS = "set by the units, do not set"
 OTHER_ROWS = (
-    (config.ENV_FILE_VAR, "which `.env` is read first", "your choice", UNITS, "yes"),
-    ("JOBHUNTER_CONFIG", "which `config.toml` is read", "your choice", UNITS, "yes"),
+    (
+        config.ENV_FILE_VAR,
+        "which `.env` is read first",
+        "your choice",
+        "not used (secrets are podman secrets)",
+        "yes",
+    ),
+    (
+        "JOBHUNTER_CONFIG",
+        "which `config.toml` is read",
+        "your choice",
+        "not used (the config is `/config/config.toml`)",
+        "yes",
+    ),
     *(
         (var, f"overrides `[paths] {field}`", "optional", UNITS, "yes")
         for field, var in config.PATH_ENV_VARS.items()
@@ -78,7 +91,7 @@ OTHER_ROWS = (
         "where the Claude Code login lives; passed to the drafting runner",
         "optional",
         "not used (drafting runs on the host)",
-        "no",
+        "yes",
     ),
     (
         "CLAUDE_CODE_OAUTH_TOKEN",
@@ -86,7 +99,7 @@ OTHER_ROWS = (
         "A secret with no `_FILE` form",
         "`~/.env`",
         "not used",
-        "no",
+        "yes",
     ),
     *(
         (name, "set by jobhunter on the Claude Code child: do not set", "-", "-", "-")
@@ -94,18 +107,15 @@ OTHER_ROWS = (
     ),
     *(
         (name, "never passed to the Claude Code child", "-", "-", "-")
-        for name in (
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX",
-        )
+        for name in cli_runner.NEVER_PASSED
+        if name not in secrets.DEFAULT_NAMES and name != "CLAUDECODE"
     ),
-    ("JOBHUNTER_CONTAINER", "container mode switch", "-", "set by the units, do not set", "-"),
+    ("JOBHUNTER_CONTAINER", "container mode switch", "-", "set by the image, do not set", "-"),
     (
         "JOBHUNTER_PUBLISHED_LOOPBACK_ONLY",
         "the console's published-port check",
         "-",
-        "set by the units, do not set",
+        "set by you only for the 0.0.0.0 fallback (see Containers, Troubleshooting)",
         "-",
     ),
     (
@@ -162,5 +172,8 @@ def env_var_table() -> str:
     return "\n".join(lines)
 
 
-def generators() -> dict[str, Callable[[], str]]:
-    return {"cloud-steps": cloud_steps, "env-vars": env_var_table}
+GENERATORS: dict[str, Callable[[], str]] = {
+    "cloud-steps": cloud_steps,
+    "env-vars": env_var_table,
+}
+helpdocs.BLOCKS.update(GENERATORS)

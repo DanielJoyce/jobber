@@ -6,9 +6,11 @@ own pages. This page is the whole Gmail setup, in seven steps. In the console, t
 appear as rows on `/setup` (the Email alerts group) and `/alerts`; `jobhunter doctor` lists them
 too. Do them in order: each step needs the one before.
 
-Commands run on the **host**, in the checkout. In container mode, `jobhunter mail auth` and
-`jobhunter mail setup` still run on the host (they need your browser); the scheduled runs read
-the files you hand them as podman secrets. See [Containers](containers.md#gmail).
+Commands run on the **host**, in the checkout. In container mode only `jobhunter mail auth`
+must run on the host (it needs your browser), and it stores the token as a podman secret, so
+the host keeps no token. Every other mail command then runs through the wrapper: write
+`jobhunter-ctr mail setup` and `jobhunter-ctr mail status` where this page says
+`jobhunter mail setup` and `jobhunter mail status`. See [Containers](containers.md#gmail).
 
 Use a separate `+jobs` address of your own Gmail account, such as `<you>+jobs@gmail.com`: mail
 sent there still reaches your inbox, and a filter can tell it apart.
@@ -151,10 +153,9 @@ whole domain.
 
 ## How to tell it works
 
-- `jobhunter mail status` prints the token location, whether the label and each filter exist,
+- `jobhunter mail status` (in containers `jobhunter-ctr mail status`) prints the token location, whether the label and each filter exist,
   and how many messages sit under the label. It changes nothing.
 - Alerts arrive in Gmail under the label (open the label in Gmail).
-- `jobhunter mail sample` and `jobhunter mail match` show how recent alerts would be read.
 - In the console, the Email alerts rows on `/setup` go green one by one, and `/alerts` shows
   per-board counts.
 - `jobhunter doctor` prints the same rows in the terminal.

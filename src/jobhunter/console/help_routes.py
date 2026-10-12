@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from jobhunter.console import help as helpdocs
+from jobhunter.console import help_blocks  # noqa: F401  (registers the generated blocks)
 
 
 def register(app: FastAPI, templates: Jinja2Templates, nav: list[tuple[str, str]]) -> None:

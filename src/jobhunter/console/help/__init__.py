@@ -285,13 +285,3 @@ def render(topic: str) -> Page:
     with _cache_lock:
         _cache[topic] = (mtime, page)
     return page
-
-
-def _register_code_blocks() -> None:
-    """Blocks built from constants of the code (``jobhunter.helpblocks``)."""
-    from jobhunter import helpblocks
-
-    BLOCKS.update(helpblocks.generators())
-
-
-_register_code_blocks()

@@ -370,7 +370,7 @@ def env_like_literals() -> dict[str, str]:
 
 
 def test_every_environment_variable_in_the_code_is_documented():
-    from jobhunter import helpblocks
+    from jobhunter.console import help_blocks as helpblocks
 
     table = helpblocks.env_var_table()
     missing = {}
@@ -381,15 +381,28 @@ def test_every_environment_variable_in_the_code_is_documented():
         missing[name] = where
     assert not missing, (
         "read in the code but not in the environment-variable table of settings-and-secrets.md "
-        f"(add to jobhunter/helpblocks.py): {missing}"
+        f"(add to jobhunter/console/help_blocks.py): {missing}"
     )
 
 
 def test_environment_table_names_are_still_read_by_the_code():
     """The reverse: a documented variable that no code reads any more is stale."""
-    from jobhunter import helpblocks
+    from jobhunter.console import help_blocks as helpblocks
 
     used = set(env_like_literals())
     used |= {f"{n}_FILE" for n in used}
     for name in re.findall(r"^\| `([A-Z0-9_]+)`", helpblocks.env_var_table(), flags=re.M):
         assert name in used or name.removesuffix("_FILE") in used, f"{name} is never read"
+
+
+def test_importing_the_help_package_loads_no_settings_or_secrets_code():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, jobhunter.console.help; "
+        "bad = [m for m in ('jobhunter.config', 'jobhunter.secrets', 'jobhunter.mail.auth', "
+        "'jobhunter.ops.ctr') if m in sys.modules]; print(bad)"
+    )
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+    assert out.stdout.strip() == "[]", out.stderr or out.stdout

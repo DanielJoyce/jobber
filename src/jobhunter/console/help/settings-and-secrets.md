@@ -19,8 +19,8 @@ jobhunter paths
 
 ## Environment variables
 
-Every variable jobhunter reads is in this table. It is generated from the code, and a test fails
-if the code reads a variable that is missing here. A variable from the environment is read once,
+Every variable jobhunter reads whose name starts with `JOBHUNTER_`, `ANTHROPIC_`, `OPENROUTER_`, `OPENAI_COMPAT_`, `LLAMA_`, `USAJOBS_`, `CLAUDE_` or `XDG_` is in this table (the usual `PATH` and proxy variables are not). It is generated from the code, and a test fails
+if the code reads such a variable that is missing here. A variable from the environment is read once,
 at start, so changing one needs a restart of the console (and applies to the next scheduled run
 on its own). A secret `NAME` can instead be given as `NAME_FILE`, the path of a file holding the
 value; containers use that form.
@@ -37,8 +37,8 @@ value; containers use that form.
 | `USAJOBS_API_KEY` (secret; or `USAJOBS_API_KEY_FILE`) | the USAJOBS source | `~/.env` or the environment | podman secret `jobhunter_usajobs_key` as `USAJOBS_API_KEY_FILE` | yes |
 | `USAJOBS_EMAIL` (secret; or `USAJOBS_EMAIL_FILE`) | the USAJOBS source (the email you registered the key with) | `~/.env` or the environment | podman secret `jobhunter_usajobs_email` as `USAJOBS_EMAIL_FILE` | yes |
 | `ANTHROPIC_PROFILE`, `ANTHROPIC_CONFIG_DIR`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_IDENTITY_TOKEN`, `ANTHROPIC_IDENTITY_TOKEN_FILE` | the Anthropic SDK's other sign-in routes; jobhunter only checks that they are set | the environment | not mounted | yes |
-| `JOBHUNTER_ENV_FILE` | which `.env` is read first | your choice | set by the units, do not set | yes |
-| `JOBHUNTER_CONFIG` | which `config.toml` is read | your choice | set by the units, do not set | yes |
+| `JOBHUNTER_ENV_FILE` | which `.env` is read first | your choice | not used (secrets are podman secrets) | yes |
+| `JOBHUNTER_CONFIG` | which `config.toml` is read | your choice | not used (the config is `/config/config.toml`) | yes |
 | `JOBHUNTER_DATA_DIR` | overrides `[paths] data_dir` | optional | set by the units, do not set | yes |
 | `JOBHUNTER_CACHE_DIR` | overrides `[paths] cache_dir` | optional | set by the units, do not set | yes |
 | `JOBHUNTER_DB_PATH` | overrides `[paths] db_path` | optional | set by the units, do not set | yes |
@@ -50,8 +50,8 @@ value; containers use that form.
 | `XDG_DATA_HOME` | base of `~/.local/share/jobhunter` | optional | ignored | yes |
 | `XDG_CACHE_HOME` | base of `~/.cache/jobhunter` | optional | ignored | yes |
 | `XDG_RUNTIME_DIR` | podman's socket directory, read by `container preflight` | set by your login session | not used | no |
-| `CLAUDE_CONFIG_DIR` | where the Claude Code login lives; passed to the drafting runner | optional | not used (drafting runs on the host) | no |
-| `CLAUDE_CODE_OAUTH_TOKEN` | a subscription token from `claude setup-token`; passed to the drafting runner. A secret with no `_FILE` form | `~/.env` | not used | no |
+| `CLAUDE_CONFIG_DIR` | where the Claude Code login lives; passed to the drafting runner | optional | not used (drafting runs on the host) | yes |
+| `CLAUDE_CODE_OAUTH_TOKEN` | a subscription token from `claude setup-token`; passed to the drafting runner. A secret with no `_FILE` form | `~/.env` | not used | yes |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | set by jobhunter on the Claude Code child: do not set | - | - | - |
 | `CLAUDE_CODE_DISABLE_ATTACHMENTS` | set by jobhunter on the Claude Code child: do not set | - | - | - |
 | `CLAUDE_CODE_DISABLE_CLAUDE_MDS` | set by jobhunter on the Claude Code child: do not set | - | - | - |
@@ -59,8 +59,8 @@ value; containers use that form.
 | `ANTHROPIC_BASE_URL` | never passed to the Claude Code child | - | - | - |
 | `CLAUDE_CODE_USE_BEDROCK` | never passed to the Claude Code child | - | - | - |
 | `CLAUDE_CODE_USE_VERTEX` | never passed to the Claude Code child | - | - | - |
-| `JOBHUNTER_CONTAINER` | container mode switch | - | set by the units, do not set | - |
-| `JOBHUNTER_PUBLISHED_LOOPBACK_ONLY` | the console's published-port check | - | set by the units, do not set | - |
+| `JOBHUNTER_CONTAINER` | container mode switch | - | set by the image, do not set | - |
+| `JOBHUNTER_PUBLISHED_LOOPBACK_ONLY` | the console's published-port check | - | set by you only for the 0.0.0.0 fallback (see Containers, Troubleshooting) | - |
 | `JOBHUNTER_BUILD_COMMIT` | the commit `jobhunter version` shows | - | set by the image, do not set | - |
 
 <!-- jh:end env-vars -->

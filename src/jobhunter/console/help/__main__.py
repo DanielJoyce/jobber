@@ -1,5 +1,6 @@
 """``python -m jobhunter.console.help`` rewrites the generated blocks in every help file."""
 
+from jobhunter.console import help_blocks  # noqa: F401  (registers the generated blocks)
 from jobhunter.console.help import HELP_DIR, regenerate
 
 if __name__ == "__main__":
