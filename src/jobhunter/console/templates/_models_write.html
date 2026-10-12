@@ -9,5 +9,5 @@
   {% include "_models_row.html" %}
   {% with oob = True %}{% include "_models_history.html" %}{% endwith %}
 {% endif %}
-{% if not stale %}<input type="hidden" id="models-digest" name="digest" value="{{ digest }}" hx-swap-oob="true">{% endif %}
+{% if wrote %}<input type="hidden" id="models-digest" name="digest" value="{{ digest }}" hx-swap-oob="true">{% endif %}
 {% with oob = True %}{% include "_models_banner.html" %}{% include "_models_access.html" %}{% endwith %}

@@ -481,6 +481,52 @@ def test_409_keeps_the_old_digest_so_a_second_click_is_refused_too(client):
     assert models_path(client).read_text() == '[apply]\neffort = "low"\n'
 
 
+def test_a_no_change_save_after_a_409_hands_out_no_fresh_digest(client):
+    """Only a write moves the page's digest: a no-op save (or any refusal) after another
+    writer's change must not refresh it, or the next real save would overwrite that change."""
+    page = client.get("/models").text
+    old = digest_of(page)
+    models_path(client).write_text('[apply]\neffort = "low"\n')  # another writer
+    assert save(client, "drafting", page, effort="high").status_code == 409
+    r = save(client, "screen", page)  # nothing changed on this row
+    assert r.status_code == 200 and "No change" in r.text
+    assert 'id="models-digest" name="digest"' not in r.text
+    assert hidden(r.text, "page_digest") == old
+    r = save(client, "deep", page, screen_other="", deep="anthropic:claude-sonnet-5-5")
+    assert r.status_code == 409
+    r = client.post("/models/screen", data={"digest": old, "screen": f"openrouter:{SENTINEL}"})
+    assert r.status_code == 422 and digest_of(r.text) == old  # no-JS page keeps it too
+    assert models_path(client).read_text() == '[apply]\neffort = "low"\n'
+
+
+def test_no_js_409_does_not_claim_the_page_was_reloaded(client):
+    page = client.get("/models").text
+    models_path(client).write_text('[apply]\neffort = "low"\n')
+    data = {"digest": digest_of(page), "effort": "high", "shown_effort": "medium"}
+    r = client.post("/models/drafting", data=data)
+    assert r.status_code == 409
+    text = unescape(r.text)
+    assert "reloaded" not in text and "Reload the page" in text
+
+
+def test_a_models_save_is_not_an_outside_change_to_the_config_watch(cfg):
+    from jobhunter import config_watch as cw
+
+    client = make_client(settings_from(cfg))
+    watch = cw.ConfigWatcher(
+        config_path=lambda: cfg, env_candidates=lambda: [], container_mode=False, start_env={}
+    )
+    client.app.state.config_watch = watch
+    assert not watch.check(client.app.state.settings, force=True).pending
+    page = client.get("/models").text
+    assert "Saved at" in save(client, "deep", page, deep="anthropic:claude-sonnet-5-5").text
+    state = watch.check(client.app.state.settings, force=True)
+    assert not state.pending, state.fields
+    # An edit made outside the console still shows.
+    models_path(client).write_text('[apply]\neffort = "low"\n')
+    assert watch.check(client.app.state.settings, force=True).pending
+
+
 def test_malformed_config_value_is_shown_with_its_problem_not_as_blocked(tmp_path):
     cfg = write_config(tmp_path, '[scoring]\nscreen_scorer = "openroute:jev:tiny"\n')
     client = make_client(settings_from(cfg))

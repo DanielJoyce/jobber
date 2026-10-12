@@ -99,6 +99,8 @@ FLASH = {
     "loaded": "Loaded models.toml into the running settings.",
     "nothing": "Nothing to load: the running settings already match models.toml.",
     "stale": "models.toml changed elsewhere; this page is reloaded with what is there now.",
+    "refused-stale": "Not saved: models.toml changed elsewhere since this page was loaded. "
+    "Reload the page to see what is there now.",
     "refreshed": "The OpenRouter model list was refreshed.",
     "refresh-failed": "The OpenRouter list could not be fetched; the old list is kept.",
     "not-broken": "models.toml is valid TOML; reset single rows instead.",
@@ -804,6 +806,7 @@ def register(
         state: RowState = field(default_factory=RowState)
         saved: bool = False
         stale: bool = False
+        wrote: bool = False  # models.toml was written: only then is a new digest handed out
 
     def apply_write(
         request: Request,
@@ -915,7 +918,7 @@ def register(
         verb = {"reset": "Reset", "revert": "Reverted"}.get(source, "Saved")
         done = RowState(message=f"{verb} at {saved_at}.", kind="ok")
         done.effect = effect_lines(result.changed, request.app.state.settings)
-        return Outcome(200, done, saved=True)
+        return Outcome(200, done, saved=True, wrote=True)
 
     def effect_lines(changed: Mapping[str, Any], settings: Settings) -> list[str]:
         out = []
@@ -952,17 +955,19 @@ def register(
         """htmx: the row (or the history section) plus out-of-band swaps of the digest, the
         banner, the access list and the history. Otherwise the whole page.
 
-        After a 409 the page keeps the digest it posted: handing out the new one would let a
-        second click overwrite the other writer's change unseen. Only a reload moves it."""
+        The new digest goes out only when this request wrote models.toml. Any other answer
+        (no change, a refusal, a 409) echoes the digest it was posted: handing out the file's
+        current digest would let the next save overwrite another writer's change unseen.
+        Only a reload, or this page's own write, moves it."""
         ctx = make_ctx(request, conn, local_ids)
         states = {row: outcome.state} if row else {}
         context = page_context(request, ctx, states, history_msg=history_msg)
-        context["stale"] = outcome.stale
-        if outcome.stale:
+        context["wrote"] = outcome.wrote
+        if not outcome.wrote:
             context["digest"] = posted_digest
         if not request.headers.get("hx-request"):
             if outcome.stale:
-                context["flash"] = FLASH["stale"]
+                context["flash"] = FLASH["refused-stale"]
             return render("models.html", request, context, outcome.status)
         context["primary"] = row or "history"
         return render("_models_write.html", request, context, outcome.status)
@@ -983,7 +988,8 @@ def register(
                 if refused:
                     state = RowState(values=values, shown=shown, message=REFUSED_TEXT,
                                      kind="error")  # fmt: skip
-                    return write_response(request, conn, Outcome(422, state), row=row)
+                    return write_response(request, conn, Outcome(422, state), row=row,
+                                          posted_digest=digest_of(form))  # fmt: skip
                 changes: dict[str, Any] = {}
                 for name, text in values.items():
                     if name in shown and text == shown[name]:
@@ -1006,7 +1012,8 @@ def register(
             except mc.ModelsFileError as exc:
                 state = RowState(values=values, shown=shown, message=f"Not saved: {exc}",
                                  kind="error")  # fmt: skip
-                return write_response(request, conn, Outcome(422, state), row=row)
+                return write_response(request, conn, Outcome(422, state), row=row,
+                                      posted_digest=digest_of(form))  # fmt: skip
             finally:
                 conn.close()
 
@@ -1057,7 +1064,8 @@ def register(
                 except mc.ModelsFileError as exc:
                     state.message, state.kind = f"Not reverted: {exc}", "error"
                     return write_response(request, conn, Outcome(422, state), row=None,
-                                          history_msg=state)  # fmt: skip
+                                          history_msg=state,
+                                          posted_digest=digest_of(form))  # fmt: skip
                 outcome = apply_write(
                     request, conn, {name: value}, digest=digest_of(form), source="revert",
                     queued=str(form.get("queued", "")), approved=approved_from(form),
