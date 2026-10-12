@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -345,7 +346,8 @@ def test_cli_prints_privacy_notice_once(tmp_path, monkeypatch):
 
     from jobhunter.scoring import profile as profile_mod
 
-    monkeypatch.setattr(profile_mod, "load_profile", lambda *a, **k: object())
+    stub = SimpleNamespace(filter_version="f", scoring_version="s")
+    monkeypatch.setattr(profile_mod, "load_profile", lambda *a, **k: stub)
     monkeypatch.setattr(screen, "score_sync", lambda *a, **k: screen.SyncResult(), raising=True)
     monkeypatch.setattr(
         "anthropic.Anthropic", lambda *a, **k: pytest.fail("no Anthropic client needed")
