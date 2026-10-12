@@ -16,9 +16,14 @@ while an unmigrated old database exists, and ``jobhunter migrate-paths`` moves i
 from __future__ import annotations
 
 import difflib
+import hashlib
+import logging
 import os
+import re
 import tomllib
 from collections.abc import Mapping
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +31,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from jobhunter import container
 from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
+
+logger = logging.getLogger(__name__)
 
 CONFIG_ENV_VAR = "JOBHUNTER_CONFIG"
 CONFIG_FILE_NAME = "config.toml"
@@ -238,6 +245,18 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
         raise ValueError(f'{field} "{spec}": the model name starts with the provider {inner!r}')
 
 
+# The value an invalid ``models.toml`` spending key leaves in its field. It is not a usable spec
+# (``check_scorer_spec`` refuses the provider), so a path that forgot ``scorer_problems`` still
+# cannot build a scorer from it, and nothing falls back to another provider.
+BLOCKED_SPEC = "blocked:models.toml"
+
+
+def blocked_message(field: str, reason: str = "") -> str:
+    """The one-line message for a blocked spending key (shown in the run summary)."""
+    why = f": {reason}" if reason else ""
+    return f"models.toml {field} is invalid{why} (see /models or `jobhunter models show`)"
+
+
 class Scoring(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -253,11 +272,23 @@ class Scoring(BaseModel):
     openrouter: OpenRouter = Field(default_factory=OpenRouter)
     local: Local = Field(default_factory=Local)
 
+    # {field: message} for a scorer that ``models.toml`` sets to an invalid value, or every
+    # scorer when the file cannot be read (specs/020 Storage). Filled by ``load_settings``.
+    _blocked: dict[str, str] = PrivateAttr(default_factory=dict)
+
     def scorer_problems(self) -> dict[str, str]:
-        """{field: message} for each malformed scorer spec. Loading never fails on these: the
-        run stage, console and CLI report them where they matter (scoring fails soft)."""
+        """{field: message} for each scorer that must not run: a malformed spec, or one that
+        ``models.toml`` blocks (fail closed: an invalid spending key is never replaced by
+        config.toml's value or the default). Loading never fails on these: the run stage,
+        console and CLI report them where they matter (scoring fails soft)."""
         out: dict[str, str] = {}
         for name, only in (("screen_scorer", False), ("deep_scorer", True)):
+            if name in self._blocked:
+                out[name] = self._blocked[name]
+                continue
+            if getattr(self, name) == BLOCKED_SPEC:
+                out[name] = blocked_message(name)
+                continue
             try:
                 check_scorer_spec(getattr(self, name), name, anthropic_only=only)
             except ValueError as exc:
@@ -343,6 +374,20 @@ class Settings(BaseModel):
     console: Console = Field(default_factory=Console)
     capture: Capture = Field(default_factory=Capture)
 
+    # The models.toml layers this was built with (``load_layers``); None when built directly.
+    _models: Any = PrivateAttr(default=None)
+
+    @property
+    def models_layers(self) -> Layers | None:
+        """How ``load_settings`` layered models.toml into this, for ``/models``, ``jobhunter
+        models`` and the drafting notice. None for Settings built without ``load_settings``."""
+        return self._models
+
+    @property
+    def models_notices(self) -> list[str]:
+        """One line per [apply] key in models.toml that was invalid and fell back."""
+        return list(self._models.notices) if self._models is not None else []
+
     @model_validator(mode="after")
     def _derive_catalog_cache(self) -> Settings:
         router = self.scoring.openrouter
@@ -426,17 +471,232 @@ def load_env_files() -> list[Path]:
     return loaded
 
 
-def load_settings(
+# ─── models.toml (specs/020-model-selection.md#storage) ─────────────────────
+
+MODELS_FILE_NAME = "models.toml"
+# The only keys models.toml may hold, with the catalog use each model key is judged under
+# (None: the field's own type is the whole check). Caps, api_key_env and endpoints stay in
+# config.toml.
+MODEL_KEYS: dict[str, dict[str, str | None]] = {
+    "scoring": {"screen_scorer": "screen", "deep_scorer": "deep"},
+    "apply": {
+        "runner": None,
+        "cli_model": "draft_cli",
+        "api_model": "draft_api",
+        "effort": None,
+        "entailment_check": None,
+        "cli_entailment_model": "check_cli",
+        "api_entailment_model": "check_api",
+    },
+}
+# Keys that spend on their own (the nightly run, re-scores, the deep pass): invalid means
+# blocked. The [apply] keys fall back instead: every draft is a click that shows its cost.
+SPENDING_KEYS = ("screen_scorer", "deep_scorer")
+_CHOICES = {"runner": ("cli", "api"), "effort": ("low", "medium", "high")}
+# A value may be echoed in a message only when it looks like a scorer spec or model id
+# (019 B: never a value except SHOWN_VALUES), and never when it looks like a key.
+_SHOWABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
+_SECRET_LOOKING = re.compile(r"(?i)^(sk-|sk_|key-|ghp_|xox|bearer)|secret|token|password")
+
+
+def shown_value(value: object) -> str | None:
+    """``value`` when it may appear in a message (a scorer spec or model id), else None."""
+    if not isinstance(value, str) or not _SHOWABLE.fullmatch(value):
+        return None
+    if _SECRET_LOOKING.search(value):
+        return None
+    return value
+
+
+def models_file(data_dir: Path) -> Path:
+    """``<data dir>/models.toml``: the console-managed layer over config.toml (specs/020)."""
+    return resolve_path(data_dir) / MODELS_FILE_NAME
+
+
+@dataclass(frozen=True)
+class ModelsProblem:
+    """One thing wrong in models.toml. ``kind``: "broken" (the file cannot be read as TOML),
+    "invalid" (a known key with a bad value: ignored, and blocked when it spends) or "unknown"
+    (a key this version does not know: ignored with a warning). The message never holds a
+    value other than a scorer spec or model id."""
+
+    kind: str
+    key: str | None  # "scoring.screen_scorer"; None for the whole file
+    message: str
+
+
+@dataclass
+class Layers:
+    """What ``load_layers`` found: each layer, what it set, what is wrong, and the result.
+
+    ``base`` is built from the code defaults, config.toml, the environment and ``overrides``,
+    without models.toml. ``layer`` is {section: {key: value}} for the valid keys models.toml
+    set, ``invalid`` the same for the known keys it set to a bad value (raw, not for display),
+    ``blocked`` {field: message} for the spending keys that are blocked, ``notices`` one line
+    per [apply] key that fell back. ``config_keys`` are the (section, key) pairs config.toml
+    set, for "where did this value come from". ``digest`` is the SHA-256 of the file's bytes
+    (of b"" when there is no file), which every write must quote.
+    """
+
+    path: Path
+    exists: bool
+    digest: str
+    base: Settings
+    merged: Settings
+    layer: dict[str, dict[str, Any]] = dc_field(default_factory=dict)
+    invalid: dict[str, dict[str, Any]] = dc_field(default_factory=dict)
+    problems: list[ModelsProblem] = dc_field(default_factory=list)
+    blocked: dict[str, str] = dc_field(default_factory=dict)
+    notices: list[str] = dc_field(default_factory=list)
+    config_keys: frozenset[tuple[str, str]] = frozenset()
+    override_keys: frozenset[tuple[str, str]] = frozenset()
+
+    @property
+    def broken(self) -> bool:
+        return any(p.kind == "broken" for p in self.problems)
+
+    def source(self, section: str, key: str) -> str:
+        """Where the effective value of ``section.key`` came from: "override", "models.toml",
+        "models.toml (invalid)", "config.toml" or "default"."""
+        if (section, key) in self.override_keys:
+            return "override"
+        if key in self.layer.get(section, {}):
+            return "models.toml"
+        if key in self.invalid.get(section, {}) or (section == "scoring" and key in self.blocked):
+            return "models.toml (invalid)"
+        if (section, key) in self.config_keys:
+            return "config.toml"
+        return "default"
+
+
+def check_model_key(section: str, key: str, value: object) -> str | None:
+    """Why ``value`` is not valid for ``section.key`` in models.toml, or None.
+
+    The field's type, the scorer spec syntax (the deep pass Anthropic only), an Anthropic
+    model's price-table entry and the catalog's per-use rules (``catalog.use_rule_problem``).
+    Never echoes a value that is not a scorer spec or model id.
+    """
+    use = MODEL_KEYS[section][key]
+    if key == "entailment_check":
+        return None if isinstance(value, bool) else "must be true or false"
+    if key in _CHOICES:
+        choices = _CHOICES[key]
+        if isinstance(value, str) and value in choices:
+            return None
+        return "must be one of " + ", ".join(f'"{c}"' for c in choices)
+    if not isinstance(value, str):
+        return "must be a string"
+    assert use is not None
+    from jobhunter.scoring import catalog  # lazy: catalog imports this module
+
+    reason = catalog.use_rule_problem(use, value, key)
+    if reason is None:
+        return None
+    if shown_value(value) is None:
+        return "is not a usable model name"
+    return reason
+
+
+_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_once(path: Path, digest: str, problems: list[ModelsProblem]) -> None:
+    """Log the problems in one version of the file once per process, not on every load."""
+    if not problems or (str(path), digest) in _WARNED:
+        return
+    _WARNED.add((str(path), digest))
+    for p in problems:
+        logger.warning("%s: %s", path, p.message)
+
+
+def read_models_file(path: Path) -> tuple[bool, str, dict[str, Any] | None, list[ModelsProblem]]:
+    """(exists, digest, parsed table or None when broken, problems). Never raises."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return False, hashlib.sha256(b"").hexdigest(), {}, []
+    except OSError as exc:
+        msg = f"{MODELS_FILE_NAME} cannot be read ({type(exc).__name__})"
+        return True, "", None, [ModelsProblem("broken", None, msg)]
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        data = tomllib.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        where = ""
+        if isinstance(exc, tomllib.TOMLDecodeError) and getattr(exc, "lineno", None):
+            where = f" at line {exc.lineno}"
+        msg = f"{MODELS_FILE_NAME} is not valid TOML{where}"
+        return True, digest, None, [ModelsProblem("broken", None, msg)]
+    return True, digest, data, []
+
+
+def _key_label(name: object) -> str:
+    text = str(name)
+    return text if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) else "<a key>"
+
+
+def _split_layer(
+    data: dict[str, Any] | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], list[ModelsProblem], set[str]]:
+    """(valid, invalid, problems, sections that cannot be read) from a parsed models.toml."""
+    valid: dict[str, dict[str, Any]] = {}
+    invalid: dict[str, dict[str, Any]] = {}
+    problems: list[ModelsProblem] = []
+    unreadable: set[str] = set()
+    if data is None:
+        return valid, invalid, problems, set(MODEL_KEYS)
+    for section, table in data.items():
+        if section not in MODEL_KEYS:
+            label = _key_label(section)
+            problems.append(
+                ModelsProblem("unknown", label, f"unknown section or key {label!r}; ignored")
+            )
+            continue
+        if not isinstance(table, dict):
+            unreadable.add(section)
+            problems.append(
+                ModelsProblem("invalid", section, f"[{section}] must be a table; ignored")
+            )
+            continue
+        for key, value in table.items():
+            dotted = f"{section}.{_key_label(key)}"
+            if key not in MODEL_KEYS[section]:
+                problems.append(
+                    ModelsProblem("unknown", dotted, f"unknown key {dotted!r}; ignored")
+                )
+                continue
+            reason = check_model_key(section, key, value)
+            if reason is None:
+                valid.setdefault(section, {})[key] = value
+            else:
+                invalid.setdefault(section, {})[key] = value
+                problems.append(ModelsProblem("invalid", dotted, f"{dotted} {reason}"))
+    return valid, invalid, problems, unreadable
+
+
+def _keys(table: Mapping[str, Any]) -> frozenset[tuple[str, str]]:
+    return frozenset(
+        (section, key)
+        for section, inner in table.items()
+        if isinstance(inner, Mapping)
+        for key in inner
+    )
+
+
+def load_layers(
     config_path: Path | None = None,
     overrides: Mapping[str, Any] | None = None,
-) -> Settings:
-    """Build Settings from code defaults, the TOML file, the environment, then ``overrides``.
+) -> Layers:
+    """Build Settings layer by layer: defaults, config.toml, the environment, models.toml,
+    then ``overrides`` (specs/020 Storage).
 
-    An explicit ``config_path`` wins over ``$JOBHUNTER_CONFIG``, which wins over the
-    default location. A missing file is not an error. Unknown keys raise
-    ``pydantic.ValidationError`` naming the key (e.g. ``fetch.bogus``). The ``[paths]``
-    keys can also come from ``JOBHUNTER_DATA_DIR`` and friends (``PATH_ENV_VARS``), which
-    beat the file.
+    The data dir is settled first, from everything but models.toml, and
+    ``<data dir>/models.toml`` is read from there. Each of its keys is validated on its own; a
+    valid key applies. An unknown key is ignored with a warning. An invalid ``screen_scorer`` or
+    ``deep_scorer``, or a file that is not TOML, **blocks** that use: the field is set to
+    ``BLOCKED_SPEC`` and ``scorer_problems()`` reports it, so nothing spends on config.toml's
+    value or the default instead. An invalid [apply] key is ignored, and config.toml's value or
+    the default applies, with a line in ``notices``. ``overrides`` (tests) beat the file.
     """
     path = config_file(config_path)
     file_data: dict[str, Any] = {}
@@ -444,16 +704,100 @@ def load_settings(
         with path.open("rb") as fh:
             file_data = tomllib.load(fh)
     env_paths = {f: v for f, var in PATH_ENV_VARS.items() if (v := os.environ.get(var))}
-    merged = _deep_merge(file_data, {"paths": env_paths} if env_paths else {})
-    merged = _deep_merge(merged, overrides or {})
+    lower = _deep_merge(file_data, {"paths": env_paths} if env_paths else {})
+    overrides = overrides or {}
+    base = _validate(_deep_merge(lower, overrides), file_data, env_paths, overrides)
+
+    mpath = models_file(base.paths.data_dir)
+    exists, digest, data, problems = read_models_file(mpath)
+    valid, invalid, key_problems, unreadable = _split_layer(data)
+    problems = problems + key_problems
+    override_keys = _keys(overrides)
+    config_keys = _keys(file_data)
+    broken_reason = next((p.message for p in problems if p.kind == "broken"), "")
+
+    blocked: dict[str, str] = {}
+    for key in SPENDING_KEYS:
+        if ("scoring", key) in override_keys:
+            continue
+        if "scoring" in unreadable:
+            blocked[key] = blocked_message(key, broken_reason or "[scoring] is not a table")
+        elif key in invalid.get("scoring", {}):
+            problem = next(p for p in problems if p.key == f"scoring.{key}")
+            blocked[key] = blocked_message(key, problem.message.removeprefix(f"scoring.{key} "))
+
+    notices: list[str] = []
+    if "apply" in unreadable:
+        if any(("apply", k) not in override_keys for k in MODEL_KEYS["apply"]):
+            reason = broken_reason or "models.toml's [apply] is not a table"
+            notices.append(f"{reason}; drafting uses the config.toml values or defaults")
+    else:
+        for key in invalid.get("apply", {}):
+            if ("apply", key) in override_keys:
+                continue
+            value = getattr(base.apply, key)
+            fallback = shown_value(str(value).lower() if isinstance(value, bool) else value)
+            where = "config.toml" if ("apply", key) in config_keys else "the default"
+            notices.append(
+                f"models.toml's apply.{key} is invalid; using {fallback or 'the value'} "
+                f"from {where}"
+            )
+
+    layered = _deep_merge(lower, valid)
+    if blocked:
+        layered = _deep_merge(layered, {"scoring": dict.fromkeys(blocked, BLOCKED_SPEC)})
+    merged = _validate(_deep_merge(layered, overrides), file_data, env_paths, overrides)
+    merged.scoring._blocked = dict(blocked)
+    layers = Layers(
+        path=mpath,
+        exists=exists,
+        digest=digest,
+        base=base,
+        merged=merged,
+        layer=valid,
+        invalid=invalid,
+        problems=problems,
+        blocked=blocked,
+        notices=notices,
+        config_keys=config_keys,
+        override_keys=override_keys,
+    )
+    merged._models = layers
+    _warn_once(mpath, digest, problems)
+    return layers
+
+
+def _validate(
+    merged: dict[str, Any],
+    file_data: Mapping[str, Any],
+    env_paths: Mapping[str, str],
+    overrides: Mapping[str, Any],
+) -> Settings:
+    merged = dict(merged)
     merged.setdefault("paths", {})
     settings = Settings.model_validate(merged)
     labels = settings.paths._sources
-    for field in PATH_FIELDS:
-        if field in ((overrides or {}).get("paths") or {}):
-            labels[field] = "override"
-        elif field in env_paths:
-            labels[field] = f"env {PATH_ENV_VARS[field]}"
-        elif field in (file_data.get("paths") or {}):
-            labels[field] = "config file"
+    for name in PATH_FIELDS:
+        if name in (overrides.get("paths") or {}):
+            labels[name] = "override"
+        elif name in env_paths:
+            labels[name] = f"env {PATH_ENV_VARS[name]}"
+        elif name in (file_data.get("paths") or {}):
+            labels[name] = "config file"
     return settings
+
+
+def load_settings(
+    config_path: Path | None = None,
+    overrides: Mapping[str, Any] | None = None,
+) -> Settings:
+    """Build Settings from code defaults, the TOML file, the environment, ``models.toml`` in
+    the data dir, then ``overrides`` (``load_layers`` has the details).
+
+    An explicit ``config_path`` wins over ``$JOBHUNTER_CONFIG``, which wins over the
+    default location. A missing file is not an error. Unknown keys raise
+    ``pydantic.ValidationError`` naming the key (e.g. ``fetch.bogus``). The ``[paths]``
+    keys can also come from ``JOBHUNTER_DATA_DIR`` and friends (``PATH_ENV_VARS``), which
+    beat the file. A broken ``models.toml`` never raises: it blocks the spending uses.
+    """
+    return load_layers(config_path, overrides).merged

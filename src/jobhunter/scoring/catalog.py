@@ -608,6 +608,34 @@ def judge(
     return Verdict(True, note=note)
 
 
+def use_rule_problem(use: str, value: str, field: str | None = None) -> str | None:
+    """Why ``value`` can never serve ``use``, or None. Local and free; reads no file.
+
+    The load-time half of :func:`judge`, for a value set in ``models.toml`` (020 M2): the spec
+    syntax, an Anthropic model's price-table entry and its per-use rules. It leaves out what a
+    save checks and ``--force`` may override (the screening reservation, the OpenRouter cache
+    and the local server list), so a value saved on purpose still applies when read back.
+    """
+    if use not in USES:
+        raise ValueError(f"unknown use {use!r} (known: {', '.join(USES)})")
+    value = value.strip()
+    if not value:
+        return "no model given"
+    if use in CLI_USES or use in ("draft_api", "check_api"):
+        # These branches of judge never reach the reservation or the cache.
+        verdict = judge(use, value)
+        return None if verdict.offered else verdict.reason
+    try:
+        check_scorer_spec(value, field or use, anthropic_only=use == "deep")
+    except ValueError as exc:
+        return str(exc)
+    provider, _, name = value.partition(":")
+    if provider == "anthropic":
+        verdict = _anthropic_verdict(name, use)
+        return None if verdict.offered else verdict.reason
+    return None
+
+
 # ─── Options per use ────────────────────────────────────────────────────────
 
 
