@@ -1,4 +1,6 @@
-"""docs/containers.md must not drift from the real command line (specs/018, ticket C11).
+"""The container help page must not drift from the real command line (specs/018 C11, 019 S11d).
+
+The page lives at src/jobhunter/console/help/containers.md; docs/containers.md is a pointer.
 
 Every `jobhunter ...` (and `jobhunter-ctr ...`, which runs the same CLI in a container) line in
 a fenced block must name a real subcommand and only real options. Local links must resolve.
@@ -16,7 +18,7 @@ import typer.main
 from jobhunter.cli import app
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "docs" / "containers.md"
+DOC = ROOT / "src" / "jobhunter" / "console" / "help" / "containers.md"
 
 
 def _command_lines() -> list[str]:
