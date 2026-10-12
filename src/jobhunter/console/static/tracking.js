@@ -1,6 +1,13 @@
 (function () {
   "use strict";
 
+  // Requests from the nav activity band are not this page's: its /activity poll and the
+  // achievement x (POST /achievements/seen, hx-swap none) fire the same htmx events.
+  function bandRequest(ev) {
+    var p = ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path;
+    return p === "/activity" || p === "/achievements/seen";
+  }
+
   var ORDER = ["interested", "preparing", "applied", "acknowledged", "screening", "interview", "offer"];
   var current = null;
   var pendingId = null;
@@ -81,8 +88,7 @@
   }
 
   document.addEventListener("htmx:afterSettle", function (ev) {
-    // The nav activity poll (/activity) swaps every few seconds: not our request.
-    if (ev && ev.detail && ev.detail.requestConfig && ev.detail.requestConfig.path === "/activity") return;
+    if (bandRequest(ev)) return;
     if (!pendingId) return;
     var el = document.getElementById(pendingId);
     pendingId = null;

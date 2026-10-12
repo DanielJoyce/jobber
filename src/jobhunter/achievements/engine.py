@@ -313,6 +313,22 @@ def _apply(conn: sqlite3.Connection, now: datetime, tz: tzinfo) -> list[Unlock]:
     return new
 
 
+def unseen(conn: sqlite3.Connection, settings: Settings) -> list[Unlock]:
+    """Unseen unlocks the notice may show: known ids in visible categories, newest first.
+    Reads the partial index on ``seen_at IS NULL`` (normally zero to a few rows)."""
+    rows = [
+        Unlock(*r)
+        for r in conn.execute(
+            "SELECT id, achievement_id, tier, unlocked_at, detected_at, evidence, "
+            "catalog_version, seen_at FROM achievement_unlock WHERE seen_at IS NULL "
+            "ORDER BY detected_at DESC, id DESC"
+        ).fetchall()
+    ]
+    return [
+        u for u in rows if u.achievement_id in catalog.BY_ID and u.category not in settings.hidden
+    ]
+
+
 def mark_seen(
     conn: sqlite3.Connection, ids: Iterable[int], now: datetime, busy_ms: int | None = None
 ) -> int:
@@ -384,6 +400,7 @@ class Gate:
         self.tz = tz
         self._fp: tuple[object, ...] | None = None
         self._lock = threading.Lock()
+        self._running = threading.Lock()  # one evaluation at a time per process
 
     def zone(self) -> tzinfo:
         return self.tz or local_tz()
@@ -393,16 +410,30 @@ class Gate:
             self._fp = None
 
     def refresh(
-        self, conn: sqlite3.Connection, now: datetime, *, force: bool = False
+        self,
+        conn: sqlite3.Connection,
+        now: datetime,
+        *,
+        force: bool = False,
+        wait: bool = True,
     ) -> list[Unlock]:
         """``evaluate`` when the fingerprint changed (or ``force``). A ``sqlite3.Error``
-        propagates and leaves the fingerprint unchanged, so the next call retries."""
+        propagates and leaves the fingerprint unchanged, so the next call retries.
+
+        ``wait=False`` (the polled ``/activity``): when another request in this process is
+        already evaluating, return ``[]`` at once instead of queueing a second read phase
+        behind it; the fingerprint is left alone, so a later poll catches up."""
         tz = self.zone()
         fp = fingerprint(conn, now, tz)
         with self._lock:
             if not force and fp == self._fp:
                 return []
-        new = evaluate(conn, now, tz)
+        if not self._running.acquire(blocking=wait):
+            return []
+        try:
+            new = evaluate(conn, now, tz)
+        finally:
+            self._running.release()
         with self._lock:
             self._fp = fp
         return new
