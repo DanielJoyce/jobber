@@ -46,7 +46,8 @@ At most `apply_links.per_run` jobs per run (default 200; the rest wait for the n
 `config.toml` to turn the stage off. To leave it out of one run, name the stages you want:
 `jobhunter run --stage list,resolve,normalize,dedupe,prefilter,score`. What it did shows on
 [/log](/log) with each run (`apply_links: tried …, live …, errors …`); a failure in this stage
-is logged and never fails the run. Jobs it did not reach still resolve when you open them.
+is logged and never fails the run, and Ctrl-C stops it like the fetch stages. Jobs it did not
+reach still resolve when you open them.
 
 Optional, to keep the timers running while you are logged out:
 `loginctl enable-linger $USER`. Without it, timers that never fire are reported as "timers not
