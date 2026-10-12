@@ -106,6 +106,25 @@ These install the systemd user timers that run the two commands above each night
 logs and what to do when you move the checkout are in [Nightly runs](nightly-runs.md). In
 containers the timers come from the Quadlet units instead; do not turn on both.
 
+## See what ran
+
+Two places answer "did it run, and what did it do?":
+
+- The **Last 24 hours** card on Today (`/`): when the last run happened and how it ended
+  (or "running since ..."), how many jobs were pulled in and grouped since this time
+  yesterday, how many of those new jobs passed the prefilter (a preferences change re-checks
+  old jobs, and those are not counted), and how many were scored. Failures are listed
+  separately: refused or cut off by the scorer, errors in re-score requests, and errors in
+  score batches. Then the unscored backlog (what the next nightly run will score), the scoring
+  spend in the window, and all spend for today and yesterday. The card links to
+  the Costs page (`/costs`) and the log.
+- The **Log** page (`/log`, in the nav): every run, re-score, score batch, deep pass, mail
+  fetch, extension capture and drafting run, newest first, in your local time. Pick a kind to
+  filter. A run that never finished shows "running" only while the nightly `run` itself holds the
+  run lock (a re-score or other job holding it does not count) and "interrupted" otherwise;
+  a run that finished with some sources failing is "partial". Error text is shortened and stripped of email addresses
+  and anything that looks like a key.
+
 ## When something is wrong
 
 `/setup` and `jobhunter doctor` say what is missing and why. Common errors and their fixes are

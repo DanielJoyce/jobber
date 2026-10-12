@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('pages.css') }}">
+{% endblock %}
+{% block main %}
+<div class="pg lg">
+  <h1>Log</h1>
+  <p class="muted">What ran and how it ended, newest first, in your local time. The newest {{ limit }} events. <a href="/setup">Setup</a> says whether things are ready.</p>
+  <nav class="lg-filter" aria-label="Filter by kind">
+    <a href="/log"{% if kind == "all" %} aria-current="true" class="on"{% endif %}>All</a>
+    {% for k, label in kinds.items() %}
+    <a href="/log?kind={{ k }}"{% if kind == k %} aria-current="true" class="on"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  {% if events %}
+  <table class="pg-table lg-table">
+    <thead><tr><th>When</th><th>Kind</th><th>What</th><th>Result</th><th class="num">Took</th><th class="num">Cost</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+    <tr class="lg-row">
+      <td data-label="When" class="lg-when">{{ e.at | localtime }}</td>
+      <td data-label="Kind">{{ e.kind_label }}</td>
+      <td data-label="What">{{ e.title }}
+        {% for d in e.detail %}<div class="muted lg-detail">{{ d }}</div>{% endfor %}
+        {% if e.error %}<div class="lg-error">{{ e.error }}</div>{% endif %}
+      </td>
+      <td data-label="Result">{% if e.status %}<span class="lg-status lg-{{ e.status }}">{{ e.status }}</span>{% endif %}</td>
+      <td data-label="Took" class="num">{{ e.duration }}</td>
+      <td data-label="Cost" class="num">{% if e.cost_note %}{{ e.cost_note }}{% elif e.cost %}${{ "%.2f"|format(e.cost) }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing here yet.{% if kind != "all" %} <a href="/log">Show all kinds</a>.{% endif %}</p>
+  {% endif %}
+</div>
+{% endblock %}

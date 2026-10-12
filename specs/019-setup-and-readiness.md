@@ -1097,6 +1097,82 @@ is, and shows names and allowlisted values only, under the rules above.
   `[Container]` and both exit-status lines under `[Service]`; preflight writes the drop-in with
   the same sections.
 
+## Addendum C: activity log (`/log`)
+
+Added 2026-10-12 for bug `be1d232`: you could not tell whether a re-score ran (five requests
+failed and nothing outside the `/prefs` panel showed it), or how many jobs came in and were
+scored since yesterday. Read-only; no new table, no migration.
+
+### Route
+
+`GET /log`, `?kind=` one of `all` (default), `run`, `rescore`, `batch`, `deep`, `mail`,
+`capture`, `draft`. `/activity` is the nav band fragment, so the page is `/log`. In the nav
+("Log") and linked from `/setup`. Unknown `kind` is read as `all`. Responses are `no-store`.
+
+### Events
+
+Newest first, each with a local time (`localtime` filter), a kind label, a one-line summary and
+a status. Each kind is fetched with its own `ORDER BY id DESC LIMIT 100` (or the newest 100
+rows by `rowid`), merged, and cut to 150, so the page costs a handful of small reads however
+large the database is.
+
+| Kind | Source | Shows |
+|---|---|---|
+| `run` | `run` | trigger (`timer`, `manual`, or "unknown" for old rows), stages, exit status, duration, per-stage counts from `run.counts`, failed-source count from `run_source` |
+| `rescore` | `rescore_request` | scorer (via `scorer_label`), scope, scored / errored / total, cost, status, error |
+| `batch` | `score_batch` | a "submitted" event (`submitted_at`, scorer, tier, request count) and a "collected" event (`collected_at`, result counts) |
+| `deep` | `deep_request` | mode, scorer, done / total, new reports, spend, status, error |
+| `mail` | `mail_message` | messages processed in the same minute, with entry counts |
+| `capture` | `capture_log` | extension captures: host, method, outcome |
+| `draft` | `draft_run` | packet drafting runs: kind, runner, outcome, duration, error, and the document's API-equivalent cost when known |
+
+A `run` with no `ended_at` is **running** only when it is the newest `run` row, the run
+lock is held (`runlock.probe`, the read-only look the band uses), the holder's command is
+`run`, and the holder's start time is within 5 minutes of the row's `started_at`. Every other
+job (console re-score, deep pass, `score`, `backfill`) takes the same lock, so a held lock alone
+proves nothing. Anything else unfinished is **interrupted**. A run that ended `degraded` is
+**partial**; any other non-`ok` exit is **failed**. A drafting row with no outcome is
+**running** or **stopped** by `draft_runs`' own rule (its claim is held or free). A subscription
+(CLI) drafting run shows "subscription" in the cost column, not a price.
+
+### Privacy
+
+Nothing that is a secret, an email address, or a key-shaped scorer spec is rendered. Scorer
+specs go through `config.shown_value` / `hidden_label` (the `scorer_label` filter). Stored
+error text is shown through one redaction: email addresses become `(email)`, any token that
+`config.hidden_value` calls key-shaped becomes `(hidden)`, URL query strings are dropped, and
+phone numbers become `(number)`, `Bearer`/`Basic` credentials and `key=`/`token=`-style
+assignments are masked, `%40` is read as `@`, query strings (with or without a scheme) are
+dropped, and the result is cut to 200 characters. Capture hosts and stage counts are shown as stored.
+
+### Today card
+
+A "Last 24 hours" panel on `/`, with a link to `/log`:
+
+- **Last run:** when, result and duration, or "running since ...", or "interrupted".
+- **Since yesterday** (the last 24 hours from now): jobs pulled in (`job.first_seen_at`), new
+  groups (`job_group.created_at`), **new jobs that passed the prefilter** (`first_seen_at` in
+  the window and a `passed = 1` result under the current `filter_version`; a profile change
+  rewrites `evaluated_at` for every job, so evaluations are never counted), and scored
+  (`fit_score.created_at`). A row exactly 24 h old counts; an older one does not.
+- **Failures, shown separately** because they overlap and are never summed: refused or cut off
+  (`score_failure.created_at`), re-score errors (`rescore_request.errored` summed over requests
+  finished in the window, with the number of failed requests), and batch errors (`errored` plus
+  `expired` in the `counts` of batches collected in the window).
+- **Unscored backlog:** `screen.count_eligible(..., new_only=True)`, the same rule the daily
+  run uses to pick groups. Shown as "?" when the profile cannot load.
+- **Scoring spend:** the sum of `fit_score.cost_usd` created in the window. Next to it,
+  **spend today and yesterday (all calls)** from `llm_spend`, which has only a day, so it also
+  counts drafting and refused calls. Links to `/costs`. A query that fails shows "?".
+
+### Testing (C)
+
+Each event kind renders; running versus interrupted (a real `RunLock` held by `run` and by
+`console re-score`); partial; subscription cost; new-jobs-only prefilter count; failures from
+re-scores and batches; the window at the 24 h boundary; a
+sentinel email, key-shaped scorer and key-shaped error text never appear; an empty database;
+the kind filter; `/log` in the nav and linked from `/setup`.
+
 ## Proposed tickets
 
 Not filed yet; the PM files them after you approve. Labels `area:console` or `area:ops`;

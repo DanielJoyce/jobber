@@ -1,0 +1,29 @@
+<section class="panel lg-card" id="last-24h" aria-labelledby="lg-card-title">
+  <h2 id="lg-card-title">Last 24 hours <a class="lg-card-link" href="/log">Open the log &#9656;</a></h2>
+  <p class="lg-card-run">
+    {% if card.last_run %}
+      Last run:
+      {% if card.last_run.status == "running" %}<span class="lg-status lg-running">running</span> since {{ card.last_run.started_at | localtime }}
+      {% else %}{{ card.last_run.started_at | localtime }},
+        <span class="lg-status lg-{{ card.last_run.status }}">{{ card.last_run.status }}</span>{% if card.last_run.duration %}, {{ card.last_run.duration }}{% endif %}
+      {% endif %}
+      <span class="muted">({{ card.last_run.trigger }})</span>
+    {% else %}
+      No run yet.
+    {% endif %}
+  </p>
+  {% macro n(v) %}{{ v if v is not none else "?" }}{% endmacro %}
+  <dl class="lg-stats">
+    <div><dt>Jobs pulled in</dt><dd>{{ n(card.jobs) }}</dd></div>
+    <div><dt>New groups</dt><dd>{{ n(card.groups) }}</dd></div>
+    <div><dt>New jobs that passed prefilter</dt><dd>{{ n(card.passed) }}</dd></div>
+    <div><dt>Scored</dt><dd>{{ n(card.scored) }}</dd></div>
+    <div><dt>Refused or cut off</dt><dd>{{ n(card.refused) }}</dd></div>
+    <div><dt>Re-score errors{% if card.rescore_failed %} ({{ card.rescore_failed }} failed request{{ "" if card.rescore_failed == 1 else "s" }}){% endif %}</dt><dd>{{ n(card.rescore_errored) }}</dd></div>
+    <div><dt>Batch errors</dt><dd>{{ n(card.batch_errored) }}</dd></div>
+    <div><dt>Unscored backlog</dt><dd>{{ n(card.backlog) }}</dd></div>
+    <div><dt>Scoring spend</dt><dd>{% if card.spend is none %}?{% else %}${{ "%.2f"|format(card.spend) }}{% endif %}</dd></div>
+    <div><dt>Spend, UTC today and yesterday (all calls)</dt><dd>{% if card.spend_days is none %}?{% else %}${{ "%.2f"|format(card.spend_days) }}{% endif %}</dd></div>
+  </dl>
+  <p class="muted lg-detail"><a href="/costs">Costs</a> has the full breakdown.</p>
+</section>
