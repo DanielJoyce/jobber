@@ -57,6 +57,21 @@ def current_state(request: Request, *, force: bool = False) -> cw.State:
     watch = watcher_of(request)
     if watch is None:
         return cw.EMPTY
+    lock = getattr(request.app.state, "settings_lock", None)
+    if not force and lock is not None:
+        # A save, Load or Apply holds the lock between writing models.toml and assigning the
+        # running settings: a check now would show the console's own write as an outside
+        # change. Skip it and show the last state; the next poll checks again.
+        if not lock.acquire(blocking=False):
+            return watch.last_state
+        try:
+            return _check(watch, request, force)
+        finally:
+            lock.release()
+    return _check(watch, request, force)
+
+
+def _check(watch: cw.ConfigWatcher, request: Request, force: bool) -> cw.State:
     try:
         return watch.check(request.app.state.settings, force=force)
     except Exception as exc:
@@ -99,6 +114,8 @@ def summary(state: cw.State, read_at: datetime, just_applied: bool = False) -> s
     """The notice's first line. Names and counts only, never a value."""
     if state.errors:
         return f"config.toml has errors; the console keeps the settings from {hhmm(read_at)}."
+    if state.models_errors:
+        return f"models.toml has errors; the console keeps the settings from {hhmm(read_at)}."
     parts: list[str] = []
     if state.replaced:
         parts.append(
@@ -106,20 +123,22 @@ def summary(state: cw.State, read_at: datetime, just_applied: bool = False) -> s
             "file until it restarts."
         )
     if state.fields:
-        n_effect = state.reload_count + state.restart_count
         if just_applied and state.reload_count == 0 and state.restart_count:
             verb = "needs" if state.restart_count == 1 else "need"
             parts.append(f"{plural(state.restart_count, 'setting')} still {verb} a restart.")
-        elif n_effect == 0:
-            parts.append(
-                f"config.toml changed: {plural(len(state.fields), 'setting')} "
-                "(no effect: set on the command line)."
-            )
         else:
             for source in ("config.toml", "models.toml"):
-                n = sum(1 for f in state.fields if f.source == source)
-                if n:
-                    parts.append(f"{source} changed: {plural(n, 'setting')}.")
+                mine = [f for f in state.fields if f.source == source]
+                if not mine:
+                    continue
+                inert = [f for f in mine if f.cls == cw.NO_EFFECT]
+                where = " and ".join(dict.fromkeys(f.set_on or cw.SET_ON_CLI for f in inert))
+                text = f"{source} changed: {plural(len(mine), 'setting')}"
+                if inert and len(inert) == len(mine):
+                    text += f" (no effect: set on {where})"
+                elif inert:
+                    text += f"; {len(inert)} with no effect (set on {where})"
+                parts.append(text + ".")
     for change in state.env:
         parts.append(f"{change.file} changed: {plural(change.count, 'key')}.")
     return " ".join(parts)
@@ -144,6 +163,8 @@ def register(
             "applied": "Applied.",
             "moved": "config.toml changed again before Apply; this is the new change.",
             "nothing": "Nothing to apply.",
+            "models": "A models.toml change made outside the console is applied here, with "
+            "Apply now, together with any config.toml change.",
         }
         return templates.TemplateResponse(
             request,

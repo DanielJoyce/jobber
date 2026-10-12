@@ -40,6 +40,7 @@ from jobhunter import model_access as ma
 from jobhunter import model_choices as mc
 from jobhunter import readiness as rd
 from jobhunter.config import BLOCKED_SPEC, Settings, layers_for, relayer, shown_value
+from jobhunter.console import config_routes as cr
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.scoring import catalog
 from jobhunter.scoring.scorers import privacy_notice
@@ -536,8 +537,11 @@ def access_rows(ctx: Ctx) -> list[AccessRow]:
     return rows
 
 
-def banner(ctx: Ctx) -> dict[str, Any]:
-    """The /models banner: blocked uses, a broken file, fallbacks, and missing access."""
+def banner(ctx: Ctx, *, watching: bool = False, watch_state: Any = None) -> dict[str, Any]:
+    """The /models banner: blocked uses, a broken file, fallbacks, missing access, and an
+    outside change to models.toml. ``watching``: the config watch runs, so an outside change
+    is applied there (Config changes, Apply now), and this banner links to it instead of
+    offering Load (specs/020 "Config watch": one flow, no double apply)."""
     settings = ctx.settings
     disk = ctx.disk
     lines: list[str] = list(settings.scoring.scorer_problems().values())
@@ -567,6 +571,11 @@ def banner(ctx: Ctx) -> dict[str, Any]:
         "access": [] if nothing else [(ma.summary(a), a.help) for a in access],
         "nothing": nothing,
         "pending": pending,
+        "watching": watching,
+        # What Config changes offers now: Apply, or errors that block it, or neither (the
+        # notice was dismissed, or only restart-class changes are left).
+        "watch_apply": bool(watch_state is not None and watch_state.can_apply),
+        "watch_errors": bool(watch_state is not None and watch_state.all_errors),
     }
 
 
@@ -619,6 +628,9 @@ def register(
 
         app.state.settings_lock = threading.Lock()
 
+    def watching(request: Request) -> bool:
+        return getattr(request.app.state, "config_watch", None) is not None
+
     def mode_of(request: Request) -> str:
         override = getattr(request.app.state, "setup_mode", None)
         return override or rd.detect_mode(settings=request.app.state.settings)
@@ -665,7 +677,11 @@ def register(
             "digest": ctx.disk.digest if ctx.disk is not None else "",
             "rows": [build_row(ctx, r, states.get(r)) for r in ROWS],
             "access_rows": access_rows(ctx),
-            "banner": banner(ctx),
+            "banner": banner(
+                ctx,
+                watching=watching(request),
+                watch_state=cr.current_state(request) if watching(request) else None,
+            ),
             "history": history_rows(ctx.conn),
             "history_msg": history_msg,
             "flash": flash,
@@ -1113,9 +1129,14 @@ def register(
 
     @app.post("/models/load")
     async def models_load(request: Request) -> Response:
-        """Before S12a: take the on-disk models.toml into the running settings."""
+        """Take the on-disk models.toml into the running settings, for a console that does
+        not run the config watch. When the watch runs, an outside change is the watch's to
+        apply (Config changes, Apply now, which reloads config.toml too): Load then writes
+        nothing and sends you there, so the two never apply the same change twice."""
         if not peer_is_loopback(request):
             return refuse_peer()
+        if watching(request):
+            return RedirectResponse("/config/changes?flash=models", status_code=303)
         form, _getlist = await read_form(request)
 
         def work() -> Response:

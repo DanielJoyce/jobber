@@ -94,8 +94,13 @@ The exact messages, and what to do, are in
   model. Reset and Revert show the same choice.
 - **Reset file** appears when `models.toml` is broken. It replaces the file with an empty one and
   keeps the old file beside it, named `models.toml.broken-<time>`.
-- **Load** appears when `models.toml` was changed outside the console (for example by
-  `jobhunter models set` in a terminal). It takes the file's values into the running console.
+- **Changed outside the console.** When `models.toml` was changed outside the console (for
+  example by `jobhunter models set` in a terminal), the page says so and links to **Config
+  changes** in the console. Review the change there and press **Apply now**, which takes it in
+  together with any `config.toml` edit. If the file has an error, Config changes lists it and
+  offers no Apply until you fix the file or press Reset file here. See [Config changes while
+  the console runs](settings-and-secrets.md#config-changes-while-the-console-runs). A console
+  started without the config watch shows a **Load** button here instead.
 - **Refresh list** fetches the public OpenRouter model list. It needs no key and contacts
   openrouter.ai, so it runs only when you press it.
 - **Check server** asks your local model server whether it answers and which models it loads.

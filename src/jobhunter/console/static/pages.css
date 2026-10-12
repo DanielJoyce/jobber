@@ -24,3 +24,6 @@
 .bars .bar { background: var(--grid); border-radius: 3px; height: 14px; display: block; }
 .bars .bar span { display: block; height: 100%; background: var(--series-1); border-radius: 3px; }
 .bars .val { text-align: right; color: var(--text-primary); }
+
+/* Config changes: the model layers table scrolls inside its box on a phone (020 M8). */
+.cfgw-scroll { overflow-x: auto; max-width: 100%; }
