@@ -223,8 +223,6 @@ def test_step3_no_login_on_macos_is_unknown(settings, home, fake_claude):
     [
         {},
         {"CLAUDE_CONFIG_DIR": "SET"},
-        {"CLAUDE_SECURESTORAGE_CONFIG_DIR": "SET", "CLAUDE_CONFIG_DIR": "/nowhere"},
-        {"CLAUDE_SECURESTORAGE_CONFIG_DIR": ""},
     ],
 )
 def test_step5_login_file_is_likely_and_only_stat_ed(settings, home, tmp_path, fake_claude, env):
@@ -239,10 +237,16 @@ def test_step5_login_file_is_likely_and_only_stat_ed(settings, home, tmp_path, f
 def test_login_dir_follows_the_cli(home, tmp_path):
     assert ma.claude_login_file({}, home) == home / ".claude" / ".credentials.json"
     assert ma.claude_login_dir({"CLAUDE_CONFIG_DIR": "/c"}, home) == Path("/c")
-    env = {"CLAUDE_SECURESTORAGE_CONFIG_DIR": "/s", "CLAUDE_CONFIG_DIR": "/c"}
-    assert ma.claude_login_dir(env, home) == Path("/s")
-    env = {"CLAUDE_SECURESTORAGE_CONFIG_DIR": "", "CLAUDE_CONFIG_DIR": "/c"}
-    assert ma.claude_login_dir(env, home) == home / ".claude"
+
+
+def test_a_login_the_child_cannot_see_does_not_count(settings, home, tmp_path, fake_claude):
+    # The CLI honours CLAUDE_SECURESTORAGE_CONFIG_DIR, but child_env drops it, so a draft
+    # would never find a login kept there.
+    secure = tmp_path / "secure"
+    secure.mkdir()
+    (secure / ma.CREDENTIALS_FILE).touch()
+    env = {"CLAUDE_SECURESTORAGE_CONFIG_DIR": str(secure)}
+    assert sub(settings, env=env, home=home).status == ma.MISSING
 
 
 def test_step5_oauth_token_env_is_likely(settings, home, fake_claude):
@@ -307,13 +311,16 @@ def test_container_screening_uses_the_container_environment(settings, home):
 
 def test_host_managing_screening_follows_the_dropin(settings, home):
     env = {"ANTHROPIC_API_KEY": FAKE}  # the host shell's key does not reach the containers
-    assert access(ma.SCREEN, settings, mode=MANAGING, env=env, home=home).status == ma.MISSING
+    a = access(ma.SCREEN, settings, mode=MANAGING, env=env, home=home)
+    assert a.status == ma.MISSING
+    assert "podman secret jobhunter_anthropic" in a.detail and "unset" not in a.detail
     drop = preflight.dropin_path(
         preflight.default_unit_dir(home), preflight.RUN, "jobhunter_anthropic"
     )
     drop.parent.mkdir(parents=True)
     drop.write_text("[Container]\n", encoding="utf-8")
-    assert access(ma.SCREEN, settings, mode=MANAGING, env={}, home=home).status == ma.OK
+    a = access(ma.SCREEN, settings, mode=MANAGING, env={}, home=home)
+    assert a.status == ma.OK and a.detail == "set (podman secret jobhunter_anthropic)"
 
 
 def test_host_managing_drafting_is_judged_from_the_host(settings, home, fake_claude):

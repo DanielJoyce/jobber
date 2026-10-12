@@ -17,8 +17,10 @@ Statuses:
 
 The Claude Code login file. Confirmed on 2026-10-11 against the installed CLI (2.1.295, the
 bundled JavaScript, not the file itself): the login is ``<dir>/.credentials.json`` where
-``<dir>`` is ``CLAUDE_SECURESTORAGE_CONFIG_DIR`` when that variable is set (empty means
-``~/.claude``), else ``CLAUDE_CONFIG_DIR``, else ``~/.claude``. On macOS the CLI keeps the login
+``<dir>`` is ``CLAUDE_CONFIG_DIR``, else ``~/.claude``. (The CLI also honours
+``CLAUDE_SECURESTORAGE_CONFIG_DIR``, but ``cli_runner.child_env`` never passes it to the child,
+so it is ignored here: the login is looked for in the environment the draft actually gets.) On
+macOS the CLI keeps the login
 in the Keychain, which a ``stat`` cannot see, so there a missing file answers ``unknown``.
 """
 
@@ -174,7 +176,30 @@ def scorer_access(
     cred = readiness.scorer_credential(
         spec, settings.scoring, mode=mode, environ=environ, home=home
     )
-    return _from_credential(provider_of(spec), cred)
+    provider = provider_of(spec)
+    secret = readiness.secret_for_provider(spec)
+    via_dropin = (
+        mode == readiness.HOST_MANAGING
+        and secret is not None
+        and cred.status != scorers.UNKNOWN
+        and not (cred.status == scorers.PRESENT and not cred.names)  # no key needed
+    )
+    if not via_dropin:
+        return _from_credential(provider, cred)
+    # Host-managing: the containers' podman secret decides, not this shell's variables.
+    if cred.status == scorers.PRESENT:
+        return Access(provider, OK, f"set (podman secret {secret})", HELP.get(provider, "scorers"))
+    wording = {
+        ANTHROPIC: "No Anthropic API credential found for the containers",
+        OPENROUTER: "No OpenRouter key found for the containers",
+    }.get(provider, f"No {provider} key found for the containers")
+    return Access(
+        provider,
+        MISSING,
+        f"{wording} (podman secret {secret} missing, or `jobhunter container preflight` "
+        "not run since it was created)",
+        HELP.get(provider, "scorers"),
+    )
 
 
 def anthropic_api_access(
@@ -194,11 +219,9 @@ def anthropic_api_access(
 
 
 def claude_login_dir(environ: Mapping[str, str], home: Path | None = None) -> Path:
-    """Where the Claude Code CLI keeps ``.credentials.json`` (see the module docstring)."""
+    """Where the Claude Code CLI keeps ``.credentials.json`` (see the module docstring).
+    ``environ`` is the child's environment (``cli_runner.child_env``)."""
     base = home if home is not None else Path.home()
-    if "CLAUDE_SECURESTORAGE_CONFIG_DIR" in environ:
-        value = environ["CLAUDE_SECURESTORAGE_CONFIG_DIR"].strip()
-        return Path(value) if value else base / ".claude"
     if value := environ.get("CLAUDE_CONFIG_DIR", "").strip():
         return Path(value)
     return base / ".claude"
@@ -209,7 +232,9 @@ def claude_login_file(environ: Mapping[str, str], home: Path | None = None) -> P
 
 
 def _login_found(environ: Mapping[str, str], home: Path | None) -> str | None:
-    """How a login was found, or None. Presence and ``stat`` only: never opened."""
+    """How a login was found, or None. Presence and ``stat`` only: never opened. Judged on
+    what the child gets (``cli_runner.child_env``), so a variable it never sees never counts."""
+    environ = cli_runner.child_env(environ)
     if environ.get(OAUTH_TOKEN_ENV, "").strip():
         return f"{OAUTH_TOKEN_ENV} set"
     path = claude_login_file(environ, home)

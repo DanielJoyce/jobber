@@ -493,6 +493,11 @@ def scorer_credential(
     return scorers.Credential(scorers.MISSING, cred.names)
 
 
+def secret_for_provider(spec: str) -> str | None:
+    """The podman secret that carries ``spec``'s credential to the containers."""
+    return _SECRET_FOR_PROVIDER.get(_provider(spec))
+
+
 def _credential(ctx: _Ctx, spec: str) -> scorers.Credential:
     return scorer_credential(
         spec, ctx.settings.scoring, mode=ctx.mode, environ=ctx.environ, home=ctx.home

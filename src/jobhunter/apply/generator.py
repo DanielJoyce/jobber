@@ -512,7 +512,18 @@ def _run_api(
     now: datetime,
     client_factory: Callable[[], Any] | None,
 ) -> Call:
-    client = client_factory() if client_factory is not None else _default_client()
+    try:
+        client = client_factory() if client_factory is not None else _default_client()
+    except Exception as exc:
+        import anthropic
+
+        if not isinstance(exc, anthropic.AnthropicError):
+            raise
+        # anthropic.CredentialsError and kin: nothing was sent. A profile or config dir that
+        # credential_for counted (stat only) but the SDK cannot load fails here. Fixed
+        # wording: the SDK's message can name files or accounts.
+        logger.warning("packet %s API client failed: %s", req.kind, type(exc).__name__)
+        raise GenerateFailed(CLIENT_FAILED) from exc
     params = api_params(req, model, effort=effort, max_tokens=MAX_TOKENS[req.kind])
     try:
         with client.messages.stream(**params) as stream:
@@ -544,6 +555,9 @@ def _run_api(
         raise GenerateFailed("the output did not match the expected structure") from exc
     call.model = served
     return call
+
+
+CLIENT_FAILED = "the Anthropic SDK could not load its credentials; check them with jobhunter doctor"
 
 
 def _default_client() -> Any:
