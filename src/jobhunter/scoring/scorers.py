@@ -33,6 +33,8 @@ from jobhunter.config import (
     OpenRouter,
     Scoring,
     check_scorer_spec,
+    hidden_label,
+    shown_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -1045,6 +1047,7 @@ def scorer_from_string(
 
 def privacy_notice(spec: str, scoring: Scoring) -> str | None:
     """One line for non-Anthropic scorers: the resume and postings leave for ``base_url``."""
+    label = shown_value(spec) or hidden_label(spec)
     provider, _ = split_scorer(spec)
     if provider == "anthropic":
         return None
@@ -1057,7 +1060,7 @@ def privacy_notice(spec: str, scoring: Scoring) -> str | None:
             "data_collection", "unset (OpenRouter default)"
         )
         return (
-            f"notice: scorer {spec} sends your resume-derived profile and the job postings to "
+            f"notice: scorer {label} sends your resume-derived profile and the job postings to "
             f"openrouter.ai and the model provider it routes to; provider data_collection is "
             f"{collection} (specs/008 personal data, specs/016)"
         )
@@ -1065,15 +1068,15 @@ def privacy_notice(spec: str, scoring: Scoring) -> str | None:
         url = local_base_url(scoring.local)
         if is_loopback(url):
             return (
-                f"notice: scorer {spec} runs on this machine: your resume-derived profile and "
+                f"notice: scorer {label} runs on this machine: your resume-derived profile and "
                 f"the job postings stay here (sent only to {url}, nothing leaves the computer)"
             )
         return (
-            f"notice: scorer {spec} is configured for {url}, which is NOT this machine; your "
+            f"notice: scorer {label} is configured for {url}, which is NOT this machine; your "
             f"resume-derived profile and the job postings go there (specs/008 personal data)"
         )
     target = scoring.openai_compat.base_url if provider == "openai-compat" else provider
     return (
-        f"notice: scorer {spec} sends your resume-derived profile and the job postings to "
+        f"notice: scorer {label} sends your resume-derived profile and the job postings to "
         f"{target} (specs/008 personal data)"
     )

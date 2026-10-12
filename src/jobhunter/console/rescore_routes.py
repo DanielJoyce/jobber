@@ -23,7 +23,13 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from jobhunter.config import check_scorer_spec, resolve_path, shown_value
+from jobhunter.config import (
+    check_scorer_spec,
+    hidden_label,
+    resolve_path,
+    shown_value,
+    usable_model_text,
+)
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.console.work import Restarting, WorkRegistry, refused
 from jobhunter.core import runlock
@@ -268,6 +274,9 @@ def register(
     app.state.rescore_scorer_factory = None  # tests inject a fake; None builds the real scorer
     app.state.rescore_client_factory = None
     templates.env.filters["localtime"] = local_time
+    templates.env.filters["scorer_label"] = lambda spec: (
+        shown_value(spec) or hidden_label(str(spec))
+    )
 
     def state_of(request: Request) -> gr.PrefsState:
         return gr.lenient_state(request.app.state.settings)
@@ -310,7 +319,7 @@ def register(
             scope = queued["scope"]  # running a queued request plans its own scope
         running = rs.running_request(conn, now())
         plan = notice = None
-        if fixed is not None and shown_value(fixed) is None:
+        if fixed is not None and not usable_model_text(fixed):
             # Never echo a key-shaped value (heading, dialog, field or a problem message).
             problem = (
                 "The saved screening model cannot be shown here, so it is not re-scored from "
@@ -349,7 +358,7 @@ def register(
             ).fetchall(),
             "via": via,
             "fixed": fixed is not None,
-            "scorer_shown": shown_value(spec) or "",
+            "scorer_shown": shown_value(spec) or (hidden_label(spec) if fixed is not None else ""),
             "run_url": VIA_RUN_URL.get(via, "/prefs/rescore/run"),
             "panel_url": VIA_PANEL_URL.get(via, "/prefs/rescore/panel"),
         }

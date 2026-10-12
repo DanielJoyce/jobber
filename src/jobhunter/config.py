@@ -206,23 +206,30 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
     """
     provider, sep, model = spec.partition(":")
     known = ", ".join(SCORER_PROVIDERS)
+
+    def q(text: str) -> str:
+        # A message never quotes a value that looks like a key (019 B).
+        return "(value not shown)" if text and shown_value(text) is None else text
+
     inner, inner_sep, rest = model.partition(":")
     if not sep:
         raise ValueError(
-            f'{field} "{spec}": no provider; write "anthropic:{spec}" (known: {known})'
+            f'{field} "{q(spec)}": no provider; write "anthropic:{q(spec)}" (known: {known})'
         )
     if provider not in SCORER_PROVIDERS:
         if inner_sep and inner in DECISIONS_PROVIDERS and rest:
-            hint = f'; use "{inner}:{rest}"'
+            hint = f'; use "{q(inner)}:{q(rest)}"'
         elif near := difflib.get_close_matches(provider, SCORER_PROVIDERS, n=1):
             hint = f"; did you mean {near[0]!r}?"
         else:
             hint = ""
-        raise ValueError(f'{field} "{spec}": unknown provider {provider!r}{hint} (known: {known})')
+        raise ValueError(
+            f'{field} "{q(spec)}": unknown provider {q(provider)!r}{hint} (known: {known})'
+        )
     if not model.strip():
-        raise ValueError(f'{field} "{spec}": no model after "{provider}:"')
+        raise ValueError(f'{field} "{q(spec)}": no model after "{q(provider)}:"')
     if anthropic_only and provider != "anthropic":
-        raise ValueError(f'{field} "{spec}": the deep pass needs "anthropic:<model>"')
+        raise ValueError(f'{field} "{q(spec)}": the deep pass needs "anthropic:<model>"')
     if provider == "anthropic":
         # Lazy: scorers imports this module. A model missing from the price table would be
         # reserved and recorded at the wrong price, so it is refused up front (bug df51dff).
@@ -231,18 +238,20 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
         if model not in PRICING_PER_MTOK:
             listed = ", ".join(sorted(PRICING_PER_MTOK))
             raise ValueError(
-                f'{field} "{spec}": no price for {model!r}, so spend caps cannot see its cost '
-                f"(priced: {listed})"
+                f'{field} "{q(spec)}": no price for {q(model)!r}, '
+                f"so spend caps cannot see its cost (priced: {listed})"
             )
     # OpenRouter slugs are author/model, so a leading provider name is a mistake. Local and
     # openai-compat model names are free-form ("jev:latest" can be legitimate).
     if provider == "openrouter" and inner_sep and inner in SCORER_PROVIDERS:
         if inner in DECISIONS_PROVIDERS and rest:
             raise ValueError(
-                f'{field} "{spec}": {inner.capitalize()} is its own provider; use '
-                f'"{inner}:{rest}" (it still uses OPENROUTER_API_KEY)'
+                f'{field} "{q(spec)}": {q(inner).capitalize()} is its own provider; use '
+                f'"{q(inner)}:{q(rest)}" (it still uses OPENROUTER_API_KEY)'
             )
-        raise ValueError(f'{field} "{spec}": the model name starts with the provider {inner!r}')
+        raise ValueError(
+            f'{field} "{q(spec)}": the model name starts with the provider {q(inner)!r}'
+        )
 
 
 # The value an invalid ``models.toml`` spending key leaves in its field. It is not a usable spec
@@ -496,19 +505,102 @@ _CHOICES = {"runner": ("cli", "api"), "effort": ("low", "medium", "high")}
 # A value may be echoed in a message only when it looks like a scorer spec or model id
 # (019 B: never a value except SHOWN_VALUES), and never when it looks like a key.
 _SHOWABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
-# A key prefix at the start or after a provider or path separator ("openrouter:sk-or-...").
+# What main always refused (and hid): these prefixes at the start or after ``:`` or ``/``, and the
+# words secret, token and password anywhere. Never widened: an existing models.toml must keep
+# loading after an upgrade.
+_ORIGINAL_PREFIXES = ("sk-", "sk_", "key-", "ghp_", "xox", "bearer")
 _SECRET_LOOKING = re.compile(
-    r"(?i)(?:^|[:/])(?:sk-|sk_|key-|ghp_|xox|bearer)|secret|token|password"
+    r"(?i)(?:^|[:/])(?:"
+    + "|".join(re.escape(p) for p in _ORIGINAL_PREFIXES)
+    + r")|secret|token|password"
 )
+# Exact, case-sensitive key shapes, also refused. Each needs a separator-free tail of key length,
+# so model names that merely start like a prefix ("Aizawa-Llama-3-8B-JP", "hf_llama_3_8b",
+# "xai-grok-2-vision-1212", "pa-legal-assistant-7b") stay valid.
+_START = r"(?:^|[:/])"
+_EXACT_KEY_SHAPES = re.compile(
+    _START
+    + r"(?:(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}"
+    + r"|(?:hf_|pa-|pat-|key_|rk_|pk_|sess-|fw_|r8_|tgp_|gho_|ghs_|csk-)[A-Za-z0-9]{30,}"
+    + r"|github_pat_[A-Za-z0-9_]{50,}"
+    + r"|(?:xai-|nvapi-|pplx-|glpat-|gsk_)[A-Za-z0-9]{20,}"
+    + r"|ya29\.[A-Za-z0-9_-]{30,})(?![A-Za-z0-9_-])"
+)
+_HEX_RUN = re.compile(r"[0-9a-fA-F]{32,}")
+_JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*")
+_SEGMENT_SPLIT = re.compile(r"[:/@_.+=-]")
+_LONG_BASE64 = re.compile(r"[A-Za-z0-9+/]{40,}")
+
+
+def _hex_shaped(value: str) -> bool:
+    for unit in re.split(r"[:/@]", value):
+        if _HEX_RUN.fullmatch(re.sub(r"[^A-Za-z0-9]", "", unit)):  # hex, or a UUID
+            return True
+        if any(_HEX_RUN.fullmatch(seg) for seg in _SEGMENT_SPLIT.split(unit)):  # word-<32 hex>
+            return True
+    return False
+
+
+def is_key_shaped(value: str) -> bool:
+    """What ``models.toml`` refuses: exactly the rule main always had (a pasted-key prefix at the
+    start or after ``:`` or ``/``, or the words secret, token, password). Never widened, so a
+    file that loaded before an upgrade still loads. Other key shapes are only hidden
+    (``hidden_value``)."""
+    return bool(_SECRET_LOOKING.search(value))
+
+
+def _long_run_segment(value: str) -> bool:
+    """A segment of 32 or more characters with both letters and digits (a bare Mistral-style
+    key). Display only: it hides the value but never makes it invalid."""
+    if any(
+        len(seg) >= 32 and any(c.isdigit() for c in seg) and any(c.isalpha() for c in seg)
+        for seg in _SEGMENT_SPLIT.split(value)
+    ):
+        return True
+    # An unbroken 40+ run of base64 characters with all three classes (an AWS secret key).
+    return any(
+        any(c.isupper() for c in run) and any(c.islower() for c in run)
+        and any(c.isdigit() for c in run)
+        for run in _LONG_BASE64.findall(value)
+    )  # fmt: skip
+
+
+def hidden_value(value: str) -> bool:
+    """Whether a message must not echo ``value``: a refused prefix, or any key shape (exact
+    shapes, hex, UUID, JWT, long segments). Hiding never makes a value invalid."""
+    return (
+        is_key_shaped(value)
+        or bool(_EXACT_KEY_SHAPES.search(value) or _JWT.search(value))
+        or _hex_shaped(value)
+        or _long_run_segment(value)
+    )
 
 
 def shown_value(value: object) -> str | None:
     """``value`` when it may appear in a message (a scorer spec or model id), else None."""
     if not isinstance(value, str) or not _SHOWABLE.fullmatch(value):
         return None
-    if _SECRET_LOOKING.search(value):
+    if hidden_value(value):
         return None
     return value
+
+
+def hidden_label(value: str) -> str:
+    """A stand-in for a hidden value that tells two different hidden values apart without
+    revealing either (a short digest), for panels, history and confirm forms."""
+    import hashlib
+
+    return "(hidden value " + hashlib.sha256(value.encode()).hexdigest()[:8] + ")"
+
+
+def usable_model_text(value: object) -> bool:
+    """Whether ``models.toml`` and /models may keep ``value``: well-formed and not key-shaped.
+    A value that is merely hidden from display (``_long_run_segment``) is still usable."""
+    return (
+        isinstance(value, str)
+        and _SHOWABLE.fullmatch(value) is not None
+        and not is_key_shaped(value)
+    )
 
 
 def models_file(data_dir: Path) -> Path:
@@ -578,13 +670,18 @@ class Layers:
 
     def source(self, section: str, key: str) -> str:
         """Where the effective value of ``section.key`` came from: "override", "models.toml",
-        "models.toml (invalid)", "config.toml" or "default"."""
+        "models.toml (invalid)" (a blocked spending key), "config.toml" or "default"; an invalid
+        key that falls back says so: "default (models.toml value invalid)"."""
         if (section, key) in self.override_keys:
             return "override"
         if key in self.layer.get(section, {}):
             return "models.toml"
-        if key in self.invalid.get(section, {}) or (section == "scoring" and key in self.blocked):
+        if section == "scoring" and key in self.blocked:
             return "models.toml (invalid)"
+        if key in self.invalid.get(section, {}):
+            if (section, key) in self.config_keys:
+                return "config.toml (models.toml value invalid)"
+            return "default (models.toml value invalid)"
         if (section, key) in self.config_keys:
             return "config.toml"
         return "default"
@@ -607,7 +704,7 @@ def check_model_key(section: str, key: str, value: object) -> str | None:
         return "must be one of " + ", ".join(f'"{c}"' for c in choices)
     if not isinstance(value, str):
         return "must be a string"
-    if shown_value(value) is None:  # looks like a key, or has characters no model id has
+    if not usable_model_text(value):  # key-shaped, or has characters no model id has
         return "not a usable model name"
     assert use is not None
     from jobhunter.scoring import catalog  # lazy: catalog imports this module
@@ -615,7 +712,7 @@ def check_model_key(section: str, key: str, value: object) -> str | None:
     reason = catalog.use_rule_problem(use, value, key)
     if reason is None:
         return None
-    if shown_value(value) is None:
+    if shown_value(value) is None:  # the reason may quote the value: never a hidden one
         return "not a usable model name"
     return reason
 
@@ -655,7 +752,7 @@ def read_models_file(path: Path) -> tuple[bool, str, dict[str, Any] | None, list
 
 def _key_label(name: object) -> str:
     text = str(name)
-    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) and not _SECRET_LOOKING.search(text):
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) and not hidden_value(text):
         return text
     return "<a key>"
 

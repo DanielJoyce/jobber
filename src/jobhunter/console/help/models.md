@@ -97,6 +97,34 @@ The exact messages, and what to do, are in
 [Troubleshooting](troubleshooting.md#a-model-use-is-blocked-by-the-saved-choice) and
 [the broken file entry](troubleshooting.md#the-models-file-is-broken).
 
+## Model names that look like keys
+
+To keep a pasted API key out of most messages and logs, jobhunter hides a model name that looks
+like a key: a known key prefix (`AIza`, `glpat-`, `gsk_`, `hf_`, `xai-` and the like) with a long
+tail, 32 or more hex digits, a UUID, a JWT, a 40-character base64 run, or a segment of 32 or more
+letters and digits. A hidden name is shown as "(value not shown)", or as "(hidden value
+1a2b3c4d)" where two values must be told apart (the re-score panel and the history). Hiding is a
+display rule for the places listed here and on `/models`; a few other pages may still print the
+configured name, so keep real keys out of model fields.
+
+Hiding is not refusing. A hidden name is still saved and still works. A vLLM snapshot path, an
+Azure UUID deployment name or a `repo@<commit>` pin is an example: never printed, never
+blocked, and History keeps it so Revert works.
+
+`/models` and `jobhunter models set` **refuse** only these, with the same rule that has always
+applied (matched case-insensitively, anywhere in the name for the words):
+
+- a name that starts with, or after `:` or `/` continues with, `sk-`, `sk_`, `key-`, `ghp_`,
+  `xox` or `bearer`;
+- a name containing `secret`, `token` or `password` anywhere, so `tokenizer-free-7b` is refused;
+- a name whose first character is not a letter or digit, that is longer than 200 characters, or
+  that has a character outside `A-Z a-z 0-9 . _ : / @ + -`.
+
+A name you cannot save can still be set in `config.toml`; it works there. Ordinary quantised
+names such as `DeepSeek-R1-Distill-Qwen-7B-Q4_K_M` or `...-W8A8-FP8` are never hidden, and
+neither are names that only start like a prefix, such as `hf_llama_3_8b` or
+`xai-grok-2-vision-1212`.
+
 ## The Models page
 
 - **Save** writes the changed fields and records the change in the history.

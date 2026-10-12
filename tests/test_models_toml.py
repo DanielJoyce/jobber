@@ -231,6 +231,16 @@ def test_invalid_drafting_key_falls_back_with_a_notice(dirs, key, value, fallbac
     assert notice == [f"models.toml's apply.{key} is invalid; using {fallback} from the default"]
     if key != "effort":
         assert layers.merged.apply.effort == "high"  # the valid key beside it still applies
+    assert layers.source("apply", key) == "default (models.toml value invalid)"
+
+
+def test_fallen_back_key_names_config_toml_when_it_supplied_the_value(dirs):
+    cfg, mfile = dirs
+    write_config(cfg, '[apply]\neffort = "high"\n')
+    mfile.write_text('[apply]\neffort = "max"\n')
+    layers = load_layers()
+    assert layers.merged.apply.effort == "high"
+    assert layers.source("apply", "effort") == "config.toml (models.toml value invalid)"
 
 
 def test_unknown_keys_warn_and_are_ignored(dirs, caplog):
@@ -601,3 +611,22 @@ def test_reset_file_refuses_a_healthy_file_without_force(dirs):
     out = cli.invoke(app, ["models", "reset-file", "--force"])
     assert out.exit_code == 0, out.output
     assert load_settings().apply.effort == "medium"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "local:DeepSeek-R1-Distill-Qwen-7B-Q4_K_M",
+        "local:mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit",
+        "local:Qwen2-VL-7B-Instruct-W8A8-FP8",
+        "local:DeepSeek-V2-Lite-Chat-Q4_K_M.gguf",
+        "local:aB3dE6gH9jK2mN5pQ8sT1vW4xY7zLm0o",  # hidden in messages, still valid
+    ],
+)
+def test_an_existing_models_toml_with_a_quantised_name_does_not_block_screening(dirs, name):
+    _, mfile = dirs
+    mfile.write_text(f'[scoring]\nscreen_scorer = "{name}"\n')
+    layers = load_layers()
+    assert layers.merged.scoring.screen_scorer == name
+    assert layers.merged.scoring.scorer_problems() == {}
+    assert not layers.blocked and not layers.invalid

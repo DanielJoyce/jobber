@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from jobhunter import container, secrets
-from jobhunter.config import Settings, config_file, resolve_path
+from jobhunter.config import Settings, config_file, resolve_path, shown_value
 from jobhunter.scoring import scorers
 from jobhunter.scoring.profile import ProfileError, _resolve_resume
 
@@ -599,6 +599,7 @@ def _scorer_row(
         )  # fmt: skip
     cred = _credential(ctx, spec)
     provider = _provider(spec)
+    shown = shown_value(spec) or "(value not shown)"
     var = cred.names[0] if cred.names else ""
     if cred.status == scorers.PRESENT:
         if cred.note == scorers.SDK_NOTE:
@@ -612,13 +613,13 @@ def _scorer_row(
             how, source = cred.note, where
         note = f"; {cred.note}" if cred.note and cred.note != scorers.SDK_NOTE and var else ""
         return Check(
-            check_id, SCORING, level, OK, False, title, f"{spec}; {how}{note}", unlocks,
+            check_id, SCORING, level, OK, False, title, f"{shown}; {how}{note}", unlocks,
             None, source, reads_at_start=True,
         )  # fmt: skip
     if cred.status == scorers.UNKNOWN:
         return Check(
             check_id, SCORING, level, UNKNOWN, False, title,
-            f"{spec}; {cred.note or 'only the server can say'}", unlocks,
+            f"{shown}; {cred.note or 'only the server can say'}", unlocks,
             Fix("route", "/setup"), where, reads_at_start=True,
         )  # fmt: skip
     # missing
@@ -632,11 +633,11 @@ def _scorer_row(
             'pick another scorer in config.toml, e.g.  [scoring] screen_scorer = "jev:<model>"',
         )
     if invalid and state is not None:
-        detail = f"{spec}; {var} {state.describe()}"
+        detail = f"{shown}; {var} {state.describe()}"
         status = BROKEN
     else:
         names = " or ".join(cred.names) or "a credential"
-        detail = f"{spec} ({where}) is used and no credential is set ({names})"
+        detail = f"{shown} ({where}) is used and no credential is set ({names})"
         status = MISSING
     return Check(
         check_id, SCORING, level, status, False, title, detail, unlocks,
@@ -924,7 +925,7 @@ def _models_choices(ctx: _Ctx) -> Check:
     unknown = [p.message for p in layers.problems if p.kind == "unknown"]
     if unknown:
         return Check("models.choices", SCORING, RECOMMENDED, OK, False, title,
-                     "; ".join(unknown) + " (ignored)", unlocks, None, "models.toml",
+                     "; ".join(unknown), unlocks, None, "models.toml",
                      reads_at_start=True)  # fmt: skip
     count = sum(len(v) for v in layers.layer.values())
     return Check("models.choices", SCORING, RECOMMENDED, OK, False, title,

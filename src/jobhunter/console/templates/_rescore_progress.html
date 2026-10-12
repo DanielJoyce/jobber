@@ -5,7 +5,7 @@
   <p><strong>Re-scoring&hellip;</strong> scored {{ r.scored }} of {{ r.total }} &middot; cost so far ${{ "%.4f" | format(r.cost_usd) }} &middot; errors {{ r.errored }}</p>
   <progress max="{{ r.total or 1 }}" value="{{ r.scored + r.errored }}"></progress>
   {% elif r.status == 'done' %}
-  <p class="rescore-done"><strong>Done.</strong> Scored {{ r.scored }} of {{ r.total }} with <code>{{ r.scorer }}</code> &middot; cost ${{ "%.4f" | format(r.cost_usd) }} &middot; errors {{ r.errored }}. <a href="/inbox">Open the inbox</a></p>
+  <p class="rescore-done"><strong>Done.</strong> Scored {{ r.scored }} of {{ r.total }} with <code>{{ r.scorer | scorer_label }}</code> &middot; cost ${{ "%.4f" | format(r.cost_usd) }} &middot; errors {{ r.errored }}. <a href="/inbox">Open the inbox</a></p>
   {% if r.note %}<p class="hint">{{ r.note }}</p>{% endif %}
   {% elif r.status == 'failed' %}
   <p class="field-error" role="alert"><strong>Failed.</strong> {{ r.error }} (scored {{ r.scored }} of {{ r.total }} before it stopped; cost ${{ "%.4f" | format(r.cost_usd) }}.)</p>

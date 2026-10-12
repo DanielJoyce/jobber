@@ -47,7 +47,15 @@ from starlette.concurrency import run_in_threadpool
 from jobhunter import model_access as ma
 from jobhunter import model_choices as mc
 from jobhunter import readiness as rd
-from jobhunter.config import BLOCKED_SPEC, Settings, layers_for, relayer, shown_value
+from jobhunter.config import (
+    BLOCKED_SPEC,
+    Settings,
+    hidden_label,
+    layers_for,
+    relayer,
+    shown_value,
+    usable_model_text,
+)
 from jobhunter.console import config_routes as cr
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.console.deep_routes import loopback_peer
@@ -703,7 +711,7 @@ def register(
                 watching=watching(request),
                 watch_state=cr.current_state(request) if watching(request) else None,
             ),
-            "history": history_rows(ctx.conn),
+            "history": mc.masked_history(history_rows(ctx.conn)),
             "history_msg": history_msg,
             "flash": flash,
             "prices_checked": catalog.PRICES_CHECKED,
@@ -736,7 +744,7 @@ def register(
                 values[name] = str(form.get(name, "") or "").strip()
             if name == "screen" and (other := str(form.get("screen_other", "") or "").strip()):
                 values[name] = other
-            if name in MODEL_FIELDS and values[name] and shown_value(values[name]) is None:
+            if name in MODEL_FIELDS and values[name] and not usable_model_text(values[name]):
                 values.pop(name)
                 refused.append(name)
             if f"shown_{name}" in form:
@@ -889,7 +897,7 @@ def register(
                     return Outcome(422, state)
                 if not check.needs_force:
                     continue
-                text = mc.to_text(value) or ""
+                text = mc.display_text(mc.to_text(value)) or ""
                 if approved.get(name) == text:
                     ok_approved[name] = text  # "save anyway" was pressed for this value
                 else:
@@ -1067,10 +1075,12 @@ def register(
         scope = str(form.get("scope") or "recent")
         token = str(form.get("plan") or "")
         current = request.app.state.settings.scoring.screen_scorer
-        if shown_value(current) is None:
+        if not usable_model_text(current):
             return screen_panel(request, conn, scope=scope)  # says why; plans nothing
-        if not saved or saved != current:
-            shown = text_of(current) or "a blocked value"
+        # A hidden-but-valid model is posted as its digest label, never as the value.
+        label = shown_value(current) or hidden_label(current)
+        if not saved or saved != label:
+            shown = label
             return screen_panel(
                 request,
                 conn,
@@ -1081,7 +1091,7 @@ def register(
                 ),
             )
         return request.app.state.rescore_run_confirmed(
-            request, conn, scope=scope, spec=saved, token=token, fixed=saved, via="models"
+            request, conn, scope=scope, spec=current, token=token, fixed=current, via="models"
         )
 
     # Registered last (below): "/models/{row}" would otherwise match /models/load and friends.
