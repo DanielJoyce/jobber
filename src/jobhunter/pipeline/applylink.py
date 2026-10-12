@@ -794,6 +794,23 @@ def resolve_pending(
     return done
 
 
+def reverify_due(link: ApplyLink, now: datetime, max_age_hours: float = 24) -> bool:
+    """Whether ``reverify`` would make a request for this row: a ``live`` link last checked
+    more than ``max_age_hours`` ago that is fetched at all (not set by the user, not a login
+    wall, not an ATS trusted without a request, not a job board)."""
+    if link.status != ApplyStatus.live or not link.final_url:
+        return False
+    if link.chosen_by == "user" or is_login_link(link):
+        return False
+    rule = match_ats(link.final_url)
+    if rule is not None and not rule.fetch:
+        return False
+    if is_board_host(host_of(link.final_url)):
+        return False  # never fetched (specs/017 phase 1e)
+    checked = link.verified_at or link.resolved_at
+    return now - checked >= timedelta(hours=max_age_hours)
+
+
 def reverify(
     conn: sqlite3.Connection,
     group_id: int,
@@ -809,19 +826,10 @@ def reverify(
     the user set and login walls (never requested). A redirect to a login wall blocks the link.
     """
     link = get_apply_link(conn, group_id)
-    if link is None or link.status != ApplyStatus.live or not link.final_url:
+    if link is None or not reverify_due(link, now, max_age_hours):
         return link
-    if link.chosen_by == "user" or is_login_link(link):
-        return link
+    assert link.final_url is not None  # reverify_due
     rule = match_ats(link.final_url)
-    if rule is not None and not rule.fetch:
-        return link
-    if is_board_host(host_of(link.final_url)):
-        return link  # never fetched (specs/017 phase 1e)
-    checked = link.verified_at or link.resolved_at
-    if now - checked < timedelta(hours=max_age_hours):
-        return link
-
     url = link.final_url
     left_posting = False
     ctx = ctx_factory(url)

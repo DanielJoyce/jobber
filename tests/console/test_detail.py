@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -10,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jobhunter.config import Settings
-from jobhunter.console import detail
+from jobhunter.console import apply_bg, detail
 from jobhunter.console.app import create_app
 from jobhunter.core import db
 from jobhunter.core.fetch import fetch_context_for_url, reset_shared_state
@@ -557,3 +559,113 @@ def test_closed_page_does_not_blame_the_employer_for_a_dead_board_link(client, c
     add_link(conn, 4, "expired")  # on the employer's ATS: the posting really closed
     t = client.get("/apply/4").text
     assert "This posting has closed" in t and "employer's page" in t
+
+
+# ─── bug e0d047b: a busy run or a slow site never holds up a click ─────────────────────
+
+
+class SlowSites(Pages):
+    """Pages whose every non-robots request waits on ``gate``: a site that does not answer
+    until the test lets it (or 10 s pass)."""
+
+    def __init__(self):
+        super().__init__()
+        self.gate = threading.Event()
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/robots.txt":
+            self.gate.wait(10)
+        return super().handle(request)
+
+
+@pytest.fixture
+def slow(client, monkeypatch):
+    monkeypatch.setattr(apply_bg, "WAIT_S", 0.3)
+    monkeypatch.setattr(apply_bg, "CLICK_RETRY_GAP_S", 0.05)
+    app = client.app
+    settings = app.state.settings
+    sites = SlowSites()
+    opened = []
+
+    def factory(url):
+        c = db.connect(settings.paths.db_path)
+        opened.append(c)
+        return fetch_context_for_url(
+            settings,
+            c,
+            url,
+            transport=httpx.MockTransport(sites.handle),
+            clock=lambda: 0.0,
+            sleep=lambda s: None,
+        )
+
+    app.state.ctx_factory = factory
+    yield sites
+    sites.gate.set()
+    assert app.state.apply_link_worker.wait_idle(15)
+    for c in opened:
+        c.close()
+
+
+def timed_get(client, path):
+    t0 = time.monotonic()
+    r = client.get(path)
+    return r, time.monotonic() - t0
+
+
+def test_apply_redirects_promptly_while_reverify_hangs(client, conn, slow):
+    """A stale live link: the click goes to the stored link within the wait budget, and the
+    re-verify finishes in the background (the old code held the request for the whole fetch)."""
+    add_link(conn, 2, "live", verified_hours=48)
+    slow.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    r, took = timed_get(client, "/apply/2")
+    assert r.status_code == 302 and r.headers["location"] == WD
+    assert took < 3.0
+    click = conn.execute("SELECT outcome FROM apply_click WHERE job_group_id = 2").fetchone()
+    assert click["outcome"] == "redirected"
+    slow.gate.set()
+    assert client.app.state.apply_link_worker.wait_idle(10)
+    row = conn.execute("SELECT verified_at FROM apply_link WHERE job_group_id = 2").fetchone()
+    assert row["verified_at"].startswith("2026-10-09T12:00")
+
+
+def test_button_fragment_and_click_share_one_walk_and_never_hang(client, conn, slow):
+    """A legacy login-wall row, slow sites: the fragment answers pending (and asks again), the
+    click goes to the start URL at once, and both share one walk of the group's links."""
+    add_link(conn, 1, "live", final=LOGIN, ats="unknown")
+    slow.responses["https://example.com/1"] = httpx.Response(302, headers={"Location": WD})
+    slow.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    frag, took = timed_get(client, "/job/1/apply-button")
+    assert frag.status_code == 200 and took < 3.0
+    assert 'hx-get="/job/1/apply-button"' in frag.text and "resolving" in frag.text
+    r, took = timed_get(client, "/apply/1")
+    assert r.status_code == 302 and r.headers["location"] == "https://nlx.example/start"
+    assert took < 3.0
+    slow.gate.set()
+    assert client.app.state.apply_link_worker.wait_idle(10)
+    assert slow.hits.count("https://example.com/1") == 1  # one walk, not one per request
+    frag = client.get("/job/1/apply-button").text
+    assert "Apply on Workday" in frag and "hx-get" not in frag
+
+
+def test_apply_click_survives_a_run_holding_the_write_lock(client, conn, db_path, slow):
+    """Another process (a nightly run) holds the write lock: the click still redirects at once
+    and its log row lands once the lock is free (the old code failed with 'database is
+    locked' after busy_timeout)."""
+    add_link(conn, 2, "live", verified_hours=1)
+    run = db.connect(db_path)
+    run.execute("BEGIN IMMEDIATE")
+    try:
+        r, took = timed_get(client, "/apply/2")
+        assert r.status_code == 302 and r.headers["location"] == WD
+        assert took < 3.0
+    finally:
+        run.execute("COMMIT")
+        run.close()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if conn.execute("SELECT COUNT(*) FROM apply_click").fetchone()[0]:
+            break
+        time.sleep(0.05)
+    click = conn.execute("SELECT outcome, final_url FROM apply_click").fetchone()
+    assert click["outcome"] == "redirected" and click["final_url"] == WD
