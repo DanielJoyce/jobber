@@ -286,6 +286,24 @@ def test_all_set_unlocks_in_the_console_when_essentials_are_ok(client, db_path, 
     assert [tuple(r) for r in rows] == [(1,)]
 
 
+def test_all_set_unlocks_on_reload_after_setup_is_fixed_without_a_db_change(
+    client, db_path, monkeypatch
+):
+    from jobhunter import readiness
+
+    fixed = {"ok": False}  # stands in for config.toml, .env or the resume being fixed on disk
+    monkeypatch.setattr(readiness, "essentials_ok_cheap", lambda *a, **k: fixed["ok"])
+    client.get("/achievements")
+    assert (
+        run(db_path, "SELECT tier FROM achievement_unlock WHERE achievement_id = 'setup.ready'")
+        == []
+    )
+    fixed["ok"] = True  # no DB row changes between the two loads
+    client.get("/achievements")
+    rows = run(db_path, "SELECT tier FROM achievement_unlock WHERE achievement_id = 'setup.ready'")
+    assert [tuple(r) for r in rows] == [(1,)]
+
+
 def test_all_set_is_not_granted_in_the_console_while_an_essential_is_missing(
     client, db_path, monkeypatch
 ):
