@@ -34,3 +34,10 @@
   .su-row { padding: 8px; }
   .su-head { flex-direction: column; align-items: flex-start; }
 }
+.su-live-out:empty { display: none; }
+.su-live-result { border: 1px solid var(--grid); border-radius: 6px; padding: 4px 8px; margin: 4px 0; }
+.su-live-ok { border-left: 4px solid var(--status-good); }
+.su-live-failed, .su-live-error { border-left: 4px solid var(--status-critical); }
+.su-live-not-run { border-left: 4px solid var(--status-warning); }
+.su-live-facts { margin: 2px 0 2px 1.2rem; padding: 0; }
+.su-live-hint { font-size: 0.85rem; }

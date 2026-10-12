@@ -295,11 +295,8 @@ def reset_auth_cache() -> None:
     _AUTH_OK.clear()
 
 
-def check_auth(binary: str, cwd: Path, environ: Mapping[str, str] | None = None) -> None:
-    """``claude auth status`` must show a claude.ai first-party login. Cached per process
-    (success only, so a failure is re-checked after **Turn back on**)."""
-    if binary in _AUTH_OK:
-        return
+def _auth_json(binary: str, cwd: Path, environ: Mapping[str, str] | None) -> dict[str, Any]:
+    """Run ``claude auth status --json`` once and parse it ({} when unreadable)."""
     try:
         proc = _spawn(
             [binary, "auth", "status", "--json"],
@@ -324,10 +321,45 @@ def check_auth(binary: str, cwd: Path, environ: Mapping[str, str] | None = None)
         data = json.loads(out.decode("utf-8", "replace") or "{}")
     except ValueError:
         data = {}
-    if not isinstance(data, dict):
-        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def _subscription_login(data: Mapping[str, Any]) -> bool:
+    return (
+        data.get("authMethod") == "claude.ai"
+        and data.get("apiProvider") == "firstParty"
+        and data.get("loggedIn") is not False
+    )
+
+
+@dataclass(frozen=True)
+class AuthStatus:
+    """``claude auth status`` reduced to two booleans (specs/019 "Live checks"). The email,
+    organization and every other field of the reply are dropped here."""
+
+    logged_in: bool
+    subscription: bool  # a claude.ai first-party login, not an API key
+
+
+def auth_status(binary: str, cwd: Path, environ: Mapping[str, str] | None = None) -> AuthStatus:
+    """Uncached ``claude auth status``, for the free live check. Unlike ``check_auth`` it never
+    adds to ``_AUTH_OK`` and never asks for the runner to be turned off: a failed check is a
+    status. Raises ``CliFailure`` (fixed text) when the command cannot run or times out."""
+    data = _auth_json(binary, cwd, environ)
+    logged_in = data.get("loggedIn") is True or (
+        data.get("loggedIn") is None and bool(data.get("authMethod"))
+    )
+    return AuthStatus(logged_in, logged_in and _subscription_login(data))
+
+
+def check_auth(binary: str, cwd: Path, environ: Mapping[str, str] | None = None) -> None:
+    """``claude auth status`` must show a claude.ai first-party login. Cached per process
+    (success only, so a failure is re-checked after **Turn back on**)."""
+    if binary in _AUTH_OK:
+        return
+    data = _auth_json(binary, cwd, environ)
     method, provider = data.get("authMethod"), data.get("apiProvider")
-    if method != "claude.ai" or provider != "firstParty" or data.get("loggedIn") is False:
+    if not _subscription_login(data):
         raise CliFailure(
             "claude auth status does not show a claude.ai subscription login "
             f"(authMethod {method!r}, apiProvider {provider!r}); the CLI runner is off so "

@@ -17,7 +17,8 @@ Spends API credits (or OpenRouter credits):
 - the deep pass: `jobhunter score --deep 10` or `--deep-group`
 - a draft made with the `api` runner (see [Drafting](drafting.md))
 
-Never spends: opening `/setup`, `jobhunter doctor`, reading this help, browsing the inbox,
+Never spends: opening `/setup`, `jobhunter doctor`, the free live checks (`doctor --live`
+and the **Test (free)** buttons), reading this help, browsing the inbox,
 editing free preferences (see [Profile and resume](profile-and-resume.md)), and drafting with
 the `cli` runner on your subscription. A paid `llm bench` is the exception, below.
 

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from jobhunter import container, legacy_data, model_access, readiness
+from jobhunter import container, legacy_data, live_checks, model_access, readiness
 from jobhunter import readiness_snapshot as snap
 from jobhunter.config import MODEL_KEYS, Settings, load_settings, resolve_path, shown_value
 from jobhunter.ops import preflight
@@ -92,10 +92,18 @@ class Report:
     model_sources: list[tuple[str, str, str]] = field(default_factory=list)
     # --snapshot: one line per section written or not (stderr), e.g. "wrote manual_inputs"
     snapshot_notes: list[str] = field(default_factory=list)
+    settings: Settings | None = None  # None when the config file would not load
+    live: list[live_checks.LiveResult] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
-        return 0 if readiness.essentials_ok(self.checks) else 1
+        if not readiness.essentials_ok(self.checks):
+            return 1
+        # --live: an essential row's live check failing is also exit 1 (019 doctor).
+        essential = {c.id for c in self.checks if c.level == ESSENTIAL}
+        if any(r.failing and essential.intersection(r.rows) for r in self.live):
+            return 1
+        return 0
 
 
 def normalize_group(name: str) -> str:
@@ -333,7 +341,13 @@ def gather(
     if at is not None:
         checks[at + 1 : at + 1] = model_access_checks(settings, mode, now)
 
-    report = Report(checks, mode, group=wanted, snapshot_notes=notes)
+    report = Report(
+        checks,
+        mode,
+        group=wanted,
+        snapshot_notes=notes,
+        settings=None if config_error else settings,
+    )
     if config_error is None:
         report.model_sources = model_sources(settings)
     if containers:
@@ -429,9 +443,72 @@ def render(report: Report, *, verbose: bool = False) -> list[str]:
     if verbose:
         out.append(f"mode: {report.mode}")
         out.append(WAL_NOTE)
+    out += render_live(report)
     out.append(summary(report.checks))
     return out
 
 
 def to_json_data(report: Report) -> list[dict]:
     return [c.as_dict() for c in report.checks]
+
+
+# --- live checks (S6) ---------------------------------------------------------------------------
+
+
+def live_plan(report: Report) -> list[live_checks.Planned]:
+    if report.settings is None:
+        return []
+    return live_checks.plan(report.settings, report.mode)
+
+
+def live_preamble(report: Report, planned: list[live_checks.Planned]) -> list[str]:
+    """What ``--live`` will contact, printed before anything is contacted."""
+    out = ["Live checks (free: no model is called, nothing is stored)."]
+    if report.settings is None:
+        return [*out, "  none run: the config file will not load"]
+    contacts = [
+        line
+        for p in planned
+        if not p.instead
+        and (line := live_checks.contact_line(p.kind, p.rows[0], report.settings, report.mode))
+    ]
+    if contacts:
+        out.append("Will contact:")
+        out += [f"  {c}" for c in contacts]
+    else:
+        out.append("Nothing to contact here.")
+    return out
+
+
+def run_live(
+    report: Report,
+    planned: list[live_checks.Planned],
+    *,
+    now: Callable[[], datetime] | None = None,
+    deps: live_checks.Deps | None = None,
+) -> None:
+    if report.settings is None or not planned:
+        return
+    clock = now or (lambda: datetime.now(UTC))
+    report.live = live_checks.run_plan(planned, report.settings, report.mode, now=clock, deps=deps)
+
+
+LIVE_LABELS = {
+    live_checks.OK: "ok",
+    live_checks.FAILED: "FAILED",
+    live_checks.ERROR: "ERROR",
+    live_checks.NOT_RUN: "not run",
+}
+
+
+def render_live(report: Report) -> list[str]:
+    if not report.live:
+        return []
+    out = ["Live checks"]
+    width = max(len(r.title) for r in report.live)
+    for r in report.live:
+        parts = [live_checks.fact_text(f) for f in r.facts] + list(r.notes)
+        out.append(f"  {LIVE_LABELS[r.outcome]:<8} {r.title:<{width}}  {'; '.join(parts)}")
+        if r.instead:
+            out.append(f"           run: {r.instead}")
+    return out

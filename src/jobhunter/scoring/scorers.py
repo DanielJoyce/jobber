@@ -934,6 +934,73 @@ def local_server_status(config: Local, *, client: httpx.Client | None = None) ->
             http.close()
 
 
+# ─── OpenRouter key check (specs/019 "Live checks") ─────────────────────────
+
+OPENROUTER_HOST = "openrouter.ai"
+
+
+def is_openrouter_host(base_url: str) -> bool:
+    """True only when ``base_url``'s host is exactly ``openrouter.ai``."""
+    try:
+        return (httpx.URL(base_url).host or "").lower() == OPENROUTER_HOST
+    except (httpx.InvalidURL, TypeError, ValueError):
+        return False
+
+
+@dataclass(frozen=True)
+class KeyStatus:
+    """The answer of OpenRouter's free ``GET /key``, reduced to fixed fields.
+
+    ``accepted`` None means no answer (not reachable, or an unexpected reply); ``problem`` is
+    fixed wording. The key's ``label`` (a masked key) and the raw body are never kept."""
+
+    accepted: bool | None
+    limit_remaining: float | None = None
+    problem: str = ""
+
+
+def openrouter_key_status(
+    config: OpenRouter,
+    *,
+    client: httpx.Client | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> KeyStatus:
+    """``GET <base_url>/key``: is the key accepted, and how much credit is left on it.
+
+    Free: no model is called. Only for ``openrouter.ai`` (the caller checks
+    ``is_openrouter_host`` first; this refuses anything else without a request)."""
+    if not is_openrouter_host(config.base_url):
+        return KeyStatus(None, problem="no free live check for this endpoint")
+    env = os.environ if environ is None else environ
+    key = _env_value(env, config.api_key_env) if config.api_key_env else ""
+    if not key:
+        return KeyStatus(None, problem="no key set; nothing was sent")
+    url = config.base_url.rstrip("/") + "/key"
+    http = client if client is not None else httpx.Client(timeout=15.0)
+    try:
+        try:
+            resp = http.get(url, headers={"Authorization": f"Bearer {key}"})
+        except httpx.HTTPError:
+            return KeyStatus(None, problem="could not reach openrouter.ai")
+        if resp.status_code in (401, 403):
+            return KeyStatus(False, problem="the key was refused")
+        if resp.status_code != 200:
+            return KeyStatus(None, problem=f"openrouter.ai answered HTTP {resp.status_code}")
+        try:
+            data = resp.json().get("data")
+        except (ValueError, AttributeError):
+            data = None
+        if not isinstance(data, dict):
+            return KeyStatus(None, problem="openrouter.ai gave an unreadable reply")
+        remaining = data.get("limit_remaining")
+        if isinstance(remaining, bool) or not isinstance(remaining, int | float):
+            remaining = None
+        return KeyStatus(True, float(remaining) if remaining is not None else None)
+    finally:
+        if client is None:
+            http.close()
+
+
 # ─── Factory ────────────────────────────────────────────────────────────────
 
 

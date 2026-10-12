@@ -2563,7 +2563,15 @@ def doctor(
             "(up to 120 s) and probes podman; host only.",
         ),
     ] = False,
-    live: Annotated[bool, typer.Option("--live", hidden=True)] = False,
+    live: Annotated[
+        bool,
+        typer.Option(
+            "--live",
+            help="Also the free live checks: whether your keys are accepted, the local model "
+            "and Gmail answer, and `claude` is logged in. Calls no model and spends nothing; "
+            "prints what it will contact first.",
+        ),
+    ] = False,
     snapshot: Annotated[
         bool,
         typer.Option(
@@ -2576,18 +2584,17 @@ def doctor(
 ) -> None:
     """Check that jobhunter is set up: the same checks as /setup, in the terminal.
 
-    Exit 0 when every essential is ok, 1 when an essential is missing or broken, 2 on a usage
-    error. Recommended items never change the exit code. Free and local: no network, no model
-    call. Opens the database read-only and never migrates it (SQLite may create the -wal and
-    -shm files beside a WAL database; they hold no new data). Runs even when the old layout,
+    Exit 0 when every essential is ok, 1 when an essential is missing or broken (with --live,
+    also when an essential's live check fails), 2 on a usage error. Recommended items never
+    change the exit code. Free: no model call. Without --live, local only (no network); --live
+    prints what it will contact before contacting it. Opens the database read-only and never
+    migrates it (SQLite may create the -wal and -shm files beside a WAL database; they hold no
+    new data). Runs even when the old layout,
     a pending schema or a broken config file stop other commands. Prints no key, address or
     contact. Writes nothing, except readiness.json with --snapshot.
     """
     from jobhunter.ops import doctor as doc
 
-    if live:
-        typer.echo("error: doctor --live is not available yet (019 S6).", err=True)
-        raise typer.Exit(2)
     if containers:
         _host_only("doctor --containers", "jobhunter doctor --containers")
     try:
@@ -2603,8 +2610,16 @@ def doctor(
         raise typer.Exit(2) from exc
     for note in report.snapshot_notes:
         typer.echo(note, err=True)
+    if live:
+        planned = doc.live_plan(report)
+        for line in doc.live_preamble(report, planned):
+            typer.echo(line, err=as_json)
+        doc.run_live(report, planned)
     if as_json:
-        typer.echo(json.dumps(doc.to_json_data(report), indent=2))
+        data = doc.to_json_data(report)
+        if live:  # a separate key: plain --json stays the list of checks
+            data = {"checks": data, "live": [r.as_dict() for r in report.live]}
+        typer.echo(json.dumps(data, indent=2))
     else:
         for line in doc.render(report, verbose=verbose):
             typer.echo(line)

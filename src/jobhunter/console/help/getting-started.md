@@ -65,6 +65,13 @@ it prints no key or address. `-v` shows every row with what it unlocks and where
 exit status is 0 when every essential is fine, 1 when an essential is missing or broken, and 2
 on a usage error. Recommended and optional items never change it.
 
+`jobhunter doctor --live` also asks each service whether your setup works: whether your scorer
+key is accepted (and, for OpenRouter, the credit left on it), whether a local model answers,
+whether Gmail accepts your token and has the label and filters, and whether `claude` is logged
+in with claude.ai. It prints what it will contact first, calls no model and spends nothing, and
+shows only yes or no answers. The same checks are the **Test (free)** buttons on `/setup`, which
+appear only in a browser on this machine. With containers, run `jobhunter-ctr doctor --live`.
+
 ## The first run
 
 ```bash
