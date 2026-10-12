@@ -260,6 +260,9 @@ class Mail(BaseModel):
     alerts_address: str = "<you>+jobs@gmail.com"
     label: str = "jobhunter/alerts"
     fallback_sender_domains: list[str] = Field(default_factory=list)
+    # Exact sender addresses (``from:<address>`` filters), for sites that also send personal mail
+    # and so cannot be routed by domain, e.g. LinkedIn's job-alert sender (specs/019 S9).
+    fallback_senders: list[str] = Field(default_factory=list)
     # Google OAuth client secrets JSON (Desktop app), kept outside the repo. The env var
     # JOBHUNTER_GOOGLE_CLIENT_SECRETS overrides it.
     client_secrets_path: Path = Field(

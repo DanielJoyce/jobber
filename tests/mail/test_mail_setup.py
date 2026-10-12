@@ -268,3 +268,41 @@ def test_cli_auth_missing_secrets(cfg, tmp_path, monkeypatch):
 def test_cli_status_without_token(cfg):
     result = runner.invoke(app, ["mail", "status"])
     assert result.exit_code == 1 and "mail auth" in result.output
+
+
+def test_fallback_sender_filters_are_exact_from_addresses():
+    g = Gmail()
+    s = make_settings(
+        fallback_sender_domains=["a.test"],
+        fallback_senders=["JobAlerts-NoReply@linkedin.com", "jobalerts-noreply@linkedin.com"],
+    )
+    setup.setup_mailbox(g, s)
+    assert [f["criteria"] for f in g.filters] == [
+        {"to": ADDR},
+        {"from": "@a.test"},
+        {"from": "jobalerts-noreply@linkedin.com"},
+    ]
+    xml = setup.filters_xml(s)
+    assert "jobalerts-noreply@linkedin.com" in xml
+    assert 'value="@linkedin.com"' not in xml
+
+
+@pytest.mark.parametrize(
+    "bad", ["linkedin.com", "@linkedin.com", "*@linkedin.com", "LinkedIn <a@linkedin.com>", "a@b"]
+)
+def test_fallback_sender_validation_rejects_non_addresses(bad):
+    with pytest.raises(setup.MailSetupError, match="fallback_senders"):
+        setup.wanted_filters(make_settings(fallback_senders=[bad]))
+    with pytest.raises(setup.MailSetupError):
+        setup.setup_mailbox(Gmail(), make_settings(fallback_senders=[bad]))
+
+
+def test_personal_mail_domain_warning():
+    s = make_settings(fallback_sender_domains=["@linkedin.com", "www.craigslist.org", "ok.test"])
+    warns = setup.domain_warnings(s)
+    assert len(warns) == 2 and "linkedin.com" in warns[0] and "fallback_senders" in warns[0]
+    assert "craigslist.org" in warns[1]
+    assert setup.domain_warnings(make_settings(fallback_sender_domains=["mail.linkedin.com"]))
+    report = setup.setup_mailbox(Gmail(), make_settings(fallback_sender_domains=["linkedin.com"]))
+    assert any(line.startswith("warning:") for line in report.lines())
+    assert not setup.domain_warnings(make_settings(fallback_senders=["a@linkedin.com"]))

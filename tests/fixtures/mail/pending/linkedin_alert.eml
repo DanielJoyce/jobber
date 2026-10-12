@@ -1,0 +1,18 @@
+From: LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>
+To: you+jobs@example.com
+Subject: "platform engineer": Example Fictional Corp and more
+Date: Thu, 08 Oct 2026 06:45:00 -0400
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<!-- SYNTHETIC FIXTURE: fictional employers and job ids. LinkedIn alerts have no parser yet. -->
+<html><body>
+<p>Your job alert for platform engineer</p>
+<table>
+  <tr><td><a href="https://www.linkedin.com/comm/jobs/view/3900000001/?trackingId=x">Platform Engineer</a></td>
+      <td>Example Fictional Corp</td><td>Denver, CO</td></tr>
+  <tr><td><a href="https://www.linkedin.com/jobs/view/3900000002/">Site Reliability Engineer</a></td>
+      <td>Example Allegheny Robotics</td><td>Remote</td></tr>
+</table>
+</body></html>

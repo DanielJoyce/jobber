@@ -48,6 +48,8 @@ from jobhunter.core.models import (
 from jobhunter.core.textnorm import parse_date
 from jobhunter.mail.message import MailMessage
 from jobhunter.mail.parsers import AlertEntry, Detection, parse_message, row_for_host
+from jobhunter.mail.pending import pending_family, pending_key
+from jobhunter.pipeline.board_ids import is_board_host
 from jobhunter.pipeline.dedupe import normalize_employer
 from jobhunter.pipeline.dedupe_url import normalize_apply_url
 from jobhunter.pipeline.listing import to_iso
@@ -80,6 +82,10 @@ _DESCRIPTION_SELECTORS = (
 # ─── resolve policy ─────────────────────────────────────────────────────────
 
 
+# LinkedIn's link shortener: never requested (not in board_ids, which the extension mirrors).
+_SHORTENERS = ("lnkd.in",)
+
+
 def may_resolve(url: str, family: str, rows: Sequence[SourceRow]) -> bool:
     """Whether an emailed posting link may be followed at all (specs/012 table).
 
@@ -88,6 +94,8 @@ def may_resolve(url: str, family: str, rows: Sequence[SourceRow]) -> bool:
     FetchContext still checks robots.txt before the request.
     """
     host = urlsplit(url).hostname or ""
+    if is_board_host(host) or pending_key(host) or host.lower().rstrip(".") in _SHORTENERS:
+        return False  # LinkedIn, Indeed, Craigslist: never requested, not even robots.txt
     row = row_for_host(host, rows)
     if row is not None:
         return row.robots.status not in _NO_FETCH_ROBOTS
@@ -338,7 +346,13 @@ class MailAlertsAdapter:
         self, conn: sqlite3.Connection, src: SourceRow, msg: MailMessage, index: DedupeIndex
     ) -> Iterator[JobStub]:
         now = to_iso(self._clock())
-        det, found = parse_message(msg, self.rows)
+        # Decided from the sender alone, before any body signal: a LinkedIn or Craigslist alert
+        # that mentions NEOGOV or "saved search" must not be parsed as another family.
+        pending = pending_family(msg.sender_domain)
+        if pending:  # no parser yet: record only, so the parser's re-read can find it
+            det, found = Detection(pending, None, "pending parser"), []
+        else:
+            det, found = parse_message(msg, self.rows)
         self.stats.messages += 1
         self.stats.families[det.family] = self.stats.families.get(det.family, 0) + 1
         conn.execute(
@@ -357,7 +371,7 @@ class MailAlertsAdapter:
                 now,
             ),
         )
-        if not found:
+        if not found and not pending:
             log.warning("alert %s (%s): no job entries parsed", msg.message_id, det.family)
         for i, entry in enumerate(found):
             try:
