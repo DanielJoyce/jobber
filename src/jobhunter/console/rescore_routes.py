@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from jobhunter.config import check_scorer_spec, resolve_path
+from jobhunter.config import check_scorer_spec, resolve_path, shown_value
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.console.work import Restarting, WorkRegistry, refused
 from jobhunter.core import runlock
@@ -296,7 +296,7 @@ def register(
         settings = request.app.state.settings
         st = state_of(request)
         if fixed is not None:
-            scorers = [(fixed, "just saved on /models")]
+            scorers = [(fixed, "saved on /models")]
             spec = fixed
             request_id = None  # queued requests are run from /prefs
         else:
@@ -310,7 +310,14 @@ def register(
             scope = queued["scope"]  # running a queued request plans its own scope
         running = rs.running_request(conn, now())
         plan = notice = None
-        problem = _spec_problem(spec, scoring=settings.scoring)
+        if fixed is not None and shown_value(fixed) is None:
+            # Never echo a key-shaped value (heading, dialog, field or a problem message).
+            problem = (
+                "The saved screening model cannot be shown here, so it is not re-scored from "
+                "this page. Choose another model above, or use `jobhunter score --rescore`."
+            )
+        else:
+            problem = _spec_problem(spec, scoring=settings.scoring)
         if problem:
             message = message or problem
         if st.kind == "ok" and running is None and not problem:
@@ -342,6 +349,7 @@ def register(
             ).fetchall(),
             "via": via,
             "fixed": fixed is not None,
+            "scorer_shown": shown_value(spec) or "",
             "run_url": VIA_RUN_URL.get(via, "/prefs/rescore/run"),
             "panel_url": VIA_PANEL_URL.get(via, "/prefs/rescore/panel"),
         }

@@ -3,6 +3,7 @@
       hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids"
       hx-sync="this:queue all">
   <input type="hidden" name="page_digest" value="{{ digest }}">
+  <input type="hidden" name="rerun" class="mo-rerun-intent" value="{{ '1' if r.state.rerun else '' }}">
   <header class="mo-head">
     <h2>{{ r.title }}</h2>
     {% if r.source %}<span class="mo-source muted">{{ r.source }}</span>{% endif %}
@@ -52,11 +53,15 @@
   {% endif %}
 </form>
 {% set s = r.state %}
-{% if s.rerun_open == "screen" and s.rescore %}
+{% if s.rerun_open == "screen" %}
 <div class="mo-rerun" id="models-rerun-screen">
-  <h3>Re-score with {{ s.rescore.scorer_shown }}</h3>
-  <p class="muted">Nothing runs until you press Re-score now and confirm. The model stays saved either way.</p>
-  <div id="rescore-panel">{% with rs = s.rescore %}{% include "_rescore_panel.html" %}{% endwith %}</div>
+  <div id="rescore-panel">
+  {% if s.rescore %}{% with rs = s.rescore %}{% include "_rescore_panel.html" %}{% endwith %}
+  {% else %}
+  <p class="mo-msg mo-error" role="alert">The model is saved, but the re-score panel could not be opened.</p>
+  <button type="button" class="button" hx-get="/models/screen/rescore" hx-target="#rescore-panel" hx-swap="innerHTML">Try again</button>
+  {% endif %}
+  </div>
 </div>
 {% endif %}
 {% if r.key == "deep" %}

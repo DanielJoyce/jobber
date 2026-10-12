@@ -47,6 +47,22 @@
 .mo-history-list { list-style: none; margin: 6px 0; padding: 0; }
 .mo-history-list li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--grid); overflow-wrap: anywhere; }
 .mo-foot { margin-top: 16px; }
+/* Save + re-run (M5): the re-score panel shown under the screening row. prefs.css is not
+   loaded here, so the panel's controls get their themed look from these rules. */
+.mo-rerun { margin: 10px 0 0; padding: 8px 0 0; border-top: 1px solid var(--grid); }
+.mo-rerun h3 { font-size: 0.95rem; margin: 0 0 6px; overflow-wrap: anywhere; }
+.mo-rerun p { margin: 4px 0; overflow-wrap: anywhere; }
+.mo-rerun .banner { border: 1px solid var(--border); border-left: 4px solid var(--status-critical); border-radius: 6px; padding: 6px 10px; margin: 0 0 8px; background: var(--surface-1); color: var(--text-primary); }
+.mo-rerun .rescore-form label { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; color: var(--text-secondary); font-size: 0.85rem; }
+.mo-rerun .rescore-form select { font: inherit; font-size: 0.9rem; color: var(--text-primary); background: var(--page); border: 1px solid var(--axis); border-radius: 4px; padding: 2px 6px; width: 28rem; max-width: 100%; }
+.mo-rerun .rescore-scope, .mo-rerun .rescore-scorer { color: var(--text-primary); }
+.mo-rerun .actions { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 8px 0 0; }
+.mo .mo-rerun .button.primary { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-bg); }
+.mo .mo-rerun .button.primary:hover:not(:disabled) { background: var(--btn-primary-hover); }
+/* A disabled button must look it: the .mo button rule above overrides the UA's greyed look. */
+.mo .mo-rerun button:disabled, .mo .mo-rerun button[disabled] { background: var(--surface-1); border-color: var(--border); color: var(--text-muted); cursor: not-allowed; opacity: 0.6; }
+.mo-rerun .rescore-progress progress { width: 100%; }
+.mo-rerun .field-error { color: var(--text-primary); border-left: 4px solid var(--status-critical); padding-left: 8px; }
 @media (max-width: 600px) {
   .mo-acc { grid-template-columns: 1fr; }
   .mo-acc-needs, .mo-acc-actions { grid-column: 1; }

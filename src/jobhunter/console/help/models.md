@@ -24,13 +24,25 @@ Prices are in [Costs and credits](costs-and-credits.md). The scorer formats (`an
 3. Press **Save**. Saving spends nothing and does not start a run. If re-scores are queued, the
    row asks first what they should use (see [Queued re-scores](#queued-re-scores)).
 
-A **Save + re-run** button, which would open the re-score or deep-pass panel with the new model
-selected, is planned for a later update. Until then, to re-score existing jobs with a new
-screening model, use the re-score on [Prefs](/prefs) or `jobhunter score --rescore`. To run the
-deep pass with the saved model, press **Deep-score…** under the Deep pass row: pick N and either
-the next unscored groups or **Re-run my top groups** (those with a report from another model),
-then confirm the estimate. See [The deep pass](costs-and-credits.md#the-deep-pass). One group:
-its job page, or `jobhunter score --deep-group GID`.
+**Save + re-score…** (screening) and **Save + deep-score…** (deep pass) save exactly like
+**Save**, then open that use's confirm step under the row. Neither runs anything by itself:
+
+- **Save + re-score…** shows the re-score panel for the model you just saved: how many job
+  groups, the estimate, the most the run may spend and what is left of the spend cap. Pick the
+  scope, then press **Re-score now** and confirm. Nothing runs if, by then, new jobs changed the
+  plan, the cap no longer covers the estimate, or the screening model was changed again (in
+  another tab, say); the panel shows the new numbers instead. One re-score runs at a time, so a
+  second click does not start a second run. Cancel in the confirm only cancels the re-score; the
+  model stays saved. Queued re-scores from Prefs stay there to run or dismiss.
+- **Save + deep-score…** opens the deep-pass panel (the same as **Deep-score…** under the Deep
+  pass row): pick N and either the next unscored groups or **Re-run my top groups** (those with
+  a report from another model), then confirm the estimate. See
+  [The deep pass](costs-and-credits.md#the-deep-pass). One group: its job page, or
+  `jobhunter score --deep-group GID`.
+
+Both buttons work only in a browser on the machine running the console, and are off under
+`jobhunter console --allow-remote`. There, use `jobhunter score --rescore recent` (it shows the
+estimate and asks first) or `jobhunter score --deep N`.
 
 Drafting and the fact check have no bulk re-run. Each draft is a click with its own estimate, so
 the next **Generate** on a packet uses the new choice.
@@ -91,7 +103,8 @@ The exact messages, and what to do, are in
   old value back as a new change. It does not rewind anything else.
 - **Queued re-score buttons** appear when re-scores are queued. Save offers
   **Save; queued re-scores use the new model** and **Save; keep queued re-scores on** the old
-  model. Reset and Revert show the same choice.
+  model. Reset and Revert show the same choice. After **Save + re-score…** the same two choices
+  come with "then re-score", and the re-score panel opens once you pick one.
 - **Reset file** appears when `models.toml` is broken. It replaces the file with an empty one and
   keeps the old file beside it, named `models.toml.broken-<time>`.
 - **Changed outside the console.** When `models.toml` was changed outside the console (for

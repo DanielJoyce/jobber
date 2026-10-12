@@ -30,6 +30,7 @@ LAN = ("192.168.1.20", 50000)
 SPEC = "openrouter:test/model"
 HAIKU = "anthropic:claude-haiku-5-5"
 SONNET = "anthropic:claude-sonnet-5-5"
+OPUS = "anthropic:claude-opus-5-5"
 PREFS = """\
 resume_path: resume.md
 target_titles: [Systems Engineer]
@@ -227,10 +228,25 @@ def confirm(client, token: str, saved: str = SPEC, scope: str = "all"):
 # ─── Save + re-score opens the confirm, spends nothing ──────────────────────
 
 
+def queue_rescore(client) -> None:
+    conn = client.app.state.conn_factory()
+    with conn:
+        conn.execute(
+            "INSERT INTO rescore_request (requested_at, scope, scoring_version, job_count, "
+            "cost_per_job_usd, estimated_usd) VALUES ('2026-10-10T01:21:00Z', 'recent', 'v', "
+            "3, 0.002, 0.006)"
+        )
+    conn.close()
+
+
 def test_page_offers_save_and_rerun_but_runs_nothing(client):
     text = client.get("/models").text
-    assert 'name="rerun" value="1"' in text and "Save + re-score" in text
-    assert "Save + deep-score" in text
+    assert 'data-rerun="1"' in text and "Save + re-score" in text and "Save + deep-score" in text
+    # The intent field sits in the row form, outside the preview region a preview replaces.
+    screen = re.search(r'id="models-row-screen".*?</section>', text, re.S).group(0)
+    intent = screen.index('class="mo-rerun-intent"')
+    assert intent < screen.index('id="models-screen-preview"')
+    assert 'name="rerun" class="mo-rerun-intent" value=""' in screen
     assert 'id="rescore-form"' not in text  # the panel opens only on Save + re-score
     assert requests_of(client) == [] and client.sent == []
 
@@ -243,13 +259,24 @@ def test_save_rerun_saves_and_shows_the_estimate_without_spending(client):
     text = unescape(r.text)
     assert 'id="rescore-panel"' in text and 'hx-post="/models/screen/rescore/run"' in text
     assert f'name="saved" value="{SPEC}"' in text
+    assert f"Re-score with {SPEC}</h3>" in text
     assert "Will score <strong>" in text and "estimated <strong>$" in text
     assert "Spend cap remaining" in text
-    assert f"with {SPEC}?" in text and "This spends credits." in text  # the hx-confirm
     assert "Cancel only cancels the re-score" in text
-    assert 'hx-disabled-elt="#rescore-run"' in text
+    assert 'hx-disinherit="hx-confirm"' in text and 'hx-disabled-elt="#rescore-run"' in text
     # Nothing ran, nothing was queued.
     assert requests_of(client) == [] and client.sent == []
+
+
+def test_the_confirm_dialog_names_the_model_count_and_cost(client):
+    save_rerun(client)
+    text = unescape(client.get("/models/screen/rescore", params={"scope": "all"}).text)
+    m = re.search(r'<form id="rescore-form"[^>]*hx-confirm="([^"]*)"', text)
+    assert m, "the run form has its confirm dialog"
+    assert m.group(1) == (
+        f"Re-score 3 job groups with {SPEC}? Estimated cost $0.01; the run stops before it "
+        "spends more than $0.02. This spends credits."
+    )
 
 
 def test_scope_change_replans_on_the_models_route(client):
@@ -257,16 +284,17 @@ def test_scope_change_replans_on_the_models_route(client):
     r = client.get("/models/screen/rescore", params={"scope": "all"})
     assert r.status_code == 200
     assert '<option value="all" selected>' in r.text
+    assert 'hx-get="/models/screen/rescore"' in r.text  # not /prefs/rescore/panel
     assert "Will score <strong>3</strong>" in r.text
     assert requests_of(client) == [] and client.sent == []
 
 
-def test_confirm_runs_the_saved_plan_once(client):
+def test_confirm_runs_the_saved_plan_once_and_redraws_the_models_panel(client):
     token_of(save_rerun(client).text)  # the save shows a confirmable plan ("recent")
     token = token_of(client.get("/models/screen/rescore", params={"scope": "all"}).text)
     r = confirm(client, token)
     assert r.status_code == 200
-    assert "/prefs/rescore/progress/" in r.text and "via=models" in r.text
+    assert 'hx-get="/prefs/rescore/progress/' in r.text and "?via=models" in r.text
     client.app.state.rescore.join()
     rows = requests_of(client)
     assert len(rows) == 1
@@ -279,7 +307,12 @@ def test_confirm_runs_the_saved_plan_once(client):
         headers={"HX-Request": "true"},
     )
     assert done.headers["HX-Retarget"] == "#rescore-panel"
-    assert "Done." in done.text
+    assert "Done." in done.text and 'id="rescore-heading"' in done.text
+    assert 'name="saved"' in done.text or "Will score <strong>0</strong>" in done.text
+    assert "/prefs/rescore/run" not in done.text and 'id="rescore-queued"' not in done.text
+    # Without via, the /prefs variant as before.
+    prefs = client.get(f"/prefs/rescore/progress/{rows[0]['id']}", headers={"HX-Request": "true"})
+    assert 'id="rescore-heading"' not in prefs.text
 
 
 # ─── The confirm is tied to the plan and the saved value ────────────────────
@@ -299,16 +332,17 @@ def test_a_stale_plan_runs_nothing(client, cfg):
     assert requests_of(client) == [] and client.sent == []
 
 
-def test_a_confirm_for_another_model_runs_nothing(client):
+def test_a_confirm_for_another_model_runs_nothing_and_relabels_the_panel(client):
     save_rerun(client)
     token = token_of(client.get("/models/screen/rescore", params={"scope": "all"}).text)
-    page = client.get("/models").text
+    page = client.get("/models").text  # another tab saves another model
     assert "Saved at" in save(client, "screen", page, screen=HAIKU, force_for_screen=HAIKU).text
     r = confirm(client, token)
     assert "The screening model changed since this re-score was planned" in r.text
+    assert f"Re-score with {HAIKU}</h3>" in r.text and f"with {SPEC}" not in r.text
     assert requests_of(client) == [] and client.sent == []
     # A confirm that names no saved value runs nothing either.
-    r = confirm(client, token, saved="")
+    confirm(client, token, saved="")
     assert requests_of(client) == [] and client.sent == []
 
 
@@ -342,6 +376,34 @@ def test_a_double_submit_runs_once(cfg):
     assert sorted(client.sent) == sorted(set(client.sent)) and len(client.sent) == 3
 
 
+def test_a_key_shaped_saved_value_is_never_rendered_or_run(tmp_path):
+    secret = "openrouter:sk-or-v1-SENTINEL0123456789abcdef"
+    cfg = setup_data(tmp_path, f'screen_scorer = "{secret}"\n')
+    client = make_client(cfg)
+    page = client.get("/models").text
+    r = save(client, "screen", page, rerun="1")  # no change: opens the panel for it
+    assert "SENTINEL" not in r.text
+    assert "cannot be shown here" in r.text and 'id="rescore-form"' not in r.text
+    for resp in (
+        client.get("/models/screen/rescore", params={"scope": "all"}),
+        confirm(client, "0123456789abcdef", saved=secret),
+    ):
+        assert "SENTINEL" not in resp.text and 'name="saved"' not in resp.text
+    assert requests_of(client) == [] and client.sent == []
+
+
+def test_a_panel_failure_after_the_save_offers_a_retry(client, monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("db is busy")
+
+    monkeypatch.setattr(client.app.state, "rescore_panel_context", broken)
+    r = save_rerun(client)
+    assert r.status_code == 200 and "Saved at" in r.text
+    assert "could not be opened" in r.text and 'hx-get="/models/screen/rescore"' in r.text
+    assert client.app.state.settings.scoring.screen_scorer == SPEC
+    assert requests_of(client) == []
+
+
 # ─── Gates ──────────────────────────────────────────────────────────────────
 
 
@@ -351,14 +413,20 @@ def test_a_double_submit_runs_once(cfg):
         ("get", "/models/screen/rescore", None),
         ("post", "/models/screen/rescore/run", {"saved": SPEC, "plan": "x", "scope": "all"}),
         ("post", "/models/screen", {"screen": SPEC, "rerun": "1"}),
-        ("post", "/models/deep", {"deep": "anthropic:claude-sonnet-5-5", "rerun": "1"}),
+        ("post", "/models/deep", {"deep": SONNET, "rerun": "1"}),
     ],
 )
-@pytest.mark.parametrize("remote", ["peer", "allow_remote"])
+@pytest.mark.parametrize("remote", ["peer", "allow_remote", "forwarded"])
 def test_rerun_routes_are_loopback_only_and_off_under_allow_remote(cfg, method, url, data, remote):
-    kw = {"peer": LAN} if remote == "peer" else {"allow_remote": True}
+    kw = {"peer": LAN} if remote == "peer" else {}
+    if remote == "allow_remote":
+        kw["allow_remote"] = True
     client = make_client(cfg, **kw)
-    r = client.get(url) if method == "get" else client.post(url, data=data)
+    headers = {"X-Forwarded-For": "203.0.113.9"} if remote == "forwarded" else {}
+    if method == "get":
+        r = client.get(url, headers=headers)
+    else:
+        r = client.post(url, data=data, headers=headers)
     assert r.status_code == 403
     assert not (Path(client.app.state.settings.paths.data_dir) / "models.toml").exists()
     assert requests_of(client) == [] and client.sent == []
@@ -373,44 +441,41 @@ def test_allow_remote_hides_the_rerun_buttons_but_keeps_save(cfg):
 # ─── Pending questions and the deep row ─────────────────────────────────────
 
 
+def test_queued_rescores_offer_save_and_rerun_variants(client):
+    queue_rescore(client)
+    preview = client.post(
+        "/models/screen/preview",
+        data={"screen": "jev:typesafe/jev-1.13", "shown_screen": HAIKU},
+    )
+    assert "queued re-score" in preview.text
+    assert "Save + re-score; queued re-scores use the new model" in preview.text
+    assert f"Save + re-score; keep queued re-scores on {HAIKU}" in preview.text
+    assert preview.text.count('data-rerun="1"') == 2
+
+
 def test_a_pending_question_carries_rerun_and_then_opens_the_panel(client):
-    conn = client.app.state.conn_factory()
-    with conn:
-        conn.execute(
-            "INSERT INTO rescore_request (requested_at, scope, scoring_version, job_count, "
-            "cost_per_job_usd, estimated_usd) VALUES ('2026-10-10T01:21:00Z', 'recent', 'v', "
-            "3, 0.002, 0.006)"
-        )
-    conn.close()
+    queue_rescore(client)
     r = save_rerun(client)
     assert "choose what queued re-scores use" in r.text
-    assert 'name="rerun" value="1"' in r.text and 'id="rescore-form"' not in r.text
+    assert 'name="rerun" class="mo-rerun-intent" value="1"' in r.text
+    assert 'id="rescore-form"' not in r.text
     r = save_rerun(client, queued="new")
     assert "Saved at" in r.text and 'id="rescore-form"' in r.text
     assert "can be run or dismissed on" in r.text  # the queued request stays on /prefs
     assert len(requests_of(client)) == 1 and client.sent == []
 
 
-def test_deep_save_rerun_without_the_deep_panel_gives_the_commands(client):
+def test_deep_row_has_one_deep_panel_that_loads_after_save_and_deep_score(client):
     page = client.get("/models").text
+    deep = re.search(r'id="models-row-deep".*?</section>', page, re.S).group(0)
+    assert deep.count('id="deep-panel"') == 1
+    assert 'hx-trigger="click from:#deep-open"' in deep  # not loaded on render
     r = save(client, "deep", page, deep=SONNET, force_for_deep=SONNET, rerun="1")
     assert r.status_code == 200 and "Saved at" in r.text
-    assert "score --deep N" in r.text and "score --deep-group GID" in r.text
-    assert 'id="deep-panel"' not in r.text
+    assert r.text.count('id="deep-panel"') == 1
+    assert 'hx-trigger="load, click from:#deep-open"' in r.text
     assert requests_of(client) == []
-
-
-def test_deep_save_rerun_loads_the_deep_panel_when_the_console_has_one(client):
-    from fastapi.responses import HTMLResponse
-
-    hits: list[str] = []
-
-    @client.app.get("/deep/panel", response_class=HTMLResponse)
-    def deep_panel() -> str:
-        hits.append("x")
-        return "<p>deep plan</p>"
-
+    # A plain Save does not load it.
     page = client.get("/models").text
-    r = save(client, "deep", page, deep=SONNET, force_for_deep=SONNET, rerun="1")
-    assert 'id="deep-panel" hx-get="/deep/panel" hx-trigger="load"' in r.text
-    assert hits == []  # the save itself plans nothing; the browser loads the panel
+    r = save(client, "deep", page, deep=OPUS, force_for_deep=OPUS)
+    assert 'hx-trigger="click from:#deep-open"' in r.text
