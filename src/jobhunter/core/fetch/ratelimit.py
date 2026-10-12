@@ -54,6 +54,14 @@ class HostRateLimiter:
             sleep(wait)
         return max(wait, 0.0)
 
+    def hold(self, host: str, seconds: float, *, clock: Clock) -> None:
+        """Nobody may hit ``host`` for ``seconds`` from now (a 429 or Retry-After). Shared by
+        every context on the host; never shortens a later slot already reserved."""
+        with self._lock:
+            until = clock() + max(0.0, seconds)
+            if until > self._next.get(host, until - 1.0):
+                self._next[host] = until
+
     def reset(self) -> None:
         with self._lock:
             self._next.clear()

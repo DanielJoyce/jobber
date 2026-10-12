@@ -112,6 +112,9 @@ class Fetch(BaseModel):
     respect_robots: bool = True
     default_rps: float = 0.2
     global_concurrency: int = 8
+    # Sources fetched at once by `jobhunter run` (list and resolve). Capped by
+    # global_concurrency; per-host rate limits and robots Crawl-delay still hold.
+    parallel_sources: int = Field(default=6, ge=1)
     user_agent_contact: str = "<you>@example.com"
     timeout_s: float = 20.0
     max_retries: int = 5
@@ -987,6 +990,7 @@ RELOADABLE: frozenset[str] = frozenset(
         "fetch.user_agent_contact",
         "fetch.timeout_s",
         "fetch.max_retries",
+        "fetch.parallel_sources",  # read per run
         # scorers are built per run
         "scoring.screen_scorer",
         "scoring.deep_scorer",
@@ -1071,6 +1075,7 @@ SHOWN_VALUES: frozenset[str] = frozenset(
         "fetch.timeout_s",
         "fetch.max_retries",
         "fetch.global_concurrency",
+        "fetch.parallel_sources",
         "scoring.screen_scorer",
         "scoring.deep_scorer",
         "scoring.daily_cap_usd",

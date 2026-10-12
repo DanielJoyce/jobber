@@ -11,10 +11,11 @@ accidental.
 |---|---|---|
 | `respect_robots` | **true** | A source whose `robots.txt` disallows us is marked `blocked` and not fetched |
 | Rate limit | **0.2 req/s per source** (1 per 5s), concurrency 1, jittered | Slower than a human browsing. 55 sources in parallel is still fast overall |
-| Global concurrency | 8 sources at once | Caps total outbound load |
+| Global concurrency | 8 requests in flight at once | Caps total outbound load |
+| Parallel sources | 6 (`fetch.parallel_sources`, capped by global concurrency) | `jobhunter run` lists and resolves this many sources at once. Every per-host limit, `Crawl-delay` and robots rule still holds across them: the host limiter is process-wide, so two sources on one host share its spacing |
 | User-Agent | `jobhunter/0.1 (personal job search; <your-email>)` | Identifies the client and gives an admin someone to contact |
 | Conditional requests | `If-None-Match` / `If-Modified-Since` always | A `304` costs the server almost nothing |
-| Retries | 5 max, exponential backoff with jitter | |
+| Retries | 5 max, exponential backoff with jitter | A `429` or `Retry-After` holds the whole host, for every source on it |
 | On `403`/`401` | **stop the source immediately**, mark `broken`, no retries | A block is a decision, not a blip. Do not hammer past it |
 | Crawl window | Nightly, off-peak (default 02:00 local) | |
 | Query budget | 15–40 targeted queries per source per night | Not a full crawl ([003](003-sources-and-adapters.md#query-driven-ingestion-not-full-crawl)) |

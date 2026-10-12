@@ -28,6 +28,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import httpx
 
 from jobhunter.config import Settings, resolve_path
+from jobhunter.core.db import connection_lock
 from jobhunter.core.fetch import ratelimit
 from jobhunter.core.fetch.cache import ContentCache
 from jobhunter.core.fetch.errors import (
@@ -125,7 +126,14 @@ class FetchContext:
         clock: Callable[[], float] | None = None,
         sleep: Callable[[float], None] | None = None,
         rng: random.Random | None = None,
+        limiter: ratelimit.HostRateLimiter | None = None,
+        cancel: Callable[[], None] | None = None,
     ) -> None:
+        """``limiter`` shares one per-host limiter between contexts that use an injected clock
+        (tests); without it they get the process-wide limiter, or a private one when ``clock``
+        is injected, since times from another clock are not comparable.
+
+        ``cancel`` is called before every request attempt and raises to stop the run (Ctrl-C)."""
         self.source = source
         self.settings = settings
         self.conn = conn
@@ -136,12 +144,17 @@ class FetchContext:
         self._sleep = sleep or time.sleep
         self._rng = rng or random.Random()
         # Times from an injected clock are not comparable with the process-wide limiter's.
-        self._limiter = ratelimit.shared_limiter() if clock is None else ratelimit.HostRateLimiter()
+        if limiter is None:
+            limiter = ratelimit.shared_limiter() if clock is None else ratelimit.HostRateLimiter()
+        self._limiter = limiter
+        self._cancel = cancel
         self.rate_limit = source.rate_limit or RateLimit(
             rps=settings.fetch.default_rps, concurrency=1, jitter=True
         )
         self._source_sem = threading.BoundedSemaphore(self.rate_limit.concurrency)
-        self._db_lock = threading.Lock()
+        # Contexts of one run may live on several threads (pipeline fan-out, bug 50320dc): every
+        # use of the shared connection holds the connection's own lock.
+        self._db_lock = connection_lock(conn) or threading.RLock()
         self._client: httpx.Client | None = None
         self._log_key = self._registered_key(source.key)
         self._pw: Any = None
@@ -393,9 +406,12 @@ class FetchContext:
         gsem = ratelimit.global_semaphore(self.settings.fetch.global_concurrency)
         detail = ""
         status: int | None = None
+        host = _host_key(request.url)
         for attempt in range(attempts):
+            if self._cancel is not None:
+                self._cancel()
             self._limiter.acquire(
-                _host_key(request.url),
+                host,
                 interval,
                 clock=self._clock,
                 sleep=self._sleep,
@@ -403,6 +419,8 @@ class FetchContext:
                 rng=self._rng,
                 floor=self._crawl_delay(str(request.url)),
             )
+            if self._cancel is not None:
+                self._cancel()
             retry_after: float | None = None
             with gsem, self._source_sem:
                 try:
@@ -429,17 +447,23 @@ class FetchContext:
                         content_type=response.headers.get("content-type"),
                     )
                     retry_after = _retry_after_seconds(response.headers.get("retry-after"))
+            # The host asked us to slow down (429, Retry-After): every context on it waits, not
+            # just this one, since sources share hosts. Held even when this context gives up,
+            # capped at MAX_RETRY_AFTER_S. A retry's own acquire() then does the waiting.
+            host_wait: float | None = None
+            if retry_after is not None or status == 429:
+                host_wait = retry_after if retry_after is not None else self._backoff(attempt)
+                self._limiter.hold(host, min(host_wait, MAX_RETRY_AFTER_S), clock=self._clock)
             if attempt == attempts - 1:
                 break
             if retry_after is not None and retry_after > MAX_RETRY_AFTER_S:
                 detail += f" (Retry-After {retry_after:.0f}s exceeds {MAX_RETRY_AFTER_S:.0f}s)"
                 break
-            delay = retry_after if retry_after is not None else self._backoff(attempt)
+            delay = host_wait if host_wait is not None else self._backoff(attempt)
             # Host and error kind only: a URL carries query strings and posting titles.
-            log.info(
-                "retrying %s in %.1fs after %s", _host_key(request.url), delay, detail.split(":")[0]
-            )
-            self._sleep(delay)
+            log.info("retrying %s in %.1fs after %s", host, delay, detail.split(":")[0])
+            if host_wait is None:
+                self._sleep(delay)
         raise TransientFetchError(url, f"{detail} after {attempt + 1} attempt(s)", status=status)
 
     def spacing(self, url: str) -> tuple[float, str]:
@@ -539,17 +563,20 @@ class FetchContext:
 
     def _registered_key(self, key: str) -> str | None:
         """fetch_log.source_key references source(key); ad-hoc/unregistered sources log NULL."""
-        row = self.conn.execute("SELECT 1 FROM source WHERE key = ?", (key,)).fetchone()
+        with self._db_lock:
+            row = self.conn.execute("SELECT 1 FROM source WHERE key = ?", (key,)).fetchone()
         return key if row else None
 
     def _latest_ok(self, rhash: str) -> sqlite3.Row | None:
-        row = self.conn.execute(
-            "SELECT content_hash, etag, last_modified, content_type, fetched_at, bytes "
-            "FROM fetch_log "
-            "WHERE request_hash = ? AND content_hash IS NOT NULL AND http_status IN (200, 304) "
-            "ORDER BY fetched_at DESC, id DESC LIMIT 1",
-            (rhash,),
-        ).fetchone()
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT content_hash, etag, last_modified, content_type, fetched_at, bytes "
+                "FROM fetch_log "
+                "WHERE request_hash = ? AND content_hash IS NOT NULL "
+                "AND http_status IN (200, 304) "
+                "ORDER BY fetched_at DESC, id DESC LIMIT 1",
+                (rhash,),
+            ).fetchone()
         if row is None or not self.cache.has(row["content_hash"]):
             return None
         return row

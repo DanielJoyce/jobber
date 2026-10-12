@@ -19,6 +19,7 @@
 # respect_robots = true
 # default_rps = 0.2
 # global_concurrency = 8
+# parallel_sources = 6     # sources `jobhunter run` fetches at once (at most global_concurrency)
 # user_agent_contact = "<you>@example.com"
 # timeout_s = 20.0
 # max_retries = 5

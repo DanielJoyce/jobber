@@ -207,6 +207,7 @@ def apply_link(item: dict[str, Any]) -> str | None:
 
 class WyomingAdapter:
     family = "wyo"
+    parallel_safe = True  # fetches only through ctx; never uses the DB connection (50320dc)
 
     def search(
         self, src: SourceRow, query: Query, since: datetime, ctx: FetchContext

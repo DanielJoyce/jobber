@@ -394,6 +394,7 @@ def _with_siblings(node: LexborNode, starts: set[int]) -> LexborNode:
 
 class HtmlConfigAdapter:
     family = "htmlconfig"
+    parallel_safe = True  # fetches only through ctx; never uses the DB connection (50320dc)
 
     # ── search ──────────────────────────────────────────────────────────────
 
