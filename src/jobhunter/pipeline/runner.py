@@ -38,7 +38,7 @@ from jobhunter.pipeline.listing import (
 )
 from jobhunter.pipeline.normalize import normalize_pending
 from jobhunter.scoring.prefilter import run_prefilter
-from jobhunter.scoring.profile import Profile, ProfileError, load_profile
+from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 from jobhunter.sources.adapters.base import SourceAdapter
 from jobhunter.sources.adapters.htmlconfig import HtmlConfigAdapter
 from jobhunter.sources.adapters.mailalerts import MailAlertsAdapter
@@ -158,7 +158,7 @@ def default_profile_loader(settings: Settings) -> ProfileLoader:
         if not profile_dir.is_dir():
             return None
         try:
-            return load_profile(profile_dir, resolve_path(settings.paths.resume_path))
+            return load_profile_for(settings)
         except ProfileError as exc:
             logger.warning("profile unusable: %s", exc)
             return None

@@ -512,7 +512,7 @@ def _score_mode(
     from jobhunter.config import load_settings
     from jobhunter.core import db
     from jobhunter.scoring import screen
-    from jobhunter.scoring.profile import ProfileError, load_profile
+    from jobhunter.scoring.profile import ProfileError, load_profile_for
     from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
 
     settings = load_settings()
@@ -526,7 +526,7 @@ def _score_mode(
         deep=is_deep,
     )
     try:
-        profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
+        profile = load_profile_for(settings)
     except ProfileError as exc:
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -1203,7 +1203,7 @@ def eval_(
     `eval --compare A B [C...]` compares prompt_version[@model] variants on the same labels.
     """
     from jobhunter.scoring import evaluate as ev
-    from jobhunter.scoring.profile import ProfileError, load_profile
+    from jobhunter.scoring.profile import ProfileError, load_profile_for
 
     if tier not in ("screen", "deep"):
         typer.echo("--tier must be screen or deep", err=True)
@@ -1217,7 +1217,7 @@ def eval_(
         raise typer.Exit(2)
     settings = load_settings()
     try:
-        profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
+        profile = load_profile_for(settings)
     except ProfileError as exc:
         typer.echo(f"profile error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -1724,13 +1724,13 @@ def llm_bench(
     from jobhunter.config import load_settings
     from jobhunter.core import db
     from jobhunter.scoring.bench import run_bench
-    from jobhunter.scoring.profile import ProfileError, load_profile
+    from jobhunter.scoring.profile import ProfileError, load_profile_for
     from jobhunter.scoring.scorers import ScorerError, privacy_notice, scorer_from_string
 
     settings = load_settings()
     spec = scorer_spec or settings.scoring.screen_scorer
     try:
-        profile = load_profile(settings.paths.profile_dir, resume_path=settings.paths.resume_path)
+        profile = load_profile_for(settings)
         scorer = scorer_from_string(spec, scoring=settings.scoring)
     except (ProfileError, ScorerError) as exc:
         typer.echo(f"error: {exc}", err=True)
