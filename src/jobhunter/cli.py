@@ -31,6 +31,7 @@ class _JobhunterGroup(TyperGroup):
             return super().invoke(ctx)
         except db.SchemaError as exc:
             typer.echo(f"error: {exc}", err=True)
+            typer.echo(f"Run `{container.doctor_command()}` for details.", err=True)
             raise typer.Exit(1) from exc
         finally:
             _CURRENT_COMMAND.reset(token)
@@ -100,7 +101,7 @@ def _host_only(command: str, host_command: str | None = None) -> None:
 
 # Commands that run while old-layout data is unmigrated: they report on it, move it, or do
 # not touch user data at all (schedule only writes systemd units, version only reads).
-UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets", "version"}
+UNGUARDED_COMMANDS = {"paths", "migrate-paths", "init", "schedule", "secrets", "version", "doctor"}
 
 # specs/018-containers.md#version-skew: commands that neither migrate on their own nor refuse
 # because migrations are pending; they still refuse a newer database where they would write.
@@ -117,6 +118,7 @@ MIGRATION_EXEMPT_COMMANDS = frozenset(
         "db restore",
         "upgrade",
         "db migrate",
+        "doctor",
     }
 )
 
@@ -204,6 +206,7 @@ def _refuse_split_data() -> None:
     status = legacy_data.check(settings)
     if status.blocked:
         typer.echo(f"error: {status.message}", err=True)
+        typer.echo(f"Run `{container.doctor_command()}` for details.", err=True)
         raise typer.Exit(1)
     for note in status.warnings:
         typer.echo(note, err=True)
@@ -2442,6 +2445,115 @@ def secrets_status() -> None:
         typer.echo(note)
 
 
+@app.command()
+def doctor(
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Every row, with what it unlocks and where.")
+    ] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="The checks as a JSON list (same rules, no secrets).")
+    ] = False,
+    group: Annotated[
+        str | None,
+        typer.Option("--group", help="Only one group: basics, profile, scoring, sources, ..."),
+    ] = None,
+    containers: Annotated[
+        bool,
+        typer.Option(
+            "--containers",
+            help="Also run `container preflight` as a dry run. Starts one container "
+            "(up to 120 s) and probes podman; host only.",
+        ),
+    ] = False,
+    live: Annotated[bool, typer.Option("--live", hidden=True)] = False,
+    snapshot: Annotated[bool, typer.Option("--snapshot", hidden=True)] = False,
+) -> None:
+    """Check that jobhunter is set up: the same checks as /setup, in the terminal.
+
+    Exit 0 when every essential is ok, 1 when an essential is missing or broken, 2 on a usage
+    error. Recommended items never change the exit code. Free and local: no network, no model
+    call. Opens the database read-only and never migrates it (SQLite may create the -wal and
+    -shm files beside a WAL database; they hold no new data). Runs even when the old layout,
+    a pending schema or a broken config file stop other commands. Prints no key, address or
+    contact.
+    """
+    from jobhunter.ops import doctor as doc
+
+    for flag, name, ticket in ((live, "--live", "S6"), (snapshot, "--snapshot", "S4")):
+        if flag:
+            typer.echo(
+                f"error: doctor {name} is not available yet (019 {ticket}).",
+                err=True,
+            )
+            raise typer.Exit(2)
+    if containers:
+        _host_only("doctor --containers", "jobhunter doctor --containers")
+    try:
+        report = doc.gather(
+            group=group,
+            containers=containers,
+            secrets_report=_SECRETS_REPORT,
+            context_builder=build_preflight_context,
+        )
+    except doc.UsageError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if as_json:
+        typer.echo(json.dumps(doc.to_json_data(report), indent=2))
+    else:
+        for line in doc.render(report, verbose=verbose):
+            typer.echo(line)
+    raise typer.Exit(report.exit_code)
+
+
+def build_preflight_context(unit_dir: Path | None = None, settings=None):
+    """The ``preflight.Context`` for this host; shared by `container preflight` and
+    `doctor --containers`. Reads files and the database read-only; writes nothing."""
+    from jobhunter.config import config_file
+    from jobhunter.core import dbpaths
+    from jobhunter.ops import preflight
+    from jobhunter.ops import version as ver
+    from jobhunter.xdg import config_home
+
+    settings = settings or load_settings()
+    paths = settings.paths
+    data_dir = resolve_path(paths.data_dir)
+    units = (unit_dir.expanduser() if unit_dir else preflight.default_unit_dir()).absolute()
+    db_path = resolve_path(paths.db_path)
+    report = _SECRETS_REPORT
+    abs_count, abs_error = dbpaths.absolute_path_count(db_path, data_dir)
+    # The drop-in variable names must match the config file the units mount.
+    mounted_path = Path.home() / preflight.CONFIG_SOURCE
+    mounted, mounted_error = None, ""
+    if mounted_path.is_file():
+        try:
+            mounted = load_settings(mounted_path)
+        except Exception as exc:  # a broken file: reported as a FAIL line
+            mounted_error = f"{mounted_path}: {type(exc).__name__}"
+    else:
+        mounted = load_settings(mounted_path)  # preflight creates it empty: code defaults
+    ctx = preflight.Context(
+        home=Path.home(),
+        unit_dir=units,
+        settings=settings,
+        data_dir=data_dir,
+        cache_dir=resolve_path(paths.cache_dir),
+        db_path=db_path,
+        profile_dir=resolve_path(paths.profile_dir),
+        resume_path=resolve_path(paths.resume_path),
+        config_file=config_file(None),
+        gmail_token_file=config_home() / "gmail_token.json",
+        env_files=list(report.env_files) if report else [],
+        host_version=ver.collect(db_path, db.owning_data_dir(db_path, data_dir)),
+        absolute_paths=abs_count,
+        absolute_paths_error=abs_error,
+        container_settings=mounted,
+        container_settings_error=mounted_error,
+        quadlet=preflight.QUADLET,
+    )
+    return ctx
+
+
 @container_app.command("preflight")
 def container_preflight_cmd(
     unit_dir: Annotated[
@@ -2481,11 +2593,7 @@ def container_preflight_cmd(
     are gone, and, after asking (or with --yes), writes <data dir>/deployment.toml. Reads
     secret names only, never values. Rerun after any podman secret change. Host only.
     """
-    from jobhunter.config import config_file
-    from jobhunter.core import dbpaths
     from jobhunter.ops import preflight
-    from jobhunter.ops import version as ver
-    from jobhunter.xdg import config_home
 
     _host_only("container preflight")
     settings = load_settings()
@@ -2525,38 +2633,7 @@ def container_preflight_cmd(
         )
         return
 
-    db_path = resolve_path(paths.db_path)
-    report = _SECRETS_REPORT
-    abs_count, abs_error = dbpaths.absolute_path_count(db_path, data_dir)
-    # The drop-in variable names must match the config file the units mount.
-    mounted_path = Path.home() / preflight.CONFIG_SOURCE
-    mounted, mounted_error = None, ""
-    if mounted_path.is_file():
-        try:
-            mounted = load_settings(mounted_path)
-        except Exception as exc:  # a broken file: reported as a FAIL line
-            mounted_error = f"{mounted_path}: {type(exc).__name__}"
-    else:
-        mounted = load_settings(mounted_path)  # preflight creates it empty: code defaults
-    ctx = preflight.Context(
-        home=Path.home(),
-        unit_dir=units,
-        settings=settings,
-        data_dir=data_dir,
-        cache_dir=resolve_path(paths.cache_dir),
-        db_path=db_path,
-        profile_dir=resolve_path(paths.profile_dir),
-        resume_path=resolve_path(paths.resume_path),
-        config_file=config_file(None),
-        gmail_token_file=config_home() / "gmail_token.json",
-        env_files=list(report.env_files) if report else [],
-        host_version=ver.collect(db_path, db.owning_data_dir(db_path, data_dir)),
-        absolute_paths=abs_count,
-        absolute_paths_error=abs_error,
-        container_settings=mounted,
-        container_settings_error=mounted_error,
-        quadlet=preflight.QUADLET,
-    )
+    ctx = build_preflight_context(units, settings)
 
     def confirm(marker: Path) -> bool:
         if yes:

@@ -294,10 +294,31 @@ def apply_dropins(plan: DropinPlan) -> None:
 # --- individual checks ---------------------------------------------------------------------
 
 
+# Fixed ids for the lines of a run (019 `jobhunter doctor`); a line without one is
+# "preflight_other" in doctor. Drop-in write/remove/up-to-date lines use "secrets".
+PREFLIGHT_IDS = (
+    "podman",
+    "bind_sources",
+    "owner",
+    "labels",
+    "host_timers",
+    "db_paths",
+    "version_skew",
+    "env_files",
+    "mounted_config",
+    "secrets",
+    "dropin_conflict",
+    "base_units",
+    "quadlet",
+    "marker",
+)
+
+
 @dataclass(frozen=True)
 class Line:
     status: str  # OK, WARN or FAIL
     text: str
+    id: str = ""  # one of PREFLIGHT_IDS; "" maps to preflight_other in doctor
 
     def render(self) -> str:
         return f"{self.status:<4}  {self.text}"
@@ -421,8 +442,8 @@ class Result:
     marker: Path | None = None
     marker_present: bool = False
 
-    def add(self, status: str, text: str) -> None:
-        self.lines.append(Line(status, text))
+    def add(self, status: str, text: str, id: str = "") -> None:
+        self.lines.append(Line(status, text, id))
 
     @property
     def failed(self) -> bool:
@@ -441,28 +462,34 @@ def _bind_sources(ctx: Context, res: Result, dry_run: bool) -> None:
     config_src = ctx.home / CONFIG_SOURCE
     for what, src in (("data", data_src), ("cache", cache_src)):
         if src.is_dir():
-            res.add(OK, f"{what} dir {src} exists")
+            res.add(OK, f"{what} dir {src} exists", id="bind_sources")
         elif src.exists():
-            res.add(FAIL, f"{what} dir {src} exists but is not a directory")
+            res.add(FAIL, f"{what} dir {src} exists but is not a directory", id="bind_sources")
             continue
         elif dry_run:
-            res.add(WARN, f"{what} dir {src} is missing; would create it (0700)")
+            res.add(WARN, f"{what} dir {src} is missing; would create it (0700)", id="bind_sources")
             continue
         else:
             mkdir_private(src)
-            res.add(OK, f"{what} dir {src} created (0700)")
+            res.add(OK, f"{what} dir {src} created (0700)", id="bind_sources")
         _owner(src, what + " dir", res)
     if config_src.is_file():
-        res.add(OK, f"config file {config_src} exists")
+        res.add(OK, f"config file {config_src} exists", id="bind_sources")
         _owner(config_src, "config file", res)
     elif config_src.exists():
-        res.add(FAIL, f"config file {config_src} exists but is not a regular file")
+        res.add(
+            FAIL, f"config file {config_src} exists but is not a regular file", id="bind_sources"
+        )
     elif dry_run:
-        res.add(WARN, f"config file {config_src} is missing; would create it empty (0600)")
+        res.add(
+            WARN,
+            f"config file {config_src} is missing; would create it empty (0600)",
+            id="bind_sources",
+        )
     else:
         mkdir_private(config_src.parent)
         os.close(os.open(config_src, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-        res.add(OK, f"config file {config_src} created empty (0600)")
+        res.add(OK, f"config file {config_src} created empty (0600)", id="bind_sources")
 
     # The units mount fixed sources; the host must use the same files or the containers see
     # another database.
@@ -472,26 +499,34 @@ def _bind_sources(ctx: Context, res: Result, dry_run: bool) -> None:
             f"host data dir is {ctx.data_dir} but the units mount {data_src} at /data; "
             "move the data there (jobhunter migrate-paths) or drop the [paths] / "
             "JOBHUNTER_DATA_DIR / XDG_DATA_HOME override",
+            id="bind_sources",
         )
     if not _same(ctx.db_path, ctx.data_dir / CONTAINER_PATHS["db_path"]):
         res.add(
             FAIL,
             f"host database is {ctx.db_path}; the containers use "
             f"<data dir>/{CONTAINER_PATHS['db_path']}. Drop the db_path override",
+            id="bind_sources",
         )
     for key, value in (("profile_dir", ctx.profile_dir), ("resume_path", ctx.resume_path)):
         if not _same(value, ctx.data_dir / CONTAINER_PATHS[key]):
             res.add(
                 WARN,
                 f"host {key} is {value}; the containers use <data dir>/{CONTAINER_PATHS[key]}",
+                id="bind_sources",
             )
     if not _same(ctx.cache_dir, cache_src):
-        res.add(WARN, f"host cache dir is {ctx.cache_dir}; the units mount {cache_src}")
+        res.add(
+            WARN,
+            f"host cache dir is {ctx.cache_dir}; the units mount {cache_src}",
+            id="bind_sources",
+        )
     if not _same(ctx.config_file, config_src):
         res.add(
             WARN,
             f"host config file is {ctx.config_file}; the units mount {config_src}, so the "
             "containers read that one",
+            id="bind_sources",
         )
 
 
@@ -505,6 +540,7 @@ def _owner(path: Path, what: str, res: Result) -> None:
             FAIL,
             f"{what} {path} is owned by uid {uid}, not you (uid {os.getuid()}); "
             "the containers map only your uid",
+            id="owner",
         )
 
 
@@ -514,15 +550,18 @@ def _labels(ctx: Context, res: Result) -> None:
             continue
         checked, examples, total = unlabelled_files(root, ctx.label_of)
         if not checked and ctx.label_of(root) is None:
-            res.add(OK, f"SELinux: no label on {root} (SELinux off?); label check skipped")
+            res.add(
+                OK, f"SELinux: no label on {root} (SELinux off?); label check skipped", id="labels"
+            )
         elif not checked:
             res.add(
                 OK,
                 f"SELinux: {what} dir not labelled {CONTAINER_FILE_T} yet "
                 "(podman labels it at the first start, :z)",
+                id="labels",
             )
         elif not total:
-            res.add(OK, f"SELinux: every file under {root} is {CONTAINER_FILE_T}")
+            res.add(OK, f"SELinux: every file under {root} is {CONTAINER_FILE_T}", id="labels")
         else:
             shown = ", ".join(str(p) for p in examples)
             more = f" and {total - len(examples)} more" if total > len(examples) else ""
@@ -530,6 +569,7 @@ def _labels(ctx: Context, res: Result) -> None:
                 WARN,
                 f"SELinux: {total} file(s) under {root} are not {CONTAINER_FILE_T} (moved in "
                 f"with mv?): {shown}{more}. Fix with: chcon -R -t {CONTAINER_FILE_T} {root}",
+                id="labels",
             )
 
 
@@ -543,25 +583,33 @@ def _timers(ctx: Context, res: Result) -> None:
             FAIL,
             f"host timers still enabled ({', '.join(enabled)}); they would run beside the "
             "containers. Run: jobhunter schedule uninstall",
+            id="host_timers",
         )
     else:
-        res.add(OK, "no host timers from `jobhunter schedule install` are enabled")
+        res.add(
+            OK, "no host timers from `jobhunter schedule install` are enabled", id="host_timers"
+        )
 
 
 def _paths_in_db(ctx: Context, res: Result) -> None:
     if ctx.absolute_paths_error:
-        res.add(FAIL, f"cannot read the paths stored in the database: {ctx.absolute_paths_error}")
+        res.add(
+            FAIL,
+            f"cannot read the paths stored in the database: {ctx.absolute_paths_error}",
+            id="db_paths",
+        )
     elif ctx.absolute_paths is None:
-        res.add(OK, "no database yet, so no stored paths to check")
+        res.add(OK, "no database yet, so no stored paths to check", id="db_paths")
     elif ctx.absolute_paths:
         res.add(
             FAIL,
             f"{ctx.absolute_paths} absolute or escaping path(s) in the database; the "
             "containers cannot open them. Run: jobhunter db backup && "
             "jobhunter db relativize-paths --apply",
+            id="db_paths",
         )
     else:
-        res.add(OK, "every path stored in the database is relative to the data dir")
+        res.add(OK, "every path stored in the database is relative to the data dir", id="db_paths")
 
 
 def _versions(ctx: Context, prefix: list[str], res: Result) -> None:
@@ -574,6 +622,7 @@ def _versions(ctx: Context, prefix: list[str], res: Result) -> None:
             "BUILD_COMMIT=$(git rev-parse HEAD) -t localhost/jobhunter:$(git rev-parse "
             "--short HEAD) . && podman tag localhost/jobhunter:$(git rev-parse --short HEAD) "
             f"{IMAGE}",
+            id="version_skew",
         )
         return
     image_schema = info["code_schema"]
@@ -590,6 +639,7 @@ def _versions(ctx: Context, prefix: list[str], res: Result) -> None:
             FAIL,
             f"schema skew: migrations only in the host code {only_host or 'none'}, only in "
             f"the image {only_image or 'none'}. Rebuild the image from this checkout",
+            id="version_skew",
         )
     elif image_schema != host.code_schema:
         res.add(
@@ -597,43 +647,56 @@ def _versions(ctx: Context, prefix: list[str], res: Result) -> None:
             f"schema skew: host code has migration {host.code_schema}, image {IMAGE} has "
             f"{image_schema}. Rebuild the image from this checkout (or update the checkout) so "
             "they match",
+            id="version_skew",
         )
     else:
-        res.add(OK, f"host code and image agree on schema {image_schema}")
+        res.add(OK, f"host code and image agree on schema {image_schema}", id="version_skew")
     if host.db_state == "pending":
         res.add(
             FAIL,
             f"database {host.db_path} is at schema {host.db_schema}, behind the code "
             f"({host.code_schema}); nothing migrates on its own after the switch. "
             "Run: jobhunter db migrate",
+            id="version_skew",
         )
     elif host.db_state == "newer":
-        res.add(FAIL, f"database {host.db_path} is newer than this code ({host.code_schema})")
+        res.add(
+            FAIL,
+            f"database {host.db_path} is newer than this code ({host.code_schema})",
+            id="version_skew",
+        )
     elif host.db_state in ("missing", "new"):
         res.add(
             FAIL,
             f"database {host.db_path} has no schema yet; after the switch nothing migrates "
             "on its own, so create it first: jobhunter init",
+            id="version_skew",
         )
     elif host.db_state == "unreadable":
-        res.add(FAIL, f"database {host.db_path} could not be read")
+        res.add(FAIL, f"database {host.db_path} could not be read", id="version_skew")
     elif host.db_state == "current":
-        res.add(OK, f"database at schema {host.db_schema}")
+        res.add(OK, f"database at schema {host.db_schema}", id="version_skew")
     image_commit = info.get("commit")
     if host.commit and image_commit and host.commit != image_commit:
         res.add(
             WARN,
             f"host checkout is at {host.commit[:12]}, image built from {str(image_commit)[:12]}; "
             "rebuild the image to pick up code changes",
+            id="version_skew",
         )
     if not isinstance(image_set, list):
         res.add(
             WARN,
             "image does not list its migrations (built before this check); only the highest "
             "migration number was compared",
+            id="version_skew",
         )
     if not image_commit:
-        res.add(WARN, "image does not record its build commit (built without BUILD_COMMIT)")
+        res.add(
+            WARN,
+            "image does not record its build commit (built without BUILD_COMMIT)",
+            id="version_skew",
+        )
 
 
 def _env_files(ctx: Context, res: Result) -> None:
@@ -641,9 +704,9 @@ def _env_files(ctx: Context, res: Result) -> None:
 
     notes = secrets.env_file_warnings(ctx.env_files)
     for note in notes:
-        res.add(WARN, note.removeprefix("warning: "))
+        res.add(WARN, note.removeprefix("warning: "), id="env_files")
     if ctx.env_files and not notes:
-        res.add(OK, ".env files being read are private (0600)")
+        res.add(OK, ".env files being read are private (0600)", id="env_files")
 
 
 def _secrets(ctx: Context, specs: list[SecretSpec], existing: list[str], res: Result) -> None:
@@ -651,12 +714,12 @@ def _secrets(ctx: Context, specs: list[SecretSpec], existing: list[str], res: Re
     known = [s.secret for s in specs]
     present = [n for n in known if n in have]
     absent = [n for n in known if n not in have]
-    res.add(OK, f"podman secrets found: {', '.join(present) or 'none'}")
+    res.add(OK, f"podman secrets found: {', '.join(present) or 'none'}", id="secrets")
     if absent:
-        res.add(OK, f"not created (their drop-ins are skipped): {', '.join(absent)}")
+        res.add(OK, f"not created (their drop-ins are skipped): {', '.join(absent)}", id="secrets")
     for spec in specs:
         if spec.secret in have and spec.note:
-            res.add(WARN, f"{spec.secret}: {spec.note}; no drop-in written")
+            res.add(WARN, f"{spec.secret}: {spec.note}; no drop-in written", id="secrets")
     if GMAIL_TOKEN_SECRET in have and (
         ctx.gmail_token_file.exists() or ctx.gmail_token_file.is_symlink()
     ):
@@ -665,6 +728,7 @@ def _secrets(ctx: Context, specs: list[SecretSpec], existing: list[str], res: Re
             f"a host Gmail token file is still there ({ctx.gmail_token_file}) although the "
             f"podman secret {GMAIL_TOKEN_SECRET} exists. If the secret works, remove it: "
             f"rm {ctx.gmail_token_file}",
+            id="secrets",
         )
 
 
@@ -673,7 +737,9 @@ def _matrix(ctx: Context, res: Result) -> list[SecretSpec]:
     host's config is reported, since the drop-ins follow what the containers read."""
     if ctx.container_settings_error:
         res.add(
-            FAIL, f"the config the units mount cannot be loaded: {ctx.container_settings_error}"
+            FAIL,
+            f"the config the units mount cannot be loaded: {ctx.container_settings_error}",
+            id="mounted_config",
         )
     mounted = ctx.container_settings if ctx.container_settings is not None else ctx.settings
     specs = secret_matrix(mounted, ctx.registry_rows)
@@ -686,6 +752,7 @@ def _matrix(ctx: Context, res: Result) -> list[SecretSpec]:
                     f"{spec.secret}: the host config names {host.get(spec.secret)} but the "
                     f"mounted config ({ctx.home / CONFIG_SOURCE}) names {spec.env}; the "
                     "drop-ins follow the mounted one",
+                    id="mounted_config",
                 )
     return specs
 
@@ -798,9 +865,10 @@ def _base_units(ctx: Context, res: Result) -> None:
             FAIL,
             f"base units not installed in {ctx.unit_dir}: {', '.join(missing)}. "
             f"Copy them: cp deploy/quadlet/*.container {ctx.unit_dir}/",
+            id="base_units",
         )
     else:
-        res.add(OK, f"base units found in {ctx.unit_dir}")
+        res.add(OK, f"base units found in {ctx.unit_dir}", id="base_units")
 
 
 def run(
@@ -819,11 +887,11 @@ def run(
     res = Result()
     found = ctx.probe()
     if found is None:
-        res.add(FAIL, f"podman is not reachable (tried {podman.TRIED})")
+        res.add(FAIL, f"podman is not reachable (tried {podman.TRIED})", id="podman")
         prefix: list[str] | None = None
     else:
         prefix, res.existing = found
-        res.add(OK, f"podman reachable ({' '.join(prefix)})")
+        res.add(OK, f"podman reachable ({' '.join(prefix)})", id="podman")
 
     _bind_sources(ctx, res, dry_run)
     _labels(ctx, res)
@@ -838,7 +906,11 @@ def run(
         _secrets(ctx, specs, res.existing, res)
         res.plan = plan_dropins(ctx.unit_dir, specs, res.existing)
         for path in res.plan.conflict:
-            res.add(WARN, f"{path} exists and was not written by preflight; left alone")
+            res.add(
+                WARN,
+                f"{path} exists and was not written by preflight; left alone",
+                id="dropin_conflict",
+            )
 
     res.marker = ctx.data_dir / db.DEPLOYMENT_MARKER
     res.marker_present = db.deployment_marker(ctx.data_dir) is not None
@@ -847,35 +919,44 @@ def run(
     if ctx.quadlet is not None and ctx.quadlet.exists():
         ok, why = quadlet_check(ctx.quadlet, ctx.unit_dir, res.plan)
         if not ok:
-            res.add(FAIL, f"quadlet -dryrun -user rejects the result: {why}")
+            res.add(FAIL, f"quadlet -dryrun -user rejects the result: {why}", id="quadlet")
             return res
-        res.add(OK, "quadlet -dryrun -user generates every jobhunter unit with these drop-ins")
+        res.add(
+            OK,
+            "quadlet -dryrun -user generates every jobhunter unit with these drop-ins",
+            id="quadlet",
+        )
     else:
-        res.add(OK, "quadlet generator not found here; generator dry run skipped")
+        res.add(OK, "quadlet generator not found here; generator dry run skipped", id="quadlet")
 
     verb = "would " if dry_run else ""
     for path in res.plan.write:
-        res.add(OK, f"{verb}write {path}")
+        res.add(OK, f"{verb}write {path}", id="secrets")
     for path in res.plan.remove:
-        res.add(OK, f"{verb}remove {path} (its secret is gone or no longer used)")
+        res.add(OK, f"{verb}remove {path} (its secret is gone or no longer used)", id="secrets")
     if not res.plan.changes:
-        res.add(OK, f"drop-ins up to date ({len(res.plan.keep)} in place)")
+        res.add(OK, f"drop-ins up to date ({len(res.plan.keep)} in place)", id="secrets")
     if not dry_run:
         apply_dropins(res.plan)
 
     if res.marker_present:
-        res.add(OK, f"deployment marker {res.marker} present (no automatic migration)")
+        res.add(OK, f"deployment marker {res.marker} present (no automatic migration)", id="marker")
     elif dry_run:
-        res.add(OK, f"would ask to write the deployment marker {res.marker}")
+        res.add(OK, f"would ask to write the deployment marker {res.marker}", id="marker")
     elif confirm_marker(res.marker):
         write_marker(res.marker)
         res.marker_present = True
-        res.add(OK, f"wrote deployment marker {res.marker}: no command migrates on its own now")
+        res.add(
+            OK,
+            f"wrote deployment marker {res.marker}: no command migrates on its own now",
+            id="marker",
+        )
     else:
         res.add(
             WARN,
             f"deployment marker {res.marker} not written; rerun with --yes to switch. Until "
             "then host commands still migrate the database on their own",
+            id="marker",
         )
     return res
 

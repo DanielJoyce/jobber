@@ -29,6 +29,11 @@ def published_loopback_only() -> bool:
     return is_container() and os.environ.get(PUBLISHED_LOOPBACK_ONLY_VAR) == "1"
 
 
+def doctor_command() -> str:
+    """The command that reports why something is refused, for this deployment."""
+    return "jobhunter-ctr doctor" if is_container() else "jobhunter doctor"
+
+
 def refusal(command: str, host_command: str | None = None) -> str:
     """The message for a command that only works on the host."""
     host_command = host_command or f"jobhunter {command}"

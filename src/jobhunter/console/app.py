@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from jobhunter import container
 from jobhunter.apply import cli_runner, ext_pairing
 from jobhunter.config import Settings, resolve_path
 from jobhunter.console import (
@@ -255,7 +256,10 @@ def create_app(
         # Every request opens its own connection, and each one checks the schema: once a
         # newer jobhunter migrates the database, this console stops reading and writing it.
         logger.error("console: %s", exc)
-        return PlainTextResponse(f"jobhunter console stopped: {exc}", status_code=503)
+        return PlainTextResponse(
+            f"jobhunter console stopped: {exc}\nRun `{container.doctor_command()}` for details.",
+            status_code=503,
+        )
 
     app.state.settings = settings
     app.state.console_lock = console_lock  # kept alive with the app

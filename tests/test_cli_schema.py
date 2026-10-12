@@ -163,6 +163,7 @@ def test_exempt_list_matches_the_spec():
         "db restore",
         "upgrade",
         "db migrate",
+        "doctor",
     } == cli.MIGRATION_EXEMPT_COMMANDS
 
 

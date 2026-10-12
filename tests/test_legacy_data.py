@@ -140,12 +140,23 @@ def test_realistic_invocations_stop_before_touching_anything(argv, old_layout, m
     assert not data_home().exists()
 
 
-@pytest.mark.parametrize("command", sorted(UNGUARDED_COMMANDS - {"init", "schedule", "secrets"}))
+@pytest.mark.parametrize(
+    "command", sorted(UNGUARDED_COMMANDS - {"init", "schedule", "secrets", "doctor"})
+)
 def test_paths_and_migrate_paths_still_work(command, old_layout, monkeypatch):
     root = old_layout()
     monkeypatch.chdir(root)
     result = runner.invoke(app, [command])
     assert result.exit_code == 0, result.output
+    assert files_below(data_home()) == []
+
+
+def test_doctor_runs_on_old_layout_data_reports_it_and_creates_nothing(old_layout, monkeypatch):
+    root = old_layout()
+    monkeypatch.chdir(root)
+    result = runner.invoke(app, ["doctor", "--group", "basics"])
+    assert result.exit_code == 1, result.output  # the old layout is an essential failure
+    assert "Data location" in result.output and "BROKEN" in result.output
     assert files_below(data_home()) == []
 
 
