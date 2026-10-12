@@ -528,10 +528,21 @@ def register(
         busy: dict[str, float] = request.app.state.live_busy
         mono = getattr(request.app.state, "live_clock", None) or time.monotonic
         last = busy.get(kind)
+        wait = ""
         if last == INFLIGHT:
-            raise HTTPException(429, "that check is already running; wait for it to finish")
-        if last is not None and mono() - last < LIVE_COOLDOWN_SECONDS:
-            raise HTTPException(429, "that check just ran; wait a few seconds and try again")
+            wait = "That check is already running; try again in a moment."
+        elif last is not None and mono() - last < LIVE_COOLDOWN_SECONDS:
+            left = max(1, int(LIVE_COOLDOWN_SECONDS - (mono() - last) + 0.999))
+            wait = f"Checked moments ago; try again in {left} s."
+        if wait:
+            held = lc.LiveResult(kind, lc.TITLES[kind], lc.NOT_RUN, notes=(wait,), rows=(check_id,))
+            if request.headers.get("hx-request") == "true":
+                return templates.TemplateResponse(
+                    request, "_setup_live.html", {"res": held}, status_code=429
+                )
+            resp = page(request, show_all=True, live_results={check_id: held})
+            resp.status_code = 429
+            return resp
         busy[kind] = INFLIGHT
         try:
             result = await run_in_threadpool(

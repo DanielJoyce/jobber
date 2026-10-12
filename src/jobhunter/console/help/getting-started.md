@@ -70,8 +70,9 @@ key is accepted (and, for OpenRouter, the credit left on it), whether a local mo
 whether Gmail accepts your token and has the label and filters, and whether `claude` is logged
 in with claude.ai. It prints what it will contact first, calls no model and spends nothing, and
 shows only yes or no answers. The same checks are the **Test (free)** buttons on `/setup`, which
-appear only in a browser on this machine; a button refuses a second click for a few seconds, so
-nothing can hammer a service. Gmail is only read, never changed. OpenRouter is asked only over
+appear only in a browser on this machine; a button shows "checked moments ago" for a few seconds
+after a check, and rows that share a service (the two Gmail rows, or the scorers on one
+provider) share that wait, so nothing can hammer a service. Gmail is only read, never changed. OpenRouter is asked only over
 https. With `--group NAME`, `--live` checks only that group's rows, and a failing live check on
 an essential row shows in the summary line as well as the exit status. With containers, run
 `jobhunter-ctr doctor --live`.

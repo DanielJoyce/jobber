@@ -17,8 +17,12 @@ document.addEventListener("click", function (ev) {
 // swap 4xx by default, so let this one through (as prefs.js does for section saves).
 document.addEventListener("htmx:beforeSwap", function (ev) {
   var xhr = ev.detail && ev.detail.xhr;
-  if (!xhr || [413, 415, 422].indexOf(xhr.status) === -1) return;
-  if (!/\/setup\/resume$/.test(xhr.responseURL || "")) return;
+  if (!xhr) return;
+  var url = xhr.responseURL || "";
+  // a live check held back by its cooldown answers 429 with a result fragment to show
+  var live = xhr.status === 429 && /\/setup\/live\//.test(url);
+  var resume = [413, 415, 422].indexOf(xhr.status) !== -1 && /\/setup\/resume$/.test(url);
+  if (!live && !resume) return;
   ev.detail.shouldSwap = true;
   ev.detail.isError = false;
 });
