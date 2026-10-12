@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -41,6 +42,8 @@ from jobhunter.scoring.profile import (
 )
 from jobhunter.xdg import mkdir_private
 
+LIVE_COOLDOWN_SECONDS = 5.0
+INFLIGHT = -1.0  # marks a live check that is running (a clock reading is never negative)
 DISMISSED_FILE = "setup-dismissed.json"
 # Rows only the CLI shows (019 "/setup": rows 1-3 are doctor-only).
 DOCTOR_ONLY = frozenset({"config.file", "db.schema"})
@@ -515,7 +518,38 @@ def register(
         deps = getattr(request.app.state, "live_deps", None) or lc.Deps(
             environ=getattr(request.app.state, "setup_environ", None), home=home_of(request)
         )
-        result = await run_in_threadpool(lc.run_row, check_id, settings, mode, now=now(), deps=deps)
+        kind = lc.kind_for(check_id, settings, mode)
+        if kind is None:
+            raise HTTPException(404, "this row has no live check")
+        # One request per service at a time, and a short cooldown after it, so a loop of
+        # POSTs cannot hammer a provider. Rows sharing a service share the limit.
+        if not hasattr(request.app.state, "live_busy"):
+            request.app.state.live_busy = {}
+        busy: dict[str, float] = request.app.state.live_busy
+        mono = getattr(request.app.state, "live_clock", None) or time.monotonic
+        last = busy.get(kind)
+        wait = ""
+        if last == INFLIGHT:
+            wait = "That check is already running; try again in a moment."
+        elif last is not None and mono() - last < LIVE_COOLDOWN_SECONDS:
+            left = max(1, int(LIVE_COOLDOWN_SECONDS - (mono() - last) + 0.999))
+            wait = f"Checked moments ago; try again in {left} s."
+        if wait:
+            held = lc.LiveResult(kind, lc.TITLES[kind], lc.NOT_RUN, notes=(wait,), rows=(check_id,))
+            if request.headers.get("hx-request") == "true":
+                return templates.TemplateResponse(
+                    request, "_setup_live.html", {"res": held}, status_code=429
+                )
+            resp = page(request, show_all=True, live_results={check_id: held})
+            resp.status_code = 429
+            return resp
+        busy[kind] = INFLIGHT
+        try:
+            result = await run_in_threadpool(
+                lc.run_row, check_id, settings, mode, now=now(), deps=deps
+            )
+        finally:
+            busy[kind] = mono()
         if result is None:
             raise HTTPException(404, "this row has no live check")
         if request.headers.get("hx-request") == "true":

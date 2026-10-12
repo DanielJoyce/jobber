@@ -1334,13 +1334,13 @@ def _gmail_token(ctx: _Ctx) -> Check:
         if ctx.mode == HOST and meta is None:
             if src and src["status"] == "ok" and last_ok and ctx.now - last_ok <= RECENT_OK:
                 return row(OK, "worked at the last run (stored in the keyring)")
-            return row(UNKNOWN, "use Test (free), or run `jobhunter mail status`", f=None)
+            return row(UNKNOWN, f"use Test (free), or run `{_mail_status_cmd(ctx)}`", f=None)
         return row(MISSING, "no Gmail token")
 
     if issued is None:
         if src and src["status"] == "ok" and last_ok and ctx.now - last_ok <= RECENT_OK:
             return row(OK, "worked at the last run (no issue date recorded)")
-        return row(UNKNOWN, "use Test (free), or run `jobhunter mail status`", f=None)
+        return row(UNKNOWN, f"use Test (free), or run `{_mail_status_cmd(ctx)}`", f=None)
 
     expires = issued + timedelta(days=GMAIL_TESTING_DAYS)
     if last_ok and last_ok > expires:
@@ -1353,6 +1353,10 @@ def _gmail_token(ctx: _Ctx) -> Check:
     return row(OK, f"re-auth due about {expires.astimezone().date().isoformat()}")
 
 
+def _mail_status_cmd(ctx: _Ctx) -> str:
+    return "jobhunter mail status" if ctx.mode == HOST else "jobhunter-ctr mail status"
+
+
 def _mail_label(ctx: _Ctx) -> Check:
     title, unlocks = "Gmail label and filter", "Alerts leave your inbox and land under one label"
     fix = Fix("command", "jobhunter mail setup" if ctx.mode == HOST else "jobhunter-ctr mail setup")
@@ -1363,8 +1367,8 @@ def _mail_label(ctx: _Ctx) -> Check:
                      f"{rows[0][0]} alert(s) arrived under the label in the last 14 days",
                      unlocks, None, "mail_message", step=4)  # fmt: skip
     return Check("mail.label", EMAIL, RECOMMENDED, UNKNOWN, False, title,
-                 "no alert has arrived in the last 14 days; use Test (free) or `jobhunter mail "
-                 "status`", unlocks, fix, step=4)  # fmt: skip
+                 "no alert has arrived in the last 14 days; use Test (free) or "
+                 f"`{_mail_status_cmd(ctx)}`", unlocks, fix, step=4)  # fmt: skip
 
 
 def _subscriptions(ctx: _Ctx) -> Check:

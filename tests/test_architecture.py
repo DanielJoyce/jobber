@@ -9,6 +9,8 @@ import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "jobhunter"
 GUARDED_PACKAGES = ["sources", "pipeline", "scoring", "mail", "apply"]
+# Single modules outside those packages that must not touch the network directly either.
+GUARDED_FILES = ["live_checks.py"]
 FORBIDDEN = {"httpx", "playwright"}
 # API clients (not scrapers) that may use httpx: the OpenAI-compatible scorer talks to an LLM
 # endpoint the user configured. Keep this list explicit and tiny.
@@ -34,12 +36,15 @@ def network_imports(path: Path, root: Path = SRC) -> list[str]:
 
 
 def guarded_modules() -> list[Path]:
-    return sorted(p for pkg in GUARDED_PACKAGES for p in (SRC / pkg).rglob("*.py"))
+    found = [p for pkg in GUARDED_PACKAGES for p in (SRC / pkg).rglob("*.py")]
+    return sorted(found + [SRC / name for name in GUARDED_FILES])
 
 
 def test_guarded_packages_exist():
     for pkg in GUARDED_PACKAGES:
         assert (SRC / pkg / "__init__.py").is_file()
+    for name in GUARDED_FILES:
+        assert (SRC / name).is_file()
     assert guarded_modules()
 
 

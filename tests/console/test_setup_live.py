@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from jobhunter import live_checks as lc
 from jobhunter import readiness
 from jobhunter.config import Settings, load_settings
 from jobhunter.console.app import create_app
@@ -70,6 +71,8 @@ def make_app(settings: Settings, rec: Recorder, *, mode=readiness.HOST, allow_re
     )
     app.state.setup_mode = mode
     app.state.live_deps = deps(rec, settings)
+    ticks = iter(range(100, 100_000, 60))  # each reading is a minute on: no cooldown by default
+    app.state.live_clock = lambda: float(next(ticks))
     return app
 
 
@@ -221,3 +224,77 @@ def test_plain_form_post_renders_the_page_with_the_result(settings, rec):
     r = client(make_app(settings, rec)).post("/setup/live/mail.label")
     assert r.status_code == 200 and "<h1>Setup</h1>" in r.text
     assert "token accepted: yes" in text_of(row(r.text, "mail.label"))
+
+
+def test_a_second_click_inside_the_cooldown_sends_nothing(settings, rec):
+    app = make_app(settings, rec)
+    app.state.live_clock = lambda: 1000.0  # time stands still
+    c = client(app)
+    assert c.post("/setup/live/scorer.screen").status_code == 200
+    seen = list(rec.seen)
+    assert seen  # the first click contacted the service
+    # the same row, and another row sharing the service, are refused without a request
+    assert c.post("/setup/live/scorer.screen").status_code == 429
+    assert c.post("/setup/live/scorer.deep").status_code == 429
+    assert rec.seen == seen
+    # a different service is not held up by it
+    assert c.post("/setup/live/mail.token").status_code == 200
+
+
+def test_held_back_click_shows_a_fragment_not_json(settings, rec):
+    app = make_app(settings, rec)
+    app.state.live_clock = lambda: 1000.0
+    c = client(app)
+    assert c.post("/setup/live/mail.token").status_code == 200
+    r = c.post("/setup/live/mail.label", headers={"hx-request": "true"})
+    assert r.status_code == 429
+    assert "su-live-result" in r.text and "detail" not in r.text
+    assert "Checked moments ago; try again in 5 s." in r.text
+
+
+def test_held_back_plain_post_renders_the_page(settings, rec):
+    app = make_app(settings, rec)
+    app.state.live_clock = lambda: 1000.0
+    c = client(app)
+    assert c.post("/setup/live/mail.token").status_code == 200
+    r = c.post("/setup/live/mail.label")
+    assert r.status_code == 429
+    assert "<html" in r.text and "Checked moments ago" in r.text
+    assert '{"detail"' not in r.text
+
+
+def test_the_cooldown_resets_after_an_exception(settings, rec, monkeypatch):
+    app = make_app(settings, rec)
+    now = [1000.0]
+    app.state.live_clock = lambda: now[0]
+    c = client(app, raise_server_exceptions=False)
+    real = lc.run_row
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(lc, "run_row", boom)
+    assert c.post("/setup/live/scorer.screen").status_code == 500
+    monkeypatch.setattr(lc, "run_row", real)
+    now[0] += 6  # not stuck "running": only the short cooldown applied
+    assert c.post("/setup/live/scorer.screen").status_code == 200
+
+
+def test_a_click_while_the_check_is_running_is_refused(settings, rec):
+    from jobhunter.console import setup_routes
+
+    app = make_app(settings, rec)
+    c = client(app)
+    app.state.live_busy = {"anthropic": setup_routes.INFLIGHT}
+    assert c.post("/setup/live/scorer.screen").status_code == 429
+    assert rec.seen == []
+
+
+def test_the_cooldown_ends(settings, rec):
+    app = make_app(settings, rec)
+    now = [1000.0]
+    app.state.live_clock = lambda: now[0]
+    c = client(app)
+    assert c.post("/setup/live/scorer.screen").status_code == 200
+    now[0] += 6
+    assert c.post("/setup/live/scorer.screen").status_code == 200

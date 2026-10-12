@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -403,8 +403,13 @@ def _fix_lines(fix: Fix, prefix: str = "fix") -> list[str]:
     return lines
 
 
-def summary(checks: list[Check]) -> str:
-    essentials = len(readiness.failing(checks, ESSENTIAL))
+def summary(checks: list[Check], live: list[live_checks.LiveResult] | None = None) -> str:
+    failing_ids = {c.id for c in readiness.failing(checks, ESSENTIAL)}
+    essential_ids = {c.id for c in checks if c.level == ESSENTIAL}
+    for r in live or []:  # a refused live check is an essential failing too (same as exit 1)
+        if r.failing:
+            failing_ids |= essential_ids.intersection(r.rows)
+    essentials = len(failing_ids)
     recommended = len(readiness.failing(checks, RECOMMENDED))
     unknown = sum(1 for c in checks if c.status == UNKNOWN)
     head = (
@@ -416,6 +421,14 @@ def summary(checks: list[Check]) -> str:
     return f"{head}, {recommended} recommended, {unknown} unknown. Details: {cmd} -v"
 
 
+TEST_BUTTON = "use Test (free)"  # readiness wording for the /setup button; no button in a terminal
+
+
+def terminal_detail(detail: str, mode: str) -> str:
+    """Row text for the CLI: the /setup button does not exist here, so name the command."""
+    return detail.replace(TEST_BUTTON, f"run `{live_checks.doctor_live_command(mode)}`")
+
+
 def render(report: Report, *, verbose: bool = False) -> list[str]:
     out: list[str] = []
     for group in readiness.GROUPS:
@@ -425,7 +438,9 @@ def render(report: Report, *, verbose: bool = False) -> list[str]:
         out.append(group)
         width = max(len(c.title) for c in rows)
         for c in rows:
-            out.append(f"  {label(c):<8} {c.title:<{width}}  {c.detail}")
+            out.append(
+                f"  {label(c):<8} {c.title:<{width}}  {terminal_detail(c.detail, report.mode)}"
+            )
             if verbose:
                 out.append(f"           unlocks: {c.unlocks}")
                 if c.source:
@@ -444,12 +459,13 @@ def render(report: Report, *, verbose: bool = False) -> list[str]:
         out.append(f"mode: {report.mode}")
         out.append(WAL_NOTE)
     out += render_live(report)
-    out.append(summary(report.checks))
+    out.append(summary(report.checks, report.live))
     return out
 
 
 def to_json_data(report: Report) -> list[dict]:
-    return [c.as_dict() for c in report.checks]
+    return [{**c.as_dict(), "detail": terminal_detail(c.detail, report.mode)}
+            for c in report.checks]  # fmt: skip
 
 
 # --- live checks (S6) ---------------------------------------------------------------------------
@@ -458,7 +474,14 @@ def to_json_data(report: Report) -> list[dict]:
 def live_plan(report: Report) -> list[live_checks.Planned]:
     if report.settings is None:
         return []
-    return live_checks.plan(report.settings, report.mode)
+    planned = live_checks.plan(report.settings, report.mode)
+    if report.group is None:
+        return planned
+    shown = {c.id for c in report.checks}  # --group limits --live to that group's rows
+    limited = [
+        replace(p, rows=rows) for p in planned if (rows := tuple(r for r in p.rows if r in shown))
+    ]
+    return limited
 
 
 def live_preamble(report: Report, planned: list[live_checks.Planned]) -> list[str]:
