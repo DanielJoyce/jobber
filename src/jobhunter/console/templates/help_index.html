@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ static_url('help.css') }}">{% endblock %}
+{% block main %}
+<div class="help-layout">
+  <aside class="help-side">
+    {% include "_help_nav.html" %}
+  </aside>
+  <details class="help-topics">
+    <summary>Help topics</summary>
+    {% include "_help_nav.html" %}
+  </details>
+  <div class="help-page">
+    <h1>Help</h1>
+    <p class="help-start">New here? Read <a href="/help/getting-started">Getting started</a>.</p>
+    <p class="muted">The same pages are in the repository under <code>src/jobhunter/console/help/</code>.</p>
+    {% for t, heads in entries %}
+    <section class="help-entry">
+      <h2><a href="/help/{{ t.slug }}">{{ t.title }}</a></h2>
+      <p>{{ t.summary }}</p>
+      {% if heads %}
+      <ul>
+        {% for h in heads %}
+        <li class="lvl{{ h.level }}"><a href="/help/{{ t.slug }}#{{ h.id }}">{{ h.text }}</a></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

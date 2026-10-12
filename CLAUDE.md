@@ -11,6 +11,14 @@ why on the bug (see Decisions below).
 - SQLite (stdlib `sqlite3`, no ORM), pydantic v2, httpx, selectolax/lxml, typer, fastapi + jinja2 + htmx.
 - Tests in `tests/`, mirroring the package. Fixtures in `tests/fixtures/`.
 
+## User help
+
+User-facing help is Markdown in `src/jobhunter/console/help/` (one file per topic; the console
+serves it at `/help`, and `README.md` has a Help table linking each file). Read the help topic
+for the area you are changing, and update it in the same change when behaviour it describes
+changes. Blocks between `<!-- jh:begin NAME -->` and `<!-- jh:end NAME -->` are generated from
+code: run `uv run python -m jobhunter.console.help` after changing what they list.
+
 ## Commands
 
 ```

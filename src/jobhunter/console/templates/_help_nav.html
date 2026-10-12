@@ -1,0 +1,8 @@
+<nav class="help-nav" aria-label="Help topics">
+  <a href="/help"{% if current is none %} aria-current="page"{% endif %}>All topics</a>
+  <ul>
+    {% for t in topics %}
+    <li><a href="/help/{{ t.slug }}"{% if t.slug == current %} aria-current="page"{% endif %}>{{ t.title }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>
