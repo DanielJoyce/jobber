@@ -1,4 +1,4 @@
--- 0038_deep_request: a deep pass confirmed in the console (specs/020 "Deep pass from the console").
+-- 0039_deep_request: a deep pass confirmed in the console (specs/020 "Deep pass from the console").
 --
 -- A row exists only once you confirm: there is no pending state. It carries the confirmed plan
 -- (mode, model, scoring_version, the exact group ids, the estimate and the spend ceiling), so
