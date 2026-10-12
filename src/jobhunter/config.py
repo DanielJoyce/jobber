@@ -553,6 +553,8 @@ class Layers:
     notices: list[str] = dc_field(default_factory=list)
     config_keys: frozenset[tuple[str, str]] = frozenset()
     override_keys: frozenset[tuple[str, str]] = frozenset()
+    # What load_layers merged below the file, for ``relayer`` (not compared, not shown).
+    _inputs: Any = dc_field(default=None, repr=False)
 
     def __eq__(self, other: object) -> bool:
         # Not base/merged: merged._models points back here, and Settings compares its private
@@ -730,7 +732,42 @@ def load_layers(
     lower = _deep_merge(file_data, {"paths": env_paths} if env_paths else {})
     overrides = overrides or {}
     base = _validate(_deep_merge(lower, overrides), file_data, env_paths, overrides)
+    return _layer_models(_Inputs(lower, file_data, env_paths, dict(overrides)), base)
 
+
+@dataclass(frozen=True)
+class _Inputs:
+    """What ``load_layers`` merged below models.toml, kept so ``relayer`` can re-read the file
+    over the same base without reading config.toml or the environment again."""
+
+    lower: dict[str, Any]
+    file_data: dict[str, Any]
+    env_paths: dict[str, str]
+    overrides: dict[str, Any]
+
+
+def relayer(layers: Layers) -> Layers:
+    """``layers`` again with models.toml re-read from disk, over the same base (config.toml
+    and the environment as they were when ``layers`` was built). For the console's /models
+    page: it never reloads config.toml, which only the config watch applies."""
+    if layers._inputs is None:
+        raise ValueError("these layers were not built by load_layers")
+    return _layer_models(layers._inputs, layers.base)
+
+
+def layers_for(settings: Settings) -> Layers:
+    """The layers ``settings`` was built with; for Settings built without ``load_settings``
+    (tests, an embedding app), layers that treat ``settings`` itself as the base below
+    models.toml, so ``relayer`` and the /models page work the same way."""
+    if settings.models_layers is not None:
+        return settings.models_layers
+    inputs = _Inputs(settings.model_dump(), {}, {}, {})
+    return _layer_models(inputs, settings)
+
+
+def _layer_models(inputs: _Inputs, base: Settings) -> Layers:
+    lower, file_data = inputs.lower, inputs.file_data
+    env_paths, overrides = inputs.env_paths, inputs.overrides
     mpath = models_file(base.paths.data_dir)
     exists, digest, data, problems = read_models_file(mpath)
     valid, invalid, key_problems, unreadable = _split_layer(data)
@@ -785,6 +822,7 @@ def load_layers(
         config_keys=config_keys,
         override_keys=override_keys,
     )
+    layers._inputs = inputs
     merged._models = layers
     _warn_once(mpath, digest, problems)
     return layers

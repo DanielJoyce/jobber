@@ -22,6 +22,7 @@ catch-up.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import fcntl
 import math
 import os
@@ -29,7 +30,7 @@ import re
 import sqlite3
 import tempfile
 import tomllib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from pathlib import Path
@@ -555,3 +556,95 @@ def keep_queued(conn: sqlite3.Connection, old_spec: str) -> int:
             (old_spec,),
         )
     return cur.rowcount
+
+
+# ─── The running settings (specs/020 Save, step 2) ──────────────────────────
+
+
+def swap_fields(running: Any, fresh: Any, names: Iterable[str]) -> Any:
+    """A copy of ``running`` (Settings) with only the named fields taken from ``fresh`` (the
+    Layers ``config.relayer`` built from the file on disk), validated, for one assignment to
+    ``app.state.settings``. Every other field, models.toml key or not, keeps its running value:
+    a pending config.toml edit still waits for its own Apply, and an outside models.toml change
+    still waits for Load. The copy's ``models_layers`` say where each value now comes from:
+    the named fields as ``fresh`` has them, the rest as before."""
+    names = [n for n in dict.fromkeys(names) if n in NAMES]
+    if not names:
+        return running
+    by_section: dict[str, dict[str, Any]] = {}
+    for name in names:
+        section, key = NAMES[name]
+        by_section.setdefault(section, {})[key] = getattr(getattr(fresh.merged, section), key)
+    updates: dict[str, Any] = {}
+    for section, values in by_section.items():
+        current = getattr(running, section)
+        copy = current.model_copy(update=values)
+        type(current).model_validate(copy.model_dump())  # raises on a bad value; nothing kept
+        updates[section] = copy
+    new = running.model_copy(update=updates)
+    swapped = {NAMES[n][1] for n in names if NAMES[n][0] == "scoring"}
+    if "scoring" in updates:
+        blocked = {k: v for k, v in running.scoring._blocked.items() if k not in swapped}
+        blocked.update({k: v for k, v in fresh.blocked.items() if k in swapped})
+        new.scoring._blocked = blocked
+    new._models = _mix_layers(running.models_layers, fresh, names, new)
+    return new
+
+
+def _mix_layers(old: Any, fresh: Any, names: list[str], merged: Any) -> Any:
+    """Layers for the swapped settings: the named fields as ``fresh`` has them, the others as
+    ``old`` had them, and the file's own state (digest, broken, unknown keys) from ``fresh``."""
+    if old is None:
+        return dataclasses.replace(fresh, merged=merged)
+    fields = {NAMES[n] for n in names}
+    dotted = {".".join(NAMES[n]) for n in names}
+
+    def mix(old_t: dict, fresh_t: dict) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for section in set(old_t) | set(fresh_t):
+            table = {k: v for k, v in old_t.get(section, {}).items() if (section, k) not in fields}
+            table.update(
+                {k: v for k, v in fresh_t.get(section, {}).items() if (section, k) in fields}
+            )
+            if table:
+                out[section] = table
+        return out
+
+    def keyed(p: Any) -> bool:
+        return p.kind == "invalid" and p.key is not None
+
+    problems = [p for p in fresh.problems if not keyed(p)]
+    problems += [p for p in old.problems if keyed(p) and p.key not in dotted]
+    problems += [p for p in fresh.problems if keyed(p) and p.key in dotted]
+    swapped = {key for section, key in fields if section == "scoring"}
+    blocked = {k: v for k, v in old.blocked.items() if k not in swapped}
+    blocked.update({k: v for k, v in fresh.blocked.items() if k in swapped})
+
+    def about(notice: str) -> bool:
+        return any(f"{d} " in notice for d in dotted)
+
+    notices = [n for n in old.notices if not about(n)]
+    notices += [n for n in fresh.notices if about(n)]
+    return dataclasses.replace(
+        fresh,
+        merged=merged,
+        layer=mix(old.layer, fresh.layer),
+        invalid=mix(old.invalid, fresh.invalid),
+        problems=problems,
+        blocked=blocked,
+        notices=list(dict.fromkeys(notices)),
+    )
+
+
+def pending_load(running: Any, fresh: Any) -> list[str]:
+    """The names whose value, or blocked state, in ``fresh`` (models.toml on disk) differs from
+    the running settings: what **Load** would change. Empty when they agree."""
+    out = []
+    blocked_now = running.scoring.scorer_problems()
+    blocked_disk = fresh.merged.scoring.scorer_problems()
+    for name, (section, key) in NAMES.items():
+        now_v = getattr(getattr(running, section), key)
+        disk_v = getattr(getattr(fresh.merged, section), key)
+        if now_v != disk_v or (key in blocked_now) != (key in blocked_disk):
+            out.append(name)
+    return out

@@ -1,0 +1,55 @@
+/* /models (specs/020). Colors come from app.css tokens, so light and dark both work. */
+.mo h2 { font-size: 1.05rem; margin: 0; }
+.mo code { overflow-wrap: anywhere; word-break: break-word; }
+.mo-banner p, .mo-banner .mo-warn { margin: 6px 0; }
+.mo-alert, .mo-warn, .mo-blocked { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--surface-1); color: var(--text-primary); overflow-wrap: anywhere; }
+.mo-alert, .mo-blocked { border-left: 4px solid var(--status-critical); }
+.mo-warn { border-left: 4px solid var(--status-warning); }
+.mo-access { margin: 12px 0; }
+.mo-access h2 { margin: 0 0 6px; }
+.mo-access-list { list-style: none; margin: 0; padding: 0; }
+.mo-acc { display: grid; grid-template-columns: minmax(14rem, max-content) 1fr; gap: 2px 12px; align-items: baseline; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: var(--text-primary); padding: 6px 10px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.mo-acc-needs, .mo-acc-actions { grid-column: 2; font-size: 0.85rem; }
+.mo-acc.mo-missing { border-left: 4px solid var(--status-critical); }
+.mo-acc.mo-ok { border-left: 4px solid var(--status-good); }
+.mo-acc.mo-likely, .mo-acc.mo-unknown { border-left: 4px solid var(--status-warning); }
+.mo-acc.mo-optional { border-left: 4px solid var(--grid); }
+.mo-inline { display: inline-flex; margin: 0 0 0 6px; }
+.mo-row { margin: 12px 0; }
+.mo-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; margin: 0 0 6px; }
+.mo-source, .mo-fsource { font-size: 0.85rem; }
+.mo-fields { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; }
+.mo-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 100%; }
+.mo-field > label { font-size: 0.85rem; color: var(--text-secondary); }
+.mo-field select, .mo-field input[type="text"], .mo-field input:not([type]) { font: inherit; max-width: 100%; color: var(--text-primary); background: var(--page); border: 1px solid var(--axis); border-radius: 4px; padding: 2px 6px; }
+.mo-field select { min-width: 0; width: 28rem; max-width: 100%; }
+.mo-inactive { opacity: 0.75; }
+.mo-radio { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.mo-radio legend { font-size: 0.85rem; color: var(--text-secondary); padding: 0; }
+.mo-preview { margin: 6px 0 0; }
+.mo-preview p { margin: 4px 0; overflow-wrap: anywhere; }
+.mo-needs.mo-missing { font-weight: 600; }
+.mo-note { color: var(--text-secondary); }
+.mo-queued { border-left: 4px solid var(--status-warning); padding-left: 8px; }
+.mo-msg { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+.mo-msg.mo-ok { border-left: 4px solid var(--status-good); }
+.mo-msg.mo-warn { border-left: 4px solid var(--status-warning); }
+.mo-msg.mo-error { border: 2px solid var(--text-primary); border-left: 4px solid var(--status-critical); }
+.mo-reasons { margin: 4px 0 4px 1.2rem; padding: 0; }
+.mo-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 8px 0 0; }
+.mo button, .mo-actions button { font: inherit; font-size: 0.85rem; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--axis); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
+.mo .mo-save { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-bg); }
+.mo .mo-save:hover { background: var(--btn-primary-hover); }
+.mo-reset-hint { font-size: 0.8rem; }
+.mo-commands ul { list-style: none; margin: 4px 0; padding: 0; }
+.mo-commands code { overflow-wrap: anywhere; }
+.mo-history { margin: 16px 0; }
+.mo-history-list { list-style: none; margin: 6px 0; padding: 0; }
+.mo-history-list li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--grid); overflow-wrap: anywhere; }
+.mo-foot { margin-top: 16px; }
+@media (max-width: 600px) {
+  .mo-acc { grid-template-columns: 1fr; }
+  .mo-acc-needs, .mo-acc-actions { grid-column: 1; }
+  .mo-fields { flex-direction: column; align-items: stretch; }
+  .mo-field select { width: 100%; }
+}

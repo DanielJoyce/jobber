@@ -1,0 +1,54 @@
+<section class="mo-row su-row{% if r.blocked %} su-missing{% endif %}" id="models-row-{{ r.key }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+<form method="post" action="/models/{{ r.key }}" hx-post="/models/{{ r.key }}"
+      hx-target="#models-row-{{ r.key }}" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids"
+      hx-sync="this:queue all">
+  <input type="hidden" name="page_digest" value="{{ digest }}">
+  <header class="mo-head">
+    <h2>{{ r.title }}</h2>
+    {% if r.source %}<span class="mo-source muted">{{ r.source }}</span>{% endif %}
+  </header>
+  {% if r.blocked %}<p class="mo-blocked" role="alert"><span aria-hidden="true">✕</span> {{ r.blocked }}</p>{% endif %}
+  <div class="mo-fields" hx-post="/models/{{ r.key }}/preview" hx-trigger="change" hx-sync="closest form:queue all"
+       hx-target="#models-{{ r.key }}-preview" hx-swap="innerHTML" hx-include="closest form, #models-local-ids">
+    {% for f in r.fields %}
+    <input type="hidden" name="shown_{{ f.name }}" value="{{ f.shown }}">
+    <div class="mo-field{% if not f.active %} mo-inactive{% endif %}">
+      {% if f.kind == "radio" %}
+      <fieldset class="mo-radio">
+        <legend>{{ f.label }}</legend>
+        {% for o in f.options %}
+        <label><input type="radio" name="{{ f.name }}" value="{{ o.value }}"{% if o.value == f.value %} checked{% endif %}> {{ o.label }}</label>
+        {% endfor %}
+      </fieldset>
+      {% elif f.kind == "check" %}
+      <input type="hidden" name="{{ f.name }}" value="false">
+      <label><input type="checkbox" name="{{ f.name }}" value="true"{% if f.value == "true" %} checked{% endif %}> {{ f.label }}</label>
+      {% else %}
+      <label for="models-{{ f.name }}">{{ f.label }}{% if not f.active %} <span class="muted">(not the runner in use)</span>{% endif %}</label>
+      <select id="models-{{ f.name }}" name="{{ f.name }}">
+        {% for group, opts in f.groups %}
+          {% if group %}<optgroup label="{{ group }}">{% endif %}
+          {% for o in opts %}<option value="{{ o.value }}"{% if o.value == f.value %} selected{% endif %}>{{ o.label }}</option>{% endfor %}
+          {% if group %}</optgroup>{% endif %}
+        {% endfor %}
+      </select>
+      {% endif %}
+      {% if f.source and r.fields | length > 1 %}<span class="mo-fsource muted">{{ f.source }}</span>{% endif %}
+    </div>
+    {% endfor %}
+    {% if r.key == "screen" %}
+    <div class="mo-field">
+      <label for="models-screen-other">Or type a scorer spec</label>
+      <input id="models-screen-other" name="screen_other" list="models-local-list" placeholder="openrouter:&lt;author&gt;/&lt;model&gt;" autocomplete="off" spellcheck="false">
+    </div>
+    {% endif %}
+  </div>
+  <div id="models-{{ r.key }}-preview" class="mo-preview">{% include "_models_preview_body.html" %}</div>
+  {% if not ctx.peer_ok %}
+  <div class="mo-commands">
+    <p class="muted">On the machine running the console:</p>
+    <ul>{% for c in r.commands %}<li><code>{{ c }}</code></li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+</form>
+</section>

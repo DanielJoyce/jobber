@@ -1,0 +1,6 @@
+<div id="models-local-ids" hidden{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% for i in (ctx.local_ids or []) %}<input type="hidden" name="local_id" value="{{ i }}">{% endfor %}
+  <datalist id="models-local-list">
+    {% for i in (ctx.local_ids or []) %}<option value="local:{{ i }}"></option>{% endfor %}
+  </datalist>
+</div>

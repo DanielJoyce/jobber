@@ -1,0 +1,22 @@
+<li class="mo-acc mo-{{ a.word }}" id="models-access-{{ a.access.provider }}">
+  <span class="mo-acc-head"><span class="su-icon" aria-hidden="true">{{ a.icon }}</span> <span class="su-word">{{ a.word }}</span> <span class="su-title">{{ a.label }}</span></span>
+  {% if a.check == "local" and local %}
+  <span class="mo-acc-detail">Check: {{ local.text }}{% if local.ids %}; {{ local.ids | length }} model{{ "s" if local.ids | length != 1 }}: {{ local.ids | join(", ") }}{% endif %}</span>
+  {% else %}
+  <span class="mo-acc-detail">{{ a.access.detail }}</span>
+  {% endif %}
+  {% if a.needed_by %}<span class="mo-acc-needs muted">Needed by: {{ a.needed_by | join(", ") }}</span>{% endif %}
+  <span class="mo-acc-actions">
+    {% if a.word in ("missing", "optional") %}<a href="/help/{{ a.access.help }}">How to add one</a>{% endif %}
+    {% if a.check == "local" %}
+      {% if ctx.peer_ok and not ctx.allow_remote %}
+      <form method="post" action="/models/local/check" class="su-form mo-inline"
+            hx-post="/models/local/check" hx-target="#models-access-local" hx-swap="outerHTML">
+        <button type="submit">Check server (free)</button>
+      </form>
+      {% endif %}
+    {% else %}
+      <span class="muted">A free live check comes with 019 S6.</span>
+    {% endif %}
+  </span>
+</li>
