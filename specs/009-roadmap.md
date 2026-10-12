@@ -190,6 +190,10 @@ at once, a pipeline run holding the write lock leaves `/` and `/achievements` at
 achievements off removes the nav entry, strip and notices, and no test or page load constructs
 a model client.
 
+### Extension apply assist
+
+See [022](022-extension-apply-assist.md). jobhunter's extension becomes your only apply helper: Fill from your saved answers on click, resume and letter buttons on the ATS forms, `applied` recorded when you submit (with undo), and Workday last. It is 017 phase 2 with the changes listed in [022](022-extension-apply-assist.md#what-changes-in-017). The tickets and their order are in [022](022-extension-apply-assist.md#tickets).
+
 ## Dependency order
 
 ```
