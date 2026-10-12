@@ -1144,6 +1144,10 @@ def init() -> None:
         f"next: open http://{settings.console.host}:{settings.console.port}/setup, "
         "or run `jobhunter doctor`"
     )
+    typer.echo(
+        f"new here? read http://{settings.console.host}:{settings.console.port}"
+        "/help/getting-started"
+    )
 
 
 def _warn_essentials(settings: Settings, host: str, port: int) -> None:
@@ -1216,6 +1220,8 @@ def console(
         raise typer.Exit(1) from exc
     app_.state.secrets_report = _SECRETS_REPORT  # the secret rows on /setup
     _warn_essentials(settings, bind_host, bind_port)
+    shown = "127.0.0.1" if bind_host in ("0.0.0.0", "::") else bind_host
+    typer.echo(f"help: http://{shown}:{bind_port}/help/getting-started", err=True)
     uvicorn.run(app_, host=bind_host, port=bind_port)
 
 

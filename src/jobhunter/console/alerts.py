@@ -21,7 +21,7 @@ from jobhunter.mail.setup import mail_domain_warnings
 from jobhunter.scoring.profile import Profile
 
 PLACEHOLDER_ADDRESS = "<you>+jobs@gmail.com"
-SETUP_DOC = "specs/012-email-ingest.md#setting-up-gmail"
+SETUP_DOC = "/help/email-alerts"
 STALE_AFTER = timedelta(days=3)
 MAX_KEYWORDS = 8
 POSTED_WITHIN = "1 day"

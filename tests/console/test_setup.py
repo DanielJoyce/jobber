@@ -369,7 +369,7 @@ def test_cloud_steps_shown_inline_from_cloud_steps_with_target_path(client, tmp_
     target = readiness.display_path(auth.client_secrets_path(client.app.state.settings), "host")
     assert target in t
     assert "console.cloud.google.com" in client_row
-    assert "/help" not in client_row
+    assert 'href="/help/email-alerts#step-1-google-client-json"' in client_row
 
 
 def test_cloud_steps_in_container_mode_name_the_podman_secret(tmp_path):
@@ -393,17 +393,56 @@ def internal_links(html: str) -> set[str]:
     return {h for h in hrefs if h.startswith("/") and not h.startswith("/static/")}
 
 
-def test_every_internal_link_resolves_and_no_help_links(tmp_path):
+def test_every_internal_link_resolves_including_help(tmp_path):
     s = make_settings(tmp_path, mail={"alerts_address": "x+jobs@example.test"})
     c = make_client(s, mode=readiness.HOST)
     html = c.get("/setup?all=1").text
     links = internal_links(html.split("<main>", 1)[1])  # not the nav bar
     assert "/prefs" in links or "/alerts" in links or links
+    assert "/help/getting-started" in links
     for href in links:
-        assert not href.startswith("/help"), href  # S11e adds those
         assert c.get(href).status_code == 200, href
     # external links are present but not fetched
     assert 'href="https://console.cloud.google.com/"' in html
+
+
+def _help_page_ids(client: TestClient, topic: str) -> set[str]:
+    return set(re.findall(r'id="([^"]+)"', client.get(f"/help/{topic}").text))
+
+
+@pytest.mark.parametrize("mode", [readiness.HOST, readiness.CONTAINER, readiness.HOST_MANAGING])
+def test_every_setup_row_links_a_help_anchor_that_exists(tmp_path, mode):
+    s = make_settings(tmp_path)
+    c = make_client(s, mode=mode)
+    html = c.get("/setup?all=1").text
+    checks = set(readiness.CHECK_IDS) - sr.DOCTOR_ONLY
+    for check_id in checks:
+        row_html = row(html, check_id)
+        assert row_html, check_id
+        href = re.search(r'<p class="su-help"><a href="([^"]+)"', row_html)
+        assert href, check_id
+        topic, _, anchor = href.group(1)[len("/help/") :].partition("#")
+        assert c.get(f"/help/{topic}").status_code == 200, check_id
+        if anchor:
+            assert anchor in _help_page_ids(c, topic), (check_id, href.group(1))
+
+
+def test_gmail_setup_redirects_to_step_one(tmp_path):
+    c = make_client(make_settings(tmp_path))
+    r = c.get("/setup/gmail", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/help/email-alerts#step-1-google-client-json"
+    assert c.get(r.headers["location"]).status_code == 200
+    assert "step-1-google-client-json" in _help_page_ids(c, "email-alerts")
+
+
+def test_container_secret_row_links_the_containers_secrets_section(tmp_path):
+    c = make_client(make_settings(tmp_path), mode=readiness.CONTAINER)
+    assert 'href="/help/containers#secrets"' in row(c.get("/setup").text, "secrets.valid")
+
+
+def test_setup_page_links_getting_started(client):
+    assert 'href="/help/getting-started"' in client.get("/setup").text
 
 
 def test_no_value_ever_rendered(tmp_path, monkeypatch):

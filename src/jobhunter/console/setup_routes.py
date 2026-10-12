@@ -26,6 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 from jobhunter import readiness as rd
 from jobhunter.config import Settings, resolve_path
+from jobhunter.console import help as helpdocs
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.console.prefs_routes import _WRITE_LOCK
 from jobhunter.mail import auth
@@ -44,6 +45,7 @@ DOCTOR_ONLY = frozenset({"config.file", "db.schema"})
 # The live "Test (free)" button is S6; until it lands the row points at the command only.
 TEST_BUTTON_TEXT = re.compile(r"use Test \(free\),? or (?:run )?(`[^`]+`)")
 CLIENT_SECRET = "jobhunter_google_client"
+GMAIL_HELP = "/help/email-alerts#step-1-google-client-json"
 
 # A step is blocked by the earlier steps it needs: `mail auth` needs the client JSON, and
 # `mail setup` refuses the placeholder address and needs the token (019 "Email alerts").
@@ -71,6 +73,8 @@ class Row:
     waiting_on: int = 0
     restart: str = ""  # the restart note, for rows read at process start
     cloud_steps: list[str] = field(default_factory=list)
+    help: str = ""  # "/help/<topic>#<anchor>", the row's help link (S11e)
+    help_title: str = ""  # the topic's title, for the link text
     dismissible: bool = False
     upload_error: str = ""
     hidden: bool = False
@@ -126,6 +130,12 @@ def cloud_steps(settings: Settings, mode: str, home: Path | None) -> list[str]:
     return steps
 
 
+def help_title(path: str) -> str:
+    topic = path.partition("#")[0]
+    entry = helpdocs.TOPIC_BY_SLUG.get(topic)
+    return entry.title if entry else ""
+
+
 def build_groups(
     checks: list[rd.Check],
     settings: Settings,
@@ -166,6 +176,8 @@ def build_groups(
             upload_error=(errors or {}).get(c.id, ""),
             hidden=hidden,
             detail=TEST_BUTTON_TEXT.sub(r"run \1", c.detail).replace("`", ""),
+            help="/help/" + rd.help_for(c.id, mode),
+            help_title=help_title(rd.help_for(c.id, mode)),
         )
         if c.group == rd.EMAIL and c.step > 1 and not quiet:
             for need in STEP_NEEDS.get(c.step, ()):
@@ -317,6 +329,11 @@ def register(
             },
             status_code=status,
         )
+
+    @app.get("/setup/gmail")
+    def setup_gmail() -> RedirectResponse:
+        # The one Gmail how-to is the help page (specs/019 Addendum A, S11e).
+        return RedirectResponse(GMAIL_HELP, status_code=303)
 
     @app.get("/setup", response_class=HTMLResponse)
     def setup_page(request: Request, conn: Conn, all: int = 0, done: str = "") -> HTMLResponse:
