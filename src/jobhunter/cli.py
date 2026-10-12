@@ -1917,7 +1917,7 @@ def apply_draft(
         req = generator.build_request(
             conn, ctx, kind, question=question or "", instruction=instruction
         )
-        est = generator.estimate(conn, settings, kind, req.chars)
+        est = generator.estimate(conn, settings, kind, req.chars, runner=run_on)
         left = generator.remaining_cap(conn, settings, now)
         if run_on == "api":
             typer.echo(

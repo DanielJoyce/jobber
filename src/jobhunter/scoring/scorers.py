@@ -649,6 +649,25 @@ def cached_openrouter_rates(config: OpenRouter, slug: str) -> tuple[float, float
     return _catalog_rates(cached[1], slug) if cached else None
 
 
+# The screen sends ``response_format: json_schema`` with ``provider.require_parameters``, so
+# only models whose ``supported_parameters`` list ``structured_outputs`` can serve it.
+STRUCTURED_PARAMETER = "structured_outputs"
+
+
+def _model_info(entry: dict[str, Any]) -> dict[str, Any]:
+    """One ``/models`` entry as the cache's ``models`` value: name, context, structured."""
+    params = entry.get("supported_parameters")
+    structured = (
+        STRUCTURED_PARAMETER in {str(p) for p in params} if isinstance(params, list) else None
+    )
+    context = entry.get("context_length")
+    return {
+        "name": str(entry.get("name") or entry.get("id") or ""),
+        "context_length": int(context) if isinstance(context, int | float) else None,
+        "structured": structured,
+    }
+
+
 class OpenRouterScorer(OpenAICompatScorer):
     """The openai-compat scorer preset for OpenRouter (specs/016).
 
@@ -693,11 +712,28 @@ class OpenRouterScorer(OpenAICompatScorer):
         return load_catalog_cache(self.openrouter.catalog_cache)
 
     def _fetch_catalog(self) -> dict[str, tuple[float, float]]:
+        return self._fetch_catalog_full()[0]
+
+    def _fetch_catalog_full(
+        self,
+    ) -> tuple[dict[str, tuple[float, float]], dict[str, dict[str, Any]]]:
+        """The public ``/models`` list as ``(prices, models)``.
+
+        ``models`` is the cache's ``models`` map (specs/020 "Model catalog"): per slug its
+        ``name``, ``context_length`` and ``structured`` (whether ``supported_parameters``
+        lists ``structured_outputs``; ``provider.require_parameters`` refuses the others, and
+        None when the entry has no list). Every listed slug is in it, priced or not.
+        """
         url = self.openrouter.base_url.rstrip("/") + "/models"
         resp = self.client.get(url)
         resp.raise_for_status()
         prices: dict[str, tuple[float, float]] = {}
+        models: dict[str, dict[str, Any]] = {}
         for entry in resp.json()["data"]:
+            slug = entry.get("id") if isinstance(entry, dict) else None
+            if not slug:
+                continue
+            models[str(slug)] = _model_info(entry)
             try:
                 p_in = float(entry["pricing"]["prompt"]) * 1_000_000
                 p_out = float(entry["pricing"]["completion"]) * 1_000_000
@@ -705,8 +741,8 @@ class OpenRouterScorer(OpenAICompatScorer):
                 continue
             if p_in < 0 or p_out < 0:  # routers report -1: variable pricing
                 continue
-            prices[str(entry["id"])] = (p_in, p_out)
-        return prices
+            prices[str(slug)] = (p_in, p_out)
+        return prices, models
 
     def catalog(self) -> dict[str, tuple[float, float]]:
         with self._lock:
@@ -718,20 +754,47 @@ class OpenRouterScorer(OpenAICompatScorer):
                 self._prices = cached[1]
                 return self._prices
             try:
-                self._prices = self._fetch_catalog()
-            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                self._prices, models = self._fetch_catalog_full()
+            except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
                 logger.warning("openrouter: could not fetch model catalog (%s)", exc)
                 self._prices = cached[1] if cached else {}
                 return self._prices
-            path = Path(self.openrouter.catalog_cache)
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(
-                    json.dumps({"fetched_at": now, "prices": self._prices}, sort_keys=True)
-                )
-            except OSError as exc:
-                logger.warning("openrouter: could not cache model catalog (%s)", exc)
+            self._write_cache(now, self._prices, models)
             return self._prices
+
+    def refresh_catalog(self) -> bool:
+        """Fetch the public ``/models`` list now, whatever the cache's age, and rewrite the cache.
+
+        Only for an explicit click or ``--refresh`` (specs/020 "Model catalog"); scoring keeps
+        using ``catalog()``. The list is public: no key is sent. Returns False, leaving the
+        cache as it was, when the fetch fails.
+        """
+        with self._lock:
+            try:
+                prices, models = self._fetch_catalog_full()
+            except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                logger.warning("openrouter: could not fetch model catalog (%s)", type(exc).__name__)
+                return False
+            self._prices = prices
+            return self._write_cache(self._clock(), prices, models)
+
+    def _write_cache(
+        self,
+        now: float,
+        prices: dict[str, tuple[float, float]],
+        models: dict[str, dict[str, Any]],
+    ) -> bool:
+        # ``prices`` keeps its old shape so readers that know only it keep working; ``models``
+        # sits beside it (specs/020).
+        path = Path(self.openrouter.catalog_cache)
+        body = {"fetched_at": now, "prices": prices, "models": models}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(body, sort_keys=True))
+        except OSError as exc:
+            logger.warning("openrouter: could not cache model catalog (%s)", exc)
+            return False
+        return True
 
     def _lookup(self, slug: str) -> tuple[float, float] | None:
         return _catalog_rates(self.catalog(), slug)
