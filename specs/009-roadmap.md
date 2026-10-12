@@ -154,6 +154,27 @@ redirects `/` to `/setup` naming the screen scorer, `/inbox` shows the banner, `
 doctor` exits 1 saying the same, the nightly run's summary says why it did not score, and none
 of it made a network call.
 
+### Choosing models
+
+See [020](020-model-selection.md). A `/models` page with one row per model use, each with a
+dropdown of usable models, its price, whether its key or Claude subscription is there (local,
+free checks; live checks only on click), and Save or Save + re-run (the existing re-score
+confirm, never an automatic spend). Choices are saved to `<data dir>/models.toml`, layered over
+`config.toml`; an invalid screening or deep choice blocks that use rather than falling back to
+another provider. First the catalog (M1) and credential
+detection (M3, after 019 S1); then storage (M2), the page (M4) and Save + re-run (M5); then
+help (M6), banners on other pages (M7), the config-watch hook (M8, after 019 S12a), the
+readiness rows (M10, after 019 S2), and the deep-pass button (M11: pick N, see the groups and the cost, confirm, background run). M9 (`score --submit` only scores new jobs) is independent.
+M5 also waits on the per-model spend reservation fixes (git-bug `026b50c`, PR 121, and
+`df51dff`). About 8.4 h of
+continuous run (the dependency chain binds; range 8.4 to 13.1 h, 11 tickets by the calibrated rule),
+about 15M subagent tokens.
+
+**Done when** a fresh install with no Anthropic credential shows the message on `/models` with
+a working help link, a model saved there is the one the next nightly run uses, a broken
+`models.toml` skips scoring instead of spending on another provider, and no page render, save
+or banner spent a credit or made a network call.
+
 ### Achievements
 
 See [021](021-achievements.md). An `/achievements` board in the nav, a notice in the activity
