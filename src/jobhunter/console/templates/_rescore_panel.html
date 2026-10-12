@@ -24,7 +24,7 @@
     {% else %}
     <label>Scorer
       <select name="scorer" hx-get="/prefs/rescore/panel" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
-        {% for spec, label in rs.scorers %}<option value="{{ spec }}"{% if spec == rs.scorer %} selected{% endif %}>{{ spec }} ({{ label }})</option>{% endfor %}
+        {% for spec, label in rs.scorers %}<option value="{{ spec }}"{% if spec == rs.scorer_wire %} selected{% endif %}>{{ spec }} ({{ label }})</option>{% endfor %}
       </select>
     </label>
     {% endif %}
@@ -48,7 +48,7 @@
 <form id="rescore-form" class="rescore-form">
   <label>Scorer
     <select name="scorer" hx-get="/prefs/rescore/panel" hx-trigger="change" hx-target="#rescore-panel" hx-swap="innerHTML" hx-include="closest form">
-      {% for spec, label in rs.scorers %}<option value="{{ spec }}"{% if spec == rs.scorer %} selected{% endif %}>{{ spec }} ({{ label }})</option>{% endfor %}
+      {% for spec, label in rs.scorers %}<option value="{{ spec }}"{% if spec == rs.scorer_wire %} selected{% endif %}>{{ spec }} ({{ label }})</option>{% endfor %}
     </select>
   </label>
 </form>
