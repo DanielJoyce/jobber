@@ -1,8 +1,6 @@
 """Routes for /achievements (specs/021 "UI"): a stub board, the seen and settings writes.
 
-A2 ships the routes so A3 (the board), A4 (the notice) and A5 (the Today strip) can be built in
-parallel and their links resolve. The page here is deliberately plain: a count, the earned
-list, and the settings form; A3 replaces the template.
+The board (A3) groups cards by category: earned, then in progress, then locked.
 
 - ``GET /achievements``: evaluates on every full load (it is rare), falls back to the stored
   unlocks on any ``sqlite3.Error`` (a pipeline run holding the write lock), then marks the
@@ -18,6 +16,7 @@ list, and the settings form; A3 replaces the template.
 """
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -59,6 +58,125 @@ def _flag(form: dict[str, list[str]], key: str) -> bool | None:
     return True if v in TRUE else False if v in FALSE else None
 
 
+# Evidence tables that have a page to link to; the rest are shown as plain text.
+EVIDENCE_LINKS = {"application": "/pipeline/{}", "job_group": "/job/{}"}
+EVIDENCE_LABELS = {
+    "application": "Application",
+    "job_group": "Job",
+    "week": "Week of",
+    "contact": "Contact",
+    "rejection": "Reply",
+    "followup_log": "Follow-up",
+    "application_packet": "Packet",
+    "capture_log": "Captured",
+    "alert_signup": "Alert",
+    "profile_change": "Prefs saved",
+    "manual": "Added by hand",
+}
+MAX_EVIDENCE = 12
+
+
+def _evidence(raw: str) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return []
+    out: list[dict[str, Any]] = []
+    if not isinstance(data, dict):
+        return out
+    for table, ids in data.items():
+        if not isinstance(ids, list):
+            continue
+        tmpl = EVIDENCE_LINKS.get(table)
+        for ident in ids:
+            label = EVIDENCE_LABELS.get(table, str(table))
+            href = tmpl.format(ident) if tmpl and str(ident).isdigit() else None
+            out.append({"text": f"{label} {ident}", "href": href})
+    return out
+
+
+def _local(iso: str, tz: Any) -> str:
+    try:
+        return datetime.fromisoformat(iso).astimezone(tz).strftime("%b %-d")
+    except ValueError:
+        return ""
+
+
+def _rhythm_line(r: Any) -> str:
+    if r is None:
+        return ""
+    if r.run:
+        return f"Rhythm: {r.run} week{'s' if r.run != 1 else ''}"
+    if r.best:
+        return f"Rhythm: paused. Your best run is {r.best} week{'s' if r.best != 1 else ''}"
+    return ""
+
+
+def _board(
+    conn: sqlite3.Connection,
+    g: engine.Gate,
+    moment: datetime,
+    settings: engine.Settings,
+    visible: list[engine.Unlock],
+    busy: bool,
+) -> dict[str, Any]:
+    """Sections of cards, newest earned first, then in progress, then locked."""
+    tz = g.zone()
+    comp = None
+    if settings.enabled:
+        try:
+            comp = engine.compute(conn, moment, tz)
+        except sqlite3.Error as exc:  # progress bars are left out on a busy database
+            logger.info("achievements: progress unavailable: %s", exc)
+    by_ach: dict[str, list[engine.Unlock]] = {}
+    for u in visible:
+        by_ach.setdefault(u.achievement_id, []).append(u)
+    sections = []
+    for key, label in catalog.CATEGORIES:
+        if key in settings.hidden:
+            continue
+        cards = []
+        for a in catalog.CATALOG:
+            if a.category != key:
+                continue
+            ups = sorted(by_ach.get(a.id, []), key=lambda u: u.tier)
+            top = ups[-1] if ups else None
+            tier = top.tier if top else 0
+            ev = _evidence(top.evidence) if top else []
+            done = tier >= a.tiers
+            progress = comp.series[a.id].progress if comp and a.id in comp.series else None
+            target = a.thresholds[min(tier, a.tiers - 1)]
+            state = "earned" if tier else ("progress" if progress else "locked")
+            cards.append(
+                {
+                    "a": a,
+                    "tier": tier,
+                    "done": done,
+                    "state": state,
+                    "secret": a.hidden and not tier,
+                    "progress": None if progress is None else min(progress, target),
+                    "raw_progress": progress,
+                    "target": target,
+                    "when": _local(top.unlocked_at, tz) if top else "",
+                    "sort": top.unlocked_at if top else "",
+                    "evidence": ev[:MAX_EVIDENCE],
+                    "evidence_more": max(0, len(ev) - MAX_EVIDENCE),
+                }
+            )
+        order = {"earned": 0, "progress": 1, "locked": 2}
+        cards.sort(key=lambda c: c["sort"], reverse=True)  # newest first within a state
+        cards.sort(key=lambda c: order[c["state"]])
+        sections.append({"key": key, "label": label, "cards": cards})
+    r = comp.rhythm if comp else None
+    return {
+        "sections": sections,
+        "rhythm_line": _rhythm_line(r),
+        "freezes": r.freezes if r else 0,
+        "week_active": bool(r and r.this_week_days),
+        "have_progress": comp is not None,
+    }
+
+
 def register(
     app: FastAPI,
     templates: Jinja2Templates,
@@ -91,14 +209,8 @@ def register(
                 engine.mark_seen(conn, unseen, moment, busy_ms=engine.WRITE_BUSY_MS)
             except sqlite3.Error as exc:  # the notice stays until the next visit
                 logger.info("achievements: seen not recorded: %s", exc)
-        cards = []
-        for a in catalog.CATALOG:
-            if a.category in settings.hidden:
-                continue
-            tiers = sorted(u.tier for u in visible if u.achievement_id == a.id)
-            if tiers:
-                cards.append({"a": a, "tier": max(tiers)})
-        return templates.TemplateResponse(
+        board = _board(conn, g, moment, settings, visible, busy)
+        resp = templates.TemplateResponse(
             request,
             "achievements.html",
             {
@@ -108,9 +220,11 @@ def register(
                 "settings": settings,
                 "categories": catalog.CATEGORIES,
                 "earned": len(visible),
-                "cards": cards,
+                **board,
             },
         )
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.post("/achievements/seen")
     def achievements_seen(conn: Conn, form: MultiForm) -> Response:

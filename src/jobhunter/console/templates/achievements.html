@@ -1,7 +1,16 @@
 {% extends "base.html" %}
-{# Stub board (specs/021 ticket A2). A3 replaces this with cards, pips and progress. #}
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('achievements.css') }}">
+{% endblock %}
+{% macro pips(tier, total) -%}
+<span class="ach-pips" aria-hidden="true">{% for i in range(1, total + 1) %}{{ '●' if i <= tier else '○' }}{% endfor %}</span>
+{%- endmacro %}
 {% block main %}
-<h1>Achievements</h1>
+{% include "_achievements_sprite.html" %}
+<div class="ach-head">
+  <h1>Achievements</h1>
+  {% if settings.enabled %}<a class="ach-settings-link" href="#ach-settings">Settings &#9656;</a>{% endif %}
+</div>
 {% if not settings.enabled %}
 <p>Achievements are off.</p>
 <form method="post" action="/achievements/settings">
@@ -9,22 +18,76 @@
   <button type="submit">Turn achievements on</button>
 </form>
 {% else %}
-<p class="muted">{{ earned }} earned</p>
-{% if cards %}
-<ul class="achievements-earned">
-  {% for c in cards %}
-  <li>{{ c.a.name }}{% if c.a.tiers > 1 %} (tier {{ c.tier }} of {{ c.a.tiers }}){% endif %}</li>
-  {% endfor %}
-</ul>
-{% endif %}
-<details class="achievements-settings">
+<p class="ach-summary muted">
+  {{ earned }} earned
+  {%- if rhythm_line %} &middot; {{ rhythm_line }}{% endif %}
+  {%- if freezes %} &middot; {{ freezes }} freeze{{ 's' if freezes != 1 }} held{% endif %}
+  {%- if week_active %} &middot; this week: in progress{% endif %}
+</p>
+{% for sec in sections %}
+<section class="ach-section" aria-labelledby="ach-h-{{ sec.key }}">
+  <h2 id="ach-h-{{ sec.key }}">{{ sec.label }}</h2>
+  <ul class="ach-grid">
+    {% for c in sec.cards %}
+    {% set a = c.a %}
+    {% if c.secret %}
+    <li class="ach-card ach-secret" data-state="hidden">
+      <svg class="ach-badge" aria-hidden="true" viewBox="0 0 48 48"><circle cx="24" cy="24" r="22" class="ring"/><use href="#ach-secret" x="10" y="10" width="28" height="28"/></svg>
+      <div class="ach-body">
+        <h3>Hidden achievement</h3>
+        <p class="ach-desc">Keep going.</p>
+      </div>
+    </li>
+    {% else %}
+    <li class="ach-card" data-state="{{ c.state }}" data-id="{{ a.id }}">
+      <svg class="ach-badge" aria-hidden="true" viewBox="0 0 48 48"><circle cx="24" cy="24" r="22" class="ring"/><use href="#ach-{{ a.category }}" x="10" y="10" width="28" height="28"/></svg>
+      <div class="ach-body">
+        <h3>{{ a.name }}</h3>
+        <p class="ach-tier">
+          {% if a.tiers > 1 %}{{ pips(c.tier, a.tiers) }}{% endif %}
+          {% if c.tier %}{% if a.tiers > 1 %}Tier {{ c.tier }} of {{ a.tiers }}{% else %}Earned{% endif %}
+          {% elif c.state == 'progress' %}In progress
+          {% else %}Locked{% endif %}
+        </p>
+        <p class="ach-desc">{{ a.description }}</p>
+        {% if not c.tier and a.hint %}<p class="ach-hint">Hint: {{ a.hint }}</p>{% endif %}
+        {% if a.weekly and not c.done %}<p class="ach-note">Judged when the week ends.</p>{% endif %}
+        {% if c.progress is not none and not c.done %}
+        <div class="ach-prog">
+          <progress max="{{ c.target }}" value="{{ c.progress }}" aria-label="{{ a.name }} progress">{{ c.progress }} of {{ c.target }}</progress>
+          <span class="ach-count">{{ c.progress }} of {{ c.target }}</span>
+        </div>
+        {% endif %}
+        {% if c.tier %}
+        <p class="ach-earned">{% if c.when %}Earned {{ c.when }}{% endif %}</p>
+        {% if c.evidence %}
+        <details class="ach-why">
+          <summary>Why</summary>
+          <ul>
+            {% for e in c.evidence %}
+            <li>{% if e.href %}<a href="{{ e.href }}">{{ e.text }}</a>{% else %}{{ e.text }}{% endif %}</li>
+            {% endfor %}
+            {% if c.evidence_more %}<li>and {{ c.evidence_more }} more</li>{% endif %}
+          </ul>
+        </details>
+        {% endif %}
+        {% endif %}
+      </div>
+    </li>
+    {% endif %}
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
+<details class="achievements-settings ach-settings" id="ach-settings">
   <summary>Settings</summary>
   <form method="post" action="/achievements/settings">
     <input type="hidden" name="hidden_set" value="1">
-    <p>
+    <fieldset>
+      <legend>Unlock notices</legend>
       <label><input type="radio" name="notify" value="1"{% if settings.notify %} checked{% endif %}> Show unlock notices</label>
       <label><input type="radio" name="notify" value="0"{% if not settings.notify %} checked{% endif %}> No notices</label>
-    </p>
+    </fieldset>
     <fieldset>
       <legend>Hide categories</legend>
       {% for key, label in categories %}
