@@ -748,6 +748,7 @@ def _score_group(
 ) -> None:
     """``score --group GID``: estimate, confirm, then score that one group (specs/017)."""
     from jobhunter.apply import score as group_score
+    from jobhunter.scoring import rescore as rs
     from jobhunter.scoring.scorers import privacy_notice
 
     conn = db.connect(settings.paths.db_path)
@@ -755,10 +756,11 @@ def _score_group(
     now = datetime.now(UTC)
     try:
         est = group_score.estimate(conn, profile, settings.scoring, group_id, now)
+        how = {"default": "assumed", "floor": "no cache reuse"}.get(est.cost_source, "measured")
         typer.echo(
             f"group {group_id}: score with {est.scorer}, estimated ${est.estimated_usd:.4f} "
-            f"({'measured' if est.cost_source != 'default' else 'assumed'}); "
-            f"spend cap remaining ${max(est.remaining_usd, 0):.2f}"
+            f"({how}); "
+            f"spend cap remaining {rs.usd(max(est.remaining_usd, 0))}"
         )
         if est.refusal:
             typer.echo(f"refused: {est.refusal}", err=True)
@@ -842,8 +844,15 @@ def _score_rescore(
             f"scope {scope}: {plan.total} groups with {spec} "
             f"({plan.rescored} of {plan.waiting} waiting were scored before); "
             f"estimated ${plan.estimated_usd:.2f} at ${plan.cost_per_job:.5f}/job "
-            f"({plan.cost_source}); spend cap remaining ${max(plan.remaining_usd, 0):.2f}"
+            f"({plan.cost_source}); spend cap remaining {rs.usd(max(plan.remaining_usd, 0))}"
         )
+        if plan.total and plan.reserve_differs:
+            typer.echo(
+                f"while it runs the spend cap holds ${plan.reserve_per_job:.4f}/job "
+                f"(${plan.reserved_usd:.2f} for all {plan.total})"
+            )
+        if plan.total and not plan.refusal and plan.fits_now < plan.total:
+            typer.echo(f"only {plan.fits_now} of {plan.total} fit under the cap now")
         if plan.refusal:
             typer.echo(f"refused: {plan.refusal}", err=True)
             raise typer.Exit(1)

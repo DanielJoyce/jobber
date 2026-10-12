@@ -59,7 +59,7 @@ from jobhunter.config import (
 from jobhunter.console import config_routes as cr
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.console.deep_routes import loopback_peer
-from jobhunter.scoring import catalog
+from jobhunter.scoring import catalog, rescore
 from jobhunter.scoring.scorers import privacy_notice
 
 logger = logging.getLogger(__name__)
@@ -378,6 +378,17 @@ def price_lines(ctx: Ctx, row: str, values: Mapping[str, Any]) -> list[str]:
         if est.usd is None:
             return [f"No known price ({est.source})."]
         lines = [f"About {_money(est.usd * 1000)} per 1,000 jobs ({est.source})."]
+        # 020 M5b: the cap holds per model, at least this estimate, and the same figure the
+        # run checks (prefix sized from the profile). Say so when it is more.
+        st = gr.lenient_state(ctx.settings)
+        profile = st.profile if st.kind == "ok" else None
+        held = rescore.reserve_per_job(conn, spec, scoring, profile, ctx.now)
+        if held > est.usd * (1 + 1e-9):
+            lines.append(
+                f"While a run is in flight the spend cap holds {_money(held)} a job "
+                f"({_money(held * 1000)} per 1,000), more than this estimate; a run stops "
+                "when what is left no longer covers that."
+            )
         n = catalog.jobs_screened_last_week(conn, ctx.now)
         if n:
             lines.append(

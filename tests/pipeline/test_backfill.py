@@ -15,13 +15,26 @@ from jobhunter.config import Settings
 from jobhunter.core import db
 from jobhunter.core.models import JobDetail, JobStub, Query, SourceRow
 from jobhunter.pipeline import backfill as bf
-from jobhunter.scoring.profile import Profile
+from jobhunter.scoring.profile import Profile, scoring_inputs
+from jobhunter.scoring.rubric import RUBRIC_TEXT, SCREEN_SCHEMA
 from jobhunter.scoring.scorers import ScoreResult
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
 SCORER = "anthropic:claude-haiku-4-5"
 HAIKU_BATCH_PER_JOB = 0.0026325  # compute_cost of TYPICAL_USAGE, batched Haiku 4.5
 PROFILE = Profile.model_validate({"hard": {"states_allowed": ["CO"]}})
+
+
+def _cold_batch(in_rate: float, out_rate: float, profile: Profile = PROFILE) -> float:
+    """By hand (020 M5b review B3): one typical screen in a batch with its cached prefix
+    (rubric + schema + profile inputs, at 2.75 characters a token) all cache writes."""
+    chars = len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA)) + len(scoring_inputs(profile))
+    prefix = -(-chars * 4 // 11)
+    return (2600 * in_rate + prefix * in_rate * 1.25 + 455 * out_rate) * 0.5 / 1e6
+
+
+# What a Haiku 4.5 batch is held at, per job: above its warm price, so backfill plans at it.
+HAIKU_HOLD = _cold_batch(1.0, 5.0)
 ADAPTERS = {"fake": lambda: FakeAdapter()}
 
 
@@ -271,7 +284,7 @@ def test_without_yes_nothing_is_submitted(conn):
 
 def test_budget_stops_submission_mid_way(conn):
     client = FakeClient()
-    budget = 2.5 * HAIKU_BATCH_PER_JOB  # covers exactly two jobs
+    budget = 2.5 * HAIKU_HOLD  # covers exactly two jobs at the hold
     result, text = run(
         conn, client=client, budget_usd=budget, chunk_size=1, confirm=lambda est: True
     )
@@ -283,13 +296,40 @@ def test_budget_stops_submission_mid_way(conn):
     assert result.committed_usd <= budget
 
 
+def test_backfill_holds_a_batch_at_its_cold_price_not_its_warm_or_measured_one(conn):
+    """020 M5b review B3: a batching scorer was planned and counted at its warm (or measured)
+    price, and submit_batch got no remaining_usd, so a backfill could spend 2.4-3x its budget
+    at a low cache hit rate. Measured history at the warm price must not lower the hold."""
+    for i in range(3):  # lucky history: every cached token read, the warm table price
+        conn.execute(
+            "INSERT INTO job_group (id, canonical_job_id, method, created_at) "
+            "VALUES (?, NULL, 'exact_hash', 'x')",
+            (90_000 + i,),
+        )
+        conn.execute(
+            "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, scoring_version, "
+            "verdict, overall, dimensions, evidence, cost_usd, created_at) "
+            "VALUES (?, 'screen', ?, 'p', 'old', 'weak', 10, '{}', '[]', ?, 'x')",
+            (90_000 + i, SCORER, HAIKU_BATCH_PER_JOB),
+        )
+    client = FakeClient()
+    budget = 5 * HAIKU_BATCH_PER_JOB  # the old figure covered all five eligible groups
+    result, _ = run(conn, client=client, budget_usd=budget, confirm=lambda est: True)
+    assert result.submitted == int(budget // HAIKU_HOLD) == 2  # not 5
+    # What those jobs could cost with no cache reuse stays inside the budget.
+    assert result.submitted * HAIKU_HOLD <= budget
+    assert result.committed_usd <= budget
+    held = conn.execute("SELECT reserve_per_request_usd FROM score_batch").fetchone()[0]
+    assert held == pytest.approx(HAIKU_HOLD)
+
+
 def test_budget_counts_spend_already_today(conn):
     conn.execute(
         "INSERT INTO llm_spend (day, model, tier, calls, cost_usd) "
         "VALUES ('2026-10-09', 'x', 'screen', 1, 0.009)"
     )
     client = FakeClient()
-    budget = 0.009 + 1.5 * HAIKU_BATCH_PER_JOB
+    budget = 0.009 + 1.5 * HAIKU_HOLD
     result, _ = run(conn, client=client, budget_usd=budget, confirm=lambda est: True)
     assert result.submitted == 1
     assert client.jobs_sent == 1
@@ -414,23 +454,27 @@ def test_per_job_cost_uses_scorer_price_then_measured_history(conn):
     scorer = FakeSyncScorer()
     per = bf.per_job_cost(conn, scorer)
     assert per.usd == pytest.approx(0.01) and "scorer price" in per.source
-    assert bf.per_job_cost(conn, _batch_scorer(FakeClient())).usd == pytest.approx(
-        HAIKU_BATCH_PER_JOB
-    )
+    held = bf.per_job_cost(conn, _batch_scorer(FakeClient()), PROFILE)
+    assert held.usd == pytest.approx(HAIKU_HOLD) and HAIKU_HOLD > HAIKU_BATCH_PER_JOB
+    assert "spend-cap hold" in held.source
     run(conn, scorer=scorer, confirm=lambda est: True)
     scorer.per_job = 0.05  # history wins over the price table once spend is measured
     per = bf.per_job_cost(conn, scorer)
     assert per.usd == pytest.approx(0.01) and "measured" in per.source
 
 
-def test_haiku_5_5_with_no_history_is_priced_at_spec_006_tokens(conn):
-    """2,600 in at $0.05 + 3,900 cache read at $0.005 + 455 out at $0.25 per MTok, batched:
-    about $0.00026 a job (specs/006 "Cost"), not the 30% lower figure Haiku 4.5's counts give."""
+def test_haiku_5_5_with_no_history_is_priced_at_its_hold(conn):
+    """Its price at spec 006's tokens is about $0.00026 a job (2,600 in at $0.05 + 3,900
+    cache read at $0.005 + 455 out at $0.25 per MTok, batched), and with no cache reuse about
+    $0.0008; the batch is held at the $0.002 floor, so backfill plans at that."""
     from jobhunter.scoring.scorers import AnthropicScorer
 
-    per = bf.per_job_cost(conn, AnthropicScorer(FakeClient(), "anthropic:claude-haiku-5-5"))
-    assert per.usd == pytest.approx(0.00026325)
-    assert "scorer price" in per.source
+    assert _cold_batch(0.10, 0.50) < 0.002
+    per = bf.per_job_cost(
+        conn, AnthropicScorer(FakeClient(), "anthropic:claude-haiku-5-5"), PROFILE
+    )
+    assert per.usd == pytest.approx(0.002)
+    assert "spend-cap hold" in per.source
 
 
 def test_unpriced_scorer_falls_back_to_default(conn):

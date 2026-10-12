@@ -199,9 +199,10 @@ def check_save(
 
     First the rules the reader applies on every load (``config.check_model_key``): a value
     failing them would be ignored (drafting) or block its use (screening, deep), so it is never
-    written. Then the catalog's offer rules (``catalog.judge``): a screening option above the
-    flat reservation or with no price, an OpenRouter slug that is not in the cache or lacks
-    structured output, a local model not on the server's list. Those save only with ``force``.
+    written. Then the catalog's offer rules (``catalog.judge``): an OpenRouter slug that is
+    not in the cache or lacks structured output, a local model not on the server's list (and,
+    only while ``catalog.RESERVATION_PER_MODEL`` is off, a screening option above the flat
+    reservation or with no price). Those save only with ``force``.
     With ``settings``, a screening or deep value whose credential is missing (M3's
     ``model_access``, local checks only) also needs ``force``: the nightly run may see keys
     this process does not (019 "What the nightly run sees"), so it is a warning, not proof.

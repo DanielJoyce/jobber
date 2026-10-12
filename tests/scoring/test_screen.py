@@ -25,12 +25,33 @@ from jobhunter.scoring.profile import (
     Profile,
     SalaryFloor,
     Soft,
+    scoring_inputs,
 )
-from jobhunter.scoring.rubric import PROMPT_VERSION, RUBRIC_TEXT
+from jobhunter.scoring.rubric import PROMPT_VERSION, RUBRIC_TEXT, SCREEN_SCHEMA
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
 SCORER = "anthropic:claude-haiku-4-5"
 SALARY_FLOOR = 987654  # a marker: must never appear in a prompt
+
+
+def cold_prefix(profile: Profile) -> int:
+    """The cached prefix in tokens, worked out here from the texts at 2.75 characters a
+    token (rubric, the output schema and the profile's scoring inputs), not by the code:
+    ceil(chars / 2.75) == ceil(chars * 4 / 11), in whole numbers."""
+    chars = len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA)) + len(scoring_inputs(profile))
+    return -(-chars * 4 // 11)
+
+
+def default_prefix() -> int:
+    """``cold_prefix`` with no profile at hand: 12,000 characters stand in for its inputs."""
+    return -(-(len(RUBRIC_TEXT) + len(json.dumps(SCREEN_SCHEMA)) + 12_000) * 4 // 11)
+
+
+def cold_batch_usd(in_rate: float, out_rate: float, prefix: int) -> float:
+    """One typical screen in a batch with its prefix all cache writes, by hand: 2,600 input
+    tokens, the prefix at 1.25x input, 455 output, then the 50% batch discount."""
+    return (2600 * in_rate + prefix * in_rate * 1.25 + 455 * out_rate) * 0.5 / 1e6
+
 
 DESCRIPTION = (
     "Own the   Linux fleet for a small team.\n"
@@ -299,7 +320,7 @@ def test_spend_cap_limits_batch(conn, profile):
     for n in range(1, 6):
         add_group(conn, n, profile)
     client = FakeClient()
-    cost = screen.reserve_per_request_usd(conn, SCORER)
+    cost = screen.reserve_per_request_usd(conn, SCORER, profile)
     batch_id = screen.submit_batch(
         conn, client, profile, limit=10, now=NOW, scorer=SCORER, remaining_usd=lambda: cost * 2.5
     )
@@ -321,8 +342,9 @@ def test_remaining_daily_budget(conn, profile):
     add_group(conn, 1, profile)
     screen.submit_batch(conn, FakeClient(), profile, limit=10, now=NOW, scorer=SCORER)
     remaining = screen.remaining_daily_budget(conn, 2.0, NOW)
-    reserved = screen.reserve_per_request_usd(conn, SCORER)
-    assert reserved == pytest.approx(0.0026325)  # Haiku 4.5 table price, above the $0.002 floor
+    # No history yet: Haiku 4.5 ($1 / $5) with every cached prefix token written.
+    reserved = cold_batch_usd(1.0, 5.0, cold_prefix(profile))
+    assert reserved > 0.0026325  # above its warm table price and the $0.002 floor
     assert remaining == pytest.approx(2.0 - 0.5 - reserved)
 
 

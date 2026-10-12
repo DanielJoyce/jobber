@@ -11,7 +11,6 @@ this command only. Nothing is submitted until ``confirm`` returns True.
 
 from __future__ import annotations
 
-import math
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
@@ -116,7 +115,7 @@ class BackfillResult:
 def _affordable(budget: float, committed: float, per_job: float, cap: int) -> int:
     if per_job <= 0:
         return cap
-    return max(0, math.floor((budget - committed) / per_job + 1e-9))
+    return screen.jobs_affordable(budget - committed, per_job)
 
 
 # ─── Ingest ─────────────────────────────────────────────────────────────────
@@ -178,14 +177,21 @@ def resolve_backlog(conn: sqlite3.Connection, now: datetime) -> int:
 # ─── Estimate ───────────────────────────────────────────────────────────────
 
 
-def per_job_cost(conn: sqlite3.Connection, scorer: FitScorer) -> PerJobCost:
+def per_job_cost(
+    conn: sqlite3.Connection, scorer: FitScorer, profile: Profile | None = None
+) -> PerJobCost:
     """Measured history first, then the scorer's own price, then the $0.002 default.
 
-    A non-batching scorer is never priced below what ``score_sync`` reserves for it
-    (``screen.reserve_per_job_usd``), so the confirmed estimate matches the run's cap checks.
+    A scorer is never priced below what its run holds for a job, so the confirmed estimate
+    matches the run's cap checks: a batching scorer below ``screen.reserve_per_request_usd``
+    (its cached prefix, sized from ``profile``, priced as cache writes; 020 M5b review B3), a
+    non-batching one below ``screen.reserve_per_job_usd``.
     """
     base = _history_or_price(conn, scorer)
     if scorer.supports_batching:
+        hold = screen.reserve_per_request_usd(conn, scorer.name, profile)
+        if hold > base.usd + 1e-12:
+            return PerJobCost(hold, "spend-cap hold (cached prompt priced with no reuse)")
         return base
     price = screen.scorer_list_price_usd(scorer)
     reserve = screen.reserve_per_job_usd(conn, scorer.name, screen.scoring_for(scorer), price=price)
@@ -244,7 +250,7 @@ def estimate(
     ).fetchone()[0]
     return Estimate(
         eligible=eligible,
-        per_job=per_job_cost(conn, scorer),
+        per_job=per_job_cost(conn, scorer, profile),
         spent_today_usd=float(spent),
         pending_jobs=int(pending),
         budget_usd=budget_usd,
@@ -290,6 +296,7 @@ def _submit(
             break
         limit = min(chunk_size, affordable)
         if scorer.supports_batching:
+            left = est.budget_usd - committed
             batch_id = screen.submit_batch(
                 conn,
                 client,
@@ -298,12 +305,15 @@ def _submit(
                 now=now,
                 scorer=scorer.name,
                 rejection_days=rejection_days,
+                # The budget, less what is on the books: the batch is cut at its own hold.
+                remaining_usd=lambda left=left: left,
             )
             if batch_id is None:
                 break
-            n = conn.execute(
-                "SELECT request_count FROM score_batch WHERE id = ?", (batch_id,)
-            ).fetchone()[0]
+            n, held = conn.execute(
+                "SELECT request_count, reserve_per_request_usd FROM score_batch WHERE id = ?",
+                (batch_id,),
+            ).fetchone()
             batch_ids.append(batch_id)
             out(f"  batch {batch_id}: {n} jobs submitted")
         else:
@@ -336,7 +346,7 @@ def _submit(
             out(f"  running estimate ${committed:.4f} of ${est.budget_usd:.2f}")
             continue
         submitted += n
-        committed += n * per
+        committed += n * max(per, float(held or 0.0))  # what the cap now holds for it
         out(f"  running estimate ${committed:.4f} of ${est.budget_usd:.2f}")
     return batch_ids, submitted, committed, stop
 

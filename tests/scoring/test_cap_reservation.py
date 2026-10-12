@@ -11,7 +11,10 @@ from test_screen import (
     NOW,
     FakeClient,
     add_group,
+    cold_batch_usd,
+    cold_prefix,
     conn,  # noqa: F401
+    default_prefix,
     profile,  # noqa: F401
 )
 
@@ -72,18 +75,21 @@ def test_sonnet_screening_never_submits_more_than_the_daily_cap_covers(conn, pro
         conn, client, profile, limit=1000, now=NOW, scorer=SONNET, remaining_usd=remaining
     )
     n = sent(client)
-    assert n == math.floor(2.0 / SONNET_TABLE) == 394  # the flat $0.002 allowed 1000
-    assert n * SONNET_TABLE <= 2.0
-    # The uncollected batch is reserved at Sonnet's price, so nothing more fits today even
-    # though 106 groups are still eligible.
-    assert remaining() == pytest.approx(2.0 - 394 * SONNET_TABLE)
+    # No Sonnet history: held with its prefix all cache writes (the flat $0.002 allowed 1000,
+    # the warm table price 394).
+    cold = cold_batch_usd(2.0, 10.0, cold_prefix(profile))
+    assert n == math.floor(2.0 / cold) < 394
+    assert n * cold <= 2.0
+    # The uncollected batch stays held at that price, so nothing more fits today even though
+    # groups are still eligible.
+    assert remaining() == pytest.approx(2.0 - n * cold)
     assert (
         screen.submit_batch(
             conn, client, profile, limit=1000, now=NOW, scorer=SONNET, remaining_usd=remaining
         )
         is None
     )
-    assert sent(client) == 394
+    assert sent(client) == n
 
 
 def test_haiku_55_screening_unchanged(conn, profile):
@@ -108,21 +114,26 @@ def test_pending_batches_reserve_per_model(conn):
         "'x', 'y')",
         (SONNET,),
     )
-    # openrouter:x has no price (no catalog): over the line at the unpriced reserve.
-    expected = 100 * 0.002 + 100 * SONNET_TABLE + 5 * screen.UNPRICED_RESERVE_PER_JOB_USD
+    # Rows from before the stored hold: Sonnet with no history is held with its prefix all
+    # cache writes (default size, no profile at hand); openrouter:x has no price (no
+    # catalog): over the line at the unpriced reserve.
+    sonnet = cold_batch_usd(2.0, 10.0, default_prefix())
+    expected = 100 * 0.002 + 100 * sonnet + 5 * screen.UNPRICED_RESERVE_PER_JOB_USD
     assert screen._pending_batch_usd(conn) == pytest.approx(expected)
     assert screen.remaining_daily_budget(conn, 2.0, NOW) == pytest.approx(2.0 - expected)
 
 
 def test_measured_history_above_table_price_is_used(conn, profile):
-    add_measured(conn, profile, SONNET, 0.009)
-    assert screen.reserve_per_request_usd(conn, SONNET) == pytest.approx(0.009)
+    # Above the no-cache-reuse floor too (about $0.012 for this profile), so it sets the hold.
+    assert cold_batch_usd(2.0, 10.0, cold_prefix(profile)) < 0.02
+    add_measured(conn, profile, SONNET, 0.02)
+    assert screen.reserve_per_request_usd(conn, SONNET, profile) == pytest.approx(0.02)
     add_groups(conn, profile, 50)
     client = FakeClient()
     screen.submit_batch(
         conn, client, profile, limit=100, now=NOW, scorer=SONNET, remaining_usd=lambda: 0.1
     )
-    assert sent(client) == 11  # 0.1 / 0.009, not 0.1 / 0.00507 = 19
+    assert sent(client) == 5  # 0.1 / 0.02, not 0.1 / 0.00507 = 19
 
 
 def test_measured_history_below_floor_keeps_the_floor(conn, profile):
@@ -131,7 +142,8 @@ def test_measured_history_below_floor_keeps_the_floor(conn, profile):
 
 
 def test_rescore_fallback_cost_per_job_is_priced_per_model(conn):
-    assert rescore.cost_per_job(conn, SONNET) == (pytest.approx(SONNET_TABLE), "default")
+    cold = cold_batch_usd(2.0, 10.0, default_prefix())
+    assert rescore.cost_per_job(conn, SONNET) == (pytest.approx(cold), "default")
     assert rescore.cost_per_job(conn, HAIKU55) == (0.002, "default")
     # No cached catalog price: priced at the unpriced reserve, not the flat $0.002.
     assert rescore.cost_per_job(conn, "openrouter:x/y") == (0.04, "default")
@@ -168,11 +180,14 @@ def test_rescore_batch_never_exceeds_the_confirmed_max_usd(conn, profile):
     client = FakeClient()
     st = _run(conn, profile, SONNET, rid, client)
     n = sent(client)
-    assert n == 19  # floor(0.10 / 0.00507); before the fix all 50 (about $0.25) were sent
-    assert n * SONNET_TABLE <= 0.10
-    assert st.attempted == 19
+    # No Sonnet history: cut at its first batch's hold, the prefix all cache writes. Before
+    # 026b50c all 50 (about $0.25) were sent; before M5b's review, 19 at the warm $0.00507.
+    cold = cold_batch_usd(2.0, 10.0, cold_prefix(profile))
+    assert n == math.floor(0.10 / cold) < 19
+    assert n * cold <= 0.10
+    assert st.attempted == n
     note = rescore.get_request(conn, rid)["note"]
-    assert "batch cut to 19 of 50" in note
+    assert f"batch cut to {n} of 50" in note
 
 
 def test_rescore_batch_uses_a_higher_planned_price(conn, profile):
@@ -200,8 +215,9 @@ def test_rescore_batch_priced_on_measured_history_below_table_sends_every_group(
     add_groups(conn, profile, 50)
     rid = _queue(conn, profile, SONNET)
     r = rescore.get_request(conn, rid)
-    assert r["cost_per_job_usd"] == pytest.approx(0.003)
-    assert r["max_usd"] < 50 * SONNET_TABLE  # the table price would cut this plan
+    # Priced at the no-cache-reuse floor (review B2), so the plan agrees with the hold and
+    # its confirmed ceiling covers every group at that price.
+    assert r["cost_per_job_usd"] == pytest.approx(cold_batch_usd(2.0, 10.0, cold_prefix(profile)))
     client = FakeClient()
     st = _run(conn, profile, SONNET, rid, client)
     assert sent(client) == 50 and st.attempted == 50

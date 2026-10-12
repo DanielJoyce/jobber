@@ -27,7 +27,7 @@ import sqlite3
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jobhunter.config import Scoring
@@ -133,9 +133,17 @@ def open_scored(conn: sqlite3.Connection, profile: Profile, now: datetime) -> tu
 
 
 def cost_per_job(
-    conn: sqlite3.Connection, spec: str, scoring: Scoring | None = None
+    conn: sqlite3.Connection,
+    spec: str,
+    scoring: Scoring | None = None,
+    profile: Profile | None = None,
 ) -> tuple[float, str]:
     """Measured screen cost per job for this scorer, else a per-kind default.
+
+    An Anthropic model is always priced at no less than its all-cache-writes price for
+    ``profile``'s prefix (``screen.cold_price_per_job_usd``), the floor of every hold it
+    gets, so the plan and the hold agree (020 M5b review B1, B2). When that floor is above
+    the measured mean, the source is ``"floor"``.
 
     Measured from ``fit_score``, where each row carries that job's share of its request's cost.
     Not from ``llm_spend``: it counts one call per request, and packed and Jev requests carry
@@ -147,7 +155,12 @@ def cost_per_job(
         (spec,),
     ).fetchone()
     if row[1]:
-        return float(row[0]), "fit_score"
+        measured = float(row[0])
+        if is_anthropic(spec):
+            floor = screen.cold_price_per_job_usd(spec, batch=True, profile=profile)
+            if floor > measured:
+                return floor, "floor"
+        return measured, "fit_score"
     if is_decisions(spec):
         return DECISIONS_FALLBACK_COST, "default"
     # Nothing measured: the old flat default, or the model's list price at typical tokens
@@ -157,7 +170,63 @@ def cost_per_job(
     price = screen.list_price_per_job_usd(spec, scoring, batch=spec.startswith("anthropic:"))
     if price is None:
         price = screen.unpriced_reserve_usd(spec, scoring, batch=spec.startswith("anthropic:"))
+    if is_anthropic(spec):
+        price = max(price, screen.cold_price_per_job_usd(spec, batch=True, profile=profile))
     return max(screen.ESTIMATED_COST_PER_REQUEST_USD, price), "default"
+
+
+def usd(amount: float) -> str:
+    """Dollars for a refusal: two decimals, or four under a cent, so $0.004 is not "$0.00"."""
+    return f"${amount:.2f}" if abs(amount) >= 0.01 or amount == 0 else f"${amount:.4f}"
+
+
+def _packs(spec: str, scoring: Scoring | None) -> bool:
+    """True when ``spec`` sends several jobs a request (its cap check is per wave, not per job)."""
+    provider = spec.partition(":")[0]
+    scoring = scoring or Scoring()
+    if provider == "openrouter":
+        return scoring.openrouter.jobs_per_request > 1
+    if provider == "openai-compat":
+        return scoring.openai_compat.jobs_per_request > 1
+    return False
+
+
+def reserve_per_job(
+    conn: sqlite3.Connection,
+    spec: str,
+    scoring: Scoring | None = None,
+    profile: Profile | None = None,
+    now: datetime | None = None,
+    *,
+    jobs: int | None = None,
+) -> float:
+    """What the spend cap holds per job while a run with ``spec`` is in flight. Read-only.
+
+    ``jobs`` is the size of the pack a packed scorer sends (default: a full pack; Score now
+    sends one).
+
+    The figure the run's own up-front cap check uses (020 M5b, git-bug a322711): the Anthropic
+    batch's ``screen.reserve_per_request_usd`` (batch prices, prefix sized from ``profile``),
+    ``score_sync``'s ``screen.reserve_per_job_usd`` for a one-job-a-request scorer, or a
+    packed run's per-wave estimate for a full pack (``screen.packed_hold_per_job_usd``, which
+    may be below ``cost_per_job``'s one-job price). Otherwise never below ``cost_per_job``.
+    Decisions models (Jev) check the cap per request on their own
+    estimate, so for them this is ``cost_per_job``. Reads the cached OpenRouter catalog only;
+    never fetches.
+    """
+    scoring = scoring or Scoring()
+    per_job, _ = cost_per_job(conn, spec, scoring, profile)
+    if is_decisions(spec):
+        return per_job
+    if _packs(spec, scoring):
+        when = now or datetime.now(UTC)
+        # Exactly what the packed run checks per wave (review N2), even when the plan's
+        # one-job list price is higher: a pack shares the prompt prefix.
+        return screen.packed_hold_per_job_usd(conn, spec, scoring, when, n_jobs=jobs)
+    held = screen.reserve_per_job_usd(
+        conn, spec, scoring, batch=is_anthropic(spec), profile=profile
+    )
+    return max(per_job, held)
 
 
 def refresh_catalog(
@@ -211,6 +280,31 @@ class Plan:
     group_ids: list[int] = field(default_factory=list)  # exactly the groups the run may send
     max_usd: float = 0.0  # the run stops before its own spend would pass this
     scoring_version: str = ""
+    # What the spend cap holds per job while the run is in flight (``reserve_per_job``): at
+    # least ``cost_per_job``, higher when the cap reserves more than the estimate (Haiku 5.5's
+    # $0.002 floor, or a model's table price above its measured mean).
+    reserve_per_job: float = 0.0
+
+    @property
+    def hold_per_job(self) -> float:
+        """The run's own per-job hold (``reserve_per_job``), else the estimate."""
+        return self.reserve_per_job if self.reserve_per_job > 0 else self.cost_per_job
+
+    @property
+    def reserved_usd(self) -> float:
+        """What the cap holds for every planned job at once."""
+        return self.total * self.hold_per_job
+
+    @property
+    def fits_now(self) -> int:
+        """Planned jobs the remaining cap covers at the hold now: the same comparison the run
+        makes (``screen.jobs_affordable``), so the run sends no more."""
+        return min(self.total, screen.jobs_affordable(self.remaining_usd, self.hold_per_job))
+
+    @property
+    def reserve_differs(self) -> bool:
+        """The cap holds more per job than the estimate (the page says so)."""
+        return self.reserve_per_job > self.cost_per_job * (1 + 1e-9)
 
     @property
     def token(self) -> str:
@@ -298,7 +392,7 @@ def make_plan(
     scored_before = {
         int(r[0]) for r in conn.execute("SELECT DISTINCT job_group_id FROM fit_score").fetchall()
     }
-    per_job, source = cost_per_job(conn, spec, scoring)
+    per_job, source = cost_per_job(conn, spec, scoring, profile)
     est = len(planned) * per_job
     plan = Plan(
         scope=scope,
@@ -314,6 +408,7 @@ def make_plan(
         group_ids=planned,
         max_usd=max_usd_for(est),
         scoring_version=profile.scoring_version,
+        reserve_per_job=reserve_per_job(conn, spec, scoring, profile, now),
     )
     _check_cap(plan)
     return plan
@@ -322,9 +417,17 @@ def make_plan(
 def _check_cap(plan: Plan) -> None:
     if plan.total and plan.estimated_usd > plan.remaining_usd:
         plan.refusal = (
-            f"estimated ${plan.estimated_usd:.2f} is over the remaining spend cap "
-            f"(${max(plan.remaining_usd, 0):.2f}); raise scoring.daily_cap_usd / weekly_cap_usd "
+            f"estimated {usd(plan.estimated_usd)} is over the remaining spend cap "
+            f"({usd(max(plan.remaining_usd, 0))}); raise scoring.daily_cap_usd / weekly_cap_usd "
             "in config.toml, or pick a smaller scope"
+        )
+    elif plan.total and plan.fits_now == 0:
+        # The estimate fits, but the cap holds more per job than is left, so the run would
+        # send nothing (020 M5b): say so now rather than after a confirm.
+        plan.refusal = (
+            f"the spend cap holds {usd(plan.reserve_per_job)} a job while a run is in flight "
+            f"and {usd(max(plan.remaining_usd, 0))} is left, so no job fits; raise "
+            "scoring.daily_cap_usd / weekly_cap_usd in config.toml, or wait for the cap to reset"
         )
 
 
@@ -347,6 +450,7 @@ def stored_plan(
         group_ids=ids,
         max_usd=float(row["max_usd"] or 0.0),
         scoring_version=row["scoring_version"],
+        reserve_per_job=reserve_per_job(conn, row["scorer"], scoring, profile, now),
     )
     _check_cap(plan)
     return plan
@@ -700,11 +804,12 @@ def _execute(
         # applied inside submit_batch as usual.
         per_job = plan.cost_per_job
         if _priced_on_flat_default(plan):
-            # Confirmed before per-model pricing, at the flat $0.002: price it at the model's
-            # table price when that is higher (Sonnet 5.5). A plan priced on measured history
+            # Confirmed before per-model pricing, at the flat $0.002: price it at what the
+            # cap holds for the model when that is higher (Sonnet 5.5; with no history, its
+            # all-cache-writes price, 020 M5b review B1). A plan priced on measured history
             # keeps its measured price, so it sends every group the user confirmed.
-            per_job = max(per_job, screen.table_price_per_request_usd(spec))
-        fits = len(ids) if per_job <= 0 else math.floor(plan.max_usd / per_job + 1e-9)
+            per_job = max(per_job, screen.reserve_per_request_usd(conn, spec, profile))
+        fits = len(ids) if per_job <= 0 else screen.jobs_affordable(plan.max_usd, per_job)
         if fits <= 0:
             st.notes.append(f"nothing submitted: ${plan.max_usd:.2f} confirmed covers no job")
             return
@@ -747,7 +852,7 @@ def _execute(
         # measured cost per job, and send only what fits under max_usd.
         per_job = max(plan.cost_per_job, st.cost_usd / st.attempted if st.attempted else 0.0)
         room = plan.max_usd - st.cost_usd
-        fits = len(batch) if per_job <= 0 else int(room // per_job + 1e-9)
+        fits = len(batch) if per_job <= 0 else screen.jobs_affordable(room, per_job)
         if fits <= 0:
             stop = f"stopped at the confirmed spend of ${plan.max_usd:.2f}"
             break

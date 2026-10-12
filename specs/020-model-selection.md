@@ -33,7 +33,7 @@ spec adds:
 | Does Save spend? | **Never.** Save + re-run only opens the confirm step that already exists for that use | A model change can make the nightly run cost more; a re-run costs money now. Both stay your call |
 | Which subscription checks are free and automatic | `claude` on `PATH`, a `stat` of the CLI's login file, `CLAUDE_CODE_OAUTH_TOKEN` set, the runner state, and recent subscription drafts. `claude auth status` runs only when you press **Check (free)** | 019 rule 1: no subprocess while rendering a page |
 | Models that cannot do a use | **Not offered** for it, but if one is already in effect (from `config.toml`) it is still shown, selected, with the reason | Opus 5.5's thinking cannot be turned off (PR 117 `THINKING_OFF`, `scorers.py:143`), and the screen and fact check are bounded calls (`screen.MAX_TOKENS` 2,048) |
-| Screening models dearer than the flat reservation | **Not offered until `026b50c` and `df51dff` land**, for every provider: Sonnet 5.5, any OpenRouter slug whose cached price is above $0.002 a job at typical tokens, and any OpenRouter, Jev or openai-compat slug with no known price. An effective value already set that way is still shown, selected, with this reason | The batch path reserves $0.002 a job for every model (`screen.py:527`) and the sync path does the same (`screen.py:911`); Sonnet 5.5 costs about $0.005 a job, so caps would be overrun about 2.5x |
+| Screening models dearer than the flat reservation | **Not offered until `026b50c` and `df51dff` land**, for every provider: Sonnet 5.5, any OpenRouter slug whose cached price is above $0.002 a job at typical tokens, and any OpenRouter, Jev or openai-compat slug with no known price. An effective value already set that way is still shown, selected, with this reason. **Offered since M5b** (git-bug `a322711`, 2026-10-12), which switched `catalog.RESERVATION_PER_MODEL` on once both fixes were in: each now reserves its own price, so "save anyway" is no longer asked for them | Before the fixes, the batch path reserves $0.002 a job for every model (`screen.py:527`) and the sync path does the same (`screen.py:911`); Sonnet 5.5 costs about $0.005 a job, so caps would be overrun about 2.5x |
 | An Anthropic model with no price | **Refused** on save | `compute_cost` raises `no pricing for model` (`scorers.py:97`), and spend caps would not see the cost |
 | Deep pass from the console | **Yes** (your decision, 2026-10-11): on the `/models` deep row, the job page (one group) and Today (top N). Plan, estimate, explicit confirm, background run; never automatic | Most users will not use the CLI |
 | A broken or invalid `models.toml` | **Fail closed for spending, fail soft for ingest.** An invalid screening or deep key blocks that use (skipped with a message, jobs stay queued), never falls back to another provider. Drafting falls back to `config.toml` with a notice, because every draft is a click that shows its estimate | Falling back could spend on a provider you switched away from ([Storage](#storage)) |
@@ -206,7 +206,7 @@ records the source in the PR; the table below is the starting point):
 
 | Use | Offered | Not offered, and why |
 |---|---|---|
-| Screening | Haiku 5.5 (default); Haiku 4.5 under Older; **Sonnet 5.5 once `026b50c` and `df51dff` land** | Opus 5.5: thinking cannot be turned off. Sonnet 5.5 before those fixes: the flat $0.002 reservation is below its price |
+| Screening | Haiku 5.5 (default); Haiku 4.5 under Older; **Sonnet 5.5 (since M5b, `026b50c` and `df51dff` having landed)** | Opus 5.5: thinking cannot be turned off. Sonnet 5.5 before those fixes: the flat $0.002 reservation is below its price |
 | Deep pass | Opus 5.5 (default), Sonnet 5.5 | Haiku 4.5: it rejects `output_config.effort`, and the deep pass sends effort `high` (`deep.py` `EFFORT`) |
 | Drafting, `api` | Opus 5.5 (default), Sonnet 5.5 | Haiku 4.5: same effort reason (`generator.api_params`) |
 | Drafting, `cli` | Aliases `opus` (default), `sonnet`; ids `claude-opus-5-5`, `claude-sonnet-5-5` | The `haiku` alias and `claude-haiku-4-5`: the CLI runner always passes `--effort` (`generator.py:1080`-`1081`, `cli_runner.py:189`-`191`), and Haiku 4.5 rejects it. The fallback-only ids (`claude-opus-4-8`, `claude-sonnet-5`) |
@@ -239,6 +239,31 @@ openai-compat slug with no price at all. (Jev's per-job default, $0.00013, and `
 are under it.) `models set` refuses them without `--force`, with the reason. The rule is one
 function, `catalog.within_reservation(spec)`, which returns true for everything once the fixes
 are present (M5 switches it), so nothing else has to change when they land.
+
+**Switched on (M5b, git-bug `a322711`).** `within_reservation` returns true for every screening
+option. Review of M5b (B1) found that the typical-token hold of `026b50c` assumes a
+3,900-token prefix that always hits the cache, while real prefixes are about 7,100 tokens and
+batch cache hits are best effort (30-98% seen), so a new model's first batch could cost about
+twice its hold. So an Anthropic model is held at no less than its price with the cached prefix
+sized from the real rubric, schema and profile (2.75 characters a token) and **all of it priced
+as cache writes** (`screen.cold_price_per_job_usd`). Re-verification (B2) showed a measured
+mean is not safe either (one batch at 98% hits, the next at 30% overran 2.3-2.9x), so the floor
+is **permanent**: the hold is `max(cold, measured, $0.002)`, and re-score plans, Score now,
+`/prefs` and `jobhunter backfill` price from the same floor (B3: backfill also passes its budget
+to `submit_batch` as the cap). Each batch stores the
+hold it was admitted at (`score_batch.reserve_per_request_usd`, migration 0042) and stays held
+at that until collected. The 1-hour cache TTL was considered and not adopted here: it would
+double the write price for a hit rate the batch service still does not promise.
+
+`rescore.reserve_per_job` is the hold the run's own cap check uses (the batch hold for
+Anthropic, the unbatched hold for one-job sync scorers, the per-wave figure for a full pack
+on a packed route, the plan's own price for Jev), and the `/models` screening price line, the
+re-score panel and Score now show it when it is above the estimate. Plans, pages and runs use
+one boundary comparison (`screen.jobs_affordable`). A re-score plan states how many of its
+jobs fit under the cap now, and is refused when not one job's hold fits; Score now is refused
+when its hold does not fit. What is guaranteed: no run sends more jobs than the cap covers at
+the hold. The hold is an estimate, so a batch of unusually long postings can still cost more
+than was held.
 
 **Measure before switching** ([016](016-alternative-scorers.md#ground-rules) rule 1). Each
 screening option shows how many of your labeled jobs it has scored (a count from `fit_score`

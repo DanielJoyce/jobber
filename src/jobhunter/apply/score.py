@@ -66,10 +66,17 @@ class Estimate:
     filter_version: str
     scoring_version: str
     refusal: str | None = None
+    # What the spend cap holds for this one job while it is in flight
+    # (``rescore.reserve_per_job``): never below ``estimated_usd``.
+    reserve_usd: float = 0.0
 
     @property
     def batch(self) -> bool:
         return self.refusal is None and rescore.is_anthropic(self.scorer)
+
+    @property
+    def reserve_differs(self) -> bool:
+        return self.reserve_usd > self.estimated_usd * (1 + 1e-9)
 
     @property
     def token(self) -> str:
@@ -136,7 +143,13 @@ def estimate(
             check_scorer_spec(spec, "screen_scorer")
         except ValueError as exc:
             bad_spec = str(exc)
-    per_job, source = (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec, scoring)
+    per_job, source = (
+        (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec, scoring, profile)
+    )
+    # One job: a packed scorer sends it as a pack of one, held at that pack's estimate.
+    reserve = (
+        0.0 if bad_spec else rescore.reserve_per_job(conn, spec, scoring, profile, now, jobs=1)
+    )
     est = Estimate(
         group_id=group_id,
         scorer=spec,
@@ -146,6 +159,7 @@ def estimate(
         remaining_usd=screen.remaining_budget(conn, scoring, now),
         filter_version=profile.filter_version,
         scoring_version=profile.scoring_version,
+        reserve_usd=max(reserve, per_job),
     )
     job = _canonical(conn, group_id)
     if bad_spec:
@@ -160,12 +174,21 @@ def estimate(
         est.refusal = "this posting is in a submitted batch; it is scored when that is collected"
     elif (claim := _group_claim_refusal(conn, group_id, now)) is not None:
         est.refusal = claim
-    elif est.estimated_usd > est.remaining_usd:
-        est.refusal = (
-            f"estimated ${est.estimated_usd:.4f} is over the remaining spend cap "
-            f"(${max(est.remaining_usd, 0):.2f}); raise scoring.daily_cap_usd / weekly_cap_usd "
-            "in config.toml"
-        )
+    elif screen.jobs_affordable(est.remaining_usd, est.reserve_usd) < 1:
+        # The run's own cap check holds ``reserve_usd`` (020 M5b): with less left, it would
+        # send nothing after the confirm, so it is refused here.
+        left = rescore.usd(max(est.remaining_usd, 0))
+        if est.reserve_differs:
+            est.refusal = (
+                f"the spend cap holds {rescore.usd(est.reserve_usd)} for this job while it runs "
+                f"(estimated {rescore.usd(est.estimated_usd)}), more than the {left} left; "
+                "raise scoring.daily_cap_usd / weekly_cap_usd in config.toml"
+            )
+        else:
+            est.refusal = (
+                f"estimated {rescore.usd(est.estimated_usd)} is over the remaining spend cap "
+                f"({left}); raise scoring.daily_cap_usd / weekly_cap_usd in config.toml"
+            )
     return est
 
 

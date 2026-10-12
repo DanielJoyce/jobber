@@ -264,6 +264,10 @@ def _rescore_fakes(monkeypatch, env, tokens):
             cost_per_job=0.01,
             cost_source="default",
             remaining_usd=5.0,
+            reserve_per_job=0.01,
+            reserved_usd=0.02,
+            reserve_differs=False,
+            fits_now=2,
         )
 
     def confirm(*a, **k):
