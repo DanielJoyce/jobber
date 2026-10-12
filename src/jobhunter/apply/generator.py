@@ -48,6 +48,7 @@ from jobhunter.apply.schemas import OUTPUT_MODELS, json_schema
 from jobhunter.config import Settings
 from jobhunter.core import db
 from jobhunter.core.spend import PACKET_CLI_TIER, PACKET_TIER
+from jobhunter.scoring import catalog
 from jobhunter.scoring import screen as stage2
 from jobhunter.scoring.profile import Profile
 from jobhunter.scoring.scorers import PRICING_PER_MTOK, Usage, compute_cost, thinking_off
@@ -59,7 +60,8 @@ MAX_TOKENS = {"resume": 16000, "cover_letter": 8000, "question_draft": 6000, "en
 # Output tokens assumed per kind (thinking included, effort medium) until there is history.
 ASSUMED_OUTPUT_TOKENS = {"resume": 4500, "cover_letter": 1800, "question_draft": 900}
 FALLBACK_ESTIMATE_USD = {"resume": 0.17, "cover_letter": 0.10, "question_draft": 0.05}
-ENTAILMENT_ESTIMATE_USD = 0.003
+# The old flat fact-check estimate, now the floor of ``entailment_estimate`` (specs/020 M1).
+ENTAILMENT_ESTIMATE_USD = catalog.ENTAILMENT_FLOOR_USD
 
 # ─── prompts ────────────────────────────────────────────────────────────────
 
@@ -425,24 +427,44 @@ class Estimate:
     source: str  # "median of N", "token estimate", "default"
 
 
-def estimate(conn: sqlite3.Connection, settings: Settings, kind: str, chars: int) -> Estimate:
-    """API cost estimate for one ``kind`` call, plus the entailment pass when it is on.
+def entailment_estimate(settings: Settings, runner: str) -> float:
+    """What the fact check after a ``runner`` draft is estimated and cap-checked at.
 
-    The median charged ``packet_document.cost_usd`` of earlier API versions of this kind once
-    there are any; before that, the request size (chars / 4 tokens) and an assumed output at
-    the API model's price."""
-    extra = ENTAILMENT_ESTIMATE_USD if settings.apply.entailment_check else 0.0
+    Priced for the model that check runs on (``api_entailment_model``, or the subscription's
+    ``cli_entailment_model``), never below the old flat $0.003 (``catalog``)."""
+    apply = settings.apply
+    model = apply.cli_entailment_model if runner == "cli" else apply.api_entailment_model
+    return catalog.entailment_estimate_usd(model)
+
+
+def estimate(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    kind: str,
+    chars: int,
+    *,
+    model: str | None = None,
+    runner: str = "api",
+) -> Estimate:
+    """API cost estimate for one ``kind`` call on ``model``, plus the fact check when it is on.
+
+    ``model`` is an API id, ``[apply] api_model`` by default. The median charged
+    ``packet_document.cost_usd`` of earlier API versions of this kind **made with that model**
+    once there are any; before that, the request size (chars / 4 tokens) and an assumed output
+    at the model's price. The fact check is priced for the model it runs on after a
+    ``runner`` draft (``entailment_estimate``)."""
+    model = model or settings.apply.api_model
+    extra = entailment_estimate(settings, runner) if settings.apply.entailment_check else 0.0
     costs = [
         r[0]
         for r in conn.execute(
             "SELECT cost_usd FROM packet_document WHERE kind = ? AND runner = 'api' "
-            "AND origin = 'generated' AND cost_usd > 0",
-            (kind,),
+            "AND origin = 'generated' AND cost_usd > 0 AND model = ?",
+            (kind, model),
         )
     ]
     if costs:
         return Estimate(statistics.median(costs) + extra, f"median of {len(costs)}")
-    model = settings.apply.api_model
     if model in PRICING_PER_MTOK:
         usage = Usage(input_tokens=max(chars, 0) // 4, output_tokens=ASSUMED_OUTPUT_TOKENS[kind])
         return Estimate(compute_cost(usage, model, batch=False) + extra, "token estimate")
@@ -897,9 +919,10 @@ def _entail(
     req, items = built
     try:
         capped = {"status": "skipped", "detail": "the [apply] daily cap is reached"}
+        check_usd = entailment_estimate(settings, runner)
         if runner == "api":
             with inflight.spend_section(settings.paths.data_dir):
-                if remaining_cap(conn, settings, now) < ENTAILMENT_ESTIMATE_USD:
+                if remaining_cap(conn, settings, now) < check_usd:
                     return {}, capped, 0.0
                 call = _run_api(
                     conn,
@@ -920,7 +943,7 @@ def _entail(
                 model=settings.apply.cli_entailment_model,
                 effort=None,
                 now=now,
-                estimate_usd=ENTAILMENT_ESTIMATE_USD,
+                estimate_usd=check_usd,
                 environ=environ,
                 allow_overage=paid_confirmed,
             )
@@ -929,7 +952,7 @@ def _entail(
                 # and the CLI's own budget never exceeds what is left of the cap.
                 with inflight.spend_section(settings.paths.data_dir):
                     left = remaining_cap(conn, settings, now)
-                    if left < ENTAILMENT_ESTIMATE_USD:
+                    if left < check_usd:
                         return {}, capped, 0.0
                     call, _paid = _run_cli(
                         conn,
@@ -1014,7 +1037,7 @@ def generate(
     if kind == "cover_letter" and ctx.resume_doc_id is None:
         raise ApplyRefused("make the resume version first (generate it or use the base resume)")
     req = build_request(conn, ctx, kind, question=question, instruction=instruction)
-    est = estimate(conn, settings, kind, req.chars)
+    est = estimate(conn, settings, kind, req.chars, runner=runner)
     try:
         with inflight.claim(settings.paths.data_dir, f"{packet_id}-{kind}-{qkey}"):
             return _generate_locked(

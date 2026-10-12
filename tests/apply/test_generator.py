@@ -514,8 +514,10 @@ def test_entailment_reporting_overage_without_a_paid_click_is_stopped_and_logged
     assert not fake_claude.reached("entail_went_on")
     assert runner_state.load(env.settings.paths.data_dir).overage
     rows = spend(env)
-    # The stopped call was already being served on paid usage: charged at the estimate.
-    assert rows[("packet", "claude-haiku-4-5")] == (1, pytest.approx(0.003))
+    # The stopped call was already being served on paid usage: charged at the estimate, which
+    # prices the `haiku` alias at the dearest Haiku it may resolve to (Haiku 4.5: $1/$5 at
+    # 5,000 in and 1,500 out), not the old flat $0.003 (specs/020 M1).
+    assert rows[("packet", "claude-haiku-4-5")] == (1, pytest.approx(0.0125))
 
 
 def test_confirmed_paid_run_is_refused_before_any_call_when_the_cap_is_reached(
@@ -552,6 +554,70 @@ def test_entailment_on_the_api_respects_the_apply_cap(env, monkeypatch):
         env.conn, env.settings, doc, "api", now=NOW, environ=None, client_factory=no_sdk
     )
     assert verdicts == {} and meta["status"] == "skipped"
+
+
+class _PastTheCapCheck(Exception):
+    pass
+
+
+def _past_the_cap_check():
+    raise _PastTheCapCheck
+
+
+@pytest.mark.parametrize(
+    ("model", "runs"),
+    [("claude-haiku-5-5", True), ("claude-sonnet-5-5", False)],
+)
+def test_entailment_cap_check_is_priced_for_the_entailment_model(env, monkeypatch, model, runs):
+    # $0.02 left of the cap: enough for a Haiku 5.5 check (the $0.003 floor), not for a
+    # Sonnet 5.5 one (about $0.025). The old flat $0.003 would have let Sonnet through.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
+    env.conn.execute(
+        "INSERT INTO llm_spend VALUES ('2026-10-10', 'claude-opus-5', 'packet', 5, 0, 0, 0.98)"
+    )
+    settings = env.settings.model_copy(
+        update={"apply": env.settings.apply.model_copy(update={"api_entailment_model": model})}
+    )
+    doc = {"kind": "resume", **RESUME_OUT, "context": {"lines": {"L4": "x", "L6": "y", "L7": "z"}}}
+    factory = _past_the_cap_check if runs else no_sdk
+
+    def entail():
+        return generator._entail(
+            env.conn, settings, doc, "api", now=NOW, environ=None, client_factory=factory
+        )
+
+    if runs:
+        with pytest.raises(_PastTheCapCheck):
+            entail()
+    else:
+        verdicts, meta, _ = entail()
+        assert verdicts == {} and meta["status"] == "skipped"
+        assert "cap" in meta["detail"]
+
+
+def test_estimate_is_per_model_and_prices_the_check_on_its_model(env, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-synthetic")
+    gen(env, runner="api", client_factory=lambda: FakeClient([RESUME_OUT, ENTAIL_OUT]))
+    opus = generator.estimate(env.conn, env.settings, "resume", 1)
+    assert opus.source == "median of 1"
+    # History under Opus 5.5 says nothing about Sonnet 5.5: priced from its own table rates.
+    sonnet = generator.estimate(env.conn, env.settings, "resume", 32000, model="claude-sonnet-5-5")
+    assert sonnet.source == "token estimate"
+    assert sonnet.usd == pytest.approx((8000 * 2 + 4500 * 10) / 1e6 + 0.003)
+    # A Sonnet 5.5 fact check is priced at its own rates (5,000 in, 1,500 out), not $0.003.
+    apply = env.settings.apply
+    dear = env.settings.model_copy(
+        update={"apply": apply.model_copy(update={"api_entailment_model": "claude-sonnet-5-5"})}
+    )
+    est = generator.estimate(env.conn, dear, "resume", 1)
+    assert est.usd == pytest.approx(opus.usd - 0.003 + (5000 * 2 + 1500 * 10) / 1e6)
+    # The subscription runner's check is priced for cli_entailment_model (the haiku alias at
+    # the dearest Haiku it may resolve to).
+    assert generator.entailment_estimate(env.settings, "cli") == pytest.approx(0.0125)
+    off = env.settings.model_copy(
+        update={"apply": apply.model_copy(update={"entailment_check": False})}
+    )
+    assert generator.estimate(env.conn, off, "resume", 1).usd == pytest.approx(opus.usd - 0.003)
 
 
 def test_a_second_generate_of_the_same_document_is_refused_while_one_runs(env, fake_claude):
