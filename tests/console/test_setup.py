@@ -29,7 +29,11 @@ GOOD_PREFS = Path(__file__).resolve().parent.parent.parent / "examples" / "prefe
 
 
 @pytest.fixture(autouse=True)
-def _fresh():
+def _fresh(monkeypatch: pytest.MonkeyPatch):
+    # The page's secret rows read os.environ; drop conftest's placeholder scorer keys (S7) so
+    # these tests see a machine with no keys unless a test sets one.
+    for name in ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_COMPAT_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     readiness.clear_caches()
     yield
     readiness.clear_caches()
