@@ -21,7 +21,7 @@ from jobhunter.console.tracking import APPLY_CLICK_NOTE, rebuild_status
 from jobhunter.core import rejections
 from jobhunter.core.manual_sources import EMAIL_MANUAL
 from jobhunter.core.models import ApplyLink, ApplyStatus
-from jobhunter.pipeline.applylink import get_apply_link
+from jobhunter.pipeline.applylink import get_apply_link, needs_reresolve
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
 from jobhunter.pipeline.dedupe import _refresh_group, group_members
 from jobhunter.pipeline.locations import load_job_group_locations, location_summary
@@ -158,6 +158,8 @@ class ApplyButton:
     verified: str | None = None
     host: str | None = None
     pending: bool = False  # no apply_link row yet: resolve on demand
+    why: str | None = None  # one line: where the link came from and why it was chosen
+    user_set: bool = False  # the user set this link (offer Reset)
 
 
 def chain_text(link: ApplyLink) -> str:
@@ -192,8 +194,20 @@ def apply_button(
     if link is None and fetch_link:
         link = get_apply_link(conn, group_id)
     apply_href = f"/apply/{group_id}"
-    if link is None:
+    if link is None or needs_reresolve(link):
+        # An older row that took a login wall for the posting resolves again too (334d9eb).
         return ApplyButton(group_id, "open", "Open posting ↗", apply_href, pending=True)
+    if link.chosen_by == "user":
+        name = ats_display(link.ats) if link.ats and link.ats != "unknown" else link.employer_host
+        return ApplyButton(
+            group_id,
+            "live",
+            f"Apply on {name or 'site'} ↗",
+            apply_href,
+            host=link.employer_host,
+            why=link.why or "set by you",
+            user_set=True,
+        )
     verified = f"verified {ago(link.verified_at, now)}" if link.verified_at else "not verified"
     chain, host = chain_text(link), link.employer_host
     if link.status == ApplyStatus.live:
@@ -206,6 +220,7 @@ def apply_button(
             chain=chain,
             verified=verified,
             host=host,
+            why=link.why,
         )
     if link.status == ApplyStatus.expired:
         return ApplyButton(
@@ -217,6 +232,7 @@ def apply_button(
             chain=chain,
             verified=verified,
             host=host,
+            why=link.why,
         )
     return ApplyButton(
         group_id,
@@ -226,6 +242,7 @@ def apply_button(
         chain=chain,
         verified=verified,
         host=host,
+        why=link.why,
     )
 
 

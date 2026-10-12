@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from jobhunter.pipeline.ats_rules import AtsRule, is_http_url, match_ats, unwrap
+from jobhunter.pipeline.ats_rules import AtsRule, is_http_url, is_login_wall, match_ats, unwrap
 from jobhunter.pipeline.dedupe import _refresh_group
 from jobhunter.pipeline.listing import _txn, to_iso
 
@@ -77,9 +77,12 @@ def normalize_apply_url(url: str | None) -> str | None:
 
 
 def _identifies_job(key: str) -> bool:
-    """False for keys that point at a site or board home rather than one posting."""
+    """False for keys that point at a site or board home rather than one posting, or at a
+    login wall (one sign-in URL is shared by every job behind it; bug 334d9eb)."""
     p = urlsplit(key)
     if not p.path and not p.query:
+        return False
+    if is_login_wall(key):
         return False
     rule = match_ats(key)
     return rule is None or rule.is_posting(key)
@@ -103,6 +106,12 @@ _APP_ORDER = (
 )  # fmt: skip
 _APP_RANK = {s: i for i, s in enumerate(_APP_ORDER)}
 _LINK_RANK = {"live": 0, "expired": 1}
+# A link the user set, then one a capture supplied, beat any resolved link (bug 334d9eb).
+_CHOSEN_RANK = {"user": 0, "capture": 1}
+
+
+def _link_rank(row: sqlite3.Row) -> tuple[int, int]:
+    return (_CHOSEN_RANK.get(row["chosen_by"], 9), _LINK_RANK.get(row["status"], 9))
 
 
 def _collect_keys(conn: sqlite3.Connection) -> dict[str, set[int]]:
@@ -201,7 +210,7 @@ def _merge_apply_link(conn: sqlite3.Connection, s: int, a: int) -> None:
     }
     if a not in rows:
         return
-    if s in rows and _LINK_RANK.get(rows[a]["status"], 9) >= _LINK_RANK.get(rows[s]["status"], 9):
+    if s in rows and _link_rank(rows[a]) >= _link_rank(rows[s]):
         conn.execute("DELETE FROM apply_link WHERE job_group_id = ?", (a,))
         return
     # survivor has none, or the absorbed link is strictly better (live over expired/unresolved)

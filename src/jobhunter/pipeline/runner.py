@@ -513,6 +513,7 @@ def run_pipeline(
     full: bool = False,
     max_resolve: int = DEFAULT_MAX_RESOLVE,
     now: datetime | None = None,
+    apply_ctx_factory: Callable[[str], Any] | None = None,
 ) -> RunReport:
     adapters = ADAPTERS if adapters is None else adapters
     stages = list(stages) if stages is not None else list(STAGES)
@@ -606,6 +607,20 @@ def run_pipeline(
             budget -= n
             total += n
         report.counts["resolve"] = {"resolved": total}
+        # Apply links stored before login walls were recognized (bug 334d9eb): resolve those
+        # groups again. Requests only through FetchContext; nothing paid.
+        from jobhunter.pipeline import applylink
+
+        try:
+            redone = applylink.reresolve_login_walls(
+                conn,
+                now=now,
+                ctx_factory=apply_ctx_factory or applylink.default_ctx_factory(settings, conn),
+            )
+        except Exception as exc:  # never fail the run over apply links
+            logger.warning("apply-link login-wall pass failed: %s", exc)
+            redone = []
+        report.counts["resolve"]["apply_link_login_walls"] = len(redone)
 
     if "normalize" in stages:
         tzs = {r.key: str(r.config.get("timezone", "UTC")) for r in rows}

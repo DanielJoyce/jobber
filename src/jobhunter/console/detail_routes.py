@@ -1,4 +1,5 @@
-"""Routes for /job/{id}, /job/{id}/apply-button, /apply/{id}, /job/{id}/applied (specs/007, 015).
+"""Routes for /job/{id}, /job/{id}/apply-button, /job/{id}/apply-link, /apply/{id},
+/job/{id}/applied (specs/007, 015).
 
 Nothing here submits an application: /apply only redirects the browser to the employer.
 """
@@ -62,13 +63,14 @@ def register(
     def apply_button(request: Request, conn: Conn, group_id: int) -> HTMLResponse:
         require_job(conn, group_id)
         link = applylink.get_apply_link(conn, group_id)
-        if link is None:
+        if link is None or applylink.needs_reresolve(link):
+            # No link yet, or an older row that took a login wall for the posting (334d9eb).
             try:
                 link = applylink.resolve_group(
                     conn, group_id, now=now(), ctx_factory=ctx_factory(conn)
                 )
             except ValueError:
-                link = None
+                link = applylink.get_apply_link(conn, group_id)
         btn = detail.apply_button(conn, group_id, now(), link, fetch_link=False)
         btn.pending = False
         return templates.TemplateResponse(request, "_apply_button.html", {"b": btn})
@@ -116,8 +118,27 @@ def register(
             )
         # live, or unresolved/blocked: hand over the best known link
         target = (link.final_url or link.start_url) if link else detail.posting_url(job)
+        if link is not None and applylink.needs_reresolve(link):
+            target = link.start_url  # an older row whose final URL is a login wall
         detail.log_click(conn, group_id, target, "redirected", current)
         return RedirectResponse(target, status_code=302)
+
+    @app.post("/job/{group_id}/apply-link")
+    async def set_apply_link(request: Request, conn: Conn, group_id: int) -> Response:
+        """Use this apply link: the user's URL wins over any resolved one and is never replaced
+        automatically; ``reset`` drops it so the group resolves again (bug 334d9eb). Same-origin
+        like every console write (``app.same_origin_writes``)."""
+        require_job(conn, group_id)
+        form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+        if (form.get("reset") or [""])[-1]:
+            applylink.clear_user_link(conn, group_id)
+        else:
+            url = (form.get("url") or [""])[-1]
+            try:
+                applylink.set_user_link(conn, group_id, url, now())
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        return RedirectResponse(f"/job/{group_id}", status_code=303)
 
     @app.post("/job/{group_id}/description")
     async def paste_description(request: Request, conn: Conn, group_id: int) -> Response:

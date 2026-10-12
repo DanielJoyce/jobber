@@ -127,7 +127,9 @@ CREATE TABLE apply_link (
   status        TEXT NOT NULL,     -- live | expired | unresolved | blocked
   resolved_at   TEXT NOT NULL,
   verified_at   TEXT,
-  error         TEXT
+  error         TEXT,
+  chosen_by     TEXT,              -- NULL (ranked) | capture | user   (migration 0035)
+  why           TEXT               -- one line under the button       (migration 0035)
 );
 
 CREATE TABLE apply_click (
@@ -139,8 +141,40 @@ CREATE TABLE apply_click (
 );
 ```
 
-Keyed on `job_group`: when the same opening is posted by several sources, the first chain to
-reach `live` wins, and the button uses it.
+Keyed on `job_group`. ~~When the same opening is posted by several sources, the first chain to
+reach `live` wins.~~ Superseded (bug 334d9eb): a state job bank whose link redirected to a
+single-sign-on page won over copies whose links led to the employer's ATS.
+
+### Choosing among a group's links (bug 334d9eb)
+
+- **Login walls are never the posting.** A hop to a login or single-sign-on page (hosts such as
+  `id.<state>.gov`, `login.*`, `sso.*`, `auth.*`, `accounts.*`; paths such as `/login`,
+  `/signin`, `/sso/`, `oauth2/authorize`, SAML), or a fetched page that is a password form with
+  little else, stops the walk *before* the wall: status `blocked`, error `login wall at <host>`,
+  final URL the page before it. The wall is never requested, and its URL never merges groups.
+- **Every member's start URL is a candidate** (deduplicated), resolved in this order: links an
+  extension capture supplied, then by where the start points (ATS, employer, other, trackers,
+  boards last), one per host before a second from the same host. At most 6 starts that cost
+  requests per group (`MAX_FETCH_STARTS`); LinkedIn and Indeed starts cost none and are never
+  requested. Each request goes through `FetchContext` (robots.txt, per-host rate limits). A
+  live ATS posting, or a capture of the employer's page, settles it early.
+- **Ranking by final host** (`pipeline/apply_rank.py`; the host lists live in
+  `pipeline/ats_rules.py`): known ATS > the employer's own site (a host naming the employer, or
+  a captured page's host) > other > a tracker the chain never got past (aplitrak, appcast) >
+  job boards, aggregators and state job banks (including class A sources' hosts). Within a
+  tier: live > expired > blocked > unresolved; then the final URL more members reached; then
+  the most recently seen member. Login walls rank last.
+- **A capture wins**: a linked capture of the employer's page (or a board capture's off-site
+  Apply destination) beats any ranking unless it is closed or a wall.
+- **The user's link wins over everything**: **Use a different apply link** on the job page
+  (`POST /job/{id}/apply-link`, same-origin, http(s) only) stores it with `chosen_by = 'user'`;
+  it is never re-resolved, re-verified or replaced by a capture. **Reset** deletes it and the
+  group resolves again.
+- The job page shows one line of why, e.g. `via www.aplitrak.com → jobs.ashbyhq.com ·
+  employer's applicant tracking system · 2 of 9 links checked`, or `set by you`.
+- Rows stored before this change that took a login wall for the posting (`live` with a login
+  final URL or hop) are resolved again by the nightly run's resolve stage, and on demand when
+  their job page is opened.
 
 ## Milestone placement
 

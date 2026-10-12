@@ -1,11 +1,18 @@
 """Apply-link rule tables (specs/015-apply-links.md#resolution): data, plus tiny matchers.
 
-Three tables, all meant to grow as new chains show up (`jobhunter applylinks unknown`):
+The tables, all meant to grow as new chains show up (`jobhunter applylinks unknown`):
 
 - ``REDIRECTORS``: tracking hosts that carry the destination in a query parameter. Unwrapped
   locally, with no request.
 - ``ATS_RULES``: applicant tracking systems the resolver stops at, and how each one's posting URL
   becomes its apply URL.
+- ``OTHER_ATS``: more applicant tracking systems, known by host only (no canonical apply URL
+  yet). With ``ATS_RULES`` this is the one list of ATS hosts that ranks a group's candidate
+  links (bug 334d9eb); ``ats_name`` reads both.
+- ``TRACKER_HOSTS``: click trackers and redirectors that are followed, never a destination.
+- ``AGGREGATOR_HOSTS``: job boards and state job banks, ranked last. Class A sources' own hosts
+  count too (``pipeline/apply_rank.py``).
+- ``LOGIN_*``: login and single-sign-on walls, which are never the posting.
 - ``EXPIRED_PHRASES``: text on a final page that means the posting is closed.
 """
 
@@ -202,6 +209,137 @@ def match_ats(url: str) -> AtsRule | None:
         if any(host_matches(host, pattern) for pattern in rule.hosts):
             return rule
     return None
+
+
+# Known by host only: ranked as an employer's ATS, but the resolver follows them like any page
+# and keeps the final URL as reached. Move a row into ATS_RULES when it gets a canonical rule.
+OTHER_ATS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("jobvite", ("jobs.jobvite.com", "*.jobvite.com")),
+    ("bamboohr", ("*.bamboohr.com",)),
+    ("recruitee", ("*.recruitee.com",)),
+    ("breezy", ("*.breezy.hr",)),
+    ("teamtailor", ("*.teamtailor.com",)),
+    ("jazzhr", ("*.applytojob.com",)),
+    ("successfactors", ("*.successfactors.com", "*.successfactors.eu")),
+    ("oracle", ("*.oraclecloud.com",)),
+    ("ultipro", ("recruiting.ultipro.com", "recruiting2.ultipro.com")),
+    ("paylocity", ("recruiting.paylocity.com",)),
+    ("adp", ("workforcenow.adp.com", "myjobs.adp.com")),
+    ("dayforce", ("*.dayforcehcm.com",)),
+    ("rippling", ("ats.rippling.com",)),
+    ("pinpoint", ("*.pinpointhq.com",)),
+    ("personio", ("*.jobs.personio.de", "*.jobs.personio.com")),
+    ("gem", ("jobs.gem.com",)),
+    ("cornerstone", ("*.csod.com",)),
+    ("paycom", ("*.paycomonline.net",)),
+    ("comeet", ("www.comeet.com",)),
+    ("dover", ("app.dover.com",)),
+)
+
+
+def ats_name(url: str) -> str | None:
+    """The ATS a URL is on, from ``ATS_RULES`` or ``OTHER_ATS``, or None."""
+    rule = match_ats(url)
+    if rule is not None:
+        return rule.name
+    host = host_of(url)
+    for name, patterns in OTHER_ATS:
+        if host_in(host, patterns):
+            return name
+    return None
+
+
+# ─── host classes for ranking (bug 334d9eb) ────────────────────────────────
+
+# Trackers that are followed (3xx or unwrapped) and judged by where they land. A chain that ends
+# on one of these never reached the employer.
+TRACKER_HOSTS: tuple[str, ...] = (
+    "aplitrak.com",
+    "*.aplitrak.com",
+    "*.appcast.io",
+    "*.jobs2web.com",
+    "*.recruitics.com",
+    "*.joveo.com",
+    "*.pandologic.com",
+    "*.clickcastnow.com",
+    "*.jobsyn.org",
+)
+
+# Job boards, aggregators and state job banks (``*.x`` covers subdomains only, so the apex is
+# listed too). Hosts of class A sources (the state job banks) are added at run time from the
+# source table (``apply_rank.HostClasses``). LinkedIn and Indeed are in ``board_ids``.
+AGGREGATOR_HOSTS: tuple[str, ...] = (
+    "usnlx.com",
+    "*.usnlx.com",
+    "*.nlx.org",
+    "monster.com",
+    "*.monster.com",
+    "ziprecruiter.com",
+    "*.ziprecruiter.com",
+    "glassdoor.com",
+    "*.glassdoor.com",
+    "simplyhired.com",
+    "*.simplyhired.com",
+    "careerbuilder.com",
+    "*.careerbuilder.com",
+    "dice.com",
+    "*.dice.com",
+    "talent.com",
+    "*.talent.com",
+    "jooble.org",
+    "*.jooble.org",
+    "adzuna.com",
+    "*.adzuna.com",
+    "jobs.utah.gov",
+    "*.mitalent.org",
+    "*.ohiomeansjobs.com",
+    "ohiomeansjobs.ohio.gov",
+    "worksource.my.site.com",
+)
+
+
+def host_in(host: str, patterns: tuple[str, ...]) -> bool:
+    return any(host_matches(host, p) for p in patterns)
+
+
+# ─── login and single-sign-on walls (bug 334d9eb) ──────────────────────────
+
+# First host label of an identity provider or login site: id.utah.gov, login.dts.utah.gov,
+# sso.example.org, accounts.google.com, auth.example.com.
+LOGIN_HOST_LABELS = frozenset(
+    {"id", "idp", "login", "logon", "signin", "sso", "auth", "oauth", "accounts", "cas"}
+)
+LOGIN_HOSTS: tuple[str, ...] = (
+    "*.okta.com",
+    "*.auth0.com",
+    "login.microsoftonline.com",
+    "*.b2clogin.com",
+    "id.me",
+)
+# A path segment that is a login page (``/login``, ``/jsp/utjobs/login.do``,
+# ``/sso/login.aspx``, ``/signin``), an SSO or SAML endpoint, or an OAuth authorize step.
+_LOGIN_PATH = re.compile(
+    r"(?:^|/)(?:log-?in|log-?on|sign-?in|sso|saml2?|cas)(?:\.[a-z]{2,5})?(?:/|$)"
+    r"|/oauth2?/(?:v\d(?:\.\d)?/)?authori[sz]e"
+    r"|/protocol/openid-connect/auth",
+    re.I,
+)
+
+
+def is_login_wall(url: str | None) -> bool:
+    """A login or single-sign-on page: never the posting, whatever status it answers with."""
+    if not url:
+        return False
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return False
+    if "." in host and host.split(".", 1)[0] in LOGIN_HOST_LABELS:
+        return True
+    if host_in(host, LOGIN_HOSTS):
+        return True
+    return bool(_LOGIN_PATH.search(parts.path))
 
 
 # ─── closed postings ───────────────────────────────────────────────────────

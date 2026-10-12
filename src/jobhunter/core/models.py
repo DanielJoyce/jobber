@@ -272,3 +272,5 @@ class ApplyLink(BaseModel):
     resolved_at: datetime
     verified_at: datetime | None = None
     error: str | None = None
+    chosen_by: Literal["capture", "user"] | None = None  # None: ranked by the resolver
+    why: str | None = None  # one line shown under the Apply button
