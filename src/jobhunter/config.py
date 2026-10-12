@@ -632,7 +632,9 @@ def read_models_file(path: Path) -> tuple[bool, str, dict[str, Any] | None, list
 
 def _key_label(name: object) -> str:
     text = str(name)
-    return text if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) else "<a key>"
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text) and not _SECRET_LOOKING.search(text):
+        return text
+    return "<a key>"
 
 
 def _split_layer(
