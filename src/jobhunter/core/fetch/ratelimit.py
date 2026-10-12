@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import threading
 from collections.abc import Callable
+
+log = logging.getLogger(__name__)
+LONG_WAIT_S = 10.0  # a limiter wait longer than this is worth a log line
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
@@ -44,6 +48,8 @@ class HostRateLimiter:
             start = max(now, self._next.get(host, now))
             self._next[host] = start + interval
         wait = start - now
+        if wait > LONG_WAIT_S:
+            log.info("waiting %.0fs for %s (per-host request spacing)", wait, host)
         if wait > 0:
             sleep(wait)
         return max(wait, 0.0)

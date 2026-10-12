@@ -5,6 +5,41 @@ every check with its fix. In a terminal, `jobhunter doctor` prints the same rows
 what each one unlocks). Each entry below names the message you see, what it means and the fix,
 and ends with the same two pointers. None of the fixes spends API credits.
 
+## Where the logs go, and how much they say
+
+Every jobhunter process (the console, `jobhunter run`, the timers and each command) writes
+timestamped log lines to standard error: time, level, the part of jobhunter that wrote it, and
+the message. At the default level (INFO) you see progress: each pipeline stage with its counts and
+time, one line per source (pages fetched, postings found, robots.txt skips, errors), scoring
+batches (submitted, state changes, collected with counts and cost), re-scores, the deep pass,
+mail fetches, extension captures, packet drafting and the free live checks. Lines carry ids,
+counts, durations and source names only: never keys, your address, resume text or posting text.
+
+Where to read them:
+
+- The console, run in a terminal: the same terminal.
+- The host timers: `journalctl --user -u jobhunter-run.service -n 100` (add `-f` to follow), and
+  `jobhunter-collect.service` for batch collection.
+- A console run as a unit, on the host or in a container: `journalctl --user -u jobhunter-console
+  -n 100`. The container timers: `journalctl --user -u 'jobhunter-ctr-*' -b`.
+
+To change the level, use any of these. The command-line flag beats the environment variable,
+which beats `config.toml`; with none of them the level is INFO. `-v` steps one level toward
+DEBUG and `-q` one toward ERROR from whatever the other two give, so `jobhunter -v run` is DEBUG
+at the default and `jobhunter -q run` is WARNING. `JOBHUNTER_LOG_LEVEL` takes `DEBUG`, `INFO`,
+`WARNING` or `ERROR` (anything else is ignored with one warning). In `config.toml`:
+
+```toml
+[logging]
+level = "DEBUG"
+```
+
+DEBUG adds per-item detail and is noisy. The environment variable and `config.toml` are read once
+at start, so restart the console after changing them. While the variable or `-v`/`-q` is in force,
+`/config/changes` shows an edit to `[logging] level` as having no effect. HTTP libraries
+(`httpx`, `anthropic`, `urllib3`) stay at WARNING at every level. The console's request lines
+(`GET /... 200`) keep their usual INFO level whatever you choose.
+
 ## Unknown key in config.toml
 
 Loading fails with `Extra inputs are not permitted` and a section and key name. `config.toml`

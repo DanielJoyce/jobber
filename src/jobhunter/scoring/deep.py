@@ -22,6 +22,7 @@ from typing import Any, Literal
 from anthropic import transform_schema
 from pydantic import BaseModel, Field, ValidationError
 
+from jobhunter import logsetup
 from jobhunter.core import rejections
 from jobhunter.core.models import Bucket, Evidence, Screen
 from jobhunter.pipeline.listing import _txn, to_iso
@@ -418,6 +419,7 @@ def deep_score(
         conn, [{**dict(job), "group_id": group_id}], now, rejection_days
     )
     params = build_request(job_d, stage2._summary_for(conn, job), profile, scorer=scorer)
+    logger.info("deep pass group %d: calling %s", group_id, logsetup.spec_label(scorer))
     message = _stream_message(client, params)
     usage = message.usage
     # Every attempt a server-side fallback made, each at its own model's rates.
@@ -426,6 +428,7 @@ def deep_score(
     # transaction before parsing or writing anything, so a refusal, bad output or a failing
     # report write can never lose it (bug 6c33b40). Exactly once per billed response.
     record_call_spend(conn, scorer, now, usage, cost)
+    logger.info("deep pass group %d: response billed $%.4f", group_id, cost)
 
     try:
         report = parse_message(message)

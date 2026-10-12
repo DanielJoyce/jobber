@@ -662,3 +662,20 @@ def _no_leftover_draft_threads():
             + "; release the fake runner and join them (tests/conftest.py). The rest of this "
             "session runs quarantined"
         )
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging():
+    """The CLI callback configures the root logger (jobhunter.logsetup); give every test the
+    logging state it started with so one test's level or handler never leaks into the next."""
+    import logging
+
+    root = logging.getLogger()
+    names = ("httpx", "httpcore", "anthropic", "urllib3", "uvicorn", "uvicorn.error")
+    saved = {n: logging.getLogger(n).level for n in (*names, "uvicorn.access")}
+    level, handlers = root.level, list(root.handlers)
+    yield
+    root.setLevel(level)
+    root.handlers[:] = handlers
+    for n, lv in saved.items():
+        logging.getLogger(n).setLevel(lv)

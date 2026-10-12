@@ -33,6 +33,7 @@ import logging
 import os
 import sqlite3
 import statistics
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -41,6 +42,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from jobhunter import logsetup
 from jobhunter.apply import (
     answers,
     cli_runner,
@@ -1299,6 +1301,8 @@ def _generate_locked(
     data_dir = settings.paths.data_dir
     pre = dict(now=now, estimate_usd=est.usd, confirm_paid=confirm_paid, environ=environ, cli=cli)
     paid_confirmed = False
+    t0 = time.monotonic()
+    logger.info("packet %d: drafting %s on %s", packet_id, kind, runner)
     if runner == "api":
         # Cap check, call and logged spend are one section, so two runs cannot both pass.
         with inflight.spend_section(data_dir):
@@ -1380,12 +1384,14 @@ def _generate_locked(
         equiv_usd=call.equiv_usd + entail_equiv,
     )
     logger.info(
-        "packet %d: %s v%d on %s (%s), check %s",
+        "packet %d: %s v%d on %s (%s) in %.1fs, cost $%.4f, check %s",
         packet_id,
         kind,
         version,
         runner,
-        call.model,
+        logsetup.spec_label(call.model),
+        time.monotonic() - t0,
+        call.cost_usd,
         "ok" if report["ok"] else "has unsupported lines",
     )
     return Outcome(doc_id, version, kind, runner, call.cost_usd, report["ok"], meta["status"])

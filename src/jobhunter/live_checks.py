@@ -17,8 +17,8 @@ Rules kept here (019 rule 3, "Live checks"):
 - **Never a value.** No key, masked key (OpenRouter's ``label``), email address, account or
   organization, filter criteria, or raw response or exception text reaches a result. Failures
   map to fixed wording, or to an exception type at most.
-- **Never stored or logged.** Results live only in the response that shows them; this module
-  logs nothing.
+- **Never stored.** Results live only in the response that shows them. The log gets one INFO
+  line per check: its kind, the outcome word, and the fixed-wording booleans, nothing else.
 - **Network** only through the existing clients: the ``anthropic`` SDK, ``scorers``'
   ``httpx`` transport (OpenRouter, local server), Google's Gmail client, and the ``claude``
   CLI through ``cli_runner``'s one process launch. Tests inject all four.
@@ -32,6 +32,7 @@ must confirm, and must never join ``doctor --live``.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -41,6 +42,8 @@ from typing import Any
 from jobhunter import readiness as rd
 from jobhunter.config import Settings, resolve_path
 from jobhunter.scoring import scorers
+
+logger = logging.getLogger(__name__)
 
 ANTHROPIC = "anthropic"
 OPENROUTER = "openrouter"
@@ -467,6 +470,26 @@ def _runner(settings: Settings, deps: Deps, now: datetime) -> LiveResult:
 
 
 def run_kind(
+    kind: str,
+    row_id: str,
+    settings: Settings,
+    mode: str,
+    *,
+    now: datetime,
+    deps: Deps | None = None,
+) -> LiveResult:
+    result = _run_kind(kind, row_id, settings, mode, now=now, deps=deps)
+    logger.info(
+        "live check %s (%s): %s%s",
+        kind,
+        row_id,
+        result.outcome,
+        "".join(f"; {f.label}={f.value}" for f in result.facts),
+    )
+    return result
+
+
+def _run_kind(
     kind: str,
     row_id: str,
     settings: Settings,

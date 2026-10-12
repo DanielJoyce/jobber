@@ -396,6 +396,9 @@ def _message_result(custom_id: str, message: Any) -> ScoreResult:
     )
 
 
+_BATCH_STATE: dict[str, tuple[Any, Any]] = {}  # last logged (status, processing) per batch
+
+
 class AnthropicScorer:
     """Anthropic Messages + Message Batches. ``client`` is an ``anthropic.Anthropic``."""
 
@@ -416,7 +419,19 @@ class AnthropicScorer:
         return batch.id
 
     def ready(self, handle: str) -> bool:
-        return self.client.messages.batches.retrieve(handle).processing_status == "ended"
+        batch = self.client.messages.batches.retrieve(handle)
+        status = batch.processing_status
+        counts = getattr(batch, "request_counts", None)
+        seen = (status, getattr(counts, "processing", None))
+        if _BATCH_STATE.get(handle) != seen:  # log changes only, not every poll
+            _BATCH_STATE[handle] = seen
+            logger.info(
+                "batch %s state: %s (%s processing, %s succeeded, %s errored)",
+                handle,
+                status,
+                *(getattr(counts, k, "?") for k in ("processing", "succeeded", "errored")),
+            )
+        return status == "ended"
 
     def collect(self, handle: str) -> list[ScoreResult]:
         out: list[ScoreResult] = []

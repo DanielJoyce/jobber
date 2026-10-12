@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from jobhunter import config, secrets
+from jobhunter import config, logsetup, secrets
 from jobhunter.apply import cli_runner
 from jobhunter.config import SCORER_PROVIDERS, OpenAICompat, OpenRouter
 from jobhunter.console import help as helpdocs
@@ -76,6 +76,13 @@ OTHER_ROWS = (
         "the Gmail token, read from a file",
         "not used (OS keyring, else a 0600 file)",
         "podman secret `jobhunter_gmail_token`",
+        "yes",
+    ),
+    (
+        logsetup.LEVEL_ENV_VAR,
+        "log level: DEBUG, INFO (default), WARNING or ERROR; beats `[logging] level`",
+        "optional",
+        "optional, as an `Environment=` line in a drop-in",
         "yes",
     ),
     (CONFIG_HOME_VAR, "base of `~/.config/jobhunter`", "optional", "ignored", "yes"),
