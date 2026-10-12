@@ -12,10 +12,12 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from jobhunter import config, secrets
+from jobhunter.config import SCORER_PROVIDERS, OpenAICompat, OpenRouter
 from jobhunter.apply import cli_runner
 from jobhunter.console import help as helpdocs
 from jobhunter.mail import auth
 from jobhunter.ops import ctr
+from jobhunter.scoring.scorers import BATCH_DISCOUNT, PRICING_PER_MTOK
 from jobhunter.xdg import CACHE_HOME_VAR, CONFIG_HOME_VAR, DATA_HOME_VAR
 
 
@@ -172,8 +174,53 @@ def env_var_table() -> str:
     return "\n".join(lines)
 
 
+# Scorer provider table (scorers.md). A provider added to SCORER_PROVIDERS without a row
+# here fails the generator, which fails the drift test.
+_ENDPOINT = {
+    "anthropic": "Anthropic batch API",
+    "openrouter": "OpenRouter chat completions (`[scoring.openrouter]`)",
+    "jev": "OpenRouter decisions endpoint (`[scoring.openrouter]`)",
+    "decisions": "OpenRouter decisions endpoint (`[scoring.openrouter]`)",
+    "openai-compat": "any OpenAI-compatible endpoint (`[scoring.openai_compat]`)",
+    "local": "a model on this machine (`[scoring.local]`)",
+}
+_OPENROUTER_KEY = f"`{OpenRouter().api_key_env}`"
+_KEY = {
+    "anthropic": "`ANTHROPIC_API_KEY`",
+    "openrouter": _OPENROUTER_KEY,
+    "jev": _OPENROUTER_KEY,
+    "decisions": _OPENROUTER_KEY,
+    "openai-compat": f"`{OpenAICompat().api_key_env}` (the name is `api_key_env`)",
+    "local": "optional",
+}
+
+
+def scorer_providers() -> str:
+    rows = ["| Spec | Endpoint | Key |", "|---|---|---|"]
+    for provider in SCORER_PROVIDERS:
+        rows.append(f"| `{provider}:<model>` | {_ENDPOINT[provider]} | {_KEY[provider]} |")
+    return "\n".join(rows)
+
+
+def _usd(value: float) -> str:
+    return f"${value:.2f}"
+
+
+def model_prices() -> str:
+    rows = [
+        "| Anthropic model | Input per 1M tokens | Output per 1M tokens | In a batch (in / out) |",
+        "|---|---|---|---|",
+    ]
+    for model, (in_rate, out_rate) in sorted(PRICING_PER_MTOK.items()):
+        batch = f"{_usd(in_rate * BATCH_DISCOUNT)} / {_usd(out_rate * BATCH_DISCOUNT)}"
+        rows.append(f"| `{model}` | {_usd(in_rate)} | {_usd(out_rate)} | {batch} |")
+    return "\n".join(rows)
+
+
 GENERATORS: dict[str, Callable[[], str]] = {
     "cloud-steps": cloud_steps,
     "env-vars": env_var_table,
+    "scorer-providers": scorer_providers,
+    "model-prices": model_prices,
 }
 helpdocs.BLOCKS.update(GENERATORS)
