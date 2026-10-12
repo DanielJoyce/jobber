@@ -40,6 +40,7 @@ from jobhunter import model_access as ma
 from jobhunter import model_choices as mc
 from jobhunter import readiness as rd
 from jobhunter.config import BLOCKED_SPEC, Settings, layers_for, relayer, shown_value
+from jobhunter.console import config_routes as cr
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.scoring import catalog
 from jobhunter.scoring.scorers import privacy_notice
@@ -536,7 +537,7 @@ def access_rows(ctx: Ctx) -> list[AccessRow]:
     return rows
 
 
-def banner(ctx: Ctx, *, watching: bool = False) -> dict[str, Any]:
+def banner(ctx: Ctx, *, watching: bool = False, watch_state: Any = None) -> dict[str, Any]:
     """The /models banner: blocked uses, a broken file, fallbacks, missing access, and an
     outside change to models.toml. ``watching``: the config watch runs, so an outside change
     is applied there (Config changes, Apply now), and this banner links to it instead of
@@ -571,6 +572,10 @@ def banner(ctx: Ctx, *, watching: bool = False) -> dict[str, Any]:
         "nothing": nothing,
         "pending": pending,
         "watching": watching,
+        # What Config changes offers now: Apply, or errors that block it, or neither (the
+        # notice was dismissed, or only restart-class changes are left).
+        "watch_apply": bool(watch_state is not None and watch_state.can_apply),
+        "watch_errors": bool(watch_state is not None and watch_state.all_errors),
     }
 
 
@@ -672,7 +677,11 @@ def register(
             "digest": ctx.disk.digest if ctx.disk is not None else "",
             "rows": [build_row(ctx, r, states.get(r)) for r in ROWS],
             "access_rows": access_rows(ctx),
-            "banner": banner(ctx, watching=watching(request)),
+            "banner": banner(
+                ctx,
+                watching=watching(request),
+                watch_state=cr.current_state(request) if watching(request) else None,
+            ),
             "history": history_rows(ctx.conn),
             "history_msg": history_msg,
             "flash": flash,

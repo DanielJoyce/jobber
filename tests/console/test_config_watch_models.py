@@ -238,7 +238,7 @@ def test_outside_models_change_is_applied_by_the_watch_and_models_links_to_it(tm
     assert "models.toml changed: 1 setting." in bar and "Apply now" in bar
     page = client.get("/models").text
     assert "changed outside the console" in page
-    assert 'href="/config/changes"' in page
+    assert 'href="/config/changes"' in page and "press Apply now there" in page
     assert 'action="/models/load"' not in page  # no second button for the same change
     # A Load posted anyway (an old tab) writes nothing and sends you to the one flow.
     r = client.post("/models/load", data={"page_digest": _digest(page)}, follow_redirects=False)
@@ -337,6 +337,13 @@ class CountingLock:
     def __exit__(self, *exc):
         self.lock.release()
         return False
+
+    # The /activity poll's try-lock: not counted as a waiter.
+    def acquire(self, blocking: bool = True) -> bool:
+        return self.lock.acquire(blocking)
+
+    def release(self) -> None:
+        self.lock.release()
 
 
 def _race(c: Console, *posts) -> list:
@@ -453,3 +460,67 @@ def test_a_models_save_does_not_move_a_pending_apply_or_a_dismissal(tmp_path):
     r = client.post("/config/apply", data={"key": key}, follow_redirects=False)
     assert r.headers["location"] == "/config/changes"
     assert c.settings.apply.effort == "low" and c.settings.scoring.deep_scorer == SONNET
+
+
+# ─── Review round: the poll during a save, wording, unreadable files, mutation survivors ────
+
+
+def test_the_poll_skips_the_check_while_settings_lock_is_held(tmp_path):
+    """A save holds the lock between writing models.toml and assigning the running settings;
+    a poll in that window must not report the console's own write as an outside change."""
+    c = Console(tmp_path)
+    client = c.client()
+    assert "changed" not in client.get("/activity").text
+    lock = CountingLock()
+    c.app.state.settings_lock = lock
+    c.edit_models(f'[scoring]\ndeep_scorer = "{SONNET}"\n')  # as a save mid-way
+    with lock:
+        assert "models.toml changed" not in client.get("/activity").text
+    c.clock.t += 3
+    assert "models.toml changed: 1 setting." in client.get("/activity").text
+
+
+def test_models_banner_does_not_offer_apply_when_apply_is_blocked(tmp_path):
+    c = Console(tmp_path)
+    client = c.client()
+    c.edit_models("this is [not toml\n")
+    page = client.get("/models").text
+    assert "changed outside the console" in page
+    assert "lists errors in the files" in page and "press Apply now" not in page
+
+
+def test_a_models_file_that_appears_unreadable_is_seen(tmp_path):
+    c = Console(tmp_path)
+    assert not c.state().pending
+    c.models.mkdir()  # exists, but cannot be read as a file
+    c.clock.t += 3
+    state = c.state()
+    assert state.models_errors and state.pending and not state.can_apply
+
+
+def test_an_error_only_models_change_is_pending(tmp_path):
+    """An invalid [apply] key falls back, so the merged settings do not change: the error
+    alone must still raise the notice."""
+    c = Console(tmp_path)
+    client = c.client()
+    c.edit_models('[apply]\nrunner = "bogus"\n')
+    state = c.state()
+    assert not state.fields and state.models_errors and state.pending
+    assert "models.toml has errors" in client.get("/activity").text
+
+
+def test_an_unknown_models_key_does_not_block_apply(tmp_path):
+    c = Console(tmp_path)
+    c.edit_models(f'[scoring]\ndeep_scorer = "{SONNET}"\nfuture_key = 1\n[future]\nx = 2\n')
+    state = c.state()
+    assert not state.models_errors and state.can_apply
+    assert apply(c.client(), c).status_code == 303
+    assert c.settings.scoring.deep_scorer == SONNET
+
+
+def test_model_rows_match_the_models_page_anchors():
+    from jobhunter import model_choices as mc
+    from jobhunter.console import models_routes as mr
+
+    expected = {".".join(mc.NAMES[n]): row for n, row in mr.ROW_OF.items()}
+    assert expected == cw.MODEL_ROWS

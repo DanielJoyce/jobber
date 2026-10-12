@@ -190,6 +190,21 @@ shows the value you typed, so a key pasted into the wrong place is not echoed.
 jobhunter doctor
 ```
 
+## models.toml has errors (the console keeps running)
+
+The bar under the nav says "models.toml has errors; the console keeps the settings from
+09:12", with lines such as `models.toml is not valid TOML at line 3` or
+`models.toml scoring.screen_scorer: not a usable model name`. Someone changed the models file
+outside the console (by hand, or with an older or newer jobhunter), and it no longer loads
+cleanly. The console carries on with the models it had and offers no **Apply now** until the
+file is fixed. The nightly run reads the file itself, so a broken scorer there skips that
+scoring step instead of falling back to `config.toml`.
+
+Fix the file, or open the Models page in the console and press **Reset** on the row (or
+**Reset file** when the file is not valid TOML). In the terminal, `jobhunter models show`
+names the problem, and `jobhunter models reset USE` or `jobhunter models reset-file` fixes it.
+See [The models file is broken](#the-models-file-is-broken).
+
 ## Settings still need a restart
 
 After **Apply now**, the bar may say "2 settings still need a restart". Those settings (paths,

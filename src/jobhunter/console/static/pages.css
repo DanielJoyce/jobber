@@ -27,4 +27,3 @@
 
 /* Config changes: the model layers table scrolls inside its box on a phone (020 M8). */
 .cfgw-scroll { overflow-x: auto; max-width: 100%; }
-.cfgw-scroll code { overflow-wrap: anywhere; }

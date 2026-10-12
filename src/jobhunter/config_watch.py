@@ -692,6 +692,12 @@ class ConfigWatcher:
             if key:
                 self._dismissed.add(key)
 
+    @property
+    def last_state(self) -> State:
+        """The state of the last check, without stat-ing anything."""
+        with self._lock:
+            return self._state
+
     def is_dismissed(self, state: State) -> bool:
         return bool(state.key) and state.key in self._dismissed
 
@@ -726,7 +732,7 @@ class ConfigWatcher:
                 and fp[3] == prev_fp[3]  # same size
                 and fp[4] == prev_fp[4]  # same mtime
                 and fp[7] == prev_fp[7]  # same mode: not a chmod
-                and (digest is None or digest == prev_digest)
+                and (digest in (None, UNREADABLE) or digest == prev_digest)
             ):
                 self._replaced = True  # renamed to a backup, then a new file saved by rename
         if (
@@ -864,11 +870,18 @@ def scorer_warnings(settings: Settings) -> tuple[str, ...]:
     return tuple(out)
 
 
+UNREADABLE = "unreadable"
+
+
 def _file_digest(path: Path) -> str | None:
+    """SHA-256 of the file's bytes; None when it is absent; ``UNREADABLE`` when it exists but
+    cannot be read, so a file that goes from absent to unreadable is a change, not a touch."""
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError:
+        return UNREADABLE
 
 
 _registry_names: list[str] | None = None

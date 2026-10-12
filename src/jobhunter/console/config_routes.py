@@ -57,6 +57,21 @@ def current_state(request: Request, *, force: bool = False) -> cw.State:
     watch = watcher_of(request)
     if watch is None:
         return cw.EMPTY
+    lock = getattr(request.app.state, "settings_lock", None)
+    if not force and lock is not None:
+        # A save, Load or Apply holds the lock between writing models.toml and assigning the
+        # running settings: a check now would show the console's own write as an outside
+        # change. Skip it and show the last state; the next poll checks again.
+        if not lock.acquire(blocking=False):
+            return watch.last_state
+        try:
+            return _check(watch, request, force)
+        finally:
+            lock.release()
+    return _check(watch, request, force)
+
+
+def _check(watch: cw.ConfigWatcher, request: Request, force: bool) -> cw.State:
     try:
         return watch.check(request.app.state.settings, force=force)
     except Exception as exc:
