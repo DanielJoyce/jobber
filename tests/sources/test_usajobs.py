@@ -361,3 +361,68 @@ def test_hourly_floor_also_not_sent():
         }
     )
     assert [q.salary_min for q in queries_from_profile(profile)] == [None]
+
+
+# ─── runner: unconfigured is a skip, rejected is a failure (specs/019 S10) ──
+
+
+def _run_pipeline(src, conn, tmp_path, transport=None):
+    from jobhunter.pipeline import runner
+
+    src = src.model_copy(update={"queries": [Query(keywords=["cyber"])]})
+    settings = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "cache")}, "fetch": {"max_retries": 0}}
+    )
+    clock = Clock()
+    return runner.run_pipeline(
+        conn,
+        settings,
+        [src],
+        adapters={"usajobs": UsajobsAdapter},
+        ctx_factory=lambda s: FetchContext(
+            s, settings, conn, transport=transport, clock=clock, sleep=clock.sleep
+        ),
+        profile_loader=lambda: None,
+        stages=["list"],
+        now=datetime(2026, 10, 11, tzinfo=UTC),
+    )
+
+
+def _boom(request: httpx.Request) -> httpx.Response:
+    raise AssertionError("no request may be made")
+
+
+def test_no_credentials_is_a_skip_and_exit_zero(src, conn, tmp_path, monkeypatch):
+    monkeypatch.delenv("USAJOBS_EMAIL")
+    monkeypatch.delenv("USAJOBS_API_KEY")
+    report = _run_pipeline(src, conn, tmp_path, httpx.MockTransport(_boom))
+    assert report.exit_code == 0
+    assert report.results == {}
+    msg = next(m for m in report.messages if "us-usajobs skipped" in m)
+    assert "USAJOBS_API_KEY" in msg and "USAJOBS_EMAIL" in msg
+
+
+def test_skip_only_when_no_credential_is_set(monkeypatch):
+    monkeypatch.delenv("USAJOBS_EMAIL")
+    monkeypatch.delenv("USAJOBS_API_KEY")
+    assert UsajobsAdapter.unavailable(None) is not None
+    monkeypatch.setenv("USAJOBS_API_KEY", "secret-value")
+    assert UsajobsAdapter.unavailable(None) is None
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_rejected_key_still_fails_the_run(src, conn, tmp_path, status):
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text="denied")
+
+    report = _run_pipeline(src, conn, tmp_path, httpx.MockTransport(handle))
+    assert report.exit_code == 1
+    assert report.results["us-usajobs"].failed
+
+
+def test_partial_credentials_still_fail_naming_the_missing_one(src, conn, tmp_path, monkeypatch):
+    monkeypatch.delenv("USAJOBS_EMAIL")
+    report = _run_pipeline(src, conn, tmp_path, httpx.MockTransport(_boom))
+    assert report.exit_code == 1
+    err = report.results["us-usajobs"].error
+    assert "USAJOBS_EMAIL" in err and "test-key" not in err
