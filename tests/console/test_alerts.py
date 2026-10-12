@@ -318,3 +318,52 @@ def test_page_renders_without_profile(tmp_path, conn):
     r = TestClient(app).get("/alerts")
     assert r.status_code == 200
     assert "No profile yet" in r.text
+
+
+# --- sender-routed sites (LinkedIn, Craigslist) ---------------------------------------------
+
+
+def sender(data, key):
+    return next(s for s in data.senders if s.key == key)
+
+
+def test_sender_rows_count_unparsed_alerts_by_domain(conn):
+    add_alert(conn, "l1", None, NOW - timedelta(days=2), sender="linkedin.com")
+    add_alert(conn, "l2", None, NOW - timedelta(days=1), sender="mail.linkedin.com")
+    add_alert(conn, "c1", None, NOW, sender="craigslist.org")
+    add_alert(conn, "o1", None, NOW, sender="jobs.example.net")
+    data = checklist(conn)
+    li, cl = sender(data, "linkedin"), sender(data, "craigslist")
+    assert (li.received, cl.received) == (2, 1)
+    assert li.last_alert_at == NOW - timedelta(days=1)
+    assert "2 LinkedIn alerts received" in li.pending_note and "430a0e7" in li.pending_note
+    assert "1 Craigslist alert received" in cl.pending_note and "b0ac328" in cl.pending_note
+
+
+def test_sender_rows_suggest_exact_address_and_stop_when_configured(conn):
+    li = sender(checklist(conn), "linkedin")
+    assert li.suggested_missing
+    assert li.toml_line == 'fallback_senders = ["jobalerts-noreply@linkedin.com"]'
+    mail = Mail(alerts_address=ALERTS, fallback_senders=["JobAlerts-NoReply@linkedin.com"])
+    li = sender(checklist(conn, mail=mail), "linkedin")
+    assert not li.suggested_missing and li.toml_line is None
+    assert li.configured == ["jobalerts-noreply@linkedin.com"]
+    assert sender(checklist(conn), "craigslist").suggested_sender is None
+
+
+def test_domain_wide_linkedin_warns(conn):
+    mail = Mail(alerts_address=ALERTS, fallback_sender_domains=["linkedin.com"])
+    data = checklist(conn, mail=mail)
+    assert "personal mail" in (sender(data, "linkedin").domain_warning or "")
+    assert sender(data, "craigslist").domain_warning is None
+    assert sender(checklist(conn), "linkedin").domain_warning is None
+
+
+def test_page_shows_sender_rows(client, conn):
+    add_alert(conn, "l1", None, NOW, sender="linkedin.com")
+    conn.commit()
+    html = client.get("/alerts").text
+    assert 'id="sender-linkedin"' in html and 'id="sender-craigslist"' in html
+    assert "1 LinkedIn alert received" in html
+    assert "jobalerts-noreply@linkedin.com" in html
+    assert "will be read when the parser lands (430a0e7)" in html

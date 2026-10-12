@@ -1408,6 +1408,8 @@ def mail_setup(
     settings = load_settings()
     try:
         if xml:
+            for w in setup.domain_warnings(settings):
+                typer.echo(f"warning: {w}", err=True)
             typer.echo(setup.filters_xml(settings), nl=False)
             return
         setup.validate_address(settings)
@@ -1416,6 +1418,8 @@ def mail_setup(
             typer.echo(f"would ensure label {settings.mail.label}")
             for crit in setup.wanted_filters(settings):
                 typer.echo(f"would ensure filter {setup.describe(crit)}")
+            for w in setup.domain_warnings(settings):
+                typer.echo(f"warning: {w}")
             return
         service = auth.build_service(settings)
         report = setup.setup_mailbox(service, settings, dry_run=dry_run)

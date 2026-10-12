@@ -64,4 +64,36 @@
   {% else %}
   <p class="muted">No blocked or manual boards in the registry, so there is nothing to subscribe to.</p>
   {% endif %}
+
+  <h2>Sites routed by sender address</h2>
+  <p class="muted">LinkedIn and Craigslist also send you personal mail, so they are routed by the exact alert sender (<code>mail.fallback_senders</code>), never by domain. Read the sender off the From line of a real alert if it differs.</p>
+  <div class="table-wrap">
+  <table class="pg-table" id="sender-table">
+    <thead><tr><th>Site</th><th>Sign up</th><th>Route by sender</th><th>Received</th></tr></thead>
+    <tbody>
+    {% for s in data.senders %}
+    <tr id="sender-{{ s.key }}">
+      <td><strong>{{ s.name }}</strong></td>
+      <td><a href="{{ s.signup_url }}" target="_blank" rel="noopener">{{ s.signup_url }}</a><br><span class="muted">{{ s.steps }}</span></td>
+      <td>
+        {% if s.configured %}
+        <span class="tag">routed</span> {% for a in s.configured %}<code>{{ a }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+        {% endif %}
+        {% if s.suggested_missing %}
+        <p>Add the sender, then run <code>jobhunter mail setup</code>:</p>
+        <pre><code>{{ s.toml_line }}</code></pre>
+        {% elif not s.suggested_sender and not s.configured %}
+        <span class="muted">Sender address not known yet: after your first alert arrives, read its From address and put it in <code>mail.fallback_senders</code>.</span>
+        {% endif %}
+        {% if s.domain_warning %}<br><span class="flag warn">{{ s.domain_warning }}</span>{% endif %}
+      </td>
+      <td>
+        {{ s.pending_note }}
+        <br><span class="muted">last alert: {{ s.last_alert_at.date().isoformat() if s.last_alert_at else "none yet" }}</span>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
 </div>

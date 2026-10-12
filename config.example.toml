@@ -84,7 +84,10 @@
 [mail]
 # alerts_address = "<you>+jobs@gmail.com"
 # label = "jobhunter/alerts"
-# fallback_sender_domains = []    # e.g. ["example-jobs.com"]
+# fallback_sender_domains = []    # e.g. ["example-jobs.com"]; never a site that also sends you
+#                                 # personal mail (linkedin.com): use fallback_senders instead
+# fallback_senders = []           # exact addresses, e.g. LinkedIn's job-alert sender:
+#                                 # ["jobalerts-noreply@linkedin.com"]; confirm on a real alert
 
 [console]
 # host = "127.0.0.1"

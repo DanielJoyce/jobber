@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from xml.sax.saxutils import quoteattr
 
@@ -10,6 +11,12 @@ from jobhunter.config import Settings
 PLACEHOLDER_ADDRESS = "<you>+jobs@gmail.com"
 INBOX = "INBOX"
 SPAM = "SPAM"
+
+
+# Domains whose senders also mail the user personally (InMail, recruiters, connections): a
+# domain-wide ``from:@domain`` filter would pull that mail out of the inbox (specs/019 step 6).
+PERSONAL_MAIL_DOMAINS = ("linkedin.com", "craigslist.org")
+_ADDRESS = re.compile(r"^[a-z0-9._%+\-]+@[a-z0-9\-]+(\.[a-z0-9\-]+)+$")
 
 
 class MailSetupError(ValueError):
@@ -21,10 +28,15 @@ class SetupReport:
     created: list[str] = field(default_factory=list)
     existing: list[str] = field(default_factory=list)
     dry_run: bool = False
+    warnings: list[str] = field(default_factory=list)
 
     def lines(self) -> list[str]:
         verb = "would create" if self.dry_run else "created"
-        return [f"{verb}: {x}" for x in self.created] + [f"exists: {x}" for x in self.existing]
+        return (
+            [f"{verb}: {x}" for x in self.created]
+            + [f"exists: {x}" for x in self.existing]
+            + [f"warning: {w}" for w in self.warnings]
+        )
 
 
 def validate_address(settings: Settings) -> str:
@@ -38,14 +50,52 @@ def validate_address(settings: Settings) -> str:
     return addr
 
 
+def clean_senders(settings: Settings) -> list[str]:
+    """Validated, lowercased, de-duplicated ``mail.fallback_senders``; raises on a bad entry."""
+    out: list[str] = []
+    for raw in settings.mail.fallback_senders:
+        addr = raw.strip().lower()
+        if not _ADDRESS.match(addr):
+            raise MailSetupError(
+                f"mail.fallback_senders entry {raw!r} is not a full sender address. Use the exact "
+                'From address of a real alert, e.g. "alerts-noreply@example.com" (no domain-only '
+                "entry, no wildcard, no display name)."
+            )
+        if addr not in out:
+            out.append(addr)
+    return out
+
+
+def domain_warnings(settings: Settings) -> list[str]:
+    """Warnings for ``fallback_sender_domains`` entries that match a site with personal mail."""
+    return mail_domain_warnings(settings.mail.fallback_sender_domains)
+
+
+def mail_domain_warnings(domains: list[str]) -> list[str]:
+    out: list[str] = []
+    for d in domains:
+        bare = d.strip().lstrip("@").lower()
+        for site in PERSONAL_MAIL_DOMAINS:
+            if bare == site or bare.endswith("." + site):
+                out.append(
+                    f"fallback_sender_domains has {d.strip()!r}: {site} also sends personal mail "
+                    "(InMail, recruiters, connections), and this filter would take all of it out "
+                    "of your inbox. Remove it and list the exact alert sender in "
+                    "mail.fallback_senders instead."
+                )
+    return out
+
+
 def _domain(d: str) -> str:
     return "@" + d.strip().lstrip("@")
 
 
 def wanted_filters(settings: Settings) -> list[dict[str, str]]:
-    """Criteria for each wanted filter: {'to': addr} then {'from': '@domain'} per fallback."""
+    """Criteria for each wanted filter: {'to': addr} then {'from': '@domain'} per fallback domain,
+    then {'from': address} per fallback sender."""
     out: list[dict[str, str]] = [{"to": validate_address(settings)}]
     out += [{"from": _domain(d)} for d in settings.mail.fallback_sender_domains if d.strip()]
+    out += [{"from": a} for a in clean_senders(settings)]
     return out
 
 
@@ -79,7 +129,7 @@ def _matches(existing: dict, criteria: dict[str, str], label_id: str | None) -> 
 def setup_mailbox(service, settings: Settings, dry_run: bool = False) -> SetupReport:
     """Ensure the label and filters exist. Safe to re-run; ``dry_run`` makes no writes."""
     wanted = wanted_filters(settings)
-    report = SetupReport(dry_run=dry_run)
+    report = SetupReport(dry_run=dry_run, warnings=domain_warnings(settings))
     name = settings.mail.label
 
     label_id = _find_label(service, name)

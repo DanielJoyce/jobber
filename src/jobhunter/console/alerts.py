@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from jobhunter.config import Mail
 from jobhunter.core.db import transaction
 from jobhunter.core.models import Policy, SourceRow
+from jobhunter.mail.setup import mail_domain_warnings
 from jobhunter.scoring.profile import Profile
 
 PLACEHOLDER_ADDRESS = "<you>+jobs@gmail.com"
@@ -55,6 +56,64 @@ class AlertRow:
     warning: str | None
 
 
+@dataclass(frozen=True)
+class SenderSite:
+    """A site that is not a registry source: its alerts are routed by exact sender address."""
+
+    key: str
+    name: str
+    domain: str  # the site's sender domain, for counting received alerts
+    signup_url: str
+    steps: str
+    suggested_sender: str | None  # a public no-reply address, or None until read off a real alert
+    parser_bug: str
+
+
+SENDER_SITES = (
+    SenderSite(
+        key="linkedin",
+        name="LinkedIn",
+        domain="linkedin.com",
+        signup_url="https://www.linkedin.com/jobs/",
+        steps=(
+            'Search for jobs on LinkedIn and choose "Set alert". Do not make your +jobs address '
+            "your LinkedIn email: every LinkedIn notification would follow it."
+        ),
+        suggested_sender="jobalerts-noreply@linkedin.com",
+        parser_bug="430a0e7",
+    ),
+    SenderSite(
+        key="craigslist",
+        name="Craigslist (optional)",
+        domain="craigslist.org",
+        signup_url="https://accounts.craigslist.org/",
+        steps=(
+            "Optional, low priority. Make a Craigslist account, run a jobs search and save it "
+            "with email alerts."
+        ),
+        suggested_sender=None,
+        parser_bug="b0ac328",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class SenderRow:
+    key: str
+    name: str
+    signup_url: str
+    steps: str
+    suggested_sender: str | None
+    configured: list[str]  # fallback_senders entries on this site's domain
+    suggested_missing: bool  # the suggested sender is not in fallback_senders yet
+    toml_line: str | None
+    domain_warning: str | None  # the site's domain sits in fallback_sender_domains
+    received: int  # alerts stored from this site's domain
+    last_alert_at: datetime | None
+    parser_bug: str
+    pending_note: str
+
+
 @dataclass
 class Summary:
     total: int = 0
@@ -66,6 +125,7 @@ class Summary:
 @dataclass
 class Checklist:
     rows: list[AlertRow] = field(default_factory=list)
+    senders: list[SenderRow] = field(default_factory=list)
     summary: Summary = field(default_factory=Summary)
     toml_line: str | None = None  # the config line to copy when rejected domains are missing
     placeholder: bool = False
@@ -180,6 +240,59 @@ def _arrivals(conn: sqlite3.Connection) -> dict[str, _Arrivals]:
     return out
 
 
+def sender_rows(conn: sqlite3.Connection, mail: Mail) -> list[SenderRow]:
+    """LinkedIn and Craigslist: no registry source, no parser yet. Counts what has arrived."""
+    counts: dict[str, int] = {}
+    latest: dict[str, datetime] = {}
+    for r in conn.execute(
+        "SELECT sender_domain, received_at FROM mail_message WHERE sender_domain IS NOT NULL"
+    ):
+        dom = bare_domain(r["sender_domain"])
+        ts = _parse_ts(r["received_at"])
+        for site in SENDER_SITES:
+            if domain_matches(dom, [site.domain]):
+                counts[site.key] = counts.get(site.key, 0) + 1
+                if ts is not None and ts > latest.get(site.key, ts):
+                    latest[site.key] = ts
+                elif ts is not None:
+                    latest.setdefault(site.key, ts)
+    configured_all = [s.strip().lower() for s in mail.fallback_senders if s.strip()]
+    out: list[SenderRow] = []
+    for site in SENDER_SITES:
+        mine = [s for s in configured_all if domain_matches(bare_domain(s), [site.domain])]
+        count = counts.get(site.key, 0)
+        warn = mail_domain_warnings([d for d in mail.fallback_sender_domains if d.strip()])
+        site_warn = next((w for w in warn if f"{site.domain} also sends" in w), None)
+        missing = bool(site.suggested_sender) and site.suggested_sender not in mine
+        line = None
+        if site.suggested_sender and missing:
+            merged = list(dict.fromkeys([*configured_all, site.suggested_sender]))
+            line = "fallback_senders = [" + ", ".join(f'"{a}"' for a in merged) + "]"
+        word = site.name.split(" (")[0]
+        pending = (
+            f"{count} {word} alert{'s' if count != 1 else ''} received; they will be read when "
+            f"the parser lands ({site.parser_bug})."
+        )
+        out.append(
+            SenderRow(
+                key=site.key,
+                name=site.name,
+                signup_url=site.signup_url,
+                steps=site.steps,
+                suggested_sender=site.suggested_sender,
+                configured=mine,
+                suggested_missing=missing,
+                toml_line=line,
+                domain_warning=site_warn,
+                received=count,
+                last_alert_at=latest.get(site.key),
+                parser_bug=site.parser_bug,
+                pending_note=pending,
+            )
+        )
+    return out
+
+
 def checklist_rows(registry: list[SourceRow]) -> list[SourceRow]:
     """The rows email alerts cover: blocked or manual, plus NEOGOV class B rows."""
     picked = [
@@ -205,6 +318,7 @@ def build_checklist(
     placeholder = is_placeholder(mail.alerts_address)
     keywords = suggest_criteria(profile)
     out = Checklist(placeholder=placeholder, toml_line=toml_line(mail, sorted(rejected)))
+    out.senders = sender_rows(conn, mail)
 
     for reg in checklist_rows(registry):
         arr = arrivals.get(reg.key)
