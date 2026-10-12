@@ -41,6 +41,10 @@ def view_of(a: ans.Answers) -> dict[str, Any]:
         view[f"ans.{k}"] = getattr(a, k) or ""
     wa = a.work_authorization
     view["ans.work_authorization"] = "" if wa is None else ("yes" if wa else "no")
+    rs = a.requires_sponsorship
+    view["ans.requires_sponsorship"] = "" if rs is None else ("yes" if rs else "no")
+    for k in ans.CONTACT_KEYS:
+        view[f"ans.contact.{k}"] = getattr(a.contact, k) or ""
     view["custom"] = [(c.question, c.answer) for c in a.custom]
     return view
 
@@ -61,6 +65,9 @@ def parse(form: Form) -> AnswersForm:
     for k, _label in ans.TEXT_FIELDS:
         view[f"ans.{k}"] = _last(form, f"ans.{k}")
     view["ans.work_authorization"] = _last(form, "ans.work_authorization")
+    view["ans.requires_sponsorship"] = _last(form, "ans.requires_sponsorship")
+    for k in ans.CONTACT_KEYS:
+        view[f"ans.contact.{k}"] = _last(form, f"ans.contact.{k}")
     view["custom"] = rows
     out = AnswersForm(present=present, view=view)
     if not present:
@@ -69,6 +76,9 @@ def parse(form: Form) -> AnswersForm:
     wa = view["ans.work_authorization"]
     if wa not in ("", "yes", "no"):
         errors["ans.work_authorization"] = "pick yes, no or not stored"
+    rs = view["ans.requires_sponsorship"]
+    if rs not in ("", "yes", "no"):
+        errors["ans.requires_sponsorship"] = "pick yes, no or not stored"
     custom: list[dict[str, str]] = []
     where: list[int] = []  # row index of each kept custom entry
     for i, (q, a) in enumerate(rows):
@@ -81,6 +91,8 @@ def parse(form: Form) -> AnswersForm:
         "links": {k: view[f"ans.links.{k}"] for k in ans.LINK_KEYS},
         **{k: view[f"ans.{k}"] for k, _label in ans.TEXT_FIELDS},
         "work_authorization": {"yes": True, "no": False}.get(wa),
+        "requires_sponsorship": {"yes": True, "no": False}.get(rs),
+        "contact": {k: view[f"ans.contact.{k}"] for k in ans.CONTACT_KEYS},
         "custom": custom,
     }
     if not errors:
@@ -100,3 +112,14 @@ def _form_field(path: str, where: list[int]) -> str:
         row = where[int(parts[1])] if int(parts[1]) < len(where) else int(parts[1])
         return f"ans.custom.{row}.{parts[2] if len(parts) > 2 else 'question'}"
     return f"ans.{path}"
+
+
+def with_proposal(af: AnswersForm, proposal: Mapping[str, str]) -> AnswersForm:
+    """The form with the proposed contact values put in the boxes (not saved). Errors are
+    cleared: the page shows the proposal, and the next save validates it as usual."""
+    for k, value in proposal.items():
+        if k in ans.CONTACT_KEYS:
+            af.view[f"ans.contact.{k}"] = value
+    af.errors = {}
+    af.answers = None
+    return af

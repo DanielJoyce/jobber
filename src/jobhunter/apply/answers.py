@@ -238,11 +238,25 @@ TEXT_FIELDS: tuple[tuple[str, str], ...] = (
 )
 WORK_AUTH_LABEL = "Work authorization (yes/no)"
 LINK_KEYS = tuple(k for k, _ in LINK_FIELDS)
-SCALAR_KEYS = (*(k for k, _ in TEXT_FIELDS), "work_authorization")
+SCALAR_KEYS = (*(k for k, _ in TEXT_FIELDS), "work_authorization", "requires_sponsorship")
+CONTACT_FIELDS: tuple[tuple[str, str, int], ...] = (
+    ("first_name", "First name", 100),
+    ("last_name", "Last name", 100),
+    ("preferred_name", "Preferred name", 100),
+    ("email", "Email", 254),
+    ("phone", "Phone", 40),
+    ("city", "City", 100),
+    ("region", "State or region", 100),
+    ("country", "Country", 100),
+)
+CONTACT_KEYS = tuple(k for k, _, _ in CONTACT_FIELDS)
+SPONSORSHIP_LABEL = "Will you require visa sponsorship? (yes/no)"
 FIELD_LABELS: dict[str, str] = {
     **{f"links.{k}": label for k, label in LINK_FIELDS},
     **dict(TEXT_FIELDS),
     "work_authorization": WORK_AUTH_LABEL,
+    "requires_sponsorship": SPONSORSHIP_LABEL,
+    **{f"contact.{k}": label for k, label, _ in CONTACT_FIELDS},
 }
 
 
@@ -275,6 +289,38 @@ class Links(_Strict):
     _blank = field_validator("*", mode="before")(_blank_to_none)
 
 
+class Contact(_Strict):
+    """The contact block: filled into forms by the extension, never sent to a model, never
+    logged. Street address and postal code are not here, by design (the never-store list)."""
+
+    first_name: str | None = Field(None, max_length=100)
+    last_name: str | None = Field(None, max_length=100)
+    preferred_name: str | None = Field(None, max_length=100)
+    email: str | None = Field(None, max_length=254)
+    phone: str | None = Field(None, max_length=40)
+    city: str | None = Field(None, max_length=100)
+    region: str | None = Field(None, max_length=100)
+    country: str | None = Field(None, max_length=100)
+
+    _blank = field_validator("*", mode="before")(_blank_to_none)
+
+    @field_validator("*", mode="after")
+    @classmethod
+    def _one_line(cls, value: str | None) -> str | None:
+        if value is not None and "\n" in value:
+            raise ValueError("must be one line")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def _email_shape(cls, value: str | None) -> str | None:
+        if value is not None and (
+            value.count("@") != 1 or any(c.isspace() for c in value) or value.startswith("@")
+        ):
+            raise ValueError("does not look like an email address")
+        return value
+
+
 class SavedAnswer(_Strict):
     """A reusable custom answer, e.g. a "Why this company?" template."""
 
@@ -301,6 +347,8 @@ class Answers(_Strict):
     relocation: str | None = Field(None, max_length=500)
     remote: str | None = Field(None, max_length=500)
     work_authorization: bool | None = None
+    requires_sponsorship: bool | None = None
+    contact: Contact = Field(default_factory=Contact)
     custom: list[SavedAnswer] = Field(default_factory=list)
 
     _blank = field_validator("notice_period", "relocation", "remote", mode="before")(_blank_to_none)
@@ -360,6 +408,8 @@ def answers_from_data(raw: Any) -> LoadedAnswers:
         key = str(key_raw)
         if key == "links":
             kept["links"] = _lenient_links(value, out)
+        elif key == "contact":
+            kept["contact"] = _lenient_contact(value, out)
         elif key == "custom":
             kept["custom"] = _lenient_custom(value, out)
         elif key in SCALAR_KEYS:
@@ -392,6 +442,28 @@ def _lenient_links(value: Any, out: LoadedAnswers) -> dict[str, Any]:
             continue
         links[lk] = lv
     return links
+
+
+def _lenient_contact(value: Any, out: LoadedAnswers) -> dict[str, Any]:
+    """Keep each valid contact entry; warn (naming the key, never the value) for the rest."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        _warn(out, "answers.contact is not a mapping, so it was ignored.")
+        return {}
+    contact: dict[str, Any] = {}
+    for ck_raw, cv in value.items():
+        ck = str(ck_raw)
+        if ck not in CONTACT_KEYS:
+            _unknown_key(out, f"contact.{ck}", ck)
+            continue
+        try:
+            Contact.model_validate({ck: cv})
+        except ValidationError:
+            _warn(out, f"answers.contact.{ck} does not validate, so it was ignored.")
+            continue
+        contact[ck] = cv
+    return contact
 
 
 def _lenient_custom(value: Any, out: LoadedAnswers) -> list[SavedAnswer]:
@@ -556,6 +628,9 @@ def answer_writes(
     for k in SCALAR_KEYS:
         if getattr(new, k) != getattr(old, k):
             out[f"answers.{k}"] = getattr(new, k)
+    for k in CONTACT_KEYS:
+        if getattr(new.contact, k) != getattr(old.contact, k):
+            out[f"answers.contact.{k}"] = getattr(new.contact, k)
     if new.custom != old.custom:
         out["answers.custom"] = [c.model_dump() for c in new.custom] + list(keep or []) or None
     return out
@@ -639,3 +714,26 @@ def prefs_offers(a: Answers, question_keys: set[str]) -> list[tuple[SavedAnswer,
     """/prefs custom answers to offer on a packet; those for a question on it come first."""
     marked = [(c, labels.question_key(c.question) in question_keys) for c in a.custom]
     return sorted(marked, key=lambda x: not x[1])
+
+
+@dataclass(frozen=True)
+class SponsorshipOffer:
+    """What to offer for a sponsorship question: the yes/no to write, and whether Fill ticks it
+    (known polarity) or only suggests it (any other wording)."""
+
+    value: bool
+    ticked: bool
+
+
+def sponsorship_offer(a: Answers, question: str) -> SponsorshipOffer | None:
+    """The stored sponsorship answer applied to ``question``'s polarity, or ``None`` when
+    nothing is stored or the question is not about sponsorship."""
+    stored = a.requires_sponsorship
+    if stored is None or not labels.is_sponsorship_question(question):
+        return None
+    polarity = labels.sponsorship_polarity(question)
+    if polarity == "require":
+        return SponsorshipOffer(stored, True)
+    if polarity == "without":
+        return SponsorshipOffer(not stored, True)
+    return SponsorshipOffer(stored, False)

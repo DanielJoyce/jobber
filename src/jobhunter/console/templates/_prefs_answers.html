@@ -41,6 +41,32 @@
     {{ err('ans.work_authorization') }}
   </div>
 
+  <h3 class="sub" id="ans-contact">Contact {{ ahelp('contact', 'Contact') }}</h3>
+  {% call help_body('contact', 'Contact') %}<p class="hint">Your name, email, phone and city, filled into application forms by the browser extension when you click Fill. They are stored only in this file, never sent to a model, never written to a log or the history. The street address and postal code are never stored.</p>{% endcall %}
+  {% if ans_note %}<div class="banner" role="status" id="contact-note">{{ ans_note }}</div>{% endif %}
+  <div class="grid2">
+    {% for k, label, maxlen in ans_contact_fields %}
+    <label>{{ label }}
+      <input type="{% if k == 'email' %}email{% elif k == 'phone' %}tel{% else %}text{% endif %}" name="ans.contact.{{ k }}" value="{{ ansv['ans.contact.' ~ k] }}" maxlength="{{ maxlen }}" spellcheck="false" autocomplete="off"{{ inv('ans.contact.' ~ k) }}>
+    </label>
+    {{ err('ans.contact.' ~ k) }}
+    {% endfor %}
+  </div>
+  <p>
+    <button type="button" class="button" id="contact-from-resume"
+            hx-post="/prefs/contact/from-resume" hx-include="#prefs-form" hx-target="#sec-answers" hx-swap="outerHTML">Copy from my resume header</button>
+    <span class="muted">Fills the boxes for you to check; it saves nothing.</span>
+  </p>
+  <div class="grid2">
+    <label>{{ ans_sponsorship_label }} {{ ahelp('sponsorship', 'Sponsorship') }}
+      <select name="ans.requires_sponsorship"{{ inv('ans.requires_sponsorship') }}>
+        {% for val, text in ans_work_auth_choices %}<option value="{{ val }}"{% if ansv['ans.requires_sponsorship'] == val %} selected{% endif %}>{{ text }}</option>{% endfor %}
+      </select>
+    </label>
+    {% call help_body('ans-sponsorship', 'Sponsorship') %}<p class="hint">Yes if you will need an employer to sponsor your work visa. Fill uses it to answer "Will you require sponsorship?" and, inverted, "Can you work without sponsorship?". Any other wording is only suggested, never filled for you.</p>{% endcall %}
+    {{ err('ans.requires_sponsorship') }}
+  </div>
+
   <h3 class="sub">Saved custom answers {{ ahelp('custom', 'Saved custom answers') }}</h3>
   {% call help_body('ans-custom', 'Saved custom answers') %}<p class="hint">Templates such as "Why do you want to work here?". A packet offers each one beside a question with the same wording. Promote to /prefs on a packet adds one here. Clear both boxes to remove one.</p>{% endcall %}
   <div class="answers-custom">
