@@ -234,6 +234,7 @@ and systemd starts it again; the unit needs three lines that preflight adds (see
 | `[scoring.openrouter]` | Apply now (reloads in place); except `base_url`, `api_key_env`, `catalog_cache`: restart the console |
 | `[scoring.local]` | Apply now (reloads in place); except `runtime`, `base_url`, `api_key_env`: restart the console |
 | `[apply]` | Apply now (reloads in place) |
+| `[apply_links]` | Apply now (reloads in place) |
 | `[mail]` | Apply now (reloads in place) |
 | `[console]` | Restart the console |
 | `[capture]` | Apply now (reloads in place) |

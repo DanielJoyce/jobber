@@ -386,6 +386,20 @@ class Apply(BaseModel):
     api_entailment_model: str = "claude-haiku-5-5"
 
 
+class ApplyLinks(BaseModel):
+    """The nightly run's apply-link pass (bug cf23a1c, ``pipeline/apply_pass.py``).
+
+    ``per_run`` caps the groups resolved per run (0 turns the pass off); ``workers`` is how
+    many resolve at once. Requests go through FetchContext, so robots.txt and per-host rate
+    limits hold whatever ``workers`` is. Nothing here spends credits.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    per_run: int = Field(default=200, ge=0)
+    workers: int = Field(default=4, ge=1)
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -393,6 +407,7 @@ class Settings(BaseModel):
     fetch: Fetch = Field(default_factory=Fetch)
     scoring: Scoring = Field(default_factory=Scoring)
     apply: Apply = Field(default_factory=Apply)
+    apply_links: ApplyLinks = Field(default_factory=ApplyLinks)
     mail: Mail = Field(default_factory=Mail)
     console: Console = Field(default_factory=Console)
     capture: Capture = Field(default_factory=Capture)
@@ -1027,6 +1042,9 @@ RELOADABLE: frozenset[str] = frozenset(
         "apply.entailment_check",
         "apply.cli_entailment_model",
         "apply.api_entailment_model",
+        # read per run
+        "apply_links.per_run",
+        "apply_links.workers",
         # read on use
         "mail.alerts_address",
         "mail.label",
@@ -1108,6 +1126,8 @@ SHOWN_VALUES: frozenset[str] = frozenset(
         "apply.entailment_check",
         "apply.cli_entailment_model",
         "apply.api_entailment_model",
+        "apply_links.per_run",
+        "apply_links.workers",
         "mail.label",
         "console.port",
         "console.public_port",

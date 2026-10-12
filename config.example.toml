@@ -107,6 +107,13 @@
 # daily_cap_usd = 1.00               # packet API spend only; separate from [scoring] caps
 # entailment_check = true            # advisory Haiku pass: do the cited lines support each line?
 
+# The nightly run's apply-link pass: after scoring, resolve apply links for shortlisted and
+# A/B-fit jobs that have none yet, so Apply opens without waiting. No credits; robots.txt and
+# per-host rate limits apply. Skip it once with `jobhunter run --stage` (leave out apply_links).
+[apply_links]
+# per_run = 200          # groups resolved per run at most; 0 turns the pass off
+# workers = 4            # groups resolved at once
+
 [capture]
 # Hosts where the browser extension never reads a page (suffix match).
 # disabled_hosts = []    # e.g. ["linkedin.com", "indeed.com"]
