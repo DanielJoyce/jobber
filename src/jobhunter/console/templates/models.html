@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('pages.css') }}">
+<link rel="stylesheet" href="{{ static_url('setup.css') }}">
+<link rel="stylesheet" href="{{ static_url('models.css') }}">
+<script src="{{ static_url('setup.js') }}" defer></script>
+<script src="{{ static_url('models.js') }}" defer></script>
+{% endblock %}
+{% block main %}
+<div class="pg su mo">
+  <h1>Models</h1>
+  <p class="muted">What jobhunter uses a model for, what each choice costs, and whether its key or subscription is there. Saving spends nothing; it is written to <code>{{ file or "models.toml" }}</code>, which overrides the same keys in config.toml.</p>
+  {% if flash %}<p class="callout" role="status">{{ flash }}</p>{% endif %}
+  <input type="hidden" id="models-digest" name="digest" value="{{ digest }}">
+  {% include "_models_local_ids.html" %}
+  {% include "_models_banner.html" %}
+  {% if not ctx.peer_ok %}
+  <p class="callout mo-readonly" role="note">Read only: this browser is not on the machine running the console. Change models there, or with the commands shown on each row.</p>
+  {% endif %}
+  {% include "_models_access.html" %}
+  {% for r in rows %}{% include "_models_row.html" %}{% endfor %}
+  {% include "_models_history.html" %}
+  <p class="muted mo-foot">Anthropic prices checked {{ prices_checked }}.
+    {% if openrouter_fetched %}OpenRouter list cached {{ openrouter_fetched.isoformat() | localtime }}.{% else %}No OpenRouter list cached yet.{% endif %}
+  </p>
+  {% if ctx.peer_ok and not ctx.allow_remote %}
+  <form method="post" action="/models/openrouter/refresh" class="su-form">
+    <button type="submit">Refresh list (free; contacts openrouter.ai)</button>
+  </form>
+  {% else %}
+  <p class="muted">To refresh the OpenRouter list: <code>{{ ctx.prefix }} models catalog --refresh</code></p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,3 @@
+{% set a = access_rows | selectattr("check", "equalto", "local") | first %}
+{% include "_models_access_row.html" %}
+{% with oob = True %}{% include "_models_local_ids.html" %}{% endwith %}

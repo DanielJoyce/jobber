@@ -1,0 +1,13 @@
+{# The answer to an htmx write: the primary fragment, then out-of-band swaps that keep the rest
+   of the page true: the digest every form quotes, the banner, the access list, the history,
+   and (after a revert) the rows. #}
+{% if primary == "history" %}
+  {% include "_models_history.html" %}
+  {% with oob = True %}{% for r in rows %}{% include "_models_row.html" %}{% endfor %}{% endwith %}
+{% else %}
+  {% set r = rows | selectattr("key", "equalto", primary) | first %}
+  {% include "_models_row.html" %}
+  {% with oob = True %}{% include "_models_history.html" %}{% endwith %}
+{% endif %}
+<input type="hidden" id="models-digest" name="digest" value="{{ digest }}" hx-swap-oob="true">
+{% with oob = True %}{% include "_models_banner.html" %}{% include "_models_access.html" %}{% endwith %}

@@ -1,0 +1,42 @@
+<section id="models-history" class="mo-history"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <h2>History</h2>
+  {% set s = history_msg %}
+  {% if s and s.message %}
+  <p class="mo-msg mo-{{ s.kind }}" role="{{ 'alert' if s.kind == 'error' else 'status' }}">{{ s.message }}</p>
+  {% for line in s.effect %}<p class="mo-effect">{{ line }}</p>{% endfor %}
+  {% if s.queued_line %}<p class="mo-queued">{{ s.queued_line }}</p>{% endif %}
+  {% if s.reasons %}<ul class="mo-reasons">{% for reason in s.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
+  {% if ctx.peer_ok and s.action and (s.queued_line or s.reasons) %}
+  <form method="post" action="{{ s.action }}" class="su-form" hx-post="{{ s.action }}" hx-target="#models-history" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids">
+    <input type="hidden" name="page_digest" value="{{ digest }}">
+    {% if s.forced or (s.reasons and not s.queued_line) %}<input type="hidden" name="force" value="1">{% endif %}
+    {% if s.queued_line %}
+    <button type="submit" name="queued" value="new">Revert; queued re-scores use the new model</button>
+    {% if s.queued_old %}<button type="submit" name="queued" value="keep">Revert; keep queued re-scores on {{ s.queued_old }}</button>{% endif %}
+    {% else %}
+    <button type="submit">Revert anyway</button>
+    {% endif %}
+  </form>
+  {% endif %}
+  {% endif %}
+  {% if not history %}
+  <p class="muted">No model changes yet.</p>
+  {% else %}
+  <ul class="mo-history-list">
+    {% for h in history %}
+    <li>
+      <span class="muted">{{ h["at"] | localtime }}</span>
+      <span>{{ h["field"] }}: {{ h["old_value"] or "(not set)" }} → {{ h["new_value"] or "(not set)" }}</span>
+      <span class="muted">({{ {"ui": "on /models", "cli": "jobhunter models", "reset": "reset", "revert": "revert"}.get(h["source"], h["source"]) }})</span>
+      {% if ctx.peer_ok %}
+      <form method="post" action="/models/history/{{ h['id'] }}/revert" class="mo-inline"
+            hx-post="/models/history/{{ h['id'] }}/revert" hx-target="#models-history" hx-swap="outerHTML" hx-include="#models-digest, #models-local-ids">
+        <input type="hidden" name="page_digest" value="{{ digest }}">
+        <button type="submit">Revert</button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>

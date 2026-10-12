@@ -1,0 +1,6 @@
+<section id="models-access" class="mo-access"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <h2>Access</h2>
+  <ul class="mo-access-list">
+    {% for a in access_rows %}{% include "_models_access_row.html" %}{% endfor %}
+  </ul>
+</section>

@@ -34,6 +34,7 @@ from jobhunter.console import (
     ext_routes,
     help_routes,
     inbox_routes,
+    models_routes,
     packet_routes,
     pages_routes,
     prefs_routes,
@@ -89,6 +90,7 @@ PAGES: list[tuple[str, str | None, str]] = [
     ("/search", "Search", "Search"),
     ("/costs", "Costs", "Costs"),
     ("/prefs", "Prefs", "Preferences"),
+    ("/models", "Models", "Models"),
     ("/setup", "Setup", "Setup"),
     ("/alerts", None, "Alerts"),
     # Hidden from the nav while achievements are off (base.html asks achievements_on()).
@@ -519,6 +521,7 @@ def create_app(
     rejections_routes.register(app, templates, get_conn, NAV, now)
     alerts_routes.register(app, templates, get_conn, NAV, now)
     setup_routes.register(app, templates, get_conn, NAV, now)
+    models_routes.register(app, templates, get_conn, NAV, now)
     achievements_routes.register(app, templates, get_conn, NAV, now)
     ext_routes.register(app, get_profile, now)
 

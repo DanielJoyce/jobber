@@ -1,0 +1,37 @@
+{% set b = banner %}
+<div id="models-banner" class="mo-banner"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if b.nothing %}
+  <p class="mo-alert" role="alert"><span aria-hidden="true">✕</span> No model access found: no API key and no Claude subscription. Start with <a href="/help/getting-started">Help › Getting started</a>.</p>
+  {% endif %}
+  {% for line, topic in b.access %}
+  <p class="mo-alert" role="alert"><span aria-hidden="true">✕</span> {{ line }} <a href="/help/{{ topic }}">How to fix it</a></p>
+  {% endfor %}
+  {% for line in b.lines %}
+  <p class="mo-alert" role="alert"><span aria-hidden="true">✕</span> {{ line }}</p>
+  {% endfor %}
+  {% for line in b.file_problems %}
+  <p class="mo-warn"><span aria-hidden="true">!</span> {{ line }}</p>
+  {% endfor %}
+  {% if b.broken %}
+    {% if ctx.peer_ok %}
+    <form method="post" action="/models/reset-file" class="su-form">
+      <input type="hidden" name="page_digest" value="{{ digest }}">
+      <button type="submit">Reset file</button>
+      <span class="muted">Empties models.toml and keeps the old one beside it as models.toml.broken-&lt;time&gt;.</span>
+    </form>
+    {% else %}
+    <p>To fix it: <code>{{ ctx.prefix }} models reset-file</code></p>
+    {% endif %}
+  {% endif %}
+  {% if b.pending %}
+  <div class="mo-warn">
+    <p><span aria-hidden="true">!</span> models.toml changed outside the console: {{ b.pending | length }} setting{{ "s" if b.pending | length != 1 }} ({{ b.pending | join(", ") }}) differ from what this console is running.</p>
+    {% if ctx.peer_ok %}
+    <form method="post" action="/models/load" class="su-form">
+      <input type="hidden" name="page_digest" value="{{ digest }}">
+      <button type="submit">Load</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
