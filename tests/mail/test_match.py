@@ -988,6 +988,8 @@ def test_loose_phrase_rejection_is_stored_pending(conn):
     }
     assert states == {"w1": "pending", "s1": "confirmed"}
     assert [r.confirmed for r in res.rejections] == [True, False]  # oldest first
+    # The classifier's own 'confirmed' is not you confirming (specs/021 confirmed_at).
+    assert {r[0] for r in conn.execute("SELECT confirmed_at FROM rejection")} == {None}
 
 
 def test_dismissing_a_rejection_proposal_removes_the_rejection_row(conn, client):
@@ -1018,7 +1020,8 @@ def test_accepting_a_rejection_proposal_confirms_the_rejection_row(conn, client)
     assert conn.execute("SELECT state FROM rejection").fetchone()[0] == "pending"
     pid = rows(conn)[0]["id"]
     assert client.post(f"/proposals/{pid}/accept").status_code == 303
-    assert conn.execute("SELECT state FROM rejection").fetchone()[0] == "confirmed"
+    row = conn.execute("SELECT state, confirmed_at FROM rejection").fetchone()
+    assert tuple(row) == ("confirmed", NOW.isoformat())  # specs/021: you confirmed it now
 
 
 def test_rejection_stored_before_the_application_is_proposed_once_it_exists(conn, client):

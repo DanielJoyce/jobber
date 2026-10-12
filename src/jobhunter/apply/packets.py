@@ -87,9 +87,9 @@ def prepare_in_txn(conn: sqlite3.Connection, group_id: int, now: datetime) -> in
         moved = app["status"] in _BEFORE_PREPARING
     if moved:
         conn.execute(
-            "INSERT INTO application_event (application_id, at, status, note, source) "
-            "VALUES (?, ?, 'preparing', ?, 'manual')",
-            (app_id, at, PREPARE_NOTE),
+            "INSERT INTO application_event (application_id, at, status, note, source, "
+            "recorded_at) VALUES (?, ?, 'preparing', ?, 'manual', ?)",
+            (app_id, at, PREPARE_NOTE, at),
         )
         if app is not None:
             # The cache comes from the log, the same way every reader derives it.

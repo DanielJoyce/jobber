@@ -477,9 +477,9 @@ def log_click(
         ).fetchone()
         if app and app["status"] == "interested":
             conn.execute(
-                "INSERT INTO application_event (application_id, at, status, note, source) "
-                "VALUES (?, ?, 'preparing', ?, 'manual')",
-                (app["id"], at, APPLY_CLICK_NOTE),
+                "INSERT INTO application_event (application_id, at, status, note, source, "
+                "recorded_at) VALUES (?, ?, 'preparing', ?, 'manual', ?)",
+                (app["id"], at, APPLY_CLICK_NOTE, at),
             )
             rebuild_status(conn, app["id"])  # the cache follows the log (tracking rules)
         conn.execute("COMMIT")
@@ -583,9 +583,9 @@ def answer_prompt(
                 status = app["status"]  # the event just records the answer
                 conn.execute("UPDATE application SET updated_at = ? WHERE id = ?", (at, app_id))
         conn.execute(
-            "INSERT INTO application_event (application_id, at, status, note, source) "
-            "VALUES (?, ?, ?, ?, 'manual')",
-            (app_id, at, status, "marked applied" if yes else "not applied yet"),
+            "INSERT INTO application_event (application_id, at, status, note, source, "
+            "recorded_at) VALUES (?, ?, ?, ?, 'manual', ?)",
+            (app_id, at, status, "marked applied" if yes else "not applied yet", at),
         )
         if yes:
             # The packet that went out, in the same transaction (specs/017 "Closing the loop").

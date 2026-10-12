@@ -1428,6 +1428,27 @@ def mail_setup(
         raise typer.Exit(1) from exc
     for line in report.lines():
         typer.echo(line)
+    if not dry_run:
+        _record_mail_setup(settings)
+
+
+def _record_mail_setup(settings) -> None:
+    """Record ``mail_setup_at`` for the achievements board (specs/021 ``setup.mail``) after a
+    real, successful ``mail setup``. The mailbox is already set up by now, so a database that
+    cannot take the write (pending container migration, busy) is reported, not fatal."""
+    import sqlite3
+
+    from jobhunter.core import achievement_setting
+
+    try:
+        conn = db.connect(resolve_path(settings.paths.db_path))
+        try:
+            _migrate(conn)
+            achievement_setting.record_mail_setup(conn, datetime.now(UTC))
+        finally:
+            conn.close()
+    except (db.SchemaError, sqlite3.Error) as exc:
+        typer.echo(f"note: mailbox set up, but not recorded in the database: {exc}", err=True)
 
 
 @mail_app.command("status")

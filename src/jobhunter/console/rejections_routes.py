@@ -110,7 +110,7 @@ def register(
 
     @app.post("/rejections/{rid}/confirm")
     def confirm(conn: Conn, rid: int) -> Response:
-        if not rejections.confirm(conn, rid):
+        if not rejections.confirm(conn, rid, now()):
             raise HTTPException(404, "no such rejection")
         return RedirectResponse("/rejections", status_code=303)
 
