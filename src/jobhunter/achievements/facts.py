@@ -86,6 +86,8 @@ class Facts:
     deliberate_days: dict[int, set[date]]  # application id -> local days with one
     conn: sqlite3.Connection = field(repr=False)
     _active: dict[date, list[tuple[str, object]]] | None = field(default=None, repr=False)
+    # 019's essentials_ok, supplied by the caller (None: unknown, so setup.ready says nothing)
+    essentials: bool | None = None
 
     # --- calendar
 
@@ -122,7 +124,9 @@ class Facts:
         return self._active
 
 
-def load(conn: sqlite3.Connection, now: datetime, tz: tzinfo) -> Facts:
+def load(
+    conn: sqlite3.Connection, now: datetime, tz: tzinfo, *, essentials: bool | None = None
+) -> Facts:
     rows = conn.execute(
         "SELECT id, application_id, at, status, note, source, recorded_at "
         "FROM application_event "
@@ -140,7 +144,14 @@ def load(conn: sqlite3.Connection, now: datetime, tz: tzinfo) -> Facts:
             sent[e.app] = e
     batch = Counter(e.at for e in events if e.note == SHORTLIST_NOTE)
     facts = Facts(
-        now=now, tz=tz, events=events, sent=sent, deliberate={}, deliberate_days={}, conn=conn
+        now=now,
+        tz=tz,
+        events=events,
+        sent=sent,
+        deliberate={},
+        deliberate_days={},
+        conn=conn,
+        essentials=essentials,
     )
     for e in events:
         if is_deliberate_early(e, batch):

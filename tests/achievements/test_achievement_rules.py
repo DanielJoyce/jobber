@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from achv_world import NOW, TZ, local
 
-from jobhunter.achievements import catalog, facts
+from jobhunter.achievements import catalog, engine, facts
 from jobhunter.apply import packets
 from jobhunter.console import inbox, tracking
 
@@ -423,5 +423,13 @@ def test_backdated_manual_event_does_not_fill_a_past_week(world):
 def test_every_catalog_entry_has_a_rule(world):
     s = world.series()
     assert set(s) == {a.id for a in catalog.CATALOG}
-    assert len(catalog.CATALOG) == 31
-    assert sum(a.tiers for a in catalog.CATALOG) == 53  # 54 with setup.ready (A6)
+    assert len(catalog.CATALOG) == 32
+    assert sum(a.tiers for a in catalog.CATALOG) == 54
+
+
+def test_all_set_follows_the_essentials_input(world):
+    assert engine.compute(world.conn, NOW, TZ, essentials=True).series["setup.ready"].progress == 1
+    assert engine.compute(world.conn, NOW, TZ, essentials=False).series["setup.ready"].progress == 0
+    unknown = engine.compute(world.conn, NOW, TZ)
+    assert unknown.series["setup.ready"].progress == 0
+    assert unknown.unknown == {"setup.ready"}
