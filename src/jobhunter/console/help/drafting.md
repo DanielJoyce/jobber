@@ -82,13 +82,14 @@ costs. The runner is the one you chose on `/models` (or `[apply] runner` in `con
 
 A draft takes up to a few minutes, so it runs in the background in the console. The extension
 checks on it; the packet page shows "being drafted" meanwhile. A second **Generate** for the
-same document waits until the first one finishes. A console **Restart** waits for running
-drafts, and while a restart is under way **Generate** answers "jobhunter is restarting; try
-again in a moment".
+same document is refused while the first one runs: wait for it to finish. A console
+**Restart** is refused while a draft runs (it names the draft), and while a restart is under
+way **Generate** answers "jobhunter is restarting; try again in a moment".
 
-If the console stops in the middle of a draft (a crash, or a restart that could not wait), the
-draft reads as **did not finish**. A subscription draft that did not finish is not charged.
-Press **Generate** again.
+If the console (or a `jobhunter apply draft` command) stops in the middle of a draft, the draft
+reads as **did not finish** and nothing is saved. A subscription draft uses no API credit
+unless your plan was on paid extra usage; any charge already logged shows on the Costs page.
+Press **Generate** again. The notice goes away once the document has a newer version.
 
 If a subscription draft fails, the extension offers **Run on the API** with its estimate, as its
 own click. It never switches by itself. Drafting does not run in a container: the extension

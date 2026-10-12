@@ -31,6 +31,22 @@ NONE = "none"
 
 MAX_ERROR = 500
 
+_STOPPED = (
+    "The draft did not finish: the process running it stopped (a console restart, or an "
+    "interrupted jobhunter apply draft). Nothing was saved."
+)
+
+
+def stopped_message(runner: str) -> str:
+    """What a stopped run says. A subscription run can have been charged if the plan was on
+    paid extra usage, so no run is called free; logged usage is on the Costs page."""
+    if runner == "cli":
+        return (
+            f"{_STOPPED} On your subscription it used no API credit unless your plan was on "
+            "paid extra usage; any charge already logged shows on the Costs page."
+        )
+    return f"{_STOPPED} Any API charge already logged shows on the Costs page."
+
 
 def begin(
     conn: sqlite3.Connection, packet_id: int, kind: str, qkey: str, runner: str, now: datetime
@@ -74,6 +90,10 @@ class Run:
     doc_id: int | None
     error: str | None
     state: str
+
+    @property
+    def stopped_message(self) -> str:
+        return stopped_message(self.runner)
 
 
 def _row_run(row: sqlite3.Row, state: str) -> Run:
@@ -129,11 +149,30 @@ def unfinished(
     *,
     live: Callable[[int], bool] | None = None,
 ) -> list[Run]:
-    """The packet's documents whose latest run has no outcome: drafting or stopped."""
+    """The packet's documents whose latest run has no outcome: drafting, or stopped with no
+    newer version of that document since (Generate again, an edit or the base resume clears
+    a stopped run)."""
     rows = conn.execute(
         "SELECT r.* FROM draft_run r WHERE r.packet_id = ? AND r.outcome IS NULL AND r.id = "
         "(SELECT max(id) FROM draft_run x WHERE x.packet_id = r.packet_id AND x.kind = r.kind "
         "AND x.question_key = r.question_key) ORDER BY r.id",
         (packet_id,),
     ).fetchall()
-    return [_row_run(r, _state(r, data_dir, live)) for r in rows]
+    out = []
+    for r in rows:
+        run = _row_run(r, _state(r, data_dir, live))
+        if run.state == STOPPED and _newer_version(conn, run):
+            continue
+        out.append(run)
+    return out
+
+
+def _newer_version(conn: sqlite3.Connection, run: Run) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM packet_document WHERE packet_id = ? AND kind = ? AND question_key = ? "
+            "AND created_at > ? LIMIT 1",
+            (run.packet_id, run.kind, run.question_key, run.started_at),
+        ).fetchone()
+        is not None
+    )

@@ -217,6 +217,8 @@ def join_draft_threads(app: FastAPI, timeout: float) -> list[str]:
     return the names still running (logged: their runs will read as stopped)."""
     deadline = time.monotonic() + timeout
     for thread in list(getattr(app.state, "ext_draft_threads", [])):
+        if thread.ident is None:
+            continue  # never started: joining it would raise and skip the shutdown's kill_all
         thread.join(max(deadline - time.monotonic(), 0.0))
     left = [t.name for t in getattr(app.state, "ext_draft_threads", []) if t.is_alive()]
     for name in left:

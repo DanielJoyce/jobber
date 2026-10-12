@@ -1146,13 +1146,14 @@ def start(
     instruction: str = "",
     notes: list[str] | None = None,
     confirm_paid: bool = False,
-    check: Callable[[Prepared], None] | None = None,
+    check: Callable[[Prepared], bool | None] | None = None,
     environ: Mapping[str, str] | None = None,
     cli: Any = None,
 ) -> Started:
     """Admit a run, synchronously: the request's refusals, ``check`` (the extension's
     estimate token), every pre-run refusal (``_preflight``), the ``inflight`` claim and the
-    ``draft_run`` row. Raises ApplyRefused (EstimateChanged for a stale token) with nothing
+    ``draft_run`` row. ``check`` raises to refuse, and may return False to withdraw
+    ``confirm_paid``. Raises ApplyRefused (EstimateChanged for a stale token) with nothing
     claimed or written; nothing runs and nothing is spent here."""
     prepared = prepare(
         conn,
@@ -1165,8 +1166,8 @@ def start(
         instruction=instruction,
         notes=notes,
     )
-    if check is not None:
-        check(prepared)
+    if check is not None and check(prepared) is False:
+        confirm_paid = False  # the check withdrew the confirm (the line is not charged)
     _preflight(
         conn,
         settings,

@@ -423,9 +423,9 @@ def test_a_draft_cut_off_by_a_restart_reads_as_stopped(env):
     c2 = TestClient(app2, base_url=BASE, follow_redirects=False)
     s = status_with(env, c2)
     assert s["state"] == "stopped" and s["run_id"] == started.run_id
-    assert s["message"] == (
-        "The draft did not finish (the console restarted); nothing was charged on the subscription"
-    )
+    assert s["message"].startswith("The draft did not finish: the process running it stopped")
+    assert "unless your plan was on paid extra usage" in s["message"]
+    assert "nothing was charged" not in s["message"].lower()
     page = c2.get(f"/packet/{env.pid}").text
     assert f'id="draft-stopped-{started.run_id}"' in page and "did not finish" in page
     # Generate again works and replaces it.
@@ -561,3 +561,84 @@ def test_draft_runs_state_without_outcome_follows_the_claim(tmp_path):
     assert run.state == "failed" and run.error == "boom"
     assert draft_runs.unfinished(conn, tmp_path, 5) == []
     conn.close()
+
+
+def test_a_background_draft_drops_the_superseded_attach_files(env):
+    """The employer-named copies are what you attach: after v2 is drafted in the background,
+    v1's copies must not stay (they go, or they hold v2)."""
+    from jobhunter.apply import export
+
+    def render(html, out):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"%PDF-1.4 synthetic\n")
+
+    env.app.state.packet_pdf_renderer = render
+    use_base_resume(env)
+    assert env.client.post(f"/packet/{env.pid}/export", data={"kind": "resume"}).status_code == 303
+    data_dir = env.settings.paths.data_dir
+    v1_files = export.named_files(data_dir, env.pid, "resume")
+    assert any(p.suffix == ".txt" for p in v1_files), "v1 was exported under its attach names"
+    v1_text = {p.name: p.read_bytes() for p in v1_files if p.suffix != ".pdf"}
+    env.app.state.packet_runner = FakeRunner([RESUME_OUT, ENTAIL])
+    assert generate(env, estimate(env)).status_code == 202
+    join(env)
+    assert status(env)["version"] == 2
+    left = export.named_files(data_dir, env.pid, "resume")
+    # v2 was never exported, so its attach copies cannot exist yet: v1's must be gone.
+    assert left == []
+    for name, body in v1_text.items():
+        path = data_dir / "packets" / str(env.pid) / name
+        assert not path.exists() or path.read_bytes() != body
+
+
+def test_a_stopped_notice_clears_once_a_newer_version_exists(env):
+    from jobhunter.console.inbox_routes import load_console_profile
+
+    profile, _ = load_console_profile(env.settings)
+    later = datetime(2026, 10, 12, 13, 0, tzinfo=UTC)  # before NOW, the console's clock
+    started = generator.start(
+        env.conn, env.settings, profile, env.pid, "resume", runner="cli", now=later,
+        cli=FakeRunner(),
+    )  # fmt: skip
+    started.claim.release()
+    page = env.client.get(f"/packet/{env.pid}").text
+    assert f'id="draft-stopped-{started.run_id}"' in page
+    use_base_resume(env)  # a newer version of the resume (written at NOW)
+    assert "draft-stopped" not in env.client.get(f"/packet/{env.pid}").text
+
+
+def test_a_thread_that_cannot_start_releases_everything(env, monkeypatch):
+    from jobhunter.console import ext_routes
+    from jobhunter.console.app import join_draft_threads
+
+    class NoStart(threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(ext_routes.threading, "Thread", NoStart)
+    est = estimate(env)
+    client = TestClient(env.app, base_url=BASE, raise_server_exceptions=False)
+    body = {"action_id": str(uuid.uuid4()), "kind": "resume", "token": est["token"]}
+    r = post(env, f"packets/{env.pid}/generate", body, client=client)
+    assert r.status_code == 500
+    assert env.app.state.ext_draft_threads == [] and env.app.state.ext_draft_live == {}
+    assert env.app.state.work.labels() == []
+    key = generator.claim_key(env.pid, "resume", "")
+    assert not inflight.held(env.settings.paths.data_dir, key)
+    outcomes = [(x["outcome"], x["error"]) for x in rows(env, "draft_run")]
+    assert outcomes == [("failed", "not started")]
+    assert join_draft_threads(env.app, 1.0) == []
+
+
+def test_a_confirm_on_a_free_run_is_not_passed_on(env):
+    from jobhunter.console.inbox_routes import load_console_profile
+
+    profile, _ = load_console_profile(env.settings)
+    started = generator.start(
+        env.conn, env.settings, profile, env.pid, "resume", runner="cli", now=NOW,
+        confirm_paid=True, check=lambda prepared: False, cli=FakeRunner(),
+    )  # fmt: skip
+    try:
+        assert started.confirm_paid is False
+    finally:
+        started.claim.release()

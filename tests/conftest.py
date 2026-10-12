@@ -590,12 +590,59 @@ def run_lock_holder(tmp_path):
 # --- background drafts (specs/022 "Drafting in the background") ------------------------------
 
 
+_QUARANTINE = {"on": False, "applied": False}
+
+
+def _quarantine_session() -> None:
+    """After a leaked draft thread: keep the claude and network guards for the rest of the
+    session, without undo. Applied once the leaking test's fixtures are torn down (the hook
+    below), so these replace the real functions the guards restore, and every later test's
+    monkeypatch restores to these: the leaked thread can never launch ``claude`` or reach a
+    non-loopback host, whatever later tests do."""
+    from jobhunter.apply import cli_runner
+
+    real_connect = socket.socket.connect
+    real_getaddrinfo = socket.getaddrinfo
+
+    def connect(self: socket.socket, address: object) -> object:
+        host = address[0] if isinstance(address, tuple) else address
+        if self.family != socket.AF_UNIX and not _is_loopback(host):
+            raise NetworkBlocked(f"quarantined session: no connection to {host!r}")
+        return real_connect(self, address)
+
+    def getaddrinfo(host: object, *args: object, **kwargs: object) -> object:
+        if host is not None and not _is_loopback(host):
+            raise NetworkBlocked(f"quarantined session: no lookup of {host!r}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def no_claude(*args: object, **kwargs: object) -> None:
+        raise RealClaudeBlocked("quarantined session: a draft thread leaked; claude is blocked")
+
+    socket.socket.connect = connect  # type: ignore[method-assign]
+    socket.getaddrinfo = getaddrinfo  # type: ignore[assignment]
+    cli_runner._spawn = no_claude  # type: ignore[assignment]
+    cli_runner._lookup = lambda name: None  # type: ignore[assignment]
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
+    yield
+    if _QUARANTINE["on"] and not _QUARANTINE["applied"]:
+        _QUARANTINE["applied"] = True
+        _quarantine_session()
+
+
 @pytest.fixture(autouse=True)
 def _no_leftover_draft_threads():
     """Fail any test that ends with an ``ext-draft-*`` thread it started still alive. Such a
     thread holds a document's claim and the work registry, and with a real runner it could go
     on to run ``claude`` or the API after the test's fakes are gone. Release the fake runner and
-    join the thread before the test ends. Do not weaken this guard."""
+    join the thread before the test ends.
+
+    Defined after the network and claude guards, so it is torn down before them: while it runs
+    they are still in place. On a leak it marks the session quarantined (the guards are made
+    permanent right after this test's teardown) and fails the test. Do not weaken this
+    guard."""
     import threading
 
     def live() -> set[threading.Thread]:
@@ -608,8 +655,10 @@ def _no_leftover_draft_threads():
         t.join(2.0)  # a run that is just finishing (it leaves the registry last)
     left = {t for t in left if t.is_alive()}
     if left:
+        _QUARANTINE["on"] = True
         pytest.fail(
             "test left background draft threads running: "
             + ", ".join(sorted(t.name for t in left))
-            + "; release the fake runner and join them (tests/conftest.py)"
+            + "; release the fake runner and join them (tests/conftest.py). The rest of this "
+            "session runs quarantined"
         )

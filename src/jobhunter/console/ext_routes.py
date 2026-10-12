@@ -740,6 +740,11 @@ def register(
                 client_factory=app.state.packet_api_client_factory,
                 cli=app.state.packet_runner,
             )
+            # The new version is current: the employer-named attach files must follow it, as
+            # the packet page's redirect does, or a superseded version stays attachable.
+            warn = export.safe_sync(conn, settings().paths.data_dir, started.packet_id)
+            if warn:
+                logger.warning("draft for packet %s: %s", started.packet_id, warn)
         except (generator.ApplyRefused, generator.GenerateFailed):
             pass  # recorded on the draft_run row for draft-status
         except Exception:
@@ -777,8 +782,9 @@ def register(
                     profile = profile_or_error()
                     seen: dict[str, DraftEstimateResponse] = {}
 
-                    def check(prepared: generator.Prepared) -> None:
-                        """The click's token must name this line; spend needs its confirm."""
+                    def check(prepared: generator.Prepared) -> bool:
+                        """The click's token must name this line; spend needs its confirm.
+                        Returns whether the confirm stands: only for a charged line."""
                         resp, line, _ = line_response(conn, pid, req, prepared, runner)
                         seen["estimate"] = resp
                         if line.refusal is not None:
@@ -793,6 +799,7 @@ def register(
                                 f"This draft is charged (≈ ${line.estimated_usd:.2f}): confirm "
                                 "the spend first. Nothing was run"
                             )
+                        return req.confirm_paid and line.charged
 
                     try:
                         started = generator.start(
@@ -816,15 +823,16 @@ def register(
                             name=f"ext-draft-{pid}-{started.run_id}",
                             daemon=True,
                         )
-                        app.state.ext_draft_threads.append(thread)
                         app.state.ext_draft_live[started.run_id] = thread
                         thread.start()
                         thread_started = True
+                        # Only a started thread: the shutdown joins every listed one.
+                        app.state.ext_draft_threads.append(thread)
                     finally:
                         if not thread_started:
-                            draft_runs.finish(conn, started.run_id, now(), error="not started")
-                            started.claim.release()
                             app.state.ext_draft_live.pop(started.run_id, None)
+                            started.claim.release()  # first: the row write below may fail
+                            draft_runs.finish(conn, started.run_id, now(), error="not started")
                 finally:
                     if not thread_started:
                         app.state.work.leave(work)
@@ -871,11 +879,7 @@ def register(
                     msg = f"Drafting {sub}"
                     return ok(DraftStatusResponse(**base, state="drafting", message=msg))
                 if r.state == draft_runs.STOPPED:
-                    msg = "The draft did not finish (the console restarted); " + (
-                        "nothing was charged on the subscription"
-                        if r.runner == "cli"
-                        else "any API charge already logged shows on the Costs page"
-                    )
+                    msg = draft_runs.stopped_message(r.runner)
                     return ok(DraftStatusResponse(**base, state="stopped", message=msg))
                 if r.state == draft_runs.FAILED:
                     offer, usd = r.runner == "cli", None
