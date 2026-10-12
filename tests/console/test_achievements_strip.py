@@ -124,21 +124,40 @@ def test_busy_database_renders_from_stored_rows_and_retries(client, db_path):
     assert "search.found" in unlocked(db_path)
 
 
-def test_pick_next_closest_tier_ties_prefer_follow_and_skip_hidden():
-    item = rules.Item(NOW, ())
-    multi = [a for a in catalog.CATALOG if not a.hidden and a.category != "rhythm"]
-    follow = next(a for a in multi if a.category == "follow" and len(a.thresholds) > 1)
-    other = next(
-        a
-        for a in multi
-        if a.category not in ("follow", "aimed") and a.thresholds[0] == follow.thresholds[0]
-    )
-    one = {follow.id: rules.Series([item]), other.id: rules.Series([item])}
-    got = engine.pick_next(one, ())
-    assert got is not None and got.progress == 1
-    assert got.name == min((follow, other), key=lambda a: catalog.CATALOG.index(a)).name or (
-        got.name == follow.name
-    )
-    assert engine.pick_next(one, [follow.category, other.category]) is None
-    done = {a.id: rules.Series([item] * a.thresholds[-1]) for a in (follow,)}
-    assert engine.pick_next(done, ()) is None  # all tiers reached: nothing to chase
+def test_rule_exception_renders_the_strip_from_stored_rows(client, db_path, monkeypatch):
+    prefs_save(db_path)
+    client.get("/achievements")  # stores setup.prefs
+    capture(db_path, 1)
+
+    def boom(*args, **kwargs):
+        raise ValueError("bad timestamp")
+
+    monkeypatch.setattr(engine, "compute", boom)
+    text = strip_of(today(client))
+    assert text is not None and "Achievements 1" in text
+
+
+def _series(n):
+    return rules.Series([rules.Item(NOW, ())] * n)
+
+
+def test_tie_prefers_follow_up_over_an_earlier_catalog_entry():
+    order = [a.id for a in catalog.CATALOG]
+    assert order.index("apply.momentum") < order.index("follow.plan")
+    got = engine.pick_next({"apply.momentum": _series(2), "follow.plan": _series(2)}, ())
+    assert got is not None and got.name == catalog.BY_ID["follow.plan"].name
+
+
+def test_tie_prefers_aimed_over_momentum():
+    order = [a.id for a in catalog.CATALOG]
+    assert order.index("apply.momentum") < order.index("apply.targeted")
+    got = engine.pick_next({"apply.momentum": _series(2), "apply.targeted": _series(2)}, ())
+    assert got is not None and got.name == catalog.BY_ID["apply.targeted"].name
+
+
+def test_pick_next_picks_closest_tier_and_skips_hidden_and_finished():
+    # 4 of 5 beats 2 of 5
+    got = engine.pick_next({"apply.momentum": _series(4), "follow.plan": _series(2)}, ())
+    assert got is not None and got.progress == 4 and got.target == 5
+    assert engine.pick_next({"apply.momentum": _series(4)}, ["apply"]) is None
+    assert engine.pick_next({"follow.plan": _series(15)}, ()) is None  # last tier reached

@@ -450,6 +450,10 @@ class Gate:
         with self._lock:
             return self._strip[1] if self._strip and self._strip[0] == fp else None
 
+    def evaluated(self, fp: tuple[object, ...]) -> bool:
+        with self._lock:
+            return self._fp == fp
+
     def last_strip(self) -> tuple[int, NextUp | None] | None:
         with self._lock:
             return self._strip_last
@@ -471,8 +475,8 @@ class Gate:
 
 # --- Today strip -------------------------------------------------------------------------
 
-STRIP_BUSY_MS = 50  # the Today page never waits longer than this for the write lock
-_NEXT_PREFERENCE = ("follow", "aimed")  # win a tie over everything else (Momentum last)
+_PREFERRED_CATEGORIES = ("follow",)  # win a tie over the rest (Momentum last)
+_PREFERRED_IDS = ("apply.targeted",)  # "Aimed, not sprayed"
 
 
 @dataclass(frozen=True)
@@ -505,7 +509,7 @@ def pick_next(series: dict[str, rules.Series], hidden_categories: Iterable[str])
         target = next((t for t in a.thresholds if s.progress < t), None)
         if target is None:
             continue
-        pref = 0 if a.category in _NEXT_PREFERENCE else 1
+        pref = 0 if a.category in _PREFERRED_CATEGORIES or a.id in _PREFERRED_IDS else 1
         key = (-s.progress / target, pref, order)
         if best is None or key < best:
             best, pick = key, NextUp(a.name, s.progress, target)
@@ -521,9 +525,10 @@ def _earned(conn: sqlite3.Connection, settings: Settings) -> int:
 
 
 def today_strip(gate: Gate, conn: sqlite3.Connection, now: datetime) -> Strip | None:
-    """What the Today strip shows, or None when achievements are off. Never raises a
-    ``sqlite3.Error`` and never waits more than ``STRIP_BUSY_MS`` for the write lock: on a
-    busy database it renders from the stored rows and the last cached rhythm and next."""
+    """What the Today strip shows, or None when achievements are off. Never raises: on a
+    busy database or a rule bug it renders from the stored rows and the last cached rhythm
+    and next. Evaluation goes through ``Gate.refresh(wait=False)``, the same one-at-a-time
+    path as the activity band, so a fingerprint change is evaluated once for both."""
     try:
         settings = read_settings(conn)
         gate.enabled = settings.enabled
@@ -533,21 +538,20 @@ def today_strip(gate: Gate, conn: sqlite3.Connection, now: datetime) -> Strip | 
         fp = fingerprint(conn, now, tz)
         cached = gate.strip_cache(fp)
         if cached is None:
-            comp = compute(conn, now, tz)
             ok = True
-            if not (diff(comp.reached, stored(conn), now).empty and settings.backfilled_at):
-                try:
-                    _write(conn, now, tz, STRIP_BUSY_MS)
-                except sqlite3.Error as exc:
-                    logger.info("achievements: strip evaluate skipped: %s", exc)
-                    ok = False
-                    if conn.in_transaction:
-                        conn.execute("ROLLBACK")
+            try:
+                gate.refresh(conn, now, wait=False)
+            except sqlite3.Error as exc:
+                logger.info("achievements: strip evaluate skipped: %s", exc)
+                ok = False
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+            comp = compute(conn, now, tz)
             cached = (comp.rhythm.run, pick_next(comp.series, settings.hidden))
-            gate.set_strip_cache(fp, cached, evaluated=ok)
+            gate.set_strip_cache(fp, cached, evaluated=ok and gate.evaluated(fp))
         return Strip(_earned(conn, settings), cached[0], cached[1])
-    except sqlite3.Error as exc:
-        logger.info("achievements: strip from stored rows: %s", exc)
+    except Exception:
+        logger.exception("achievements: Today strip fell back to stored rows")
         try:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
@@ -558,5 +562,5 @@ def today_strip(gate: Gate, conn: sqlite3.Connection, now: datetime) -> Strip | 
             return Strip(
                 _earned(conn, settings), last[0] if last else None, last[1] if last else None
             )
-        except sqlite3.Error:
+        except Exception:
             return None
