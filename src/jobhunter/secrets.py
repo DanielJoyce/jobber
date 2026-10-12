@@ -262,4 +262,17 @@ def startup(
         settings = None
         warn("warning: config could not be loaded; only the default secret names are checked")
     names = known_names(settings, registry_auth_names())
-    return Report(resolve(names, real_env, origin, warn), files)
+    report = Report(resolve(names, real_env, origin, warn), files)
+    global LAST_REPORT
+    LAST_REPORT = report
+    return report
+
+
+# The report of the most recent startup(), so adapters can tell "never set" from "set but
+# rejected at startup" (resolve removes invalid secrets from the environment).
+LAST_REPORT: Report | None = None
+
+
+def invalid_names() -> set[str]:
+    """Names the most recent startup() marked invalid (empty before any startup)."""
+    return {s.name for s in LAST_REPORT.states if s.state == INVALID} if LAST_REPORT else set()

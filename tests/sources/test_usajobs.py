@@ -426,3 +426,28 @@ def test_partial_credentials_still_fail_naming_the_missing_one(src, conn, tmp_pa
     assert report.exit_code == 1
     err = report.results["us-usajobs"].error
     assert "USAJOBS_EMAIL" in err and "test-key" not in err
+
+
+def test_broken_file_secrets_are_configured_so_the_run_fails(src, conn, tmp_path, monkeypatch):
+    # secrets.resolve removes both names from the environment when the files are missing
+    monkeypatch.delenv("USAJOBS_EMAIL")
+    monkeypatch.delenv("USAJOBS_API_KEY")
+    monkeypatch.setenv("USAJOBS_EMAIL_FILE", str(tmp_path / "nope-email"))
+    monkeypatch.setenv("USAJOBS_API_KEY_FILE", str(tmp_path / "nope-key"))
+    assert UsajobsAdapter.unavailable(None) is None
+    report = _run_pipeline(src, conn, tmp_path, httpx.MockTransport(_boom))
+    assert report.exit_code == 1
+
+
+def test_invalid_inline_value_is_configured_so_the_run_fails(src, conn, tmp_path, monkeypatch):
+    from jobhunter import secrets
+
+    monkeypatch.delenv("USAJOBS_EMAIL")
+    monkeypatch.delenv("USAJOBS_API_KEY")
+    monkeypatch.setattr(
+        secrets,
+        "LAST_REPORT",
+        secrets.Report([secrets.SecretState("USAJOBS_API_KEY", "invalid")], []),
+    )
+    assert UsajobsAdapter.unavailable(None) is None
+    assert _run_pipeline(src, conn, tmp_path, httpx.MockTransport(_boom)).exit_code == 1

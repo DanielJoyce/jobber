@@ -232,9 +232,17 @@ class UsajobsAdapter:
         also still fails. Names only, never values. ``*_FILE`` secrets are already resolved
         into the environment at CLI start (secrets.py).
         """
+        from jobhunter import secrets
+
         names = ("USAJOBS_EMAIL", "USAJOBS_API_KEY")
-        if any(os.environ.get(n, "").strip() for n in names):
-            return None
+        bad = secrets.invalid_names()
+        # Setting N_FILE is configuration even if the file is broken (resolve then removes N
+        # from the environment), and so is an inline value startup rejected: those must fail.
+        for n in names:
+            if os.environ.get(n, "").strip() or os.environ.get(f"{n}_FILE", "").strip():
+                return None
+            if n in bad:
+                return None
         return "no USAJOBS credentials; set " + " and ".join(names)
 
     def search(
