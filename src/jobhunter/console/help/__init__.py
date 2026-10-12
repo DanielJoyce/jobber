@@ -39,6 +39,7 @@ TOPICS: tuple[Topic, ...] = (
     Topic("getting-started", "Getting started", "The order a fresh install meets things"),
     Topic("profile-and-resume", "Profile and resume", "Preferences, the resume, what re-scores"),
     Topic("scorers", "Choosing a scorer", "Providers, keys and models"),
+    Topic("models", "Choosing models", "Per-use models, models.toml and the Models page"),
     Topic("openrouter", "OpenRouter and Jev", "An account, a key and credits"),
     Topic("costs-and-credits", "Costs and credits", "What spends money, and the caps"),
     Topic("email-alerts", "Email alerts", "Gmail, step by step"),

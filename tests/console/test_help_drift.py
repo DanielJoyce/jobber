@@ -37,8 +37,19 @@ ALLOWED_ADDRESSES = {
 def client(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("help")
     path = tmp / "t.db"
-    settings = Settings(paths=Paths(profile_dir=tmp / "profile", db_path=path))
-    return TestClient(create_app(settings, lambda: db.connect(path)))
+    # data and cache under tmp too: /models reads <data dir>/models.toml and the OpenRouter
+    # cache, which must never be the developer's real files (tests/conftest.py guards them).
+    settings = Settings(
+        paths=Paths(
+            data_dir=tmp / "data",
+            cache_dir=tmp / "cache",
+            profile_dir=tmp / "profile",
+            db_path=path,
+        )
+    )
+    # A loopback Host: the console refuses any other (app.check_host middleware), so the
+    # console links in the help pages (/models, /prefs) resolve only with one.
+    return TestClient(create_app(settings, lambda: db.connect(path)), base_url="http://127.0.0.1")
 
 
 def text_of(path: Path) -> str:

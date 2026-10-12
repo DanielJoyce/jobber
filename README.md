@@ -87,6 +87,7 @@ pages are served by the console at `http://127.0.0.1:8808/help`.
 | [Getting started](src/jobhunter/console/help/getting-started.md) | The order a fresh install meets things |
 | [Profile and resume](src/jobhunter/console/help/profile-and-resume.md) | Preferences, the resume, what re-scores |
 | [Choosing a scorer](src/jobhunter/console/help/scorers.md) | Providers, keys and models |
+| [Choosing models](src/jobhunter/console/help/models.md) | Per-use models, models.toml and the Models page |
 | [OpenRouter and Jev](src/jobhunter/console/help/openrouter.md) | An account, a key and credits |
 | [Costs and credits](src/jobhunter/console/help/costs-and-credits.md) | What spends money, and the caps |
 | [Email alerts](src/jobhunter/console/help/email-alerts.md) | Gmail, step by step |

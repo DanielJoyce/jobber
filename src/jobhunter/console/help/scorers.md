@@ -30,7 +30,7 @@ jobhunter refuses the spelling with a message naming the right one. Jev still us
 `OPENROUTER_API_KEY`; there is no separate Jev key. `decisions:<slug>` is the same endpoint
 under its general name. See [OpenRouter and Jev](openrouter.md).
 
-## The Anthropic key
+## Get an Anthropic API key
 
 For `anthropic:` specs, including the default screen and deep models:
 
@@ -52,10 +52,15 @@ Check which secrets are set without printing them:
 jobhunter secrets status
 ```
 
-## Other choices
+## Local models
 
 - `local:<model>` runs on your machine (llama.cpp or Ollama, set by `[scoring.local] runtime`).
-  It costs nothing per call but is slow, and requests run one at a time.
+  It costs nothing per call but is slow, and requests run one at a time. The Models page can
+  check that the server answers and lists the models it loads. See
+  [Choosing models](models.md#access-keys-subscription-and-local-server).
+
+## Other choices
+
 - `openai-compat:<model>` points at any server that speaks the OpenAI chat API
   (`[scoring.openai_compat] base_url`).
 - Try a scorer on a few ingested jobs before switching, without writing any scores:
