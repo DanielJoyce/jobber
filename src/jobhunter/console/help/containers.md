@@ -9,6 +9,10 @@ Every `jobhunter ...` command in a code block here is checked against the real c
 `tests/test_docs_containers.py` and the help drift tests, so a renamed command or flag fails the tests. Expected output
 is what the code prints; paths and numbers differ on your machine.
 
+New to jobhunter? Once the `jobhunter-ctr` wrapper is installed (`jobhunter ctr-script --write`, below),
+run `jobhunter-ctr doctor` for the same checks as `/setup` in the console, then open
+`http://127.0.0.1:8808/setup`. The [Getting started](getting-started.md) page has the order the steps come in.
+
 Run everything on the **host**, in the checkout, unless a step says otherwise. A line starting
 with `jobhunter` means `uv run jobhunter` from the checkout (or the installed script).
 
