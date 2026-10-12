@@ -19,12 +19,16 @@ reaches is deleted (and every tier above it). A tier that still holds keeps its 
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import sqlite3
 import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jobhunter.achievements import catalog, facts, rules
 
@@ -37,11 +41,53 @@ HIDDEN = "hidden_categories"
 BACKFILLED_AT = "backfilled_at"
 
 
+class SystemLocal(tzinfo):
+    """The C library's local zone, offset looked up per instant (DST-aware). Fallback for
+    when no IANA zone name can be found."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta:
+        if dt is None:
+            return timedelta(seconds=time.localtime().tm_gmtoff)
+        ts = time.mktime(dt.replace(tzinfo=None).timetuple())
+        return timedelta(seconds=time.localtime(ts).tm_gmtoff)
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def tzname(self, dt: datetime | None) -> str | None:
+        return time.tzname[0]
+
+    def fromutc(self, dt: datetime) -> datetime:
+        ts = (dt.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds()
+        return dt + timedelta(seconds=time.localtime(ts).tm_gmtoff)
+
+
+def _zone_name(value: str) -> str:
+    value = value.strip().lstrip(":")
+    marker = "zoneinfo/"
+    return value[value.index(marker) + len(marker) :] if marker in value else value
+
+
 def local_tz() -> tzinfo:
-    """The console process's local zone (the container runs with ``Timezone=local``)."""
-    tz = datetime.now().astimezone().tzinfo
-    assert tz is not None
-    return tz
+    """The console process's local zone (the container runs with ``Timezone=local``).
+
+    DST-aware: a fixed offset (``datetime.now().astimezone().tzinfo``) would re-bin summer
+    history into other days once the clocks change. Tries ``$TZ``, then the
+    ``/etc/localtime`` link target, as IANA names; else :class:`SystemLocal`."""
+    names = []
+    if os.environ.get("TZ"):
+        names.append(_zone_name(os.environ["TZ"]))
+    else:
+        with contextlib.suppress(OSError):
+            names.append(_zone_name(os.readlink("/etc/localtime")))
+    for name in names:
+        if not name or name.startswith("/"):
+            continue
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return SystemLocal()
 
 
 def _iso(dt: datetime) -> str:

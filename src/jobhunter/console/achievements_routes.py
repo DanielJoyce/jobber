@@ -74,17 +74,19 @@ def register(
         settings = engine.read_settings(conn)
         g.enabled = settings.enabled
         moment = now()
+        busy = False
         if settings.enabled:
             try:
                 g.refresh(conn, moment, force=True)
             except sqlite3.Error as exc:  # render what is stored; the next call retries
                 logger.info("achievements: evaluate skipped: %s", exc)
+                busy = True  # don't wait on the lock a second time for seen
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
         visible = [u for u in engine.stored(conn) if u.category not in settings.hidden]
         visible = [u for u in visible if u.achievement_id in catalog.BY_ID]
         unseen = [u.id for u in visible if u.seen_at is None]
-        if settings.enabled and unseen:
+        if settings.enabled and unseen and not busy:
             try:
                 engine.mark_seen(conn, unseen, moment, busy_ms=engine.WRITE_BUSY_MS)
             except sqlite3.Error as exc:  # the notice stays until the next visit

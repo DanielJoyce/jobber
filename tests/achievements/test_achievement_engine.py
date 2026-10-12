@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from achv_world import NOW, TZ, World, iso
@@ -296,3 +296,45 @@ def test_gate_retries_after_a_failure(world, db_path):
         holder.execute("ROLLBACK")
         holder.close()
     assert len(gate.refresh(world.conn, NOW)) == len(EXPECTED_DAY_ONE)
+
+
+# --- local zone ------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def la_process_zone(monkeypatch):
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_local_zone_is_dst_aware(world, la_process_zone):
+    """No injected tz: a summer 00:30 PDT event keeps its day when now is in PST."""
+    a = world.app()
+    world.conn.execute(
+        "INSERT INTO application_event (application_id, at, status, source, recorded_at) "
+        "VALUES (?, '2026-07-15T07:30:00+00:00', 'applied', 'email', "
+        "'2026-07-15T07:30:00+00:00')",
+        (a,),
+    )
+    winter = datetime(2026, 12, 1, 20, 0, tzinfo=UTC)
+    tz = engine.local_tz()
+    f = facts.load(world.conn, winter, tz)
+    assert f.day(f.sent[a].at) == date(2026, 7, 15)
+    assert f.day(winter) == date(2026, 12, 1)
+    # Both seasons at once, so no fixed offset (whatever the real date today) can pass.
+    assert f.day("2026-12-01T07:30:00+00:00") == date(2026, 11, 30)
+    gate = engine.Gate()  # no tz: the process zone
+    gate.refresh(world.conn, winter)
+    (u,) = [u for u in engine.stored(world.conn) if u.achievement_id == "apply.first"]
+    assert u.unlocked_at == "2026-07-15T07:30:00+00:00"
+
+
+def test_system_local_fallback_is_dst_aware(la_process_zone):
+    tz = engine.SystemLocal()
+    summer = datetime(2026, 7, 15, 7, 30, tzinfo=UTC).astimezone(tz)
+    winter = datetime(2026, 12, 15, 7, 30, tzinfo=UTC).astimezone(tz)
+    assert (summer.hour, summer.day) == (0, 15)
+    assert (winter.hour, winter.day) == (23, 14)

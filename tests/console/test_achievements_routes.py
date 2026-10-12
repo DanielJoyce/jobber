@@ -201,3 +201,27 @@ def test_busy_database_still_renders_from_stored_rows(client, db_path):
     assert "Tuned in" in r.text and "Found it yourself" not in r.text
     assert elapsed < 1.5
     assert "Found it yourself" in client.get("/achievements").text  # the next visit retries
+
+
+def test_busy_evaluate_skips_the_seen_write(client, db_path, monkeypatch):
+    from jobhunter.achievements import engine
+
+    client.get("/achievements")  # backfilled (empty)
+    prefs_save(db_path)
+    c = db.connect(db_path)
+    engine.evaluate(c, NOW, TZ)  # an unseen unlock
+    c.close()
+    capture(db_path)  # and a change that needs a write
+    calls = []
+    monkeypatch.setattr(engine, "mark_seen", lambda *a, **k: calls.append(a))
+    holder = db.connect(db_path)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        r = client.get("/achievements")
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert r.status_code == 200 and "Tuned in" in r.text
+    assert calls == []
+    client.get("/achievements")
+    assert len(calls) == 1  # the next, unblocked visit marks it
