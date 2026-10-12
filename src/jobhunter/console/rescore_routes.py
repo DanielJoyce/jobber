@@ -25,6 +25,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.config import check_scorer_spec, resolve_path
 from jobhunter.console import prefs_graceful as gr
+from jobhunter.console.work import Restarting, WorkRegistry, refused
 from jobhunter.core import runlock
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.scoring import rescore as rs
@@ -106,8 +107,11 @@ def take_run_lock(settings: Any) -> runlock.RunLock:
 class RescoreManager:
     """One background run at a time, in this process."""
 
-    def __init__(self) -> None:
+    def __init__(self, work: WorkRegistry) -> None:
         self._lock = threading.Lock()
+        # The console's work registry (019 S12b): a run is registered before its thread starts
+        # and leaves when the thread ends, so a console Restart waits for it.
+        self.work = work
         self._thread: threading.Thread | None = None
         self.current: int | None = None
 
@@ -138,9 +142,12 @@ class RescoreManager:
 
         ``token`` is the token of the plan the user confirmed. When the plan built now differs
         (new jobs, a new profile, other costs), nothing runs: PlanChanged carries the new plan.
-        Raises RescoreBusy / RescoreRefused / PlanChanged.
+        Raises RescoreBusy / RescoreRefused / PlanChanged, or Restarting once a console
+        restart was accepted.
         """
         with self._lock:
+            if self.work.restarting:
+                raise Restarting()
             if self.busy() and self.current is not None:
                 raise rs.RescoreBusy(self.current)
             live = rs.running_request(conn, now())
@@ -158,7 +165,12 @@ class RescoreManager:
                 raise rs.PlanChanged(plan)
             # The paid part holds the run lock (specs/018 Run lock, C5), never waiting for it:
             # a request thread must not block, and a timer job may hold it for hours.
-            lock = take_run_lock(settings)
+            token = self.work.enter("a re-score")  # before the run lock and the DB row
+            try:
+                lock = take_run_lock(settings)
+            except BaseException:
+                self.work.leave(token)
+                raise
             try:
                 if request_id is not None:
                     rs.attach_plan(conn, request_id, plan)
@@ -179,6 +191,7 @@ class RescoreManager:
                         client_factory,
                         plan.prefilter,
                         lock,
+                        token,
                     ),
                     name=f"rescore-{rid}",
                     daemon=True,
@@ -186,12 +199,23 @@ class RescoreManager:
                 self._thread.start()
             except BaseException:
                 lock.release()
+                self.work.leave(token)
                 raise
             return rid
 
-    @staticmethod
     def _work(
-        conn_factory, rid, profile, settings, spec, now, scorer_factory, client_factory, pre, lock
+        self,
+        conn_factory,
+        rid,
+        profile,
+        settings,
+        spec,
+        now,
+        scorer_factory,
+        client_factory,
+        pre,
+        lock,
+        token,
     ):
         try:
             RescoreManager._run(
@@ -199,6 +223,7 @@ class RescoreManager:
             )
         finally:
             lock.release()
+            self.work.leave(token)
 
     @staticmethod
     def _run(conn_factory, rid, profile, settings, spec, now, scorer_factory, client_factory, pre):
@@ -236,7 +261,7 @@ def register(
     now: Callable[[], datetime],
 ) -> None:
     Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
-    app.state.rescore = RescoreManager()
+    app.state.rescore = RescoreManager(app.state.work)
     app.state.rescore_scorer_factory = None  # tests inject a fake; None builds the real scorer
     app.state.rescore_client_factory = None
     templates.env.filters["localtime"] = local_time
@@ -358,6 +383,8 @@ def register(
                 scorer_factory=request.app.state.rescore_scorer_factory,
                 client_factory=request.app.state.rescore_client_factory,
             )
+        except Restarting as exc:
+            return refused(render_panel(request, conn, scope=scope, scorer=spec, message=str(exc)))
         except rs.RescoreBusy as exc:
             return render_panel(
                 request, conn, message=f"{exc} Showing its progress.", active_id=exc.request_id

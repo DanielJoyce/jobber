@@ -680,6 +680,12 @@ class ConfigWatcher:
 
     # -- public --------------------------------------------------------------------------
 
+    @property
+    def start_has_settings(self) -> bool:
+        """``config.toml`` set something when the console started (S12b's Restart refuses a
+        new process that would find it missing or empty)."""
+        return self._start_has_settings
+
     def check(self, running: Settings, *, force: bool = False) -> State:
         """The current state against ``running``. Stats files at most once per ``THROTTLE_S``
         unless ``force`` (Apply re-runs the check on what is on disk now)."""

@@ -349,3 +349,55 @@ def test_invalid_configured_scorer_still_shows_picker(pdir, db_path, monkeypatch
     assert 'id="rescore-run"' not in html  # nothing can be run on the invalid spec
     ok = c.get("/prefs/rescore/panel", params={"scorer": "jev:typesafe/jev-1.13"}).text
     assert 'id="rescore-run"' in ok
+
+
+# --- Console Restart: the re-score is registered work (019 S12b) -----------------------------
+
+
+def test_restart_is_409_while_a_rescore_runs_and_the_run_finishes(client, conn):
+    from fastapi.testclient import TestClient as Local
+
+    app = client.app
+    app.state.restart_preflight = lambda **kw: []
+    app.state.restart_delay = 0
+    stopped: list[bool] = []
+    app.state.restart_shutdown = lambda: stopped.append(True)
+    local = Local(app, client=("127.0.0.1", 50000))
+    gate = threading.Event()
+    scorer = FakeScorer(gate=gate)
+    app.state.rescore_scorer_factory = lambda spec: scorer
+    confirm_and_run(client)
+    assert scorer.entered.wait(10)
+    assert app.state.work.labels() == ["a re-score"]
+    r = local.post("/config/restart", follow_redirects=False)
+    assert r.status_code == 409 and "a re-score" in r.text and "restart when it finishes" in r.text
+    assert stopped == [] and not app.state.work.restarting
+    gate.set()
+    finish(client)
+    assert app.state.work.labels() == []
+    # No lost work: the run the restart waited for finished and recorded its scores.
+    assert conn.execute("SELECT status FROM rescore_request").fetchone()[0] == "done"
+    assert local.post("/config/restart", follow_redirects=False).status_code == 303
+    assert stopped == [True]
+
+
+def test_rescore_is_503_while_restarting_and_writes_nothing(client, conn):
+    client.app.state.rescore_scorer_factory = lambda spec: pytest.fail("no re-score")
+    params = {"scope": "all", "scorer": SPEC}
+    data = {**params, "plan": token_of(client.get("/prefs/rescore/panel", params=params).text)}
+    assert client.app.state.work.begin_restart() == []
+    r = client.post("/prefs/rescore/run", data=data)
+    assert r.status_code == 503 and "console restarting" in r.text
+    assert r.headers["X-Jobhunter-Restarting"] == "1"
+    assert conn.execute("SELECT count(*) FROM rescore_request").fetchone()[0] == 0
+
+
+def test_a_rescore_refused_by_the_run_lock_leaves_the_registry(
+    client, conn, db_path, run_lock_holder
+):
+    holder = run_lock_holder(db_path)
+    r = confirm_and_run(client)
+    assert "another jobhunter job is running" in r.text
+    assert client.app.state.work.labels() == []
+    holder.release()
+    holder.wait()

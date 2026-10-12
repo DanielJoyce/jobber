@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('pages.css') }}">
+{% endblock %}
+{% block main %}
+{#- Console Restart (019 Addendum B "Restart"). Names and fixed messages only, never a value. -#}
+<div class="pg cfgw">
+  <h1>Restart console</h1>
+  {% if accepted %}
+  <div id="restart-wait" data-base="{{ base }}" data-same="{{ '1' if same_origin else '0' }}" data-boot="{{ boot }}" data-next="{{ next }}" data-giveup="{{ give_up }}">
+    <p class="callout restart-waiting" role="status">Restarting: the console finishes the requests it is answering, then starts again with the files as they are now. This page reloads when it is back.</p>
+    {% if not same_origin %}<p>The new settings move the console to <a href="{{ base }}{{ next }}">{{ base }}</a>; this page waits for it there.</p>{% endif %}
+    {% if code_note %}<p class="muted">{{ code_note }}</p>{% endif %}
+    <p class="callout alert restart-gave-up" hidden>The console did not come back. Check the terminal{% if journal %} (<code>journalctl --user -u jobhunter-console</code>){% else %} it runs in (or <code>journalctl --user -u jobhunter-console</code> if it runs as a service){% endif %}.</p>
+  </div>
+  <script>
+  (function () {
+    var box = document.getElementById("restart-wait");
+    var base = box.getAttribute("data-base"), same = box.getAttribute("data-same") === "1";
+    var oldBoot = box.getAttribute("data-boot"), next = box.getAttribute("data-next");
+    var giveUp = Date.now() + 1000 * Number(box.getAttribute("data-giveup"));
+    function back() { window.location.href = base + next; }
+    function later() {
+      if (Date.now() > giveUp) {
+        box.querySelector(".restart-waiting").hidden = true;
+        box.querySelector(".restart-gave-up").hidden = false;
+        return;
+      }
+      setTimeout(poll, 1000);
+    }
+    function poll() {
+      var url = base + "/healthz";
+      if (same) {
+        // The old process answers until it stops: wait for a different boot id.
+        fetch(url, { cache: "no-store" }).then(function (r) {
+          var boot = r.headers.get("X-Jobhunter-Boot");
+          if (r.ok && boot && boot !== oldBoot) back(); else later();
+        }).catch(later);
+      } else {
+        // Another origin (a new port): an opaque answer means something listens there.
+        fetch(url, { cache: "no-store", mode: "no-cors" }).then(back).catch(later);
+      }
+    }
+    later();
+  })();
+  </script>
+  {% elif confirm_unchecked %}
+  <div class="callout alert">
+    <p><strong>config.toml may have been replaced on the host</strong>, and this console cannot see the new file, so it cannot check it first.</p>
+    <p>{{ confirm }}</p>
+  </div>
+  <form class="pg-form" method="post" action="/config/restart">
+    <input type="hidden" name="unchecked" value="1"><input type="hidden" name="next" value="{{ next }}">
+    <button type="submit">Restart without checking</button>
+    <a href="{{ next }}">Cancel</a>
+  </form>
+  {% else %}
+  <div class="callout alert" id="restart-refused">
+    <p>{{ why }}</p>
+    {% if lines %}<ul>{% for line in lines %}<li><code>{{ line }}</code></li>{% endfor %}</ul>
+    <p class="muted">Check it in the terminal: <code>{{ doctor }}</code>.</p>{% endif %}
+    {% if running %}<ul id="restart-running">{% for label in running %}<li>{{ label }}</li>{% endfor %}</ul>
+    <p class="muted">The button stays in the bar; press it again once this is done.</p>{% endif %}
+    {% if show_command %}<p><code>{{ restart }}</code></p>{% endif %}
+  </div>
+  <p><a href="{{ next }}">Back</a> &middot; <a href="/config/changes">Config changes</a></p>
+  {% endif %}
+</div>
+{% endblock %}

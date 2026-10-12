@@ -185,6 +185,12 @@ def _say_waiting(lock: Path) -> None:
 def _load_env(ctx: typer.Context) -> None:
     """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
     against a new database while the real one is still in the old layout."""
+    if ctx.invoked_subcommand == "console":
+        # Before .env and *_FILE are loaded: a console Restart re-execs with this environment,
+        # so the new process reads the .env files afresh (specs/019 Addendum B, S12b).
+        from jobhunter.console import restart
+
+        restart.snapshot_environ()
     # Snapshot the migrations this code ships now, at start: a job that waits hours for the
     # run lock across a fast-forward must treat migrations merged meanwhile as unknown.
     db.prime_migrations()
@@ -1272,7 +1278,42 @@ def console(
     # Fields set on the command line win over config: a change to them has no effect (019 B).
     pinned = [f for f, v in (("console.host", host), ("console.port", port)) if v is not None]
     app_.state.config_watch = ConfigWatcher(cli_overrides=pinned)
-    uvicorn.run(app_, host=bind_host, port=bind_port)
+    _serve(app_, bind_host, bind_port, uvicorn)
+
+
+def _serve(app_, bind_host: str, bind_port: int, uvicorn) -> None:
+    """Run uvicorn with a handle on the server, so a console Restart can stop it gracefully
+    and then re-exec or exit 42 (specs/019 Addendum B "Restart", S12b)."""
+    from jobhunter.console import restart
+    from jobhunter.ops import version
+
+    config = uvicorn.Config(
+        app_, host=bind_host, port=bind_port, timeout_graceful_shutdown=restart.drain_seconds()
+    )
+    server = uvicorn.Server(config)
+    how = restart.kind()
+    if how is not None:
+
+        def shutdown() -> None:
+            app_.state.restart_requested = True
+            server.should_exit = True
+
+        app_.state.restart_shutdown = shutdown
+    app_.state.restart_kind = how
+    app_.state.bind_host = bind_host
+    app_.state.started_commit = version.build_commit()[0]
+    interrupted = False
+    try:
+        server.run()
+    except KeyboardInterrupt:  # uvicorn re-raises a captured Ctrl-C after it has stopped
+        interrupted = True
+    if not server.started:
+        raise typer.Exit(3)  # uvicorn's STARTUP_FAILURE, never EXIT_RESTART
+    # Ctrl-C wins over an accepted restart: you asked the console to stop, so it stops.
+    if app_.state.restart_requested and how is not None and not interrupted:
+        restart.after_serve(
+            how=how, leftover=app_.state.work.wait_idle, drain=restart.drain_seconds()
+        )
 
 
 @ext_app.command("pair")

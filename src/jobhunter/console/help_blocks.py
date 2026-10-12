@@ -121,6 +121,13 @@ OTHER_ROWS = (
         "no",
     ),
     (
+        "JOBHUNTER_RESTART_EXIT",
+        "the console's Restart exits 42 so systemd starts it again",
+        "-",
+        "set by the console unit (and preflight's restart drop-in), do not set",
+        "-",
+    ),
+    (
         "JOBHUNTER_PUBLISHED_LOOPBACK_ONLY",
         "the console's published-port check",
         "-",

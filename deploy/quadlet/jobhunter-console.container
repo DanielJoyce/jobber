@@ -17,6 +17,8 @@ Environment=JOBHUNTER_DB_PATH=/data/jobhunter.db
 Environment=JOBHUNTER_PROFILE_DIR=/data/profile
 Environment=JOBHUNTER_RESUME_PATH=/data/resume
 Environment=JOBHUNTER_CACHE_DIR=/cache
+# Console Restart (specs/019 S12b): the console exits 42 to be restarted with a fresh mount.
+Environment=JOBHUNTER_RESTART_EXIT=42
 Network=pasta:--host-lo-to-ns-lo
 PublishPort=127.0.0.1:8808:8808
 Exec=console --host 127.0.0.1 --port 8808
@@ -29,6 +31,10 @@ HealthOnFailure=kill
 
 [Service]
 Restart=on-failure
+# Exit 42 is the console's Restart: start it again, and do not count it as a failure (no
+# OnFailure= notification).
+SuccessExitStatus=42
+RestartForceExitStatus=42
 ExecStartPre=/usr/bin/mkdir -p -m 0700 %h/.local/share/jobhunter %h/.cache/jobhunter
 
 [Install]

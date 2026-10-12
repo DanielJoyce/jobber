@@ -28,7 +28,7 @@
     </nav>
     <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">&#9680; theme</button>
   </header>
-  <div id="activity" class="activity" hx-get="/activity" hx-trigger="load" hx-swap="outerHTML"></div>
+  {% if not hide_activity %}<div id="activity" class="activity" hx-get="/activity" hx-trigger="load" hx-swap="outerHTML"></div>{% endif %}
   {#- Outside #activity so it survives the band's swaps; app.js fills it once per new unlock. -#}
   <div id="ach-announce" class="visually-hidden" role="status" aria-live="polite"></div>
   <main>

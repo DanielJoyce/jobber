@@ -14,6 +14,8 @@ Drop-in layout (C4's base units plug into it)::
     <unit dir>/<unit>.container.d/50-<secret>.conf   one per secret, written here
     <unit dir>/<unit>.container.d/40-jobhunter-trigger.conf   JOBHUNTER_TRIGGER=timer for the
                                                  timer-started units (specs/019 S4)
+    <unit dir>/jobhunter-console.container.d/45-jobhunter-restart.conf   the console Restart
+                                                 lines: exit 42 restarts it (specs/019 S12b)
 
 ``<unit dir>`` defaults to ``~/.config/containers/systemd``. A drop-in is ours when its first
 line is :data:`HEADER`; nothing else in those directories is ever modified or deleted.
@@ -60,6 +62,9 @@ BACKUP = "jobhunter-ctr-backup"
 TRIGGER_UNITS = (RUN, COLLECT, RESCORE)
 TRIGGER_DROPIN = "40-jobhunter-trigger.conf"
 TRIGGER_ENV = "JOBHUNTER_TRIGGER=timer"
+# The console's Restart (specs/019 S12b) exits 42; the base unit carries the three lines and
+# this drop-in delivers them to a console unit installed before they existed.
+RESTART_DROPIN = "45-jobhunter-restart.conf"
 # The one-off wrapper script (C15); not a Quadlet unit, so no drop-ins, but it has a column.
 WRAPPER = "jobhunter-ctr"
 UNITS = (CONSOLE, RUN, COLLECT, RESCORE, VERIFY, BACKUP)
@@ -199,6 +204,17 @@ def trigger_dropin_text() -> str:
     return f"{HEADER}\n[Container]\nEnvironment={TRIGGER_ENV}\n"
 
 
+def restart_dropin_text() -> str:
+    from jobhunter.console.restart import UNIT_CONTAINER_LINES, UNIT_SERVICE_LINES
+
+    return (
+        f"{HEADER}\n[Container]\n"
+        + "".join(f"{line}\n" for line in UNIT_CONTAINER_LINES)
+        + "[Service]\n"
+        + "".join(f"{line}\n" for line in UNIT_SERVICE_LINES)
+    )
+
+
 def wrapper_specs(specs: Iterable[SecretSpec], existing: Iterable[str]) -> list[SecretSpec]:
     """The secrets the one-off wrapper ``jobhunter-ctr`` (C15) mounts: its matrix column,
     limited to secrets that exist."""
@@ -223,6 +239,10 @@ def dropin_path(unit_dir: Path, unit: str, secret: str) -> Path:
 
 def trigger_dropin_path(unit_dir: Path, unit: str) -> Path:
     return dropin_dir(unit_dir, unit) / TRIGGER_DROPIN
+
+
+def restart_dropin_path(unit_dir: Path) -> Path:
+    return dropin_dir(unit_dir, CONSOLE) / RESTART_DROPIN
 
 
 def is_ours(path: Path) -> bool:
@@ -264,6 +284,7 @@ def plan_dropins(
     # from deleting it as a drop-in whose secret is gone.
     for unit in TRIGGER_UNITS:
         wanted[trigger_dropin_path(unit_dir, unit)] = trigger_dropin_text()
+    wanted[restart_dropin_path(unit_dir)] = restart_dropin_text()
     plan = DropinPlan()
     for path, text in sorted(wanted.items()):
         if path.is_symlink() or (path.exists() and not is_ours(path)):
@@ -798,8 +819,8 @@ def _final_dropins(unit_dir: Path, plan: DropinPlan) -> set[tuple[str, str]]:
     """(unit, secret) for every preflight drop-in that exists once ``plan`` is applied."""
     pairs: set[tuple[str, str]] = set()
     for path in [*plan.keep, *plan.write]:
-        if path.name == TRIGGER_DROPIN:
-            continue  # not a secret; checked by quadlet_check on its own
+        if path.name in (TRIGGER_DROPIN, RESTART_DROPIN):
+            continue  # not a secret
         unit = path.parent.name.removesuffix(".container.d")
         secret = path.name.removeprefix(DROPIN_PREFIX).removesuffix(DROPIN_SUFFIX)
         pairs.add((unit, secret))
@@ -958,6 +979,9 @@ def run(
     if any(p.name == TRIGGER_DROPIN for p in res.plan.write):
         res.add(OK, f"{verb}mark timer runs ({TRIGGER_ENV}) in {', '.join(TRIGGER_UNITS)}",
                 id="secrets")  # fmt: skip
+    if any(p.name == RESTART_DROPIN for p in res.plan.write):
+        res.add(OK, f"{verb}let the console's Restart exit 42 in {CONSOLE} "
+                "(then systemctl --user daemon-reload)", id="secrets")  # fmt: skip
     if not res.plan.changes:
         res.add(OK, f"drop-ins up to date ({len(res.plan.keep)} in place)", id="secrets")
     if not dry_run:

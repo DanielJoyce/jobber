@@ -55,6 +55,7 @@ from jobhunter.apply.capture_models import (
     VersionResponse,
 )
 from jobhunter.console.inbox_routes import load_console_profile
+from jobhunter.console.work import Restarting, refused
 from jobhunter.core import bucketnames
 from jobhunter.pipeline import applylink
 from jobhunter.pipeline.ats_rules import host_of
@@ -434,7 +435,13 @@ def register(
     score_answers: dict[str, tuple[int, dict[str, Any]]] = {}
     score_lock = threading.Lock()
 
-    def run_score(claim: group_score.Claim, profile: Profile) -> None:
+    def run_score(claim: group_score.Claim, profile: Profile, token: int) -> None:
+        try:
+            score_claimed(claim, profile)
+        finally:
+            app.state.work.leave(token)  # registered by ext_score before the thread started
+
+    def score_claimed(claim: group_score.Claim, profile: Profile) -> None:
         conn = app.state.conn_factory()  # its own connection: never the request's
         errors = app.state.ext_score_errors
         try:
@@ -468,24 +475,39 @@ def register(
                 gone(conn, gid, req.job_id)
                 profile = profile_or_error()
                 scoring = settings().scoring
+                # The work registry (019 S12b): entered before the claim and the thread, left
+                # when the thread ends; refused with 503 once a console restart was accepted.
                 try:
-                    privacy_notice(scoring.screen_scorer, scoring)
-                    claim = group_score.start(
-                        conn, profile, scoring, gid, token=req.token, now=now()
+                    work = app.state.work.enter(f"an extension Score now (group {gid})")
+                except Restarting as exc:
+                    return refused(JSONResponse({"error": str(exc)}))
+                started = False
+                try:
+                    try:
+                        privacy_notice(scoring.screen_scorer, scoring)
+                        claim = group_score.start(
+                            conn, profile, scoring, gid, token=req.token, now=now()
+                        )
+                    except group_score.EstimateChanged as exc:
+                        body = ErrorResponse(
+                            error=str(exc), estimate=build_estimate(conn, gid)
+                        ).model_dump(mode="json")
+                        return JSONResponse(body, status_code=409)
+                    except (group_score.ScoreRefused, ScorerError) as exc:
+                        return JSONResponse({"error": str(exc)}, status_code=409)
+                    app.state.ext_score_errors.pop(gid, None)
+                    thread = threading.Thread(
+                        target=run_score,
+                        args=(claim, profile, work),
+                        name=f"ext-score-{gid}",
+                        daemon=True,
                     )
-                except group_score.EstimateChanged as exc:
-                    body = ErrorResponse(
-                        error=str(exc), estimate=build_estimate(conn, gid)
-                    ).model_dump(mode="json")
-                    return JSONResponse(body, status_code=409)
-                except (group_score.ScoreRefused, ScorerError) as exc:
-                    return JSONResponse({"error": str(exc)}, status_code=409)
-                app.state.ext_score_errors.pop(gid, None)
-                thread = threading.Thread(
-                    target=run_score, args=(claim, profile), name=f"ext-score-{gid}", daemon=True
-                )
-                app.state.ext_score_threads.append(thread)
-                thread.start()
+                    app.state.ext_score_threads.append(thread)
+                    thread.start()
+                    started = True
+                finally:
+                    if not started:
+                        app.state.work.leave(work)
                 body = ScoreAccepted(status="in_progress", group_id=gid).model_dump(mode="json")
                 with score_lock:
                     score_answers[req.action_id] = (202, body)

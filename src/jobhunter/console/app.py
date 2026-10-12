@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import secrets
 import sqlite3
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -23,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from jobhunter import container
 from jobhunter.achievements import engine as achievements
 from jobhunter.apply import cli_runner, ext_pairing
-from jobhunter.config import Settings, resolve_path
+from jobhunter.config import Settings, resolve_path, shown_value
 from jobhunter.console import (
     achievements_routes,
     activity_routes,
@@ -43,10 +44,12 @@ from jobhunter.console import (
     proposals_routes,
     rejections_routes,
     rescore_routes,
+    restart,
     setup_routes,
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
+from jobhunter.console.work import WorkRegistry
 from jobhunter.core import bucketnames, db, geo, runlock
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
@@ -222,8 +225,16 @@ def create_app(
     (default ``console.public_port``, else ``console.port``); ``/ext/`` requests must name a
     loopback ``Host`` on it, even with ``allow_remote``.
     """
-    for problem in settings.scoring.scorer_problems().values():
-        logger.warning("console: %s (fix config.toml and restart the console)", problem)
+    for name in settings.scoring.scorer_problems():
+        # The name, and the spec only when it is safe to show: a key pasted into the spec
+        # must never reach the log.
+        shown = shown_value(getattr(settings.scoring, name, None))
+        logger.warning(
+            "console: scoring.%s %s cannot be used (fix config.toml or /models and restart "
+            "the console)",
+            name,
+            repr(shown) if shown is not None else "(value not shown)",
+        )
     db.prime_migrations()  # this process's known migrations: the code it started with
     factory: ConnFactory = conn_factory or (lambda: db.connect(settings.paths.db_path))
     get_profile: ProfileLoader = profile_loader or default_profile_loader(settings)
@@ -293,6 +304,20 @@ def create_app(
     app.state.settings_applied = False
     app.state.config_watch = None
     app.state.console_lock = console_lock  # kept alive with the app
+    # Console Restart (019 Addendum B, S12b). Every paid or long piece of work enters
+    # ``work``; ``restart_shutdown`` is set by the console command (None: this app cannot
+    # restart itself, e.g. under a test client). ``boot_id`` lets the restart page tell the
+    # new process's /healthz from the old one's.
+    app.state.work = WorkRegistry()
+    app.state.restart_shutdown = None
+    app.state.restart_requested = False
+    app.state.restart_kind = None
+    app.state.restart_preflight = None  # tests inject; None runs the child check
+    app.state.restart_delay = restart.SHUTDOWN_DELAY_S
+    app.state.port_free = restart.port_free  # tests inject
+    app.state.bind_host = None  # set by the console command
+    app.state.started_commit = None
+    app.state.boot_id = secrets.token_hex(8)
     # In-process only (specs/021): the last achievements fingerprint and the cached on/off
     # flag the nav reads; the settings route refreshes it.
     app.state.achievements = achievements.Gate(enabled=achievements_on)
@@ -363,7 +388,8 @@ def create_app(
         )
 
     @app.get("/healthz")
-    def healthz(conn: Conn) -> dict[str, object]:
+    def healthz(conn: Conn, response: Response) -> dict[str, object]:
+        response.headers["X-Jobhunter-Boot"] = app.state.boot_id
         return {"ok": True, "schema_version": db.current_version(conn)}
 
     def add_page(path: str, title: str) -> None:
