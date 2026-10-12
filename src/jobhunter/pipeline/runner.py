@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from jobhunter import logsetup
 from jobhunter.config import Settings, resolve_path
 from jobhunter.core.fetch import (
     AccessDenied,
@@ -55,6 +56,8 @@ DEFAULT_MAX_RESOLVE = 1500
 FULL_LOOKBACK_DAYS = 60
 DEFAULT_SCORE_LIMIT = 2000
 FLUSH_EVERY = 100
+PROGRESS_EVERY = 100  # resolve: a progress line every N postings or PROGRESS_SECONDS
+PROGRESS_SECONDS = 30.0
 
 # Extension point: add a family -> adapter class here as adapters land (specs/003).
 ADAPTERS: dict[str, Callable[[], SourceAdapter]] = {
@@ -87,6 +90,7 @@ class SourceResult:
     resolved: int = 0
     error: str | None = None
     duration_ms: int = 0
+    errors: int = 0
     max_posted: datetime | None = None
 
     @property
@@ -379,7 +383,25 @@ def _resolve_source(
     budget: int,
 ) -> int:
     done = 0
-    for row in _resolve_candidates(conn, src.key, now, budget):
+    candidates = _resolve_candidates(conn, src.key, now, budget)
+    total = len(candidates)
+    if total:
+        spacing = getattr(ctx, "spacing", None)
+        every, why = spacing(src.entry) if callable(spacing) else (None, "")
+        logger.info(
+            "resolve %s: %d candidates%s",
+            src.key,
+            total,
+            f", one request every {every:.1f}s ({why})" if every else "",
+        )
+    last_log = time.monotonic()
+    last_done = 0
+    for i, row in enumerate(candidates):
+        if done != last_done and (
+            done % PROGRESS_EVERY == 0 or time.monotonic() - last_log >= PROGRESS_SECONDS
+        ):
+            last_log, last_done = time.monotonic(), done
+            logger.info("resolve %s: %d of %d postings tried, %d resolved", src.key, i, total, done)
         conn.execute(
             "UPDATE job SET resolve_attempts = resolve_attempts + 1 WHERE id = ?", (row["id"],)
         )
@@ -390,6 +412,7 @@ def _resolve_source(
             raise
         except Exception as exc:  # one bad posting never fails a source
             logger.warning("resolve failed for %s/%s: %s", src.key, row["external_id"], exc)
+            res.errors += 1
             conn.commit()
             continue
         conn.execute(
@@ -456,6 +479,7 @@ def _score_stage(
             f"score: skipped: no credential for {spec}{hint}; survivors stay queued"
         )
         report.score_outcome = "skipped_no_credential"
+        logger.info("score skipped: no credential for %s", logsetup.spec_label(spec))
         return
     if notice := privacy_notice(spec, settings.scoring):
         report.messages.append(notice)
@@ -474,7 +498,14 @@ def _score_stage(
         )
         report.counts["score"] = "0"
         report.score_outcome = "cap_reached"
+        logger.info("score stopped: daily or weekly spend cap reached; new jobs stay queued")
         return
+    logger.info(
+        "stage score: scorer %s, %s, $%.2f left under the caps",
+        logsetup.spec_label(spec),
+        "batch" if spec.startswith("anthropic:") else "synchronous",
+        remaining(),
+    )
     if not spec.startswith("anthropic:"):
         try:
             sync = screen.score_sync(
@@ -570,6 +601,17 @@ def run_pipeline(
     )
     report.run_id = cur.lastrowid
     conn.commit()
+    run_t0 = time.monotonic()
+    skipped = sum(1 for e in report.plan if e.skip_reason)
+    logger.info(
+        "run %s start: trigger=%s stages=%s sources=%d planned, %d skipped, profile=%s",
+        report.run_id,
+        report.trigger,
+        ",".join(stages),
+        len(report.plan) - skipped,
+        skipped,
+        "loaded" if profile is not None else "missing",
+    )
 
     runnable = [e for e in report.plan if e.skip_reason is None]
     results = {e.source.key: SourceResult(e.source.key) for e in runnable}
@@ -587,17 +629,26 @@ def run_pipeline(
     def timed(key: str, t0: float) -> None:
         results[key].duration_ms += int((time.monotonic() - t0) * 1000)
 
+    def stage_done(name: str, t0: float, detail: str = "") -> None:
+        logger.info("stage %s done in %.1fs%s", name, time.monotonic() - t0, detail)
+
     if "list" in stages:
         total = 0
+        stage_t0 = time.monotonic()
+        logger.info("stage list: %d sources", len(entries))
         for key, entry in entries.items():
             src, res = entry.source, results[key]
             queries = queries_for(src, profile) or []
             t0 = time.monotonic()
+            stats: dict[str, int] = {}
             try:
                 with ctx_factory(src) as ctx:
-                    _list_source(
-                        conn, src, adapter_cache[key], queries, entry.watermark, ctx, res, now
-                    )
+                    try:
+                        _list_source(
+                            conn, src, adapter_cache[key], queries, entry.watermark, ctx, res, now
+                        )
+                    finally:
+                        stats = dict(getattr(ctx, "stats", None) or {})
             except Exception as exc:
                 fail(key, exc)
             else:
@@ -610,13 +661,29 @@ def run_pipeline(
                     _mark_source(conn, key, "ok", None)
             timed(key, t0)
             total += res.stubs_found
+            logger.info(
+                "list %s: status=%s queries=%d pages=%d (cached %d) stubs=%d robots_skips=%d "
+                "errors=%d in %.1fs",
+                key,
+                res.status,
+                res.queries_run,
+                stats.get("pages", 0),
+                stats.get("cached", 0),
+                res.stubs_found,
+                stats.get("robots_skips", 0),
+                1 if res.failed and res.status != "suspect" else 0,
+                time.monotonic() - t0,
+            )
         report.counts["list"] = {"stubs": total}
+        stage_done("list", stage_t0, f": {total} stubs from {len(entries)} sources")
         for e in report.plan:
             if e.skip_reason:
                 report.messages.append(f"list: {e.source.key} skipped ({e.skip_reason})")
 
     if "resolve" in stages:
         budget, total = max_resolve, 0
+        stage_t0 = time.monotonic()
+        logger.info("stage resolve: budget %d", max_resolve)
         for key, entry in entries.items():
             if budget <= 0:
                 break
@@ -634,6 +701,14 @@ def run_pipeline(
             timed(key, t0)
             budget -= n
             total += n
+            if n or results[key].errors:
+                logger.info(
+                    "resolve %s: %d resolved, %d errors in %.1fs",
+                    key,
+                    n,
+                    results[key].errors,
+                    time.monotonic() - t0,
+                )
         report.counts["resolve"] = {"resolved": total}
         # Apply links stored before login walls were recognized (bug 334d9eb): resolve those
         # groups again. Requests only through FetchContext; nothing paid.
@@ -649,11 +724,15 @@ def run_pipeline(
             logger.warning("apply-link login-wall pass failed: %s", exc)
             redone = []
         report.counts["resolve"]["apply_link_login_walls"] = len(redone)
+        stage_done("resolve", stage_t0, f": {total} resolved, {len(redone)} login-wall re-resolved")
 
     if "normalize" in stages:
+        stage_t0 = time.monotonic()
         tzs = {r.key: str(r.config.get("timezone", "UTC")) for r in rows}
         report.counts["normalize"] = {"rows": normalize_pending(conn, source_timezones=tzs)}
+        stage_done("normalize", stage_t0, f": {report.counts['normalize']['rows']} rows")
     if "dedupe" in stages:
+        stage_t0 = time.monotonic()
         d = group_pending(conn, now=now)
         report.counts["dedupe"] = {k: v for k, v in vars(d).items() if isinstance(v, int)}
         m = merge_by_apply_url(conn, now=now)
@@ -664,10 +743,26 @@ def run_pipeline(
         from jobhunter.apply.export import sync_abandoned
 
         sync_abandoned(conn, resolve_path(settings.paths.data_dir))
+        stage_done(
+            "dedupe",
+            stage_t0,
+            ": "
+            + ", ".join(
+                f"{k} {v}"
+                for k in ("dedupe", "dedupe_url", "dedupe_xstate")
+                for v in [sum(report.counts[k].values())]
+            ),
+        )
     if "prefilter" in stages and profile is not None:
+        stage_t0 = time.monotonic()
         report.counts["prefilter"] = run_prefilter(conn, profile, now=now)
+        stage_done("prefilter", stage_t0, f": {report.counts['prefilter']}")
     if "score" in stages:
+        stage_t0 = time.monotonic()
         _score_stage(conn, settings, profile, now, report)
+        stage_done(
+            "score", stage_t0, f": outcome={report.score_outcome} jobs={report.counts.get('score')}"
+        )
 
     for key, res in results.items():
         conn.execute(
@@ -691,6 +786,14 @@ def run_pipeline(
         (to_iso(datetime.now(UTC)), status, json.dumps(report.counts), report.run_id),
     )
     conn.commit()
+    logger.info(
+        "run %s end: status=%s, %d sources (%d not ok) in %.1fs",
+        report.run_id,
+        status,
+        len(results),
+        len(report.non_ok),
+        time.monotonic() - run_t0,
+    )
     return report
 
 

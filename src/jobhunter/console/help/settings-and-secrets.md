@@ -47,6 +47,7 @@ value; containers use that form.
 | `JOBHUNTER_RESUME_PATH` | overrides `[paths] resume_path` | optional | set by the units, do not set | yes |
 | `JOBHUNTER_GOOGLE_CLIENT_SECRETS` | the Google OAuth client JSON (overrides `[mail] client_secrets_path`) | optional | podman secret `jobhunter_google_client` | yes |
 | `JOBHUNTER_GMAIL_TOKEN_FILE` | the Gmail token, read from a file | not used (OS keyring, else a 0600 file) | podman secret `jobhunter_gmail_token` | yes |
+| `JOBHUNTER_LOG_LEVEL` | log level: DEBUG, INFO (default), WARNING or ERROR; beats `[logging] level` | optional | optional, as an `Environment=` line in a drop-in | yes |
 | `XDG_CONFIG_HOME` | base of `~/.config/jobhunter` | optional | ignored | yes |
 | `XDG_DATA_HOME` | base of `~/.local/share/jobhunter` | optional | ignored | yes |
 | `XDG_CACHE_HOME` | base of `~/.cache/jobhunter` | optional | ignored | yes |
@@ -236,6 +237,7 @@ and systemd starts it again; the unit needs three lines that preflight adds (see
 | `[mail]` | Apply now (reloads in place) |
 | `[console]` | Restart the console |
 | `[capture]` | Apply now (reloads in place) |
+| `[logging]` | Restart the console |
 | `.env` files, `*_FILE` and `JOBHUNTER_*` variables | Restart the console |
 
 <!-- jh:end config-reload -->

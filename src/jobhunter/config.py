@@ -25,9 +25,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, model_validator
 
 from jobhunter import container
 from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
@@ -336,6 +336,17 @@ class Console(BaseModel):
     public_port: int | None = Field(default=None, ge=1, le=65535)
 
 
+class Logging(BaseModel):
+    """Log verbosity (bug 85e102e). ``JOBHUNTER_LOG_LEVEL`` and the CLI's -v/-q win over it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: Annotated[
+        Literal["DEBUG", "INFO", "WARNING", "ERROR"],
+        BeforeValidator(lambda v: v.strip().upper() if isinstance(v, str) else v),
+    ] = "INFO"
+
+
 class Capture(BaseModel):
     """The extension's Send to jobhunter (specs/017 phase 1e)."""
 
@@ -382,6 +393,7 @@ class Settings(BaseModel):
     mail: Mail = Field(default_factory=Mail)
     console: Console = Field(default_factory=Console)
     capture: Capture = Field(default_factory=Capture)
+    logging: Logging = Field(default_factory=Logging)
 
     # The models.toml layers this was built with (``load_layers``); None when built directly.
     _models: Any = PrivateAttr(default=None)
@@ -1032,6 +1044,7 @@ RESTART_FIELDS: frozenset[str] = frozenset(
         "console.host",
         "console.port",
         "console.public_port",
+        "logging.level",  # applied once, at process start
         "fetch.global_concurrency",  # the process-wide semaphore is sized once
         # secrets are resolved once, at start, for the names config gave then
         "scoring.openai_compat.api_key_env",
@@ -1093,6 +1106,7 @@ SHOWN_VALUES: frozenset[str] = frozenset(
         "mail.label",
         "console.port",
         "console.public_port",
+        "logging.level",
     }
 )
 

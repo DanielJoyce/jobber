@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
+import os
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -14,7 +16,7 @@ from typing import Annotated
 import typer
 from typer.core import TyperGroup
 
-from jobhunter import container, secrets
+from jobhunter import container, logsetup, secrets
 from jobhunter.config import Settings, env_files, load_env_files, load_settings, resolve_path
 from jobhunter.core import db
 from jobhunter.pipeline import runner
@@ -182,7 +184,15 @@ def _say_waiting(lock: Path) -> None:
 
 
 @app.callback()
-def _load_env(ctx: typer.Context) -> None:
+def _load_env(
+    ctx: typer.Context,
+    verbose: Annotated[
+        int, typer.Option("--verbose", "-v", count=True, help="More log output (DEBUG).")
+    ] = 0,
+    quiet: Annotated[
+        int, typer.Option("--quiet", "-q", count=True, help="Less log output (WARNING, ERROR).")
+    ] = 0,
+) -> None:
     """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
     against a new database while the real one is still in the old layout."""
     if ctx.invoked_subcommand == "console":
@@ -198,6 +208,8 @@ def _load_env(ctx: typer.Context) -> None:
     _SECRETS_REPORT = secrets.startup(
         load_settings, load_env_files, lambda line: typer.echo(line, err=True)
     )
+    if not ctx.resilient_parsing:
+        _configure_logging(verbose, quiet)
     if ctx.invoked_subcommand == "console":
         # The console's config watch compares .env files against what was loaded now
         # (salted digests, in memory only; specs/019 Addendum B).
@@ -209,6 +221,25 @@ def _load_env(ctx: typer.Context) -> None:
     if "--help" in sys.argv[1:]:
         return
     _refuse_split_data()
+
+
+def _configure_logging(verbose: int, quiet: int) -> None:
+    """One stderr handler for the whole process (bug 85e102e); the level comes from -v/-q, then
+    JOBHUNTER_LOG_LEVEL, then [logging] level in config.toml, else INFO."""
+
+    try:
+        config_level = load_settings().logging.level
+    except Exception:  # a broken config file: the command itself reports it
+        config_level = None
+    logsetup.configure(
+        logsetup.resolve_level(verbose=verbose, quiet=quiet, config_level=config_level)
+    )
+    logsetup.OVERRIDE = logsetup.override_source(verbose, quiet)
+    bad = os.environ.get(logsetup.LEVEL_ENV_VAR, "").strip()
+    if bad and logsetup.parse_level(bad) is None:  # never echo the value
+        logging.getLogger(__name__).warning(
+            "ignoring %s: not one of DEBUG, INFO, WARNING, ERROR", logsetup.LEVEL_ENV_VAR
+        )
 
 
 def _refuse_split_data() -> None:
@@ -1286,6 +1317,8 @@ def console(
 
     # Fields set on the command line win over config: a change to them has no effect (019 B).
     pinned = [f for f, v in (("console.host", host), ("console.port", port)) if v is not None]
+    if logsetup.OVERRIDE:
+        pinned.append("logging.level")
     app_.state.config_watch = ConfigWatcher(cli_overrides=pinned)
     _serve(app_, bind_host, bind_port, uvicorn)
 
@@ -1297,7 +1330,11 @@ def _serve(app_, bind_host: str, bind_port: int, uvicorn) -> None:
     from jobhunter.ops import version
 
     config = uvicorn.Config(
-        app_, host=bind_host, port=bind_port, timeout_graceful_shutdown=restart.drain_seconds()
+        app_,
+        host=bind_host,
+        port=bind_port,
+        timeout_graceful_shutdown=restart.drain_seconds(),
+        log_config=logsetup.uvicorn_log_config(),
     )
     server = uvicorn.Server(config)
     how = restart.kind()

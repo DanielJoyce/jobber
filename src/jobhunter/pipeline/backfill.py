@@ -11,6 +11,7 @@ this command only. Nothing is submitted until ``confirm`` returns True.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from jobhunter import logsetup
 from jobhunter.config import Settings
 from jobhunter.core import rejections
 from jobhunter.core.models import SourceRow
@@ -29,6 +31,8 @@ from jobhunter.scoring.profile import Profile
 from jobhunter.scoring.scorers import FitScorer
 from jobhunter.sources.adapters.nlx import DEFAULT_MAX_PAGES as NLX_MAX_PAGES
 from jobhunter.sources.adapters.usajobs import MAX_DATE_POSTED_DAYS as USAJOBS_MAX_DAYS
+
+logger = logging.getLogger(__name__)
 
 INGEST_STAGES = tuple(s for s in runner.STAGES if s != "score")
 DEFAULT_CHUNK_SIZE = 5000
@@ -450,6 +454,13 @@ def run_backfill(
         return BackfillResult(status="no_profile")
 
     since = now - timedelta(days=days)
+    logger.info(
+        "backfill start: %d days, scorer %s, budget $%.2f, %d sources",
+        days,
+        logsetup.spec_label(scorer.name),
+        budget_usd,
+        len(rows),
+    )
     out(
         f"Ingest: postings listed since {since:%Y-%m-%d} ({days} days); watermarks are "
         "ignored and only move forward."
@@ -481,6 +492,12 @@ def run_backfill(
 
     est = estimate(conn, profile, scorer, budget_usd=budget_usd, now=now)
     _echo_estimate(out, est, settings)
+    logger.info(
+        "backfill estimate: %d eligible groups, %d fundable, committed $%.2f",
+        est.eligible,
+        est.fundable,
+        est.committed_usd,
+    )
     if est.eligible == 0:
         out("Nothing to screen: every eligible group already has a score or an open batch.")
         return BackfillResult(status="nothing")
@@ -505,6 +522,7 @@ def run_backfill(
         out=out,
         rejection_days=settings.scoring.employer_rejection_days,
     )
+    logger.info("backfill submitted %d jobs in %d batches: %s", submitted, len(batch_ids), stop)
     out(f"Submitted {submitted} jobs in {len(batch_ids)} batch(es): {stop}.")
     result = BackfillResult(
         status="ok",

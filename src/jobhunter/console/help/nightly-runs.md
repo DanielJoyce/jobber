@@ -23,7 +23,9 @@ jobhunter schedule uninstall           # disable the timers and remove the unit 
 ```
 
 Install does not run `systemctl` unless you pass `--enable`. Logs for a unit:
-`journalctl --user -u jobhunter-run.service -n 20`.
+`journalctl --user -u jobhunter-run.service -n 20`. A run logs its progress there: each stage,
+each source and each scoring batch. For the container units, the console terminal and how to
+change the level, see [Troubleshooting](troubleshooting.md#where-the-logs-go-and-how-much-they-say).
 
 Optional, to keep the timers running while you are logged out:
 `loginctl enable-linger $USER`. Without it, timers that never fire are reported as "timers not

@@ -105,6 +105,19 @@ _ALLOW_HEADERS = "Authorization, Content-Type, X-Jobhunter-Ext"
 RESTARTING_DRAFT = "jobhunter is restarting; try again in a moment"
 
 
+def _log_capture(what: str, resp: Any) -> None:
+    """One line per extension capture: the outcome and ids, never the page, title or employer."""
+    group = getattr(resp, "group", None)
+    logger.info(
+        "extension %s: outcome=%s method=%s group=%s job=%s",
+        what,
+        getattr(resp, "outcome", None),
+        getattr(resp, "method", None),
+        getattr(group, "group_id", None),
+        getattr(resp, "job_id", None),
+    )
+
+
 def _version(value: str | None) -> tuple[int, ...] | None:
     try:
         return tuple(int(p) for p in (value or "").strip().split("."))
@@ -314,6 +327,7 @@ def register(
                         conn, req, card_profile(), now=now(), ext_version=version
                     )
                 )
+                _log_capture("capture", resp)
                 return ok(resp)
 
             return with_conn(inner)
@@ -326,15 +340,15 @@ def register(
 
         def go(req: AddRequest) -> Response:
             host_allowed(req.facts.url)
-            return with_conn(
-                lambda conn: ok(
-                    capture_errors(
-                        lambda: capture.add(
-                            conn, req, card_profile(), now=now(), ext_version=version
-                        )
-                    )
+
+            def added(conn: sqlite3.Connection) -> Response:
+                resp = capture_errors(
+                    lambda: capture.add(conn, req, card_profile(), now=now(), ext_version=version)
                 )
-            )
+                _log_capture("capture/add", resp)
+                return ok(resp)
+
+            return with_conn(added)
 
         return await run(request, AddRequest, go)
 
@@ -481,6 +495,7 @@ def register(
     def score_claimed(claim: group_score.Claim, profile: Profile) -> None:
         conn = app.state.conn_factory()  # its own connection: never the request's
         errors = app.state.ext_score_errors
+        logger.info("extension score group %s: started", claim.group_id)
         try:
             group_score.run_claimed(
                 conn,
@@ -492,7 +507,9 @@ def register(
                 client_factory=app.state.packet_client_factory,
             )
             errors.pop(claim.group_id, None)
+            logger.info("extension score group %s: done", claim.group_id)
         except group_score.ScoreRefused as exc:
+            logger.info("extension score group %s: refused", claim.group_id)
             errors[claim.group_id] = str(exc)
         except Exception as exc:  # recorded for status; the claim was restored
             logger.exception("score group %s failed", claim.group_id)

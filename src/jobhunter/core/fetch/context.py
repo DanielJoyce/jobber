@@ -33,6 +33,7 @@ from jobhunter.core.fetch.cache import ContentCache
 from jobhunter.core.fetch.errors import (
     AccessDenied,
     FetchError,
+    RobotsDisallowed,
     SourceBlocked,
     TierError,
     TransientFetchError,
@@ -146,6 +147,8 @@ class FetchContext:
         self._pw: Any = None
         self._browser: Any = None
         self._page: Page | None = None
+        # Counts for the run's progress lines (bug 85e102e): never URLs or content.
+        self.stats = {"pages": 0, "cached": 0, "robots_skips": 0}
 
     # ─── public API ────────────────────────────────────────────────────────
 
@@ -265,8 +268,14 @@ class FetchContext:
         hops = 0
         while True:
             if check_robots:
-                self._check_robots(str(request.url))
+                try:
+                    self._check_robots(str(request.url))
+                except RobotsDisallowed:
+                    self.stats["robots_skips"] += 1
+                    raise
             result, response = self._fetch_one(request, ttl_s)
+            if check_robots:
+                self.stats["cached" if response is None else "pages"] += 1
             if response is None:
                 result.url = url
                 return result
@@ -426,9 +435,19 @@ class FetchContext:
                 detail += f" (Retry-After {retry_after:.0f}s exceeds {MAX_RETRY_AFTER_S:.0f}s)"
                 break
             delay = retry_after if retry_after is not None else self._backoff(attempt)
-            log.info("retrying %s in %.1fs after %s", url, delay, detail)
+            # Host and error kind only: a URL carries query strings and posting titles.
+            log.info(
+                "retrying %s in %.1fs after %s", _host_key(request.url), delay, detail.split(":")[0]
+            )
             self._sleep(delay)
         raise TransientFetchError(url, f"{detail} after {attempt + 1} attempt(s)", status=status)
+
+    def spacing(self, url: str) -> tuple[float, str]:
+        """Seconds between requests to ``url``'s host, and why: the source's rate limit, or the
+        robots Crawl-delay when that is larger (read from cache only). For progress logging."""
+        interval = 1.0 / self.rate_limit.rps
+        crawl = self._crawl_delay(url)
+        return (crawl, "robots Crawl-delay") if crawl > interval else (interval, "rate limit")
 
     def _crawl_delay(self, url: str) -> float:
         """Robots Crawl-delay for the URL's origin, if its rules are already cached; else 0.

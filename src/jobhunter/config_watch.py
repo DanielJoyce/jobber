@@ -310,6 +310,10 @@ def diff(
         old, shown_new, note = describe(name, a, b)
         source = "models.toml" if name in from_models else "config.toml"
         set_on = SET_ON_CLI if cls == NO_EFFECT else ""
+        if set_on and name == "logging.level":
+            from jobhunter import logsetup
+
+            set_on = logsetup.OVERRIDE or set_on
         out.append(FieldChange(name, cls, old, shown_new, note, source, why, set_on))
     return out
 
