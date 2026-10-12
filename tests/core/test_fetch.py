@@ -809,3 +809,74 @@ def test_long_retry_after_holds_the_host_and_others_fail_fast(settings, conn, se
         second.get(f"{HOST}/other")
     assert server.hits("/other") == 0
     assert sum(clock.sleeps) == slept  # nobody waited out the hour
+
+
+def test_long_hold_landing_while_another_source_waits_fails_it_fast(tmp_path, conn, server):
+    """s2 sleeps in per-host spacing when s1 gets 429 Retry-After 3600: s2 wakes at its slot,
+    sees the long hold and fails at once instead of sleeping out the hour."""
+    clock = SteppedClock()
+    limiter = HostRateLimiter()
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "cache")}, "fetch": {"max_retries": 0}}
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_429(_request: httpx.Request) -> httpx.Response:
+        entered.set()
+        assert release.wait(10)
+        return httpx.Response(429, headers={"Retry-After": "3600"})
+
+    server.route(f"{HOST}/jobs", slow_429)
+    server.route(f"{HOST}/b", httpx.Response(200, text="ok"))
+    errors: dict[str, BaseException] = {}
+
+    def fetch(key: str, path: str) -> None:
+        ctx = FetchContext(
+            make_source(key=key),
+            s,
+            conn,
+            transport=server.transport,
+            clock=clock,
+            sleep=clock.sleep,
+            limiter=limiter,
+        )
+        try:
+            ctx.get(f"{HOST}{path}")
+        except BaseException as exc:
+            errors[key] = exc
+        finally:
+            ctx.close()
+
+    s1 = threading.Thread(target=fetch, args=("s1", "/jobs"))
+    s1.start()  # robots.txt at 0 s, then /jobs waits for its 1 s slot
+    clock.wait_for_sleepers(1)
+    clock.advance_to(1.0)
+    assert entered.wait(10)  # s1's request is in flight
+    s2 = threading.Thread(target=fetch, args=("s2", "/b"))
+    s2.start()
+    clock.wait_for_sleepers(1)  # s2 sleeps until its 2 s slot
+    release.set()  # s1 gets the 429: the host is held for an hour
+    s1.join(timeout=10)
+    assert "3600" in str(errors["s1"])
+    clock.advance_to(2.0)
+    t0 = time.monotonic()
+    s2.join(timeout=5)
+    assert not s2.is_alive() and time.monotonic() - t0 < 1.0
+    assert isinstance(errors["s2"], TransientFetchError)
+    assert "pause" in str(errors["s2"])
+    assert server.hits("/b") == 0
+
+
+def test_long_retry_after_is_named_with_no_retries_left(tmp_path, conn, server, clock):
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "cache")}, "fetch": {"max_retries": 0}}
+    )
+    server.route(f"{HOST}/jobs", httpx.Response(429, headers={"Retry-After": "86400"}))
+    with (
+        FetchContext(
+            make_source(), s, conn, transport=server.transport, clock=clock, sleep=clock.sleep
+        ) as ctx,
+        pytest.raises(TransientFetchError) as info,
+    ):
+        ctx.get(f"{HOST}/jobs")
+    assert "Retry-After 86400s exceeds" in str(info.value)

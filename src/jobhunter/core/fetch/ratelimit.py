@@ -14,6 +14,15 @@ Clock = Callable[[], float]
 Sleep = Callable[[float], None]
 
 
+class HostHeld(Exception):
+    """The host asked for a pause longer than the caller will wait (``max_hold``)."""
+
+    def __init__(self, host: str, remaining: float) -> None:
+        super().__init__(f"host {host} asked for a {remaining:.0f}s pause (Retry-After)")
+        self.host = host
+        self.remaining = remaining
+
+
 class HostRateLimiter:
     """Reserve-then-sleep slots per host: the next request may start ``interval`` after the last.
 
@@ -39,10 +48,13 @@ class HostRateLimiter:
         jitter: bool = False,
         rng: random.Random | None = None,
         floor: float = 0.0,
+        max_hold: float | None = None,
     ) -> float:
         """Block until ``host`` may be hit again. Returns the seconds waited.
 
         ``floor`` is a minimum interval that jitter never goes below (robots Crawl-delay).
+        ``max_hold``: raise :class:`HostHeld` instead of waiting out a host hold longer than
+        this, checked before the first wait and again after every wake-up.
         """
         if jitter:
             interval *= (rng or random.Random()).uniform(0.75, 1.25)
@@ -51,7 +63,10 @@ class HostRateLimiter:
         while True:
             with self._lock:
                 now = clock()
-                start = max(now, self._next.get(host, now), self._held.get(host, now))
+                held = self._held.get(host, now)
+                if max_hold is not None and held - now > max_hold:
+                    raise HostHeld(host, held - now)
+                start = max(now, self._next.get(host, now), held)
                 self._next[host] = start + interval
             wait = start - now
             if wait > LONG_WAIT_S:

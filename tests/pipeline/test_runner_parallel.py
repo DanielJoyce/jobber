@@ -11,6 +11,7 @@ threads (a thread that must wait behind another's slot jumps forward to it).
 from __future__ import annotations
 
 import inspect
+import logging
 import signal
 import sqlite3
 import threading
@@ -643,3 +644,19 @@ def test_ctrl_c_stops_the_run_within_about_a_request(conn, tmp_path, monkeypatch
     assert stopped - fired[0] < 1.2  # at most one in-flight 0.6 s request per worker
     late = [t for t in started if t > fired[0] + 0.05]
     assert late == []  # no new request after Ctrl-C
+
+
+def test_each_source_logs_a_fetched_line_from_its_worker(conn, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="jobhunter.pipeline.runner")
+    rows = [source(f"s{i}", f"h{i}.example.gov") for i in range(3)]
+    PagedAdapter.barrier = threading.Barrier(3, timeout=10)
+    run(conn, tmp_path, rows, workers=3)
+    fetched = {
+        r.getMessage().split(":")[0]: r.threadName
+        for r in caplog.records
+        if r.getMessage().startswith("fetched ")
+    }
+    assert set(fetched) == {"fetched s0", "fetched s1", "fetched s2"}
+    assert all(name != threading.main_thread().name for name in fetched.values())
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("fetched s0"))
+    assert line.startswith(f"fetched s0: {PAGES} stubs from 1 queries in ")

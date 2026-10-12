@@ -411,21 +411,21 @@ class FetchContext:
             if self._cancel is not None:
                 self._cancel()
             # A host that asked for a long pause (Retry-After over MAX_RETRY_AFTER_S) gets no
-            # request and parks no worker: fail now, the source is retried next run.
-            held = self._limiter.remaining_hold(host, clock=self._clock)
-            if held > MAX_RETRY_AFTER_S:
-                raise TransientFetchError(
-                    url, f"host {host} asked for a {held:.0f}s pause (Retry-After)", status=None
+            # request and parks no worker, also when the hold lands while this one waits: fail
+            # now, the source is retried next run.
+            try:
+                self._limiter.acquire(
+                    host,
+                    interval,
+                    clock=self._clock,
+                    sleep=self._sleep,
+                    jitter=self.rate_limit.jitter,
+                    rng=self._rng,
+                    floor=self._crawl_delay(str(request.url)),
+                    max_hold=MAX_RETRY_AFTER_S,
                 )
-            self._limiter.acquire(
-                host,
-                interval,
-                clock=self._clock,
-                sleep=self._sleep,
-                jitter=self.rate_limit.jitter,
-                rng=self._rng,
-                floor=self._crawl_delay(str(request.url)),
-            )
+            except ratelimit.HostHeld as exc:
+                raise TransientFetchError(url, str(exc), status=None) from exc
             if self._cancel is not None:
                 self._cancel()
             retry_after: float | None = None
@@ -461,10 +461,10 @@ class FetchContext:
             if retry_after is not None or status == 429:
                 host_wait = retry_after if retry_after is not None else self._backoff(attempt)
                 self._limiter.hold(host, host_wait, clock=self._clock)
-            if attempt == attempts - 1:
-                break
             if retry_after is not None and retry_after > MAX_RETRY_AFTER_S:
                 detail += f" (Retry-After {retry_after:.0f}s exceeds {MAX_RETRY_AFTER_S:.0f}s)"
+                break
+            if attempt == attempts - 1:
                 break
             delay = host_wait if host_wait is not None else self._backoff(attempt)
             # Host and error kind only: a URL carries query strings and posting titles.
@@ -555,15 +555,21 @@ class FetchContext:
                 log.warning("browser navigation refused: %s", exc)
                 route.abort("blockedbyclient")
                 return
-            self._limiter.acquire(
-                _host_key(httpx.URL(request.url)),
-                1.0 / self.rate_limit.rps,
-                clock=self._clock,
-                sleep=self._sleep,
-                jitter=self.rate_limit.jitter,
-                rng=self._rng,
-                floor=self._crawl_delay(request.url),
-            )
+            try:
+                self._limiter.acquire(
+                    _host_key(httpx.URL(request.url)),
+                    1.0 / self.rate_limit.rps,
+                    clock=self._clock,
+                    sleep=self._sleep,
+                    jitter=self.rate_limit.jitter,
+                    rng=self._rng,
+                    floor=self._crawl_delay(request.url),
+                    max_hold=MAX_RETRY_AFTER_S,
+                )
+            except ratelimit.HostHeld as exc:
+                log.warning("browser navigation refused: %s", exc)
+                route.abort("blockedbyclient")
+                return
         route.continue_()
 
     # ─── fetch_log ─────────────────────────────────────────────────────────
