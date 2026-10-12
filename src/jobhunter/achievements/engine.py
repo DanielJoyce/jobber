@@ -314,7 +314,7 @@ SELECT
   (SELECT MAX(updated_at) FROM alert_signup),
   EXISTS (SELECT 1 FROM mail_message),
   (SELECT MAX(updated_at) FROM application),
-  (SELECT MAX(updated_at) FROM achievement_setting)
+  (SELECT value FROM achievement_setting WHERE key = 'mail_setup_at')
 """
 
 
