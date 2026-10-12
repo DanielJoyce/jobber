@@ -14,6 +14,7 @@ from test_rescore import (
     SPEC,
     FakeScorer,
     now,
+    priced_test_model,  # noqa: F401
     queue,
     queue_raw,
     row,

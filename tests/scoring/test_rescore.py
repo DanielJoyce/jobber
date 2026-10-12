@@ -23,6 +23,18 @@ from jobhunter.scoring.profile import SalaryFloor
 from jobhunter.scoring.scorers import ScoreResult
 
 SPEC = "openrouter:test/model"
+
+
+@pytest.fixture(autouse=True)
+def priced_test_model(monkeypatch):
+    """``test/model`` is a cheap model in the cached OpenRouter catalog ($0.10 / $0.50 per
+    Mtok), so the spend cap reserves the $0.002 floor for it (bug df51dff). No file, no
+    network: the cache reader is replaced."""
+    from jobhunter.scoring import screen as _screen
+
+    monkeypatch.setattr(_screen, "cached_openrouter_rates", lambda config, slug: (0.10, 0.50))
+
+
 QUOTE = "Write Terraform modules and Go tooling."
 
 

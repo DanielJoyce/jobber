@@ -132,7 +132,9 @@ def open_scored(conn: sqlite3.Connection, profile: Profile, now: datetime) -> tu
 # ─── Cost ───────────────────────────────────────────────────────────────────
 
 
-def cost_per_job(conn: sqlite3.Connection, spec: str) -> tuple[float, str]:
+def cost_per_job(
+    conn: sqlite3.Connection, spec: str, scoring: Scoring | None = None
+) -> tuple[float, str]:
     """Measured screen cost per job for this scorer, else a per-kind default.
 
     Measured from ``fit_score``, where each row carries that job's share of its request's cost.
@@ -148,11 +150,14 @@ def cost_per_job(conn: sqlite3.Connection, spec: str) -> tuple[float, str]:
         return float(row[0]), "fit_score"
     if is_decisions(spec):
         return DECISIONS_FALLBACK_COST, "default"
-    # Nothing measured: the old flat default, or the model's table price at typical tokens
-    # when that is higher (Sonnet 5.5 is about $0.005 a job), so a plan is never underpriced.
-    return max(
-        screen.ESTIMATED_COST_PER_REQUEST_USD, screen.table_price_per_request_usd(spec)
-    ), "default"
+    # Nothing measured: the old flat default, or the model's list price at typical tokens
+    # when that is higher (Sonnet 5.5 is about $0.005 a job; an OpenRouter slug is priced from
+    # the cached catalog in ``scoring``), so a plan is never underpriced. A model with no known
+    # price is priced at what the spend cap reserves for it (bug df51dff).
+    price = screen.list_price_per_job_usd(spec, scoring, batch=spec.startswith("anthropic:"))
+    if price is None:
+        price = screen.unpriced_reserve_usd(spec, scoring, batch=spec.startswith("anthropic:"))
+    return max(screen.ESTIMATED_COST_PER_REQUEST_USD, price), "default"
 
 
 # The same caps the daily run checks (screen.remaining_budget: tighter of daily and weekly).
@@ -271,7 +276,7 @@ def make_plan(
     scored_before = {
         int(r[0]) for r in conn.execute("SELECT DISTINCT job_group_id FROM fit_score").fetchall()
     }
-    per_job, source = cost_per_job(conn, spec)
+    per_job, source = cost_per_job(conn, spec, scoring)
     est = len(planned) * per_job
     plan = Plan(
         scope=scope,

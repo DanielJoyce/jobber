@@ -131,7 +131,7 @@ def estimate(
         bad_spec = None
     except ValueError as exc:
         bad_spec = str(exc)
-    per_job, source = (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec)
+    per_job, source = (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec, scoring)
     est = Estimate(
         group_id=group_id,
         scorer=spec,

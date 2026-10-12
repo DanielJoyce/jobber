@@ -81,10 +81,9 @@ class Estimate:
     spent_today_usd: float
     pending_jobs: int
     budget_usd: float
-
-    @property
-    def pending_usd(self) -> float:
-        return self.pending_jobs * self.per_job.usd
+    # Uncollected batches at each one's own model's reservation (screen._pending_batch_usd),
+    # not this run's scorer price (bug df51dff).
+    pending_usd: float = 0.0
 
     @property
     def committed_usd(self) -> float:
@@ -227,6 +226,7 @@ def estimate(
         spent_today_usd=float(spent),
         pending_jobs=int(pending),
         budget_usd=budget_usd,
+        pending_usd=screen._pending_batch_usd(conn),
     )
 
 

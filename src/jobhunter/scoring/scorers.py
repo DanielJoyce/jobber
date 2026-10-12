@@ -112,6 +112,23 @@ def compute_cost(usage: Any, model: str, *, batch: bool) -> float:
     return cost * factor / 1_000_000
 
 
+def ceiling_cost(usage: Any, *, batch: bool) -> float:
+    """USD for ``usage`` at the dearest rates in ``PRICING_PER_MTOK``.
+
+    For an Anthropic model missing from the table (bug df51dff): a batch already submitted
+    under it is still collected and its spend recorded, over-counted rather than lost.
+    """
+    in_rate = max(r[0] for r in PRICING_PER_MTOK.values())
+    out_rate = max(r[1] for r in PRICING_PER_MTOK.values())
+    cost = (
+        _usage_int(usage, "input_tokens") * in_rate
+        + _usage_int(usage, "cache_creation_input_tokens") * in_rate * CACHE_WRITE_MULTIPLIER
+        + _usage_int(usage, "cache_read_input_tokens") * in_rate * CACHE_READ_MULTIPLIER
+        + _usage_int(usage, "output_tokens") * out_rate
+    )
+    return cost * (BATCH_DISCOUNT if batch else 1.0) / 1_000_000
+
+
 def compute_message_cost(usage: Any, model: str, *, batch: bool) -> float:
     """USD for one response, counting every attempt a server-side fallback made.
 
@@ -488,6 +505,26 @@ class OpenAICompatScorer:
 CATALOG_MAX_AGE_S = 24 * 3600
 
 
+def load_catalog_cache(path: Path | str) -> tuple[float, dict[str, tuple[float, float]]] | None:
+    """``(fetched_at, {slug: (input, output) USD per Mtok})`` from the cache file, or None."""
+    try:
+        raw = json.loads(Path(path).read_text())
+        prices = {k: (float(v[0]), float(v[1])) for k, v in raw["prices"].items()}
+        return float(raw["fetched_at"]), prices
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+        return None
+
+
+def _catalog_rates(prices: dict[str, tuple[float, float]], slug: str) -> tuple[float, float] | None:
+    return prices.get(slug) or prices.get(slug.partition(":")[0])
+
+
+def cached_openrouter_rates(config: OpenRouter, slug: str) -> tuple[float, float] | None:
+    """``slug``'s rates from the cached catalog at any age, or None. Reads the disk only."""
+    cached = load_catalog_cache(config.catalog_cache)
+    return _catalog_rates(cached[1], slug) if cached else None
+
+
 class OpenRouterScorer(OpenAICompatScorer):
     """The openai-compat scorer preset for OpenRouter (specs/016).
 
@@ -529,12 +566,7 @@ class OpenRouterScorer(OpenAICompatScorer):
     # price catalog (USD per million tokens), cached on disk, refreshed at most daily
 
     def _load_cache(self) -> tuple[float, dict[str, tuple[float, float]]] | None:
-        try:
-            raw = json.loads(Path(self.openrouter.catalog_cache).read_text())
-            prices = {k: (float(v[0]), float(v[1])) for k, v in raw["prices"].items()}
-            return float(raw["fetched_at"]), prices
-        except (OSError, ValueError, KeyError, TypeError, IndexError):
-            return None
+        return load_catalog_cache(self.openrouter.catalog_cache)
 
     def _fetch_catalog(self) -> dict[str, tuple[float, float]]:
         url = self.openrouter.base_url.rstrip("/") + "/models"
@@ -578,8 +610,7 @@ class OpenRouterScorer(OpenAICompatScorer):
             return self._prices
 
     def _lookup(self, slug: str) -> tuple[float, float] | None:
-        prices = self.catalog()
-        return prices.get(slug) or prices.get(slug.partition(":")[0])
+        return _catalog_rates(self.catalog(), slug)
 
     def cost(self, usage: Any, *, batch: bool = False) -> float:
         reported = getattr(usage, "cost_usd", None)

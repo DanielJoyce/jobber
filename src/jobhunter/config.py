@@ -216,6 +216,17 @@ def check_scorer_spec(spec: str, field: str = "scorer", *, anthropic_only: bool 
         raise ValueError(f'{field} "{spec}": no model after "{provider}:"')
     if anthropic_only and provider != "anthropic":
         raise ValueError(f'{field} "{spec}": the deep pass needs "anthropic:<model>"')
+    if provider == "anthropic":
+        # Lazy: scorers imports this module. A model missing from the price table would be
+        # reserved and recorded at the wrong price, so it is refused up front (bug df51dff).
+        from jobhunter.scoring.scorers import PRICING_PER_MTOK
+
+        if model not in PRICING_PER_MTOK:
+            listed = ", ".join(sorted(PRICING_PER_MTOK))
+            raise ValueError(
+                f'{field} "{spec}": no price for {model!r}, so spend caps cannot see its cost '
+                f"(priced: {listed})"
+            )
     # OpenRouter slugs are author/model, so a leading provider name is a mistake. Local and
     # openai-compat model names are free-form ("jev:latest" can be legitimate).
     if provider == "openrouter" and inner_sep and inner in SCORER_PROVIDERS:

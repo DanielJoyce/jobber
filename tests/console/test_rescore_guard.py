@@ -21,6 +21,7 @@ from test_rescore_routes import (
     finish,
     make_client,
     pdir,  # noqa: F401
+    priced_test_model,  # noqa: F401
     token_of,
 )
 
