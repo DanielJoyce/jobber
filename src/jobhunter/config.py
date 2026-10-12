@@ -496,7 +496,10 @@ _CHOICES = {"runner": ("cli", "api"), "effort": ("low", "medium", "high")}
 # A value may be echoed in a message only when it looks like a scorer spec or model id
 # (019 B: never a value except SHOWN_VALUES), and never when it looks like a key.
 _SHOWABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
-_SECRET_LOOKING = re.compile(r"(?i)^(sk-|sk_|key-|ghp_|xox|bearer)|secret|token|password")
+# A key prefix at the start or after a provider or path separator ("openrouter:sk-or-...").
+_SECRET_LOOKING = re.compile(
+    r"(?i)(?:^|[:/])(?:sk-|sk_|key-|ghp_|xox|bearer)|secret|token|password"
+)
 
 
 def shown_value(value: object) -> str | None:
@@ -525,7 +528,7 @@ class ModelsProblem:
     message: str
 
 
-@dataclass
+@dataclass(eq=False)  # merged._models points back here: no recursive field compare
 class Layers:
     """What ``load_layers`` found: each layer, what it set, what is wrong, and the result.
 
@@ -550,6 +553,22 @@ class Layers:
     notices: list[str] = dc_field(default_factory=list)
     config_keys: frozenset[tuple[str, str]] = frozenset()
     override_keys: frozenset[tuple[str, str]] = frozenset()
+
+    def __eq__(self, other: object) -> bool:
+        # Not base/merged: merged._models points back here, and Settings compares its private
+        # state, so comparing them would recurse. The file's content decides equality.
+        if not isinstance(other, Layers):
+            return NotImplemented
+        mine = (self.path, self.exists, self.digest, self.layer, self.invalid, self.problems)
+        theirs = (other.path, other.exists, other.digest, other.layer, other.invalid,
+                  other.problems)  # fmt: skip
+        return mine == theirs and (self.blocked, self.notices, self.config_keys) == (
+            other.blocked,
+            other.notices,
+            other.config_keys,
+        )
+
+    __hash__ = None  # type: ignore[assignment]
 
     @property
     def broken(self) -> bool:
@@ -586,6 +605,8 @@ def check_model_key(section: str, key: str, value: object) -> str | None:
         return "must be one of " + ", ".join(f'"{c}"' for c in choices)
     if not isinstance(value, str):
         return "must be a string"
+    if shown_value(value) is None:  # looks like a key, or has characters no model id has
+        return "not a usable model name"
     assert use is not None
     from jobhunter.scoring import catalog  # lazy: catalog imports this module
 

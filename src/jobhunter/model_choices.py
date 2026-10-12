@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import json
 import math
 import os
+import re
 import sqlite3
 import tempfile
+import tomllib
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -239,10 +240,35 @@ def file_lock(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+_ESCAPES = {
+    '"': '\\"',
+    "\\": "\\\\",
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
+
+
+def _toml_string(text: str) -> str:
+    """A TOML basic string: quotes, backslashes and every control character (U+0000-U+001F,
+    U+007F) escaped; other characters, non-ASCII included, written as they are."""
+    out = []
+    for ch in text:
+        if ch in _ESCAPES:
+            out.append(_ESCAPES[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
 def _toml_key(key: str) -> str:
-    if key and all(c.isalnum() or c in "_-" for c in key):
-        return key
-    return json.dumps(key, ensure_ascii=False)
+    """A bare key only for ASCII letters, digits, _ and -; anything else is quoted."""
+    return key if _BARE_KEY.fullmatch(key) else _toml_string(key)
 
 
 def _toml_value(value: Any) -> str:
@@ -257,9 +283,7 @@ def _toml_value(value: Any) -> str:
             return "inf" if value > 0 else "-inf"
         return repr(value)
     if isinstance(value, str):
-        # JSON's string escapes are TOML basic-string escapes; ensure_ascii=False avoids
-        # \\ud83d-style surrogate pairs, which TOML does not accept.
-        return json.dumps(value, ensure_ascii=False)
+        return _toml_string(value)
     if isinstance(value, datetime | date | time):
         return value.isoformat()
     if isinstance(value, list):
@@ -285,6 +309,20 @@ def dumps(data: Mapping[str, Any]) -> str:
         lines += ["", f"[{_toml_key(name)}]"]
         lines += [f"{_toml_key(k)} = {_toml_value(v)}" for k, v in table.items()]
     return "\n".join(lines) + "\n"
+
+
+def _checked_dumps(data: Mapping[str, Any]) -> str:
+    """``dumps``, refused unless the text reads back as TOML with the same content."""
+    try:
+        text = dumps(data)
+        # dumps leaves out empty tables (a section whose last key was reset).
+        expected = {k: v for k, v in data.items() if not (isinstance(v, dict) and not v)}
+        ok = tomllib.loads(text) == expected
+    except (TypeError, ValueError):  # TOMLDecodeError is a ValueError
+        ok = False
+    if not ok:
+        raise ModelsFileError(f"{MODELS_FILE_NAME} could not be written as valid TOML")
+    return text
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -348,7 +386,7 @@ def write_changes(
                 changed[name] = (old, value)
         if not changed:
             return WriteResult(digest)
-        text = dumps(data)
+        text = _checked_dumps(data)
         _atomic_write(path, text)
         new_digest = read_models_file(path)[1]
     if conn is not None:
@@ -356,12 +394,25 @@ def write_changes(
     return WriteResult(new_digest, changed)
 
 
-def reset_file(path: Path, *, now: datetime) -> tuple[str, Path | None]:
-    """Replace models.toml with an empty one, keeping the old file as
-    ``models.toml.broken-<time>``. Returns (new digest, where the old file went)."""
+def reset_file(
+    path: Path, base_digest: str, *, now: datetime, force: bool = False
+) -> tuple[str, Path | None]:
+    """Replace a broken models.toml with an empty one, keeping the old file as
+    ``models.toml.broken-<time>``. Returns (new digest, where the old file went).
+
+    Refused with StaleDigest when the file changed since ``base_digest`` was read, and, unless
+    ``force``, when the file is valid TOML (Reset each use instead)."""
     with file_lock(path):
+        exists, digest, data, _problems = read_models_file(path)
+        if digest != base_digest:
+            raise StaleDigest()
+        if exists and data is not None and not force:
+            raise Refused(
+                f"{MODELS_FILE_NAME} is valid TOML; reset single uses with `jobhunter models "
+                "reset USE`, or pass --force to empty it anyway"
+            )
         kept: Path | None = None
-        if path.exists():
+        if exists:
             stamp = now.strftime("%Y%m%dT%H%M%S")
             kept = path.with_name(f"{path.name}.broken-{stamp}")
             os.replace(path, kept)

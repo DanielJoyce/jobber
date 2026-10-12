@@ -303,3 +303,21 @@ def test_models_reset_screen_with_new_leaves_rows_following(env):
     assert f"with {SPEC}" in out.output  # the reset brings back config.toml's scorer
     assert rescore.get_request(env.conn, rid)["scorer"] is None
     assert load_settings().scoring.screen_scorer == SPEC
+
+
+def test_keep_is_written_before_the_file(env, monkeypatch):
+    """A drain starting between the two writes must already see the row pinned."""
+    from jobhunter import model_choices as mc
+
+    rid = _queue(env.conn, env.profile, "all")
+    seen = []
+    real = mc.write_changes
+
+    def spy(*a, **k):
+        seen.append(rescore.get_request(env.conn, rid)["scorer"])
+        return real(*a, **k)
+
+    monkeypatch.setattr(mc, "write_changes", spy)
+    out = cli.invoke(app, ["models", "set", "screen", "local:qwen3", "--queued", "keep"])
+    assert out.exit_code == 0, out.output
+    assert seen == [SPEC]

@@ -360,7 +360,7 @@ def test_a_broken_file_is_not_written_until_reset(dirs):
     with pytest.raises(mc.BrokenFile):
         mc.write_changes(mfile, {"effort": "low"}, d0, source="ui", now=NOW)
     assert mfile.read_text() == "[apply\n"
-    digest, kept = mc.reset_file(mfile, now=NOW)
+    digest, kept = mc.reset_file(mfile, d0, now=NOW)
     assert kept is not None and kept.read_text() == "[apply\n"
     assert kept.name == "models.toml.broken-20261011T120000"
     layers = load_layers()
@@ -540,3 +540,64 @@ def test_paths_lists_models_toml(dirs):
     out = cli.invoke(app, ["paths"])
     assert out.exit_code == 0, out.output
     assert f"models_file         missing  {mfile}  [under data_dir]" in out.output
+
+
+# ─── Review fixes (PR 144) ──────────────────────────────────────────────────
+
+
+def test_settings_compare_without_recursing(dirs):
+    _, mfile = dirs
+    mfile.write_text('[apply]\neffort = "high"\n')
+    assert load_settings() == load_settings()
+
+
+def test_writer_quotes_non_ascii_keys_and_escapes_control_characters(dirs):
+    import tomllib
+
+    _, mfile = dirs
+    mfile.write_text('[newer]\n"clé" = "a\\u007fb\\u0001c"\n')
+    before = tomllib.loads(mfile.read_text())
+    mc.write_changes(mfile, {"effort": "low"}, load_layers().digest, source="ui", now=NOW)
+    after = tomllib.loads(mfile.read_text())
+    assert after["newer"] == before["newer"] == {"clé": "a\x7fb\x01c"}
+    assert "\x7f" not in mfile.read_text()
+    assert load_settings().apply.effort == "low"
+
+
+def test_writer_refuses_what_would_not_read_back(dirs, monkeypatch):
+    _, mfile = dirs
+    monkeypatch.setattr(mc, "dumps", lambda data: "[broken\n")
+    with pytest.raises(mc.ModelsFileError, match="valid TOML"):
+        mc.write_changes(mfile, {"effort": "low"}, load_layers().digest, source="ui", now=NOW)
+    assert not mfile.exists()
+
+
+@pytest.mark.parametrize(
+    "value", ["anthropic:sk-ant-api03-abc", "openrouter:sk-or-v1-abc", "openrouter:x/sk-abc"]
+)
+def test_a_key_after_the_provider_is_never_echoed_written_or_stored(dirs, conn, value):
+    _, mfile = dirs
+    assert mc.check_save("screen", value).error
+    out = cli.invoke(app, ["models", "set", "screen", value, "--force"])
+    assert out.exit_code == 2 and "sk-" not in out.output and not mfile.exists()
+    mfile.write_text(f'[scoring]\nscreen_scorer = "{value}"\n')
+    layers = load_layers()
+    assert "screen_scorer" in layers.merged.scoring.scorer_problems()
+    text = " ".join(p.message for p in layers.problems)
+    text += " ".join(layers.merged.scoring.scorer_problems().values())
+    assert "sk-" not in text
+    mc.write_changes(mfile, {"screen": "local:x"}, layers.digest, conn=conn, source="ui", now=NOW)
+    assert mc.history(conn)[0]["old_value"] == mc.INVALID_TEXT
+
+
+def test_reset_file_refuses_a_healthy_file_without_force(dirs):
+    _, mfile = dirs
+    mfile.write_text('[apply]\neffort = "low"\n')
+    out = cli.invoke(app, ["models", "reset-file"])
+    assert out.exit_code == 1 and "--force" in out.output
+    assert load_settings().apply.effort == "low"
+    with pytest.raises(mc.StaleDigest):
+        mc.reset_file(mfile, "0" * 64, now=NOW, force=True)
+    out = cli.invoke(app, ["models", "reset-file", "--force"])
+    assert out.exit_code == 0, out.output
+    assert load_settings().apply.effort == "medium"

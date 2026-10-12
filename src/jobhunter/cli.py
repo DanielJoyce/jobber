@@ -2872,6 +2872,12 @@ def _models_write(layers, changes: dict, *, source: str, queued: str | None) -> 
                 new_spec = layers.base.scoring.screen_scorer
             if new_spec != old_spec:
                 choice = _models_queued(conn, settings, old_spec, new_spec, queued)
+        # "keep" goes first: once the file names the new model, a drain starting now must
+        # already find those rows pinned to the old one. If the write then fails, the rows
+        # carry the model still in effect, so nothing changes for them.
+        if choice == "keep" and conn is not None and old_spec is not None:
+            n = mc.keep_queued(conn, old_spec)
+            typer.echo(f"kept {n} queued re-score(s) on {old_spec}")
         try:
             result = mc.write_changes(
                 layers.path,
@@ -2884,9 +2890,6 @@ def _models_write(layers, changes: dict, *, source: str, queued: str | None) -> 
         except mc.ModelsFileError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
-        if choice == "keep" and conn is not None and old_spec is not None:
-            n = mc.keep_queued(conn, old_spec)
-            typer.echo(f"kept {n} queued re-score(s) on {old_spec}")
     finally:
         if conn is not None:
             conn.close()
@@ -2985,7 +2988,11 @@ def models_reset(
 
 
 @models_app.command("reset-file")
-def models_reset_file() -> None:
+def models_reset_file(
+    force: Annotated[
+        bool, typer.Option("--force", help="Empty the file even though it is valid TOML.")
+    ] = False,
+) -> None:
     """Replace a broken models.toml with an empty one; the old file is kept beside it."""
     from jobhunter import model_choices as mc
     from jobhunter.config import load_layers
@@ -2994,7 +3001,13 @@ def models_reset_file() -> None:
     if not layers.exists:
         typer.echo(f"no {layers.path}; nothing to reset")
         return
-    _digest, kept = mc.reset_file(layers.path, now=datetime.now(UTC))
+    try:
+        _digest, kept = mc.reset_file(
+            layers.path, layers.digest, now=datetime.now(UTC), force=force
+        )
+    except mc.ModelsFileError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
     typer.echo(f"emptied {layers.path}" + (f"; the old file is {kept}" if kept else ""))
 
 
