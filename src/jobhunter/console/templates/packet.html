@@ -35,6 +35,8 @@
     {% endif %}
   </div>
 
+  {% with mb_uses=["draft", "factcheck"] %}{% include "_model_access.html" %}{% endwith %}
+
   {% include "_packet_score.html" %}
 
   <section class="card" id="posting">

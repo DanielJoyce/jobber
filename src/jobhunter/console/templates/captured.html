@@ -5,6 +5,7 @@
   <p class="crumbs"><a href="/inbox">&larr; inbox</a></p>
   <h1>Captured</h1>
   <p class="muted">Postings you added yourself: sent from the browser extension or made on <a href="/apply/new">New packet</a>, newest first. They are never scored by the nightly run; open one to score it or prepare a packet. Once scored, a posting also shows in the inbox.</p>
+  {% with mb_uses=["screen"] %}{% include "_model_access.html" %}{% endwith %}
   {% if items %}
   <div class="table-wrap">
     <table class="captured-list" id="captured-list">

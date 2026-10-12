@@ -34,6 +34,7 @@ from jobhunter.console import (
     ext_routes,
     help_routes,
     inbox_routes,
+    model_banners,
     models_routes,
     packet_routes,
     pages_routes,
@@ -522,6 +523,7 @@ def create_app(
     alerts_routes.register(app, templates, get_conn, NAV, now)
     setup_routes.register(app, templates, get_conn, NAV, now)
     models_routes.register(app, templates, get_conn, NAV, now)
+    model_banners.register(app, templates, now)
     achievements_routes.register(app, templates, get_conn, NAV, now)
     ext_routes.register(app, get_profile, now)
 
