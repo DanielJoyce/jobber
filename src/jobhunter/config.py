@@ -593,7 +593,7 @@ def check_model_key(section: str, key: str, value: object) -> str | None:
     if reason is None:
         return None
     if shown_value(value) is None:
-        return "is not a usable model name"
+        return "not a usable model name"
     return reason
 
 
@@ -670,7 +670,7 @@ def _split_layer(
                 valid.setdefault(section, {})[key] = value
             else:
                 invalid.setdefault(section, {})[key] = value
-                problems.append(ModelsProblem("invalid", dotted, f"{dotted} {reason}"))
+                problems.append(ModelsProblem("invalid", dotted, f"{dotted}: {reason}"))
     return valid, invalid, problems, unreadable
 
 
@@ -724,7 +724,7 @@ def load_layers(
             blocked[key] = blocked_message(key, broken_reason or "[scoring] is not a table")
         elif key in invalid.get("scoring", {}):
             problem = next(p for p in problems if p.key == f"scoring.{key}")
-            blocked[key] = blocked_message(key, problem.message.removeprefix(f"scoring.{key} "))
+            blocked[key] = blocked_message(key, problem.message.removeprefix(f"scoring.{key}: "))
 
     notices: list[str] = []
     if "apply" in unreadable:

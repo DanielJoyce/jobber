@@ -134,6 +134,9 @@
   <h2>Targeted resume and cover letter</h2>
 
   <div class="runner-line" id="runner-line">
+    {% for line in models_notices or [] %}
+    <div class="banner" role="status" id="models-notice-{{ loop.index }}"><p>{{ line }}</p></div>
+    {% endfor %}
     {% if r.off %}
     <div class="banner banner-error" role="status" id="runner-off">
       <p><strong>CLI runner off.</strong> {{ r.off_reason }}{% if r.off_at %} ({{ r.off_at[:16] | replace("T", " ") }} UTC){% endif %}</p>

@@ -62,8 +62,11 @@ def available_scorers(scoring: Any, env: Mapping[str, str] | None = None) -> lis
     return [(s, label) for s, label in out if not (s in seen or seen.add(s))]
 
 
-def _spec_problem(spec: str, field: str = "scorer") -> str | None:
-    """The one-line reason a scorer spec is malformed, or None."""
+def _spec_problem(spec: str, field: str = "scorer", scoring: Any = None) -> str | None:
+    """The one-line reason a scorer spec must not run, or None. The configured screen scorer
+    goes through ``scorer_problems``, which also reports a use an invalid models.toml blocks."""
+    if scoring is not None and spec == scoring.screen_scorer:
+        return scoring.scorer_problems().get("screen_scorer")
     try:
         check_scorer_spec(spec, field)
     except ValueError as exc:
@@ -269,9 +272,7 @@ def register(
             scope = queued["scope"]  # running a queued request plans its own scope
         running = rs.running_request(conn, now())
         plan = notice = None
-        problem = _spec_problem(
-            spec, "screen_scorer" if spec == settings.scoring.screen_scorer else "scorer"
-        )
+        problem = _spec_problem(spec, scoring=settings.scoring)
         if problem:
             message = message or problem
         if st.kind == "ok" and running is None and not problem:
@@ -341,7 +342,7 @@ def register(
             if spec_in in dict(available_scorers(settings.scoring))
             else (settings.scoring.screen_scorer)
         )
-        if problem := _spec_problem(spec):
+        if problem := _spec_problem(spec, scoring=settings.scoring):
             return render_panel(request, conn, scope=scope, scorer=spec, message=problem)
         try:
             rid = request.app.state.rescore.start(

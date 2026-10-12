@@ -129,17 +129,20 @@ RESTORE_MIGRATE_WAIT_S = 120.0
 def _check_scorer_override(
     settings, spec: str | None, *, screen: bool = True, deep: bool = False
 ) -> None:
-    """Fail fast (one line, exit 2) on a malformed scorer, checking only what the mode uses:
-    the ``--scorer`` override (else screen_scorer) when ``screen``, deep_scorer when ``deep``."""
+    """Fail fast (one line, exit 2) on a scorer that must not run, checking only what the mode
+    uses: the ``--scorer`` override (else screen_scorer) when ``screen``, deep_scorer when
+    ``deep``. The configured scorers go through ``scorer_problems``, which also reports a use
+    that an invalid models.toml blocks (specs/020: fail closed, never fall back)."""
     from jobhunter.config import check_scorer_spec
 
+    problems = settings.scoring.scorer_problems()
     try:
         if spec is not None:
             check_scorer_spec(spec, "--scorer")
-        elif screen:
-            check_scorer_spec(settings.scoring.screen_scorer, "screen_scorer")
-        if deep:
-            check_scorer_spec(settings.scoring.deep_scorer, "deep_scorer", anthropic_only=True)
+        elif screen and "screen_scorer" in problems:
+            raise ValueError(problems["screen_scorer"])
+        if deep and "deep_scorer" in problems:
+            raise ValueError(problems["deep_scorer"])
     except ValueError as exc:
         typer.echo(f"scorer error: {exc}", err=True)
         raise typer.Exit(2) from exc
@@ -528,10 +531,13 @@ def _score_mode(
     is_deep = deep is not None or deep_group is not None
     # Check only the spec this mode uses: --collect-pending reads stored batch models and
     # --rescore-pending reads each request's own spec, so a bad config must not block them.
+    # --collect ID spends nothing new: it collects the batch under the model stored on it, so
+    # a blocked screen_scorer (an invalid models.toml) does not stop it (specs/020).
+    collect_stored = collect is not None and scorer_override is None
     _check_scorer_override(
         settings,
         scorer_override,
-        screen=not (is_deep or collect_pending or rescore_pending),
+        screen=not (is_deep or collect_pending or rescore_pending or collect_stored),
         deep=is_deep,
     )
     try:
@@ -566,6 +572,7 @@ def _score_mode(
         _score_rescore(settings, profile, rescore, scorer_override, yes, paid_lock)
         return
     screening = submit or collect is not None
+    blocked_collect = collect_stored and "screen_scorer" in settings.scoring.scorer_problems()
     if submit:
         from jobhunter.scoring.scorers import MISSING, credential_for
 
@@ -574,12 +581,14 @@ def _score_mode(
             hint = f" (set {', '.join(cred.names)})" if cred.names else ""
             typer.echo(f"scorer error: no credential for {scorer}{hint}", err=True)
             raise typer.Exit(2)
-    if screening and (notice := privacy_notice(scorer, settings.scoring)):
+    if screening and not blocked_collect and (notice := privacy_notice(scorer, settings.scoring)):
         typer.echo(notice, err=True)
     conn = db.connect(settings.paths.db_path)
     _migrate(conn)
-    # The screen scorer may not be Anthropic; only build its client where it is needed.
-    client = None if screening and not scorer.startswith("anthropic:") else anthropic.Anthropic()
+    # The screen scorer may not be Anthropic; only build its client where it is needed. Only
+    # Anthropic batches are collected, so a blocked screen_scorer still collects with it.
+    batches = not screening or blocked_collect or scorer.startswith("anthropic:")
+    client = anthropic.Anthropic() if batches else None
     now = datetime.now(UTC)
     # Plain --submit follows the nightly rule (new groups only), so a model change never
     # re-screens scored jobs without a confirmed re-score; an explicit --scorer is a
@@ -880,6 +889,7 @@ def backfill(
     settings = load_settings()
     rows = load_registry()
     spec = scorer_override or settings.scoring.screen_scorer
+    _check_scorer_override(settings, scorer_override)
     try:
         scorer = scorer_from_string(spec, scoring=settings.scoring)
     except (ScorerError, ValueError) as exc:
@@ -1007,7 +1017,7 @@ def paths_cmd(
 ) -> None:
     """Show each path, where it came from (default, config file, env) and whether it exists."""
     from jobhunter import legacy_data
-    from jobhunter.config import config_file, config_file_source
+    from jobhunter.config import config_file, config_file_source, models_file
 
     settings = load_settings()
     config_file_path = config_file(None)
@@ -1026,6 +1036,8 @@ def paths_cmd(
         ("resume_path", settings.paths.resume_path, sources["resume_path"]),
         ("cache_dir", settings.paths.cache_dir, sources["cache_dir"]),
         ("openrouter_catalog", router.catalog_cache, catalog_source),
+        # Model choices saved on /models or with `jobhunter models set` (specs/020).
+        ("models_file", models_file(settings.paths.data_dir), "under data_dir"),
     ]
     resolved = [(name, resolve_path(path), source) for name, path, source in rows]
     status = legacy_data.check(settings)
@@ -1817,6 +1829,9 @@ def llm_bench(
 
     settings = load_settings()
     spec = scorer_spec or settings.scoring.screen_scorer
+    # Without --scorer the bench calls the configured scorer for real: a use blocked by an
+    # invalid models.toml must not run (specs/020).
+    _check_scorer_override(settings, scorer_spec)
     try:
         profile = load_profile_for(settings)
         scorer = scorer_from_string(spec, scoring=settings.scoring)
@@ -1920,6 +1935,8 @@ def apply_draft(
         raise typer.Exit(2)
     kind = "cover_letter" if letter else "question_draft" if question else "resume"
     settings = load_settings()
+    for line in settings.models_notices:  # an invalid models.toml [apply] key fell back
+        typer.echo(f"notice: {line}", err=True)
     run_on = runner or settings.apply.runner
     if run_on not in ("cli", "api"):
         typer.echo("error: --runner is cli or api", err=True)
@@ -2687,3 +2704,347 @@ def container_preflight_cmd(
         typer.echo(line)
     if result.failed:
         raise typer.Exit(1)
+
+
+# ─── jobhunter models (specs/020 M2) ────────────────────────────────────────
+
+models_app = typer.Typer(
+    help="Choose models: show, set and reset what models.toml holds (specs/020).",
+    no_args_is_help=True,
+)
+app.add_typer(models_app, name="models")
+
+QUEUED_HELP = (
+    "Re-scores queued with no plan follow the screening model: 'new' runs them with the new "
+    "model, 'keep' keeps them on the current one. Required when some are queued and stdin is "
+    "not a terminal."
+)
+
+
+def _models_value_text(value: object) -> str:
+    from jobhunter.config import shown_value
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return shown_value(value) or "<hidden>"
+
+
+def _models_problem_lines(layers) -> list[str]:
+    """File-level problems and unknown keys (an invalid key shows on its own row)."""
+    return [p.message for p in layers.problems if p.kind != "invalid"]
+
+
+@models_app.command("show")
+def models_show(
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Each use: the value in effect, where it came from, any problem, and whether its
+    credential is set (local checks only: nothing is contacted)."""
+    from jobhunter import model_choices as mc
+    from jobhunter.config import load_layers
+    from jobhunter.scoring.scorers import credential_for
+
+    layers = load_layers()
+    merged = layers.merged
+    blocked = merged.scoring.scorer_problems()
+    rows = []
+    for name, (section, key) in mc.NAMES.items():
+        value = getattr(getattr(merged, section), key)
+        problem = None
+        if section == "scoring" and key in blocked:
+            problem = blocked[key]
+        elif key in layers.invalid.get(section, {}):
+            problem = next(
+                (p.message for p in layers.problems if p.key == f"{section}.{key}"), None
+            )
+        credential = None
+        if section == "scoring" and key not in blocked:
+            cred = credential_for(value, merged.scoring)
+            credential = cred.status
+            if cred.names and cred.status != "present":
+                credential += f" (set {', '.join(cred.names)})"
+        rows.append(
+            {
+                "use": name,
+                "field": f"{section}.{key}",
+                "value": None if (section == "scoring" and key in blocked) else value,
+                "source": layers.source(section, key),
+                "problem": problem,
+                "credential": credential,
+            }
+        )
+    info = {
+        "file": str(layers.path),
+        "exists": layers.exists,
+        "digest": layers.digest,
+        "broken": layers.broken,
+        "warnings": _models_problem_lines(layers),
+        "notices": list(layers.notices),
+        "uses": rows,
+    }
+    if as_json:
+        for row in rows:
+            if row["value"] is not None and not isinstance(row["value"], bool):
+                row["value"] = _models_value_text(row["value"])
+        typer.echo(json.dumps(info, indent=2))
+        return
+    state = "missing (nothing set; config.toml and defaults apply)"
+    if layers.exists:
+        state = "BROKEN" if layers.broken else "present"
+    typer.echo(f"models.toml: {layers.path} [{state}]")
+    for line in info["warnings"]:
+        typer.echo(f"  warning: {line}")
+    for line in layers.notices:
+        typer.echo(f"  notice: {line}")
+    for row in rows:
+        value = "BLOCKED" if row["value"] is None else _models_value_text(row["value"])
+        line = f"{row['use']:<17} {value:<40} [{row['source']}]"
+        if row["credential"]:
+            line += f"  credential: {row['credential']}"
+        typer.echo(line)
+        if row["problem"]:
+            typer.echo(f"{'':<17} problem: {row['problem']}")
+
+
+def _models_db(settings):
+    """The database for history and queued re-scores, or None when there is none yet."""
+    path = resolve_path(settings.paths.db_path)
+    if not path.exists():
+        return None
+    conn = db.connect(path)
+    _migrate(conn)
+    return conn
+
+
+def _models_queued(conn, settings, old_spec: str | None, new_spec: str, queued: str | None):
+    """Print the queued re-score line and settle new|keep. Returns "new", "keep" or None
+    (nothing queued). Exits 2 when an answer is needed and cannot be asked."""
+    from jobhunter import model_choices as mc
+    from jobhunter.scoring.profile import ProfileError, load_profile_for
+
+    if conn is None or not mc.unplanned_requests(conn):
+        return None
+    impact = None
+    try:
+        profile = load_profile_for(settings)
+    except ProfileError:
+        profile = None
+    if profile is not None:
+        impact = mc.queued_impact(
+            conn, profile, settings.scoring, old_spec or "(blocked)", new_spec, datetime.now(UTC)
+        )
+    if impact is not None:
+        typer.echo(impact.line)
+    else:
+        n = len(mc.unplanned_requests(conn))
+        typer.echo(f"{n} queued re-score(s) follow the screening model (could not price them)")
+    if queued is None:
+        if not sys.stdin.isatty():
+            typer.echo("error: re-scores are queued; pass --queued new or --queued keep", err=True)
+            raise typer.Exit(2)
+        keep = old_spec is not None and typer.confirm(
+            f"Keep the queued re-scores on {old_spec}?", default=True
+        )
+        queued = "keep" if keep else "new"
+    if queued == "keep" and old_spec is None:
+        typer.echo(
+            "error: the current screening model is blocked, so there is none to keep them on; "
+            "use --queued new",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return queued
+
+
+def _models_write(layers, changes: dict, *, source: str, queued: str | None) -> None:
+    from jobhunter import model_choices as mc
+
+    settings = layers.merged
+    conn = _models_db(settings)
+    try:
+        choice = None
+        old_spec = None
+        if "screen" in changes:
+            blocked = "screen_scorer" in settings.scoring.scorer_problems()
+            old_spec = None if blocked else settings.scoring.screen_scorer
+            new_spec = changes["screen"]
+            if new_spec is None:  # reset: what config.toml or the default gives
+                new_spec = layers.base.scoring.screen_scorer
+            if new_spec != old_spec:
+                choice = _models_queued(conn, settings, old_spec, new_spec, queued)
+        try:
+            result = mc.write_changes(
+                layers.path,
+                changes,
+                layers.digest,
+                conn=conn,
+                source=source,
+                now=datetime.now(UTC),
+            )
+        except mc.ModelsFileError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        if choice == "keep" and conn is not None and old_spec is not None:
+            n = mc.keep_queued(conn, old_spec)
+            typer.echo(f"kept {n} queued re-score(s) on {old_spec}")
+    finally:
+        if conn is not None:
+            conn.close()
+    if not result.changed:
+        typer.echo("no change")
+        return
+    for name, (_old, new) in result.changed.items():
+        section, key = mc.NAMES[name]
+        if new is None:
+            typer.echo(f"reset {section}.{key}: config.toml's value or the default applies")
+        else:
+            typer.echo(f"saved {section}.{key} = {_models_value_text(new)} in {layers.path}")
+    if "screen" in result.changed:
+        typer.echo(
+            "New jobs from the next run use it; scored jobs keep their scores. To re-screen "
+            "them, run a confirmed re-score (jobhunter score --rescore recent)."
+        )
+    if "deep" in result.changed:
+        typer.echo(
+            "New deep runs use it; groups already deep-scored keep their reports "
+            "(re-run one with jobhunter score --deep-group GID)."
+        )
+    if any(mc.USE_OF[n] in ("drafting", "check") for n in result.changed):
+        typer.echo("The next draft uses it.")
+
+
+@models_app.command("set")
+def models_set(
+    use: Annotated[
+        str,
+        typer.Argument(
+            help="screen, deep, draft_cli, draft_api, check_cli, "
+            "check_api, runner, effort or entailment_check."
+        ),
+    ],
+    value: Annotated[str, typer.Argument(help="The scorer spec, model id or value.")],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Save anyway when the catalog would not offer it (dearer than the screening "
+            "reservation, not in the cached OpenRouter list). Never overrides a value that "
+            "cannot work.",
+        ),
+    ] = False,
+    queued: Annotated[str | None, typer.Option("--queued", help=QUEUED_HELP)] = None,
+) -> None:
+    """Validate and write one choice to models.toml, as /models does. Spends nothing."""
+    from jobhunter import model_choices as mc
+    from jobhunter.config import load_layers
+
+    if queued not in (None, "new", "keep"):
+        typer.echo("error: --queued is new or keep", err=True)
+        raise typer.Exit(2)
+    try:
+        mc.field_of(use)
+        parsed = mc.parse_value(use, value)
+    except mc.ModelsFileError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    layers = load_layers()
+    check = mc.check_save(use, parsed, layers.merged.scoring)
+    if check.error:
+        typer.echo(f"refused: {check.error}", err=True)
+        raise typer.Exit(2)
+    if check.needs_force:
+        for reason in check.needs_force:
+            typer.echo(f"{'saving anyway' if force else 'refused'}: {reason}", err=True)
+        if not force:
+            typer.echo("Pass --force to save it anyway.", err=True)
+            raise typer.Exit(2)
+    _models_write(layers, {use: parsed}, source="cli", queued=queued)
+
+
+@models_app.command("reset")
+def models_reset(
+    use: Annotated[
+        str,
+        typer.Argument(help="A use as for `models set`, or drafting, check or all."),
+    ],
+    queued: Annotated[str | None, typer.Option("--queued", help=QUEUED_HELP)] = None,
+) -> None:
+    """Remove a choice from models.toml: config.toml's value or the default applies."""
+    from jobhunter import model_choices as mc
+    from jobhunter.config import load_layers
+
+    if queued not in (None, "new", "keep"):
+        typer.echo("error: --queued is new or keep", err=True)
+        raise typer.Exit(2)
+    try:
+        names = mc.expand(use)
+    except mc.ModelsFileError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    _models_write(load_layers(), dict.fromkeys(names), source="reset", queued=queued)
+
+
+@models_app.command("reset-file")
+def models_reset_file() -> None:
+    """Replace a broken models.toml with an empty one; the old file is kept beside it."""
+    from jobhunter import model_choices as mc
+    from jobhunter.config import load_layers
+
+    layers = load_layers()
+    if not layers.exists:
+        typer.echo(f"no {layers.path}; nothing to reset")
+        return
+    _digest, kept = mc.reset_file(layers.path, now=datetime.now(UTC))
+    typer.echo(f"emptied {layers.path}" + (f"; the old file is {kept}" if kept else ""))
+
+
+@models_app.command("catalog")
+def models_catalog(
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="First fetch OpenRouter's public model list (contacts openrouter.ai; free, "
+            "no key sent).",
+        ),
+    ] = False,
+) -> None:
+    """The options per use, with list prices. Local and free unless --refresh."""
+    from jobhunter.scoring import catalog
+    from jobhunter.scoring.scorers import compute_cost
+
+    settings = load_settings()
+    scoring = settings.scoring
+    cache = None
+    if refresh:
+        typer.echo("fetching the public model list from openrouter.ai (free, no key sent)...")
+        cache = catalog.refresh_openrouter_cache(scoring.openrouter)
+        if cache is None:
+            typer.echo("refresh failed; the old list is kept", err=True)
+    if cache is None:
+        cache = catalog.load_openrouter_cache(scoring.openrouter.catalog_cache)
+    typer.echo(f"Anthropic prices checked {catalog.PRICES_CHECKED}")
+    if cache is not None and cache.fetched_at:
+        fetched = datetime.fromtimestamp(cache.fetched_at, UTC).strftime("%Y-%m-%d %H:%M UTC")
+        typer.echo(f"OpenRouter list cached {fetched}")
+    for use in catalog.USES:
+        opts = catalog.options(use, scoring, cache=cache)
+        typer.echo(f"\n{catalog.USE_LABELS[use]} ({use})")
+        for opt in opts.options:
+            price = ""
+            if use == "screen":
+                p = catalog.screen_list_price(opt.value, scoring, cache=cache)
+                if p.usd is not None:
+                    price = f"about ${p.usd * 1000:.2f} per 1,000 jobs ({p.source})"
+            elif use == "deep" and opt.value.startswith("anthropic:"):
+                usd = compute_cost(catalog.DEEP_TYPICAL_USAGE, opt.value, batch=False)
+                price = f"about ${usd:.3f} a job (price table)"
+            elif use in ("check_api", "check_cli"):
+                est = catalog.check_estimate(opt.value)
+                if est.usd is not None:
+                    price = f"about ${est.usd:.4f} a check ({est.source})"
+            tags = " [older]" if opt.older else ""
+            tags += f" [{opt.note}]" if opt.note else ""
+            typer.echo(f"  {opt.value:<45} {price}{tags}".rstrip())
+        for free in opts.free_text:
+            typer.echo(f"  or type {free.example}")

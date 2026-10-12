@@ -125,12 +125,17 @@ def estimate(
     spec: str | None = None,
 ) -> Estimate:
     """What scoring this one group would cost, and why it would be refused. Read-only."""
-    spec = spec or scoring.screen_scorer
-    try:
-        check_scorer_spec(spec, "screen_scorer")
-        bad_spec = None
-    except ValueError as exc:
-        bad_spec = str(exc)
+    bad_spec: str | None = None
+    if spec is None:
+        # The configured scorer: scorer_problems also reports a use an invalid models.toml
+        # blocks, which must never fall back to another provider (specs/020 Storage).
+        spec = scoring.screen_scorer
+        bad_spec = scoring.scorer_problems().get("screen_scorer")
+    else:
+        try:
+            check_scorer_spec(spec, "screen_scorer")
+        except ValueError as exc:
+            bad_spec = str(exc)
     per_job, source = (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec, scoring)
     est = Estimate(
         group_id=group_id,
