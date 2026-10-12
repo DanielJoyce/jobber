@@ -160,15 +160,14 @@ def test_documented_scorer_examples_parse():
     from jobhunter.config import SCORER_PROVIDERS, check_scorer_spec
 
     root = Path(__file__).resolve().parent.parent
-    for name in ("config.example.toml", "README.md"):
+    for name in ("config.example.toml", "src/jobhunter/console/help/scorers.md"):
         text = (root / name).read_text()
         specs = re.findall(r'(screen|deep)_scorer\s*=\s*"([^"]+)"', text)
         assert specs, name
         for key, spec in specs:
             check_scorer_spec(spec, name, anthropic_only=key == "deep")
-        if name == "README.md":
-            table = text.split("## Choosing a scorer")[1].split("\n## ")[0]
-            tokens = re.findall(r"`([a-z-]+):<", table)
+        if name.endswith("scorers.md"):  # the README section moved here (019 S11b)
+            tokens = re.findall(r"`([a-z-]+):<", text)
         else:
             tokens = re.findall(r"^#\s+([a-z-]+):<", text, re.M)
         assert set(tokens) == set(SCORER_PROVIDERS), name
