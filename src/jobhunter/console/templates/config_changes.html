@@ -77,9 +77,15 @@
       <p class="muted">Apply works only from the machine running the console.</p>
       {% endif %}
     {% endif %}
-    {% if state.needs_restart %}<p>Restart needed: <code>{{ restart }}</code></p>{% elif state.can_apply and not peer_ok %}<p>Or restart to pick it up: <code>{{ restart }}</code></p>{% endif %}
+    {% if state.needs_restart and can_restart %}
+      <form method="post" action="/config/restart" id="cfg-restart"{% if state.replaced %} data-confirm="{{ confirm }}" onsubmit="return window.confirm(this.getAttribute('data-confirm'))"{% endif %}><input type="hidden" name="next" value="/config/changes">{% if state.replaced %}<input type="hidden" name="unchecked" value="1">{% endif %}<button type="submit">Restart console</button></form>
+    {% elif state.needs_restart %}<p>Restart needed: <code>{{ restart }}</code></p>{% elif state.can_apply and not peer_ok %}<p>Or restart to pick it up: <code>{{ restart }}</code></p>{% endif %}
     <form method="post" action="/config/dismiss"><input type="hidden" name="key" value="{{ state.key }}"><button type="submit">Dismiss</button></form>
   </div>
+  {% if state.needs_restart and can_restart %}
+  <p class="muted" id="cfg-restart-note">Restart checks the new files first and keeps the console running if they would not load. While a re-score, a Score now or a draft runs, it refuses and says what is running.{% if running_work %} Running now: {{ running_work | join(", ") }}.{% endif %}</p>
+  {% if code_note %}<p class="muted" id="cfg-code-note">{{ code_note }}</p>{% endif %}
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

@@ -194,12 +194,17 @@ jobhunter doctor
 
 After **Apply now**, the bar may say "2 settings still need a restart". Those settings (paths,
 the console's host and port, `fetch.global_concurrency`, the `api_key_env` names, and any
-`.env` change) are only read when the console starts. Restart it: `Ctrl-C` and
-`jobhunter console` on the host, or on a container host:
+`.env` change) are only read when the console starts. Press **Restart console** in the bar.
+Where the console cannot restart itself (a container unit without the restart lines, or a
+browser on another machine), restart it by hand: `Ctrl-C` and `jobhunter console` on the host,
+or on a container host:
 
 ```
 systemctl --user restart jobhunter-console
 ```
+
+If Restart says work is running, wait for the re-score, Score now or draft it names and press
+it again. If it says the console would not start, fix the lines it shows and save again.
 
 [Settings and secrets](settings-and-secrets.md#config-changes-while-the-console-runs) has the
 full table. `/setup` in the console and `jobhunter doctor` show what the restarted console will

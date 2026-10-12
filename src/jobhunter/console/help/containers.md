@@ -290,6 +290,40 @@ exists, or host and containers would both migrate on their own.
 Preflight creates missing data and cache directories (mode 0700) and an empty `config.toml`.
 It does not install `jobhunter-ctr`; the next section does.
 
+### Restart from the console
+
+When `config.toml` or a secret changes in a way that needs a restart, the console's bar offers
+**Restart console**. In a container the console cannot start itself again, so it exits with
+code 42 and systemd starts a fresh container (with a fresh `config.toml` mount). The console
+unit carries three lines for this:
+
+```
+[Container]
+Environment=JOBHUNTER_RESTART_EXIT=42
+[Service]
+SuccessExitStatus=42
+RestartForceExitStatus=42
+```
+
+`SuccessExitStatus=42` keeps the failure notification (`OnFailure=`) quiet, and
+`RestartForceExitStatus=42` restarts it even though the unit says `Restart=on-failure`. The base
+unit in `deploy/quadlet/` has them. A console unit installed before they existed gets them from
+preflight, as a drop-in in `jobhunter-console.container.d/`. Run this once:
+
+```
+jobhunter container preflight --yes
+systemctl --user daemon-reload
+systemctl --user restart jobhunter-console
+```
+
+Until then the console shows no button, only the `systemctl --user restart jobhunter-console`
+command. Restart refuses while a re-score, a Score now or a draft runs, and says which. It
+first checks the new file in a separate process and keeps the console running if the file would
+not load. When the console cannot see a replaced `config.toml` (see
+[Troubleshooting](#troubleshooting)), it cannot check the file, so it asks you to confirm.
+Check the file with `jobhunter-ctr doctor` first. The drain is short (30 s) so the health check
+does not kill the container mid-restart.
+
 ### The jobhunter-ctr wrapper
 
 ```

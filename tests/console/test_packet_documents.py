@@ -724,3 +724,34 @@ def test_an_sdk_profile_the_sdk_cannot_load_is_a_message_not_a_500(env, monkeypa
     assert r.status_code == 409
     assert "could not load its credentials" in r.text and "secret-profile" not in r.text
     assert docs(env) == []
+
+
+# --- Console Restart: drafting is registered work (019 S12b) ---------------------------------
+
+
+def test_drafting_is_registered_while_it_runs_and_leaves_after(env, monkeypatch):
+    from jobhunter.apply import generator
+
+    seen: list[list[str]] = []
+
+    def fake_generate(*args, **kwargs):
+        seen.append(env.app.state.work.labels())
+        raise generator.GenerateFailed("synthetic failure")
+
+    monkeypatch.setattr(generator, "generate", fake_generate)
+    r = generate(env)
+    assert seen == [[f"a draft (packet {env.pid})"]]
+    assert r.status_code == 409  # the failure is shown as before
+    assert env.app.state.work.labels() == []  # left in a finally, even on failure
+
+
+def test_drafting_is_503_while_restarting(env, monkeypatch):
+    from jobhunter.apply import generator
+
+    monkeypatch.setattr(
+        generator, "generate", lambda *a, **k: pytest.fail("no draft while restarting")
+    )
+    assert env.app.state.work.begin_restart() == []
+    r = generate(env)
+    assert r.status_code == 503 and "console restarting" in r.text
+    assert docs(env) == []

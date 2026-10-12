@@ -152,6 +152,22 @@ def test_published_loopback_only_ignored_on_host(monkeypatch):
     assert not container.published_loopback_only()
 
 
+def recording_server(ran: dict):
+    """Stands in for uvicorn.Server: the console command now keeps a handle on the server
+    (019 S12b) instead of calling uvicorn.run."""
+
+    class Server:
+        def __init__(self, config):
+            self.config = config
+            self.started = True
+            self.should_exit = False
+
+        def run(self):
+            ran.update(host=self.config.host)
+
+    return Server
+
+
 def test_console_command_binds_all_interfaces_only_with_the_interlock(ctr, monkeypatch, tmp_path):
     import uvicorn
 
@@ -161,7 +177,7 @@ def test_console_command_binds_all_interfaces_only_with_the_interlock(ctr, monke
     ran: dict = {}
     seen: dict = {}
     real = console_app.create_app
-    monkeypatch.setattr(uvicorn, "run", lambda app_, host, port: ran.update(host=host))
+    monkeypatch.setattr(uvicorn, "Server", recording_server(ran))
     monkeypatch.setattr(console_app, "create_app", lambda *a, **k: seen.update(k) or real(*a, **k))
     r = runner.invoke(app, ["console", "--host", "0.0.0.0"])
     assert r.exit_code == 2 and not ran
@@ -183,7 +199,7 @@ def test_interlock_allows_only_0_0_0_0(ctr, monkeypatch, tmp_path):
     monkeypatch.setenv("JOBHUNTER_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JOBHUNTER_PUBLISHED_LOOPBACK_ONLY", "1")
     ran: dict = {}
-    monkeypatch.setattr(uvicorn, "run", lambda app_, host, port: ran.update(host=host))
+    monkeypatch.setattr(uvicorn, "Server", recording_server(ran))
     for bad in ("::", "192.0.2.7", "example.com"):
         assert runner.invoke(app, ["console", "--host", bad]).exit_code == 2
     assert not ran

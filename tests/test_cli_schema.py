@@ -204,6 +204,7 @@ def test_console_command_prints_the_refusal(env, monkeypatch):
     import uvicorn
 
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: pytest.fail("console started"))
+    monkeypatch.setattr(uvicorn, "Server", lambda *a, **k: pytest.fail("console started"))
     result = runner.invoke(app, ["console"])
     assert result.exit_code == 1
     assert "run `jobhunter upgrade`" in result.output

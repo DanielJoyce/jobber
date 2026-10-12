@@ -591,3 +591,41 @@ def test_every_link_on_the_packet_pages_resolves(client, conn):
             assert client.post(action, data={}).status_code not in (404, 405), f"{page}: {action}"
     gid = packet_group(conn, pasted)
     assert client.get(f"/apply/{gid}").status_code == 302  # Open application
+
+
+# --- Console Restart: Score now is registered work (019 S12b) --------------------------------
+
+
+def test_packet_score_now_is_registered_while_it_runs(client, conn):
+    pid = new_packet(client, text=TEXT, employer="Synthetic Co", title="Systems Engineer")
+    page = client.get(f"/packet/{pid}").text
+    seen: list[list[str]] = []
+
+    class Recording(FakeScorer):
+        def submit(self, requests):
+            seen.append(client.app.state.work.labels())
+            return super().submit(requests)
+
+    client.app.state.packet_scorer_factory = lambda spec: Recording()
+    r = client.post(
+        f"/packet/{pid}/score", data={"token": token_of(page)}, headers={"hx-request": "true"}
+    )
+    assert r.status_code == 200 and seen == [[f"a Score now (packet {pid})"]]
+    assert client.app.state.work.labels() == []
+
+
+def test_packet_score_now_is_503_while_restarting(client, conn):
+    pid = new_packet(client, text=TEXT, employer="Synthetic Co", title="Systems Engineer")
+    gid = packet_group(conn, pid)
+    page = client.get(f"/packet/{pid}").text
+    client.app.state.packet_scorer_factory = lambda spec: pytest.fail("no scorer while restarting")
+    assert client.app.state.work.begin_restart() == []
+    r = client.post(
+        f"/packet/{pid}/score", data={"token": token_of(page)}, headers={"hx-request": "true"}
+    )
+    assert r.status_code == 503 and r.headers["X-Jobhunter-Restarting"] == "1"
+    assert "console restarting" in r.text
+    assert job_of(conn, gid)["stage"] != "scored"
+    # Without htmx the full page says so too, still with 503.
+    r = client.post(f"/packet/{pid}/score", data={"token": token_of(page)})
+    assert r.status_code == 503 and "console restarting" in r.text

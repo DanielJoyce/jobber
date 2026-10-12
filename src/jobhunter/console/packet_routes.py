@@ -36,6 +36,7 @@ from jobhunter.apply import score as group_score
 from jobhunter.console import detail, packet_docs
 from jobhunter.console.inbox_routes import load_console_profile
 from jobhunter.console.tracking_routes import Form
+from jobhunter.console.work import Restarting, refused
 from jobhunter.core import pdf
 from jobhunter.pipeline import applylink
 from jobhunter.scoring.profile import Profile, ProfileConflict, ProfileError
@@ -454,19 +455,24 @@ def register(
                     answers.save_packet_answer(
                         conn, p.id, answers.story_key(question), question, "\n".join(facts)
                     )
-            generator.generate(
-                conn,
-                request.app.state.settings,
-                profile,
-                p.id,
-                kind,
-                runner=runner,
-                now=now(),
-                question=question,
-                instruction=form.get("instruction", ""),
-                confirm_paid=form.get("confirm_paid") == "1",
-                client_factory=request.app.state.packet_api_client_factory,
-            )
+            # Drafting is long (and may be paid): registered so a console Restart waits.
+            with request.app.state.work.running(f"a draft (packet {p.id})"):
+                generator.generate(
+                    conn,
+                    request.app.state.settings,
+                    profile,
+                    p.id,
+                    kind,
+                    runner=runner,
+                    now=now(),
+                    question=question,
+                    instruction=form.get("instruction", ""),
+                    confirm_paid=form.get("confirm_paid") == "1",
+                    client_factory=request.app.state.packet_api_client_factory,
+                )
+        except Restarting as exc:
+            gen.update(message=str(exc), offer_api=False, paid=False)
+            return refused(render_packet(request, conn, p, gen=gen))
         except generator.ApplyRefused as exc:
             gen.update(message=exc.message, offer_api=exc.offer_api, paid=exc.needs_paid_confirm)
             return render_packet(request, conn, p, status=409, gen=gen)
@@ -726,26 +732,33 @@ def register(
         settings = request.app.state.settings
         profile, error = load_console_profile(settings)
         message = ok = None
+        restarting = False
         if profile is None:
             message = f"Fix the preferences file first: {error}"
         else:
             try:
-                out = group_score.score_now(
-                    conn,
-                    profile,
-                    settings.scoring,
-                    p.group_id,
-                    token=form.get("token"),
-                    now=now(),
-                    scorer_factory=request.app.state.packet_scorer_factory,
-                    client_factory=request.app.state.packet_client_factory,
-                )
+                # A paid call: registered so a console Restart waits for it (019 S12b).
+                with request.app.state.work.running(f"a Score now (packet {packet_id})"):
+                    out = group_score.score_now(
+                        conn,
+                        profile,
+                        settings.scoring,
+                        p.group_id,
+                        token=form.get("token"),
+                        now=now(),
+                        scorer_factory=request.app.state.packet_scorer_factory,
+                        client_factory=request.app.state.packet_client_factory,
+                    )
                 ok = out.detail
+            except Restarting as exc:
+                message, restarting = str(exc), True
             except group_score.ScoreRefused as exc:
                 message = str(exc)
         ctx = score_ctx(request, conn, p, message, ok)
         if request.headers.get("hx-request") == "true":
-            return templates.TemplateResponse(request, "_packet_score.html", ctx)
+            response = templates.TemplateResponse(request, "_packet_score.html", ctx)
+            return refused(response) if restarting else response
         if message is None:
             return RedirectResponse(f"/packet/{packet_id}", status_code=303)
-        return render_packet(request, conn, p, score_message=message, score_ok=ok)
+        response = render_packet(request, conn, p, score_message=message, score_ok=ok)
+        return refused(response) if restarting else response

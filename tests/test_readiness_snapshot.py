@@ -503,13 +503,14 @@ def test_preflight_plans_and_keeps_the_trigger_dropin(tmp_path):
     units = tmp_path / "units"
     plan = preflight.plan_dropins(units, [], [])
     wanted = {preflight.trigger_dropin_path(units, u) for u in preflight.TRIGGER_UNITS}
-    assert set(plan.write) == wanted
-    for text in plan.write.values():
-        assert text.startswith(preflight.HEADER + "\n")
-        assert "Environment=JOBHUNTER_TRIGGER=timer" in text
+    restart = preflight.restart_dropin_path(units)  # the console Restart lines (019 S12b)
+    assert set(plan.write) == wanted | {restart}
+    for path in wanted:
+        assert plan.write[path].startswith(preflight.HEADER + "\n")
+        assert "Environment=JOBHUNTER_TRIGGER=timer" in plan.write[path]
     preflight.apply_dropins(plan)
     again = preflight.plan_dropins(units, [], [])
-    assert again.remove == [] and set(again.keep) == wanted and not again.write
+    assert again.remove == [] and set(again.keep) == wanted | {restart} and not again.write
     # not mistaken for a secret drop-in by the generator check
     assert preflight._final_dropins(units, again) == set()
     # leave removes it with the rest

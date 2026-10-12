@@ -62,6 +62,7 @@ value; containers use that form.
 | `CLAUDE_CODE_USE_VERTEX` | never passed to the Claude Code child | - | - | - |
 | `JOBHUNTER_CONTAINER` | container mode switch | - | set by the image, do not set | - |
 | `JOBHUNTER_TRIGGER` | marks timer-started runs (`timer`); anything else is a manual run | set by the run and collect units, do not set | set by the run, collect and rescore units (and preflight's trigger drop-in), do not set | no |
+| `JOBHUNTER_RESTART_EXIT` | the console's Restart exits 42 so systemd starts it again | - | set by the console unit (and preflight's restart drop-in), do not set | - |
 | `JOBHUNTER_PUBLISHED_LOOPBACK_ONLY` | the console's published-port check | - | set by you only for the 0.0.0.0 fallback (see Containers, Troubleshooting) | - |
 | `JOBHUNTER_BUILD_COMMIT` | the commit `jobhunter version` shows | - | set by the image, do not set | - |
 
@@ -122,7 +123,7 @@ the same state as readiness rows.
 | You changed | What to do |
 |---|---|
 | `config.toml` | Apply now in the console's notice, or restart the console for the settings that need it ([table below](#config-changes-while-the-console-runs)). Scheduled runs read the new file at their next start |
-| A `.env` file, a `NAME_FILE` or a podman secret | Restart the console: it reads them at start and keeps the first value |
+| A `.env` file, a `NAME_FILE` or a podman secret | Restart the console (**Restart console** in the bar): it reads them at start and keeps the first value |
 | `preferences.yaml` or the resume | Nothing: the console reads them on use (a re-score may be offered) |
 | A host timer or container unit | Reload systemd as the command that changed it says |
 
@@ -154,8 +155,9 @@ line appears there: "config.toml changed: 3 settings", with **Apply now**, **Det
 - **Apply now** swaps in the settings that reload in place (the table below). A page you open
   next uses them; a re-score that is already running keeps the settings it started with.
 - Settings that need a restart stay as they were, and the line then says how many still need
-  one, with the command: `Ctrl-C` and `jobhunter console` on the host, or
-  `systemctl --user restart jobhunter-console` in containers.
+  one, with **Restart console** ([below](#restart-from-the-console)). Where the console cannot
+  restart itself, the line gives the command instead: `Ctrl-C` and `jobhunter console` on the
+  host, or `systemctl --user restart jobhunter-console` in containers.
 - **Details** in the console lists each changed setting and whether it reloads. Values are
   shown only for caps, scorers, models, rates, timeouts, ports and switches. Anything personal
   (your contact, alerts address, sender lists), URLs and paths show only "changed".
@@ -174,8 +176,31 @@ line appears there: "config.toml changed: 3 settings", with **Apply now**, **Det
 - `--host` and `--port` given on the command line win over `config.toml`, so a change to
   `console.host` or `console.port` then has no effect.
 
-Apply works only from a browser on the machine running the console. Other commands
+Apply and Restart work only from a browser on the machine running the console. Other commands
 (`jobhunter run`, the timers) read `config.toml` each time they start and need nothing.
+
+### Restart from the console
+
+**Restart console** appears in the bar and on Details when a change needs a restart. It
+starts the console again with `config.toml`, `models.toml` and every `.env` file read afresh:
+
+1. It checks the new files in a separate process first. If the console would not start with
+   them, it says what is wrong (the setting and the problem, never the value) and keeps
+   running.
+2. It refuses while a re-score, a Score now or a draft runs, and lists what is running. Press
+   it again when that is done. Once a restart is under way, a new re-score, Score now or draft
+   gets "console restarting".
+3. The page waits for the new console and reloads when it answers. If the console does not come
+   back within 90 seconds, the page says so: look at the terminal it runs in (or
+   `journalctl --user -u jobhunter-console`).
+
+On the host the console restarts in place, as the same process, with the same command line.
+It runs the code that is on disk now; Details says so when that differs from the code it
+started with. It does not run `uv sync`, so after a `git pull` that changes dependencies run
+`uv sync` first (the check in step 1 catches a missing module). In containers the console exits
+and systemd starts it again; the unit needs three lines that preflight adds (see
+[Containers](containers.md#restart-from-the-console)). A browser on another machine
+(`--allow-remote`) gets the command instead of the button.
 
 <!-- jh:begin config-reload -->
 

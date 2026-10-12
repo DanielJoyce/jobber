@@ -44,6 +44,10 @@
 <span class="muted">Apply from the machine running the console.</span>
 {%- endif -%}
 {%- endif -%}
+{#- Restart (S12b): a plain form, so the browser lands on the page that waits for the new process. -#}
+{%- if cfg.needs_restart and cfg_can_restart -%}
+<form class="cfg-form" method="post" action="/config/restart"{% if cfg.replaced %} data-confirm="{{ cfg_confirm }}" onsubmit="return window.confirm(this.getAttribute('data-confirm'))"{% endif %}><input type="hidden" name="next" value="{{ cfg_next }}">{% if cfg.replaced %}<input type="hidden" name="unchecked" value="1">{% endif %}<button type="submit" class="cfg-btn">Restart console</button></form>
+{%- endif -%}
 <a href="/config/changes">Details</a><form class="cfg-form" hx-post="/config/dismiss" hx-target="#activity" hx-swap="outerHTML" method="post" action="/config/dismiss"><input type="hidden" name="key" value="{{ cfg.key }}"><button type="submit" class="cfg-btn">Dismiss</button></form></span>
 {%- endif -%}
 </div>

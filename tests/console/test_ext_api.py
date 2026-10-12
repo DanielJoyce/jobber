@@ -928,3 +928,81 @@ def test_ext_routes_never_go_through_the_same_origin_check(client, token, monkey
     monkeypatch.setattr(app_module, "cross_site_reason", lambda *a, **k: "refused by test")
     assert post(client, token, "version").status_code == 200
     assert client.get("/captured", headers={"Sec-Fetch-Site": "none"}).status_code == 403
+
+
+# ─── Console Restart: the work registry (019 S12b) ─────────────────────────
+
+
+def restart_client(client) -> TestClient:
+    """A browser on the machine running the console, with a stubbed shutdown."""
+    app = client.app
+    app.state.restart_preflight = lambda: []
+    app.state.stopped = []
+    app.state.restart_shutdown = lambda: app.state.stopped.append(True)
+    return TestClient(app, base_url=BASE, client=("127.0.0.1", 50000), follow_redirects=False)
+
+
+def test_restart_is_409_while_an_extension_score_runs(client, token, captured, conn):
+    local = restart_client(client)
+    scorer = BlockingScorer()
+    client.app.state.packet_scorer_factory = lambda spec: scorer
+    est = post(client, token, f"groups/{captured}/estimate").json()
+    r = post(client, token, f"groups/{captured}/score", {"action_id": aid(), "token": est["token"]})
+    assert r.status_code == 202 and scorer.started.wait(5)
+    assert client.app.state.work.labels() == [f"an extension Score now (group {captured})"]
+    refused = local.post("/config/restart")
+    assert refused.status_code == 409 and f"extension Score now (group {captured})" in refused.text
+    assert client.app.state.stopped == [] and not client.app.state.work.restarting
+    scorer.release.set()
+    for t in client.app.state.ext_score_threads:
+        t.join(10)
+    assert client.app.state.work.labels() == []  # the thread left the registry
+    assert count(conn, "fit_score") == 1  # nothing lost
+    assert local.post("/config/restart").status_code == 202
+    assert client.app.state.stopped == [True]
+
+
+def test_extension_score_is_503_while_restarting_and_claims_nothing(client, token, captured, conn):
+    client.app.state.packet_scorer_factory = lambda spec: pytest.fail("no scorer while restarting")
+    est = post(client, token, f"groups/{captured}/estimate").json()
+    assert client.app.state.work.begin_restart() == []
+    r = post(client, token, f"groups/{captured}/score", {"action_id": aid(), "token": est["token"]})
+    assert r.status_code == 503 and "console restarting" in r.json()["error"]
+    assert client.app.state.ext_score_threads == []
+    assert post(client, token, f"groups/{captured}/status").json()["state"] != "in_progress"
+    assert count(conn, "prefilter_result") == 0
+    assert client.app.state.work.labels() == []
+
+
+def test_a_refused_extension_score_leaves_the_registry(client, token, captured):
+    r = post(client, token, f"groups/{captured}/score", {"action_id": aid(), "token": "stale"})
+    assert r.status_code == 409 and client.app.state.work.labels() == []
+
+
+def test_job_page_score_now_is_registered_while_it_runs(client, token, captured, conn):
+    page = client.get(f"/job/{captured}").text
+    tok = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+    seen: list[list[str]] = []
+
+    class Recording(BlockingScorer):
+        def submit(self, requests):
+            seen.append(client.app.state.work.labels())
+            return super().submit(requests)
+
+    scorer = Recording()
+    scorer.release.set()
+    client.app.state.packet_scorer_factory = lambda spec: scorer
+    r = client.post(f"/job/{captured}/score", data={"token": tok}, headers={"hx-request": "true"})
+    assert r.status_code == 200 and seen == [[f"a Score now (group {captured})"]]
+    assert client.app.state.work.labels() == []
+
+
+def test_job_page_score_now_is_503_while_restarting(client, token, captured, conn):
+    page = client.get(f"/job/{captured}").text
+    tok = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+    client.app.state.packet_scorer_factory = lambda spec: pytest.fail("no scorer while restarting")
+    client.app.state.work.begin_restart()
+    r = client.post(f"/job/{captured}/score", data={"token": tok}, headers={"hx-request": "true"})
+    assert r.status_code == 503 and r.headers["X-Jobhunter-Restarting"] == "1"
+    assert "console restarting" in r.text
+    assert count(conn, "fit_score") == 0 and count(conn, "prefilter_result") == 0

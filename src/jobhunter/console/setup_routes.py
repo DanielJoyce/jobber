@@ -313,6 +313,11 @@ def register(
             home=home_of(request),
         )
 
+    def can_restart(request: Request) -> bool:
+        from jobhunter.console import config_routes  # config_routes imports app
+
+        return config_routes.can_restart(request)
+
     def config_row(request: Request) -> rd.Check | None:
         """Row 1 as broken while the watched config.toml does not load; None otherwise."""
         from jobhunter.console import config_routes
@@ -360,6 +365,8 @@ def register(
             "started": getattr(request.app.state, "settings_read_at", started),
             "boot": started,  # secret and env rows are only ever read at start
             "applied": getattr(request.app.state, "settings_applied", False),
+            # The restart notes point at the console's own Restart where it has one (S12b).
+            "can_restart": can_restart(request),
             "essentials_ok": rd.essentials_ok(checks),
             "todo_count": sum(1 for g in groups for r in g.rows if not r.quiet),
         }

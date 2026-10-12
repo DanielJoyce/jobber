@@ -60,6 +60,15 @@
     });
   });
 
+  // A 503 marked "console restarting" (019 S12b) carries a message for the user: swap it.
+  document.addEventListener("htmx:beforeSwap", function (e) {
+    var xhr = e.detail && e.detail.xhr;
+    if (xhr && xhr.status === 503 && xhr.getResponseHeader("X-Jobhunter-Restarting") === "1") {
+      e.detail.shouldSwap = true;
+      e.detail.isError = false;
+    }
+  });
+
   // Activity indicator (/activity): remember a dismissed done/failed line for this tab, and
   // tell the server which one so a later page does not show it again.
   document.addEventListener("htmx:configRequest", function (e) {

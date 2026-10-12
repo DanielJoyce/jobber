@@ -462,8 +462,11 @@ def test_trailing_newline_env_name_rejected(host):
     assert "not a valid environment variable name" in r.output
     for f in host.units.rglob("*.conf"):
         assert "\n_FILE=" not in f.read_text()
+        allowed = ("[Container]", "Secret=", "Environment=")
+        if f.name == "45-jobhunter-restart.conf":  # the console Restart lines (019 S12b)
+            allowed += ("[Service]", "SuccessExitStatus=42", "RestartForceExitStatus=42")
         for line in f.read_text().splitlines()[1:]:
-            assert line.startswith(("[Container]", "Secret=", "Environment=")), line
+            assert line.startswith(allowed), line
     assert not list(host.units.rglob("50-jobhunter_openrouter.conf"))
     assert pf._api_env("FOO\n", "x")[0] is None
 

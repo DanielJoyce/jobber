@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from jobhunter.apply import capture, export, ext_pairing
@@ -25,6 +25,7 @@ from jobhunter.apply import score as group_score
 from jobhunter.console import detail
 from jobhunter.console.inbox_routes import load_console_profile
 from jobhunter.console.tracking_routes import Form
+from jobhunter.console.work import Restarting, refused
 from jobhunter.core import db
 from jobhunter.core.manual_sources import PASTE_MANUAL
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
@@ -134,27 +135,35 @@ def register(
         settings = request.app.state.settings
         profile, error = load_console_profile(settings)
         message = ok = None
+        restarting = False
         if profile is None:
             message = f"Fix the preferences file first: {error}"
         else:
             try:
-                out = group_score.score_now(
-                    conn,
-                    profile,
-                    settings.scoring,
-                    group_id,
-                    token=str(form.get("token") or ""),
-                    now=now(),
-                    scorer_factory=request.app.state.packet_scorer_factory,
-                    client_factory=request.app.state.packet_client_factory,
-                )
+                # A paid call: registered so a console Restart waits for it (019 S12b).
+                with request.app.state.work.running(f"a Score now (group {group_id})"):
+                    out = group_score.score_now(
+                        conn,
+                        profile,
+                        settings.scoring,
+                        group_id,
+                        token=str(form.get("token") or ""),
+                        now=now(),
+                        scorer_factory=request.app.state.packet_scorer_factory,
+                        client_factory=request.app.state.packet_client_factory,
+                    )
                 ok = out.detail
+            except Restarting as exc:
+                message, restarting = str(exc), True
             except group_score.ScoreRefused as exc:
                 message = str(exc)
         if request.headers.get("hx-request") == "true":
             d = require_detail(request, conn, group_id)
             ctx = score_panel(request, conn, d, now(), message, ok)
-            return templates.TemplateResponse(request, "_group_score.html", ctx)
+            response = templates.TemplateResponse(request, "_group_score.html", ctx)
+            return refused(response) if restarting else response
+        if restarting:
+            return refused(PlainTextResponse(message or ""))
         return RedirectResponse(f"/job/{group_id}", status_code=303)
 
     @app.post("/job/{group_id}/link")

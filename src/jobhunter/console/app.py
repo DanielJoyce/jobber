@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import secrets
 import sqlite3
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -47,6 +48,7 @@ from jobhunter.console import (
     tracking_routes,
 )
 from jobhunter.console import dashboard as dash
+from jobhunter.console.work import WorkRegistry
 from jobhunter.core import bucketnames, db, geo, runlock
 from jobhunter.scoring.profile import Profile, ProfileError, load_profile_for
 
@@ -283,6 +285,17 @@ def create_app(
     app.state.settings_applied = False
     app.state.config_watch = None
     app.state.console_lock = console_lock  # kept alive with the app
+    # Console Restart (019 Addendum B, S12b). Every paid or long piece of work enters
+    # ``work``; ``restart_shutdown`` is set by the console command (None: this app cannot
+    # restart itself, e.g. under a test client). ``boot_id`` lets the restart page tell the
+    # new process's /healthz from the old one's.
+    app.state.work = WorkRegistry()
+    app.state.restart_shutdown = None
+    app.state.restart_requested = False
+    app.state.restart_kind = None
+    app.state.restart_preflight = None  # tests inject; None runs the child check
+    app.state.started_commit = None
+    app.state.boot_id = secrets.token_hex(8)
     # In-process only (specs/021): the last achievements fingerprint and the cached on/off
     # flag the nav reads; the settings route refreshes it.
     app.state.achievements = achievements.Gate(enabled=achievements_on)
@@ -341,7 +354,8 @@ def create_app(
         )
 
     @app.get("/healthz")
-    def healthz(conn: Conn) -> dict[str, object]:
+    def healthz(conn: Conn, response: Response) -> dict[str, object]:
+        response.headers["X-Jobhunter-Boot"] = app.state.boot_id
         return {"ok": True, "schema_version": db.current_version(conn)}
 
     def add_page(path: str, title: str) -> None:
