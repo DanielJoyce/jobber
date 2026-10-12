@@ -93,3 +93,16 @@ def test_read_phase_and_fingerprint_within_budget(world):
     fp = best_of(5, lambda: engine.fingerprint(world.conn, NOW, TZ))
     assert read < 0.25, f"read phase {read * 1000:.0f} ms"
     assert fp < 0.01, f"fingerprint {fp * 1000:.1f} ms"
+
+
+def test_today_strip_warm_call_is_cheap_and_cold_call_is_one_read(world):
+    build(world)
+    gate = engine.Gate(tz=TZ)
+    t = time.perf_counter()
+    cold = engine.today_strip(gate, world.conn, NOW)
+    cold_s = time.perf_counter() - t
+    assert cold is not None and cold.earned > 0 and cold.rhythm is not None
+    warm = best_of(5, lambda: engine.today_strip(gate, world.conn, NOW))
+    assert engine.today_strip(gate, world.conn, NOW) == cold
+    assert warm < 0.05, f"warm strip {warm * 1000:.1f} ms"
+    assert cold_s < 1.0, f"cold strip {cold_s * 1000:.0f} ms"

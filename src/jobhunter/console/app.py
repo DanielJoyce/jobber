@@ -404,6 +404,7 @@ def create_app(
             "fips": json.dumps({s.fips: s.usps for s in geo.STATES}),
             "names": json.dumps({s.usps: s.name for s in geo.STATES}),
             "sankey": json.dumps(dash.sankey(conn, get_profile())).replace("</", "<\\/"),
+            "ach_strip": achievements.today_strip(request.app.state.achievements, conn, now()),
             **kpi_context(conn, range_, dash.clamp_buckets(buckets)),
             **table_context(conn, range_, metric_, sort, dir, dash.clamp_buckets(buckets)),
         }

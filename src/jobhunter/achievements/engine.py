@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -31,6 +32,8 @@ from datetime import UTC, date, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jobhunter.achievements import catalog, facts, rules
+
+logger = logging.getLogger(__name__)
 
 WRITE_BUSY_MS = 250
 REVOKE_WINDOW = timedelta(hours=24)
@@ -254,11 +257,13 @@ def evaluate(conn: sqlite3.Connection, now: datetime, tz: tzinfo | None = None) 
     return _write(conn, now, tz)
 
 
-def _write(conn: sqlite3.Connection, now: datetime, tz: tzinfo) -> list[Unlock]:
+def _write(
+    conn: sqlite3.Connection, now: datetime, tz: tzinfo, busy_ms: int = WRITE_BUSY_MS
+) -> list[Unlock]:
     if conn.in_transaction:
         raise RuntimeError("achievements.evaluate needs a connection outside a transaction")
     old_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
-    conn.execute(f"PRAGMA busy_timeout = {WRITE_BUSY_MS}")
+    conn.execute(f"PRAGMA busy_timeout = {int(busy_ms)}")
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -399,6 +404,8 @@ class Gate:
         self.enabled = enabled
         self.tz = tz
         self._fp: tuple[object, ...] | None = None
+        self._strip: tuple[tuple[object, ...], tuple[int, NextUp | None]] | None = None
+        self._strip_last: tuple[int, NextUp | None] | None = None
         self._lock = threading.Lock()
         self._running = threading.Lock()  # one evaluation at a time per process
 
@@ -408,6 +415,7 @@ class Gate:
     def invalidate(self) -> None:
         with self._lock:
             self._fp = None
+            self._strip = None
 
     def refresh(
         self,
@@ -438,6 +446,121 @@ class Gate:
             self._fp = fp
         return new
 
+    def strip_cache(self, fp: tuple[object, ...]) -> tuple[int, NextUp | None] | None:
+        with self._lock:
+            return self._strip[1] if self._strip and self._strip[0] == fp else None
+
+    def evaluated(self, fp: tuple[object, ...]) -> bool:
+        with self._lock:
+            return self._fp == fp
+
+    def last_strip(self) -> tuple[int, NextUp | None] | None:
+        with self._lock:
+            return self._strip_last
+
+    def set_strip_cache(
+        self, fp: tuple[object, ...], value: tuple[int, NextUp | None], *, evaluated: bool
+    ) -> None:
+        """Remember the strip numbers for ``fp``. After a skipped write they are kept only
+        as the fallback, so the next call retries the write."""
+        with self._lock:
+            self._strip_last = value
+            if evaluated:
+                self._strip = (fp, value)
+
     def reload_enabled(self, conn: sqlite3.Connection) -> bool:
         self.enabled = read_settings(conn).enabled
         return self.enabled
+
+
+# --- Today strip -------------------------------------------------------------------------
+
+_PREFERRED_CATEGORIES = ("follow",)  # win a tie over the rest (Momentum last)
+_PREFERRED_IDS = ("apply.targeted",)  # "Aimed, not sprayed"
+
+
+@dataclass(frozen=True)
+class NextUp:
+    name: str
+    progress: int
+    target: int
+
+
+@dataclass(frozen=True)
+class Strip:
+    earned: int
+    rhythm: int | None  # None when not known (a busy database and nothing cached yet)
+    next_up: NextUp | None
+
+
+def pick_next(series: dict[str, rules.Series], hidden_categories: Iterable[str]) -> NextUp | None:
+    """The visible in-progress achievement closest to its next tier (progress / target),
+    preferring Follow-up and Aimed over the rest on a tie. Hidden achievements, hidden
+    categories and Rhythm (shown on its own) are never offered."""
+    skip = set(hidden_categories) | {"rhythm"}
+    best: tuple[float, int, int] | None = None
+    pick: NextUp | None = None
+    for order, a in enumerate(catalog.CATALOG):
+        if a.hidden or a.category in skip:
+            continue
+        s = series.get(a.id)
+        if s is None or s.progress <= 0:
+            continue
+        target = next((t for t in a.thresholds if s.progress < t), None)
+        if target is None:
+            continue
+        pref = 0 if a.category in _PREFERRED_CATEGORIES or a.id in _PREFERRED_IDS else 1
+        key = (-s.progress / target, pref, order)
+        if best is None or key < best:
+            best, pick = key, NextUp(a.name, s.progress, target)
+    return pick
+
+
+def _earned(conn: sqlite3.Connection, settings: Settings) -> int:
+    return sum(
+        1
+        for u in stored(conn)
+        if u.category not in settings.hidden and u.achievement_id in catalog.BY_ID
+    )
+
+
+def today_strip(gate: Gate, conn: sqlite3.Connection, now: datetime) -> Strip | None:
+    """What the Today strip shows, or None when achievements are off. Never raises: on a
+    busy database or a rule bug it renders from the stored rows and the last cached rhythm
+    and next. Evaluation goes through ``Gate.refresh(wait=False)``, the same one-at-a-time
+    path as the activity band, so a fingerprint change is evaluated once for both."""
+    try:
+        settings = read_settings(conn)
+        gate.enabled = settings.enabled
+        if not settings.enabled:
+            return None
+        tz = gate.zone()
+        fp = fingerprint(conn, now, tz)
+        cached = gate.strip_cache(fp)
+        if cached is None:
+            ok = True
+            try:
+                gate.refresh(conn, now, wait=False)
+            except sqlite3.Error as exc:
+                logger.info("achievements: strip evaluate skipped: %s", exc)
+                ok = False
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+            comp = compute(conn, now, tz)
+            cached = (comp.rhythm.run, pick_next(comp.series, settings.hidden))
+            gate.set_strip_cache(fp, cached, evaluated=ok and gate.evaluated(fp))
+        return Strip(_earned(conn, settings), cached[0], cached[1])
+    except Exception:
+        logger.exception("achievements: Today strip fell back to stored rows")
+        try:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            settings = read_settings(conn)
+            if not settings.enabled:
+                return None
+            last = gate.last_strip()
+            return Strip(
+                _earned(conn, settings), last[0] if last else None, last[1] if last else None
+            )
+        except Exception:
+            return None
