@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('pages.css') }}">
+{% endblock %}
+{% block main %}
+{#- Names and allowlisted values only (019 Addendum B "The notice"). -#}
+<div class="pg cfgw">
+  <h1>Config changes</h1>
+  {% if flash %}<p class="callout" role="status">{{ flash }}</p>{% endif %}
+  <p class="muted">The console's settings were {% if applied %}read at {{ read_at.astimezone().strftime('%H:%M') }} (applied){% else %}read when the console started, at {{ read_at.astimezone().strftime('%H:%M') }}{% endif %}.
+    Which settings reload in place is listed in <a href="/help/settings-and-secrets#config-changes-while-the-console-runs">Settings and secrets</a>.</p>
+
+  {% if not watching %}
+  <p class="callout">This console is not watching <code>config.toml</code>. After a change, restart it: <code>{{ restart }}</code>.</p>
+  {% elif not state.pending %}
+  <p class="callout">No changes: <code>config.toml</code> and the <code>.env</code> files match what the console is running.</p>
+  {% else %}
+  {% if dismissed %}<p class="muted">You dismissed this change in the bar; it shows here until the file changes again.</p>{% endif %}
+
+  {% if state.errors %}
+  <div class="callout alert" id="cfg-errors">
+    <p><strong>config.toml has errors</strong>; the console keeps the settings it has. Fix the file and save it again.</p>
+    <ul>{% for line in state.errors %}<li><code>{{ line }}</code></li>{% endfor %}</ul>
+    <p class="muted">Check it in the terminal: <code>jobhunter doctor</code>. See also <a href="/help/troubleshooting#configtoml-has-errors-the-console-keeps-running">Troubleshooting</a> and <a href="/setup">Setup</a>.</p>
+  </div>
+  {% endif %}
+
+  {% if state.replaced %}
+  <div class="callout alert" id="cfg-replaced">
+    <p><strong>config.toml may have been replaced on the host.</strong> This console cannot see the new file until it restarts. Check the new file first: <code>{{ ctr_doctor }}</code>, then restart: <code>{{ restart }}</code>.</p>
+  </div>
+  {% endif %}
+
+  {% if state.fields %}
+  <h2>Settings</h2>
+  <table class="pg-table" id="cfg-fields">
+    <thead><tr><th>Setting</th><th>Takes effect</th><th>Was</th><th>Now</th></tr></thead>
+    <tbody>
+    {% for f in state.fields %}
+    <tr>
+      <td><code>{{ f.field }}</code>{% if f.source != "config.toml" %} <span class="muted">({{ f.source }})</span>{% endif %}</td>
+      <td>{% if f.cls == 'no-effect' %}no effect: set on the command line{% else %}{{ f.class_text }}{% endif %}</td>
+      {% if f.note %}<td colspan="2" class="note">{{ f.note }}</td>{% else %}<td><code>{{ f.old }}</code></td><td><code>{{ f.new }}</code></td>{% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if state.warnings %}
+  <h2>Scorer warnings</h2>
+  <p class="muted">These do not block Apply: scoring skips a scorer it cannot use.</p>
+  <ul id="cfg-warnings">{% for w in state.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if state.env %}
+  <h2>.env files</h2>
+  <p class="muted">Secrets are read once, at start: a <code>.env</code> change needs a restart.</p>
+  <ul id="cfg-env">
+    {% for e in state.env %}
+    <li><code>{{ e.file }}</code>:
+      {% if e.added %} added {% for n in e.added %}<code>{{ n }}</code>{% if not loop.last %}, {% endif %}{% endfor %};{% endif %}
+      {% if e.removed %} removed {% for n in e.removed %}<code>{{ n }}</code>{% if not loop.last %}, {% endif %}{% endfor %};{% endif %}
+      {% if e.changed %} changed {% for n in e.changed %}<code>{{ n }}</code>{% if not loop.last %}, {% endif %}{% endfor %};{% endif %}
+      {% if e.hidden %} {{ e.hidden }} other key{{ '' if e.hidden == 1 else 's' }} (names not shown);{% endif %}
+      {% if e.bare %} {{ e.bare }} line{{ '' if e.bare == 1 else 's' }} that {{ 'is' if e.bare == 1 else 'are' }} not NAME=value;{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <div class="pg-form">
+    {% if state.can_apply %}
+      {% if peer_ok %}
+      <form method="post" action="/config/apply"><input type="hidden" name="key" value="{{ state.key }}"><button type="submit">Apply now ({{ state.reload_count }})</button></form>
+      {% else %}
+      <p class="muted">Apply works only from the machine running the console.</p>
+      {% endif %}
+    {% endif %}
+    {% if state.needs_restart %}<p>Restart needed: <code>{{ restart }}</code></p>{% elif state.can_apply and not peer_ok %}<p>Or restart to pick it up: <code>{{ restart }}</code></p>{% endif %}
+    <form method="post" action="/config/dismiss"><input type="hidden" name="key" value="{{ state.key }}"><button type="submit">Dismiss</button></form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

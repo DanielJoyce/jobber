@@ -240,6 +240,10 @@ a.activity-item { color: var(--link); }
 .ach-notice a { color: var(--link); }
 .ach-star { color: var(--series-1); }
 .ach-dismiss { font: inherit; color: var(--text-secondary); background: transparent; border: 0; cursor: pointer; padding: 0 6px; }
+.activity-config { flex-wrap: wrap; gap: 4px 10px; }
+.activity-config code { overflow-wrap: anywhere; }
+.cfg-form { display: inline; margin: 0; }
+.cfg-btn { font: inherit; padding: 2px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
 @keyframes activity-pulse { 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) { .activity-dot { animation: none; } }
 

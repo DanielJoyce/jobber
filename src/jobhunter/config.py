@@ -824,3 +824,176 @@ def load_settings(
     beat the file. A broken ``models.toml`` never raises: it blocks the spending uses.
     """
     return load_layers(config_path, overrides).merged
+
+
+# --- config watch classification (specs/019 Addendum B, "Which settings reload") -------------
+#
+# Every leaf field of ``Settings`` is in exactly one of RELOADABLE and RESTART_FIELDS
+# (tests/test_config_watch.py enforces it). A field missing from both still classifies as
+# restart (``reload_class``), so a new field is never swapped in place until someone looks.
+
+RELOADABLE: frozenset[str] = frozenset(
+    {
+        # read per FetchContext
+        "fetch.respect_robots",
+        "fetch.default_rps",
+        "fetch.user_agent_contact",
+        "fetch.timeout_s",
+        "fetch.max_retries",
+        # scorers are built per run
+        "scoring.screen_scorer",
+        "scoring.deep_scorer",
+        "scoring.daily_cap_usd",
+        "scoring.weekly_cap_usd",
+        "scoring.deep_shortlist",
+        "scoring.employer_rejection_days",
+        "scoring.openai_compat.input_usd_per_mtok",
+        "scoring.openai_compat.output_usd_per_mtok",
+        "scoring.openai_compat.max_concurrency",
+        "scoring.openai_compat.json_schema",
+        "scoring.openai_compat.jobs_per_request",
+        "scoring.openai_compat.max_input_tokens_per_request",
+        "scoring.openai_compat.est_cost_per_request_usd",
+        "scoring.openrouter.title",
+        "scoring.openrouter.referer",
+        "scoring.openrouter.provider",
+        "scoring.openrouter.max_concurrency",
+        "scoring.openrouter.json_schema",
+        "scoring.openrouter.jobs_per_request",
+        "scoring.openrouter.max_input_tokens_per_request",
+        "scoring.openrouter.est_cost_per_request_usd",
+        "scoring.local.timeout_s",
+        "scoring.local.max_concurrency",
+        "scoring.local.json_schema",
+        "scoring.local.jobs_per_request",
+        "scoring.local.max_input_tokens_per_request",
+        # read per call
+        "apply.runner",
+        "apply.cli_model",
+        "apply.api_model",
+        "apply.effort",
+        "apply.daily_cap_usd",
+        "apply.entailment_check",
+        "apply.cli_entailment_model",
+        "apply.api_entailment_model",
+        # read on use
+        "mail.alerts_address",
+        "mail.label",
+        "mail.fallback_sender_domains",
+        "mail.fallback_senders",
+        "mail.client_secrets_path",
+        # read per request
+        "capture.disabled_hosts",
+    }
+)
+
+RESTART_FIELDS: frozenset[str] = frozenset(
+    {
+        "paths.data_dir",
+        "paths.cache_dir",
+        "paths.db_path",
+        "paths.profile_dir",
+        "paths.resume_path",
+        "console.host",
+        "console.port",
+        "console.public_port",
+        "fetch.global_concurrency",  # the process-wide semaphore is sized once
+        # secrets are resolved once, at start, for the names config gave then
+        "scoring.openai_compat.api_key_env",
+        "scoring.openrouter.api_key_env",
+        "scoring.local.api_key_env",
+        "scoring.openrouter.catalog_cache",
+        # An endpoint goes with its credential, which is resolved at start and may rotate
+        # unseen (a podman secret's *_FILE, the process environment): a new host must never
+        # get the running key, so a scorer endpoint changes only with a restart.
+        "scoring.openai_compat.base_url",
+        "scoring.openrouter.base_url",
+        "scoring.local.base_url",
+        "scoring.local.runtime",  # picks the default endpoint
+    }
+)
+
+# Fields whose old and new values may be shown on /config/changes. Everything else shows
+# "changed" only: personal values (contact, alerts address, sender lists), URLs (a key can sit
+# in one), paths, the OpenRouter provider, title and referer. Default is hidden.
+SHOWN_VALUES: frozenset[str] = frozenset(
+    {
+        "fetch.respect_robots",
+        "fetch.default_rps",
+        "fetch.timeout_s",
+        "fetch.max_retries",
+        "fetch.global_concurrency",
+        "scoring.screen_scorer",
+        "scoring.deep_scorer",
+        "scoring.daily_cap_usd",
+        "scoring.weekly_cap_usd",
+        "scoring.deep_shortlist",
+        "scoring.employer_rejection_days",
+        "scoring.openai_compat.input_usd_per_mtok",
+        "scoring.openai_compat.output_usd_per_mtok",
+        "scoring.openai_compat.max_concurrency",
+        "scoring.openai_compat.json_schema",
+        "scoring.openai_compat.jobs_per_request",
+        "scoring.openai_compat.max_input_tokens_per_request",
+        "scoring.openai_compat.est_cost_per_request_usd",
+        "scoring.openrouter.max_concurrency",
+        "scoring.openrouter.json_schema",
+        "scoring.openrouter.jobs_per_request",
+        "scoring.openrouter.max_input_tokens_per_request",
+        "scoring.openrouter.est_cost_per_request_usd",
+        "scoring.local.runtime",
+        "scoring.local.timeout_s",
+        "scoring.local.max_concurrency",
+        "scoring.local.json_schema",
+        "scoring.local.jobs_per_request",
+        "scoring.local.max_input_tokens_per_request",
+        "apply.runner",
+        "apply.cli_model",
+        "apply.api_model",
+        "apply.effort",
+        "apply.daily_cap_usd",
+        "apply.entailment_check",
+        "apply.cli_entailment_model",
+        "apply.api_entailment_model",
+        "mail.label",
+        "console.port",
+        "console.public_port",
+    }
+)
+
+# Shown as a count of entries, never the entries.
+SHOWN_AS_COUNT: frozenset[str] = frozenset({"capture.disabled_hosts"})
+# Shown only when old and new both look like an environment variable name.
+NAME_VALUED: frozenset[str] = frozenset(
+    {
+        "scoring.openai_compat.api_key_env",
+        "scoring.openrouter.api_key_env",
+        "scoring.local.api_key_env",
+    }
+)
+
+
+def leaf_fields(model: type[BaseModel] = Settings, prefix: str = "") -> list[str]:
+    """Every leaf field of ``model`` as a dotted path (``scoring.openrouter.referer``). A field
+    whose type is itself a model is a section, not a leaf."""
+    out: list[str] = []
+    for name, info in model.model_fields.items():
+        ann = info.annotation
+        path = f"{prefix}{name}"
+        if isinstance(ann, type) and issubclass(ann, BaseModel):
+            out.extend(leaf_fields(ann, f"{path}."))
+        else:
+            out.append(path)
+    return out
+
+
+def reload_class(field: str) -> str:
+    """``reload`` for a field on RELOADABLE, else ``restart``."""
+    return "reload" if field in RELOADABLE else "restart"
+
+
+def field_value(settings: Settings, field: str) -> Any:
+    obj: Any = settings
+    for part in field.split("."):
+        obj = getattr(obj, part)
+    return obj

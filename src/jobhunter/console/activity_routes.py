@@ -17,6 +17,9 @@ poll never waits for another tab's evaluation (``wait=False``).
 The achievement notice shows the newest unseen unlock in a visible category while notices are
 on, with "+N more" for the rest. Its dismiss button posts exactly the ids it shows to
 ``POST /achievements/seen``.
+
+It also carries the config-watch notice (specs/019 Addendum B): ``config_routes.notice_context``
+runs the throttled ``config.toml``/``.env`` check, at most every 2 s per process.
 """
 
 import contextlib
@@ -33,6 +36,7 @@ from fastapi.templating import Jinja2Templates
 
 from jobhunter.achievements import catalog, engine
 from jobhunter.config import resolve_path
+from jobhunter.console import config_routes
 from jobhunter.console.achievements_routes import essentials_judge
 from jobhunter.core import runlock
 from jobhunter.pipeline.listing import to_iso
@@ -175,6 +179,7 @@ def register(
                 "every": FAST_S if active else SLOW_S,
                 "ach": notice,
                 "short": short,
+                **config_routes.notice_context(request, moment),
             },
         )
         response.headers["Cache-Control"] = "no-store"

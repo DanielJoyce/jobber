@@ -45,6 +45,12 @@ DOCTOR_ONLY = frozenset({"config.file", "db.schema"})
 # The live "Test (free)" button is S6; until it lands the row points at the command only.
 TEST_BUTTON_TEXT = re.compile(r"use Test \(free\),? or (?:run )?(`[^`]+`)")
 CLIENT_SECRET = "jobhunter_google_client"
+# Rows whose value comes only from settings that Apply reloads (config.RELOADABLE), so after an
+# Apply their rule-6 note says "read at HH:MM (applied)". Every other row is read at start:
+# secrets, paths, the bind address (console.exposure), and the scorer rows (their credential).
+APPLIED_ROWS = frozenset(
+    {"fetch.contact", "scorer.caps", "mail.address", "mail.label", "apply.runner", "apply.cap"}
+)
 GMAIL_HELP = "/help/email-alerts#step-1-google-client-json"
 
 # A step is blocked by the earlier steps it needs: `mail auth` needs the client JSON, and
@@ -148,8 +154,8 @@ def build_groups(
     by_step = {c.step: c for c in checks if c.step}
     rows_by_group: dict[str, list[Row]] = {g: [] for g in rd.GROUPS}
     for c in checks:
-        if c.id in DOCTOR_ONLY:
-            continue
+        if c.id in DOCTOR_ONLY and not (c.id == "config.file" and c.status == rd.BROKEN):
+            continue  # a broken config.toml shows: a running console can see one (019 B)
         failing = c.status in rd.FAILING
         quiet = (c.status in (rd.OK, rd.OPTIONAL_STATUS)) and not c.due
         due_ok = c.due and c.status == rd.OK
@@ -231,6 +237,7 @@ def register(
     Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
     started = now()
     templates.env.globals["COMMAND_PREFIXES"] = COMMAND_PREFIXES
+    templates.env.globals["APPLIED_ROWS"] = APPLIED_ROWS
 
     def settings_of(request: Request) -> Settings:
         return request.app.state.settings
@@ -253,10 +260,31 @@ def register(
             home=home_of(request),
         )
 
+    def config_row(request: Request) -> rd.Check | None:
+        """Row 1 as broken while the watched config.toml does not load; None otherwise."""
+        from jobhunter.console import config_routes
+
+        state = config_routes.current_state(request)
+        if not state.errors:
+            return None
+        n = len(state.errors)
+        return rd.Check(
+            "config.file", rd.BASICS, rd.ESSENTIAL, rd.BROKEN, False, "Settings file",
+            f"config.toml has {n} error{'' if n == 1 else 's'}; the console keeps the "
+            "settings it has. Check it with `jobhunter doctor`.",
+            "Every command and the console",
+            rd.Fix("route", "/config/changes"), "config.toml", reads_at_start=True,
+        )  # fmt: skip
+
     def view_of(request: Request, errors: dict[str, str] | None = None) -> dict[str, Any]:
         """Groups plus the summary numbers. Essentials are judged on every check, including
         the doctor-only rows the page does not list."""
         checks = compute(request)
+        broken = config_row(request)
+        if broken is not None:
+            # Row 1 is doctor-only because a console cannot start with a broken file, but a
+            # running one can now see one (019 Addendum B "Validating").
+            checks = [broken if c.id == "config.file" else c for c in checks]
         mode = mode_of(request)
         groups = build_groups(
             checks,
@@ -269,7 +297,9 @@ def register(
         return {
             "groups": groups,
             "mode": mode,
-            "started": started,
+            "started": getattr(request.app.state, "settings_read_at", started),
+            "boot": started,  # secret and env rows are only ever read at start
+            "applied": getattr(request.app.state, "settings_applied", False),
             "essentials_ok": rd.essentials_ok(checks),
             "todo_count": sum(1 for g in groups for r in g.rows if not r.quiet),
         }

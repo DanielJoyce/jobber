@@ -17,4 +17,23 @@
 {%- if ach -%}
 <span class="activity-item ach-notice" data-unlock="{{ ach.id }}" data-key="{{ ach.key }}" data-ids="{{ ach.ids }}" data-keys="{{ ach.shown_keys }}" aria-live="off"><span class="ach-star" aria-hidden="true">&#9733;</span><span class="ach-text">Achievement: {{ ach.name }}{% if ach.tier %} (tier {{ ach.tier }}){% endif %}</span>{% if ach.more %}<a href="/achievements">+{{ ach.more }} more</a>{% endif %}<a href="/achievements">View</a><button type="button" class="ach-dismiss" hx-post="/achievements/seen" hx-vals='{"ids": "{{ ach.ids }}"}' hx-swap="none" aria-label="Dismiss achievement notice">&times;</button></span>
 {%- endif -%}
+{#- Config watch (019 Addendum B): names and counts only, never a value. -#}
+{%- if cfg_applied -%}
+<span class="activity-item activity-done">Applied {{ cfg_applied[0] }} setting{{ '' if cfg_applied[0] == 1 else 's' }} at {{ cfg_applied[1].astimezone().strftime('%H:%M') }}</span>
+{%- endif -%}
+{%- if cfg -%}
+<span class="activity-item activity-config{% if cfg.errors or cfg.replaced %} activity-failed{% endif %}"><span>{{ cfg_summary }}
+{%- for line in cfg.bar_errors %} <code>{{ line }}</code>{% endfor -%}
+{%- if cfg.can_apply and running %} A running re-score keeps the settings it started with.{% endif -%}
+{%- if cfg_restart %} {% if cfg.needs_restart %}Restart needed{% else %}Or restart to pick it up{% endif %}: <code>{{ cfg_restart }}</code>{% if cfg.replaced %} (check the file first: <code>{{ cfg_ctr_doctor }}</code>){% endif %}.{% endif -%}
+</span>
+{%- if cfg.can_apply -%}
+{%- if cfg_peer_ok -%}
+<form class="cfg-form" hx-post="/config/apply" hx-target="#activity" hx-swap="outerHTML" method="post" action="/config/apply"><input type="hidden" name="key" value="{{ cfg.key }}"><button type="submit" class="cfg-btn">Apply now</button></form>
+{%- else -%}
+<span class="muted">Apply from the machine running the console.</span>
+{%- endif -%}
+{%- endif -%}
+<a href="/config/changes">Details</a><form class="cfg-form" hx-post="/config/dismiss" hx-target="#activity" hx-swap="outerHTML" method="post" action="/config/dismiss"><input type="hidden" name="key" value="{{ cfg.key }}"><button type="submit" class="cfg-btn">Dismiss</button></form></span>
+{%- endif -%}
 </div>
