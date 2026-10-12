@@ -282,8 +282,8 @@ def runner_status(
     spent = generator.packet_spent_today(conn, now)
     cap = settings.apply.daily_cap_usd
     api_reason = None
-    if not env.get("ANTHROPIC_API_KEY"):
-        api_reason = "no ANTHROPIC_API_KEY is set"
+    if not generator.api_credential_present(settings, env):
+        api_reason = generator.NO_API_CREDENTIAL
     elif cap - spent < min(e.usd for e in estimates.values()):
         api_reason = f"the [apply] daily cap of ${cap:.2f} is reached"
     return RunnerStatus(

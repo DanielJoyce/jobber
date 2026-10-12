@@ -51,7 +51,14 @@ from jobhunter.core.spend import PACKET_CLI_TIER, PACKET_TIER
 from jobhunter.scoring import catalog
 from jobhunter.scoring import screen as stage2
 from jobhunter.scoring.profile import Profile
-from jobhunter.scoring.scorers import PRICING_PER_MTOK, Usage, compute_cost, thinking_off
+from jobhunter.scoring.scorers import (
+    PRESENT,
+    PRICING_PER_MTOK,
+    Usage,
+    compute_cost,
+    credential_for,
+    thinking_off,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -692,6 +699,17 @@ def _cli_call(res: cli_runner.CliResult, model: str) -> Call:
     )
 
 
+NO_API_CREDENTIAL = "no ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or Anthropic SDK profile is set"
+
+
+def api_credential_present(settings: Settings, environ: Mapping[str, str] | None = None) -> bool:
+    """Can the ``api`` runner find an Anthropic credential? ``credential_for`` (specs/019 S1),
+    so ``ANTHROPIC_AUTH_TOKEN``, a profile and workload identity count as the SDK does. Local:
+    environment variables and stats only."""
+    spec = f"anthropic:{settings.apply.api_model}"
+    return credential_for(spec, settings.scoring, environ=environ).status == PRESENT
+
+
 def _preflight(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -705,8 +723,8 @@ def _preflight(
     """Every refusal that must happen before anything runs or is spent."""
     env = os.environ if environ is None else environ
     if runner == "api":
-        if not env.get("ANTHROPIC_API_KEY"):
-            raise ApplyRefused("no ANTHROPIC_API_KEY is set, so the API run is not available")
+        if not api_credential_present(settings, env):
+            raise ApplyRefused(f"{NO_API_CREDENTIAL}, so the API run is not available")
         left = remaining_cap(conn, settings, now)
         if left < estimate_usd:
             raise ApplyRefused(
