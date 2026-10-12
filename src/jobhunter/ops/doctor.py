@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from jobhunter import container, legacy_data, model_access, readiness
+from jobhunter import readiness_snapshot as snap
 from jobhunter.config import MODEL_KEYS, Settings, load_settings, resolve_path, shown_value
 from jobhunter.ops import preflight
 from jobhunter.readiness import (
@@ -89,6 +90,8 @@ class Report:
     preflight_ran: bool = False
     group: str | None = None
     model_sources: list[tuple[str, str, str]] = field(default_factory=list)
+    # --snapshot: one line per section written or not (stderr), e.g. "wrote manual_inputs"
+    snapshot_notes: list[str] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
@@ -253,6 +256,22 @@ def _preflight_skipped(why: str) -> Check:
     )  # fmt: skip
 
 
+def _write_note(section: str, write: Callable[[], bool]) -> str:
+    """Write one readiness.json section; the line to print about it (no value, no path)."""
+    try:
+        written = write()
+    except snap.Unreadable:
+        return (
+            f"readiness.json: {section} not written (the file cannot be read; remove it and "
+            "run this again)"
+        )
+    except OSError as exc:
+        return f"readiness.json: {section} not written ({type(exc).__name__})"
+    if not written:
+        return f"readiness.json: {section} not written (its lock is busy; try again)"
+    return f"readiness.json: wrote {section}"
+
+
 def gather(
     *,
     now: datetime | None = None,
@@ -263,11 +282,17 @@ def gather(
     context_builder: Callable[[], preflight.Context] | None = None,
     run_preflight: Callable[..., preflight.Result] | None = None,
     home: Path | None = None,
+    snapshot: bool = False,
+    snapshot_timeout: float | None = None,
 ) -> Report:
     """Every local check plus ``data.layout``, and with ``containers`` preflight's mapped rows.
 
     A config file that will not load becomes a broken ``config.file`` row (exception type only)
-    and the other checks run against code defaults."""
+    and the other checks run against code defaults.
+
+    Rows carry their effective status (merged with a fresh ``readiness.json``). With
+    ``snapshot`` this process's own view is first written as ``manual_inputs`` (and, with
+    ``containers``, preflight's mapped rows as ``host``); ``run_inputs`` is never touched."""
     home = home or Path.home()
     now = now or datetime.now(UTC)
     wanted = normalize_group(group) if group else None
@@ -279,16 +304,36 @@ def gather(
         settings = load_settings(Path("/nonexistent/jobhunter-no-config.toml"))
     mode = readiness.detect_mode(settings=settings)
     checks = readiness.run_checks(
-        settings, secrets_report=secrets_report, now=now, mode=mode, home=home
-    )
+        settings, secrets_report=secrets_report, now=now, mode=mode, home=home,
+        use_snapshot=False,
+        # in a container doctor runs through `jobhunter-ctr`, which gets the run's secrets
+        sees_run_secrets=mode == readiness.CONTAINER,
+    )  # fmt: skip
     if config_error is not None:
         checks = [_config_failed(config_error) if c.id == "config.file" else c for c in checks]
+    notes: list[str] = []
+    kw = {} if snapshot_timeout is None else {"timeout": snapshot_timeout}
+    if snapshot and config_error is not None:
+        notes.append("readiness.json: not written (the config file will not load)")
+    elif snapshot:
+        notes.append(
+            _write_note(
+                "manual_inputs",
+                lambda: snap.record_manual_inputs(checks, settings, now=now, mode=mode, **kw),
+            )
+        )
+    viewer = "this container" if mode == readiness.CONTAINER else "this shell"
+    data_dir = resolve_path(settings.paths.data_dir)
+    # The placeholder Containers row (unknown before the merge): --containers replaces it with
+    # this run's preflight rows, so an older host section must not keep it failing.
+    placeholder = {c.id for c in checks if c.id == "containers.deployment" and c.status == UNKNOWN}
+    checks = snap.apply(checks, data_dir, now=now, mode=mode, viewer=viewer)
     checks.insert(1, layout_check(settings, home))
     at = next((i for i, c in enumerate(checks) if c.id == "models.choices"), None)
     if at is not None:
         checks[at + 1 : at + 1] = model_access_checks(settings, mode, now)
 
-    report = Report(checks, mode, group=wanted)
+    report = Report(checks, mode, group=wanted, snapshot_notes=notes)
     if config_error is None:
         report.model_sources = model_sources(settings)
     if containers:
@@ -306,10 +351,13 @@ def gather(
                 report.preflight_ran = True
                 report.preflight_lines = list(result.lines)
                 mapped = map_preflight(result)
+                if snapshot and config_error is None:
+                    rows = mapped
+                    report.snapshot_notes.append(
+                        _write_note("host", lambda: snap.record_host(rows, settings, now=now, **kw))
+                    )
         # The placeholder row said "run doctor --containers"; the real rows replace it.
-        checks = [
-            c for c in checks if not (c.id == "containers.deployment" and c.status == UNKNOWN)
-        ]
+        checks = [c for c in checks if c.id not in placeholder]
         report.checks = [*checks, *mapped]
     if wanted:
         report.checks = [c for c in report.checks if c.group == wanted]

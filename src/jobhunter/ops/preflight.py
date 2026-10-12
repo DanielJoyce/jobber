@@ -12,6 +12,8 @@ Drop-in layout (C4's base units plug into it)::
 
     <unit dir>/<unit>.container                  base unit, from deploy/quadlet/ (C4)
     <unit dir>/<unit>.container.d/50-<secret>.conf   one per secret, written here
+    <unit dir>/<unit>.container.d/40-jobhunter-trigger.conf   JOBHUNTER_TRIGGER=timer for the
+                                                 timer-started units (specs/019 S4)
 
 ``<unit dir>`` defaults to ``~/.config/containers/systemd``. A drop-in is ours when its first
 line is :data:`HEADER`; nothing else in those directories is ever modified or deleted.
@@ -53,6 +55,11 @@ COLLECT = "jobhunter-ctr-collect"
 RESCORE = "jobhunter-ctr-rescore"
 VERIFY = "jobhunter-ctr-verify"
 BACKUP = "jobhunter-ctr-backup"
+# Units started by timers: their runs are marked JOBHUNTER_TRIGGER=timer (specs/019 S4). The
+# base units carry the line; this drop-in delivers it to units installed before it existed.
+TRIGGER_UNITS = (RUN, COLLECT, RESCORE)
+TRIGGER_DROPIN = "40-jobhunter-trigger.conf"
+TRIGGER_ENV = "JOBHUNTER_TRIGGER=timer"
 # The one-off wrapper script (C15); not a Quadlet unit, so no drop-ins, but it has a column.
 WRAPPER = "jobhunter-ctr"
 UNITS = (CONSOLE, RUN, COLLECT, RESCORE, VERIFY, BACKUP)
@@ -188,6 +195,10 @@ def dropin_text(spec: SecretSpec) -> str:
     )
 
 
+def trigger_dropin_text() -> str:
+    return f"{HEADER}\n[Container]\nEnvironment={TRIGGER_ENV}\n"
+
+
 def wrapper_specs(specs: Iterable[SecretSpec], existing: Iterable[str]) -> list[SecretSpec]:
     """The secrets the one-off wrapper ``jobhunter-ctr`` (C15) mounts: its matrix column,
     limited to secrets that exist."""
@@ -208,6 +219,10 @@ def dropin_dir(unit_dir: Path, unit: str) -> Path:
 
 def dropin_path(unit_dir: Path, unit: str, secret: str) -> Path:
     return dropin_dir(unit_dir, unit) / f"{DROPIN_PREFIX}{secret}{DROPIN_SUFFIX}"
+
+
+def trigger_dropin_path(unit_dir: Path, unit: str) -> Path:
+    return dropin_dir(unit_dir, unit) / TRIGGER_DROPIN
 
 
 def is_ours(path: Path) -> bool:
@@ -245,6 +260,10 @@ def plan_dropins(
         for unit in UNITS:
             if unit in spec.units:
                 wanted[dropin_path(unit_dir, unit, spec.secret)] = dropin_text(spec)
+    # Not a secret, so always wanted; being in ``wanted`` also keeps the removal pass below
+    # from deleting it as a drop-in whose secret is gone.
+    for unit in TRIGGER_UNITS:
+        wanted[trigger_dropin_path(unit_dir, unit)] = trigger_dropin_text()
     plan = DropinPlan()
     for path, text in sorted(wanted.items()):
         if path.is_symlink() or (path.exists() and not is_ours(path)):
@@ -779,6 +798,8 @@ def _final_dropins(unit_dir: Path, plan: DropinPlan) -> set[tuple[str, str]]:
     """(unit, secret) for every preflight drop-in that exists once ``plan`` is applied."""
     pairs: set[tuple[str, str]] = set()
     for path in [*plan.keep, *plan.write]:
+        if path.name == TRIGGER_DROPIN:
+            continue  # not a secret; checked by quadlet_check on its own
         unit = path.parent.name.removesuffix(".container.d")
         secret = path.name.removeprefix(DROPIN_PREFIX).removesuffix(DROPIN_SUFFIX)
         pairs.add((unit, secret))
@@ -934,6 +955,9 @@ def run(
         res.add(OK, f"{verb}write {path}", id="secrets")
     for path in res.plan.remove:
         res.add(OK, f"{verb}remove {path} (its secret is gone or no longer used)", id="secrets")
+    if any(p.name == TRIGGER_DROPIN for p in res.plan.write):
+        res.add(OK, f"{verb}mark timer runs ({TRIGGER_ENV}) in {', '.join(TRIGGER_UNITS)}",
+                id="secrets")  # fmt: skip
     if not res.plan.changes:
         res.add(OK, f"drop-ins up to date ({len(res.plan.keep)} in place)", id="secrets")
     if not dry_run:
@@ -1038,7 +1062,8 @@ def enabled_timers(
 
 
 def leave(unit_dir: Path, data_dir: Path, *, dry_run: bool = False) -> list[str]:
-    """Remove the drop-ins preflight wrote and the deployment marker."""
+    """Remove the drop-ins preflight wrote (the trigger drop-ins too) and the deployment
+    marker."""
     from jobhunter.core import db
 
     verb = "would remove" if dry_run else "removed"

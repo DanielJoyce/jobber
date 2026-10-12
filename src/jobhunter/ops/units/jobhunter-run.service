@@ -16,4 +16,6 @@ WorkingDirectory=@REPO@
 ExecStart=@EXEC@ run --wait 4h
 Nice=10
 Environment=PATH=@PATH@
+# Marks timer runs (specs/019 S4); a manual `jobhunter run` from a shell is recorded as manual.
+Environment=JOBHUNTER_TRIGGER=timer
 @XDG_ENV@

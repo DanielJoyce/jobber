@@ -277,6 +277,18 @@ def _job_lock(settings, command: str, wait: float | None) -> Iterator[None]:
         lock.release()
 
 
+def _snapshot_write(what: str, write: Callable[[], bool]) -> None:
+    """Write a readiness.json section; a failure is one log line, never a failed run."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        if not write():
+            logger.warning("readiness.json: %s not written (its lock was busy)", what)
+    except Exception as exc:  # never fail the run over the snapshot
+        logger.warning("readiness.json: %s not written (%s)", what, type(exc).__name__)
+
+
 @app.command()
 def run(
     stage: Annotated[
@@ -327,8 +339,22 @@ def run(
         typer.echo(text)
         return
 
+    from jobhunter import readiness_snapshot
+
     db_path = resolve_path(settings.paths.db_path)
+    trigger = readiness_snapshot.current_trigger()
     with _job_lock(settings, "run", wait_s):
+        # After the lock, so a run that times out on it writes nothing (019 S4).
+        _snapshot_write(
+            "run inputs",
+            lambda: readiness_snapshot.record_run_inputs(
+                settings,
+                secrets_report=_SECRETS_REPORT,
+                registry_rows=rows,
+                now=datetime.now(UTC),
+                trigger=trigger,
+            ),
+        )
         conn = db.connect(db_path)
         try:
             _migrate(conn)
@@ -342,9 +368,14 @@ def run(
                 since=since_dt,
                 full=full,
                 max_resolve=max_resolve,
+                trigger=trigger,
             )
         finally:
             conn.close()
+        _snapshot_write(
+            "run outcome",
+            lambda: readiness_snapshot.record_run_outcome(settings, report, now=datetime.now(UTC)),
+        )
     summary = runner.format_summary(report)
     if summary:
         typer.echo(summary)
@@ -2522,7 +2553,15 @@ def doctor(
         ),
     ] = False,
     live: Annotated[bool, typer.Option("--live", hidden=True)] = False,
-    snapshot: Annotated[bool, typer.Option("--snapshot", hidden=True)] = False,
+    snapshot: Annotated[
+        bool,
+        typer.Option(
+            "--snapshot",
+            help="Also write what this shell (or `jobhunter-ctr`) sees to readiness.json, for "
+            "the console; with --containers, preflight's results too. Never stands in for the "
+            "nightly run.",
+        ),
+    ] = False,
 ) -> None:
     """Check that jobhunter is set up: the same checks as /setup, in the terminal.
 
@@ -2531,17 +2570,13 @@ def doctor(
     call. Opens the database read-only and never migrates it (SQLite may create the -wal and
     -shm files beside a WAL database; they hold no new data). Runs even when the old layout,
     a pending schema or a broken config file stop other commands. Prints no key, address or
-    contact.
+    contact. Writes nothing, except readiness.json with --snapshot.
     """
     from jobhunter.ops import doctor as doc
 
-    for flag, name, ticket in ((live, "--live", "S6"), (snapshot, "--snapshot", "S4")):
-        if flag:
-            typer.echo(
-                f"error: doctor {name} is not available yet (019 {ticket}).",
-                err=True,
-            )
-            raise typer.Exit(2)
+    if live:
+        typer.echo("error: doctor --live is not available yet (019 S6).", err=True)
+        raise typer.Exit(2)
     if containers:
         _host_only("doctor --containers", "jobhunter doctor --containers")
     try:
@@ -2550,10 +2585,13 @@ def doctor(
             containers=containers,
             secrets_report=_SECRETS_REPORT,
             context_builder=build_preflight_context,
+            snapshot=snapshot,
         )
     except doc.UsageError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
+    for note in report.snapshot_notes:
+        typer.echo(note, err=True)
     if as_json:
         typer.echo(json.dumps(doc.to_json_data(report), indent=2))
     else:

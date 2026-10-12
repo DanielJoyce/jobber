@@ -60,6 +60,7 @@ value; containers use that form.
 | `CLAUDE_CODE_USE_BEDROCK` | never passed to the Claude Code child | - | - | - |
 | `CLAUDE_CODE_USE_VERTEX` | never passed to the Claude Code child | - | - | - |
 | `JOBHUNTER_CONTAINER` | container mode switch | - | set by the image, do not set | - |
+| `JOBHUNTER_TRIGGER` | marks timer-started runs (`timer`); anything else is a manual run | set by the run and collect units, do not set | set by the run, collect and rescore units (and preflight's trigger drop-in), do not set | no |
 | `JOBHUNTER_PUBLISHED_LOOPBACK_ONLY` | the console's published-port check | - | set by you only for the 0.0.0.0 fallback (see Containers, Troubleshooting) | - |
 | `JOBHUNTER_BUILD_COMMIT` | the commit `jobhunter version` shows | - | set by the image, do not set | - |
 

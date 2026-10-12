@@ -102,6 +102,10 @@ class RunReport:
     messages: list[str] = field(default_factory=list)
     results: dict[str, SourceResult] = field(default_factory=dict)
     counts: dict[str, Any] = field(default_factory=dict)
+    # The score stage's result as a fixed code for readiness.json (specs/019 S4): scored,
+    # skipped_no_credential, cap_reached, failed:<exception type>, no_profile or not_run.
+    score_outcome: str = "not_run"
+    trigger: str = "manual"
 
     @property
     def non_ok(self) -> list[SourceResult]:
@@ -417,11 +421,14 @@ def _score_stage(
     report: RunReport,
 ) -> None:
     if profile is None:
+        report.score_outcome = "no_profile"
         return  # already reported up front
+    report.score_outcome = "scored"
     try:
         from jobhunter.scoring import screen  # lazy: built in a separate change
     except ImportError:
         report.messages.append("score: screen stage not installed; skipped")
+        report.score_outcome = "failed:ImportError"
         return
     from jobhunter.scoring import rescore
     from jobhunter.scoring.scorers import (
@@ -439,6 +446,7 @@ def _score_stage(
     if problem := settings.scoring.scorer_problems().get("screen_scorer"):
         report.messages.append(f"score: skipped ({problem}); survivors stay queued")
         logger.warning("score skipped: %s", problem)
+        report.score_outcome = "failed:InvalidScorerSpec"
         return
     cred = credential_for(spec, settings.scoring)
     if cred.status == MISSING:  # 'unknown' (e.g. local:) and 'present' try as today
@@ -447,6 +455,7 @@ def _score_stage(
         report.messages.append(
             f"score: skipped: no credential for {spec}{hint}; survivors stay queued"
         )
+        report.score_outcome = "skipped_no_credential"
         return
     if notice := privacy_notice(spec, settings.scoring):
         report.messages.append(notice)
@@ -464,6 +473,7 @@ def _score_stage(
             "new jobs stay queued"
         )
         report.counts["score"] = "0"
+        report.score_outcome = "cap_reached"
         return
     if not spec.startswith("anthropic:"):
         try:
@@ -480,6 +490,7 @@ def _score_stage(
         except Exception as exc:  # scoring trouble must not fail the ingest exit code
             logger.warning("score failed: %s", exc)
             report.messages.append(f"score: failed ({exc}); survivors stay queued")
+            report.score_outcome = f"failed:{type(exc).__name__}"
             return
         report.counts["score"] = str(sync.written)
         return
@@ -489,6 +500,7 @@ def _score_stage(
         client = anthropic.Anthropic()
     except Exception as exc:
         report.messages.append(f"score: no Anthropic client ({exc}); skipped")
+        report.score_outcome = f"failed:{type(exc).__name__}"
         return
     try:
         result = screen.submit_batch(
@@ -505,6 +517,7 @@ def _score_stage(
     except Exception as exc:  # scoring trouble must not fail the ingest exit code
         logger.warning("score submit failed: %s", exc)
         report.messages.append(f"score: submit failed ({exc}); survivors stay queued")
+        report.score_outcome = f"failed:{type(exc).__name__}"
         return
     report.counts["score"] = str(result)
 
@@ -527,6 +540,7 @@ def run_pipeline(
     max_resolve: int = DEFAULT_MAX_RESOLVE,
     now: datetime | None = None,
     apply_ctx_factory: Callable[[str], Any] | None = None,
+    trigger: str = "manual",
 ) -> RunReport:
     adapters = ADAPTERS if adapters is None else adapters
     stages = list(stages) if stages is not None else list(STAGES)
@@ -537,7 +551,7 @@ def run_pipeline(
             return FetchContext(src, settings, conn)
 
     profile = (profile_loader or default_profile_loader(settings))()
-    report = RunReport(stages=stages)
+    report = RunReport(stages=stages, trigger="timer" if trigger == "timer" else "manual")
 
     sync_sources_table(conn, rows)
     selected = filter_sources(rows, states)
@@ -551,7 +565,8 @@ def run_pipeline(
                     f"{s}: skipped (no profile; create profile/preferences.yaml)"
                 )
     cur = conn.execute(
-        "INSERT INTO run (started_at, stages) VALUES (?, ?)", (to_iso(now), ",".join(stages))
+        'INSERT INTO run (started_at, stages, "trigger") VALUES (?, ?, ?)',
+        (to_iso(now), ",".join(stages), report.trigger),
     )
     report.run_id = cur.lastrowid
     conn.commit()
