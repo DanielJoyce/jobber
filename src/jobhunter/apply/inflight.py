@@ -5,7 +5,9 @@ draft`` beside the console would start a second run (twice the subscription quot
 runs that both pass the cap check because neither has logged its spend yet).
 
 - :func:`claim` is a non-blocking per-packet-and-kind lock: a second Generate for the same
-  document while one runs is refused, not queued.
+  document while one runs is refused, not queued. :class:`Claim` is the same lock as an
+  object, so a request thread can take it and hand it to the thread that drafts in the
+  background (specs/022 "Drafting in the background"), which releases it when it ends.
 - :func:`spend_section` is a blocking lock around every "check the apply cap, call, log the
   spend" section on the API runner, so the cap check and the logged spend are atomic
   together.
@@ -24,10 +26,12 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import re
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 MAX_NAME = 120
 PROBE_WAIT_S = 240.0  # longer than one CLI call's timeout (cli_runner.TIMEOUT_S, 180 s)
@@ -48,17 +52,64 @@ def _lock_file(data_dir: Path, name: str) -> Path:
     return d / (safe + ".lock")
 
 
-@contextmanager
-def claim(data_dir: Path, key: str) -> Iterator[None]:
-    with open(_lock_file(data_dir, f"apply-{key}"), "a+") as fh:
+class Claim:
+    """A held per-document claim. :meth:`take` raises :class:`Busy` when another run holds it;
+    :meth:`release` is idempotent and safe from any thread."""
+
+    def __init__(self, fh: Any, key: str) -> None:
+        self._fh = fh
+        self._lock = threading.Lock()
+        self.key = key
+
+    @classmethod
+    def take(cls, data_dir: Path, key: str) -> Claim:
+        fh = open(_lock_file(data_dir, f"apply-{key}"), "a+")  # noqa: SIM115 (held past return)
         try:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
+            fh.close()
             raise Busy("a draft of this document is already running; wait for it") from exc
+        except BaseException:
+            fh.close()
+            raise
+        return cls(fh, key)
+
+    @property
+    def held(self) -> bool:
+        return self._fh is not None
+
+    def release(self) -> None:
+        with self._lock:
+            fh, self._fh = self._fh, None
+        if fh is None:
+            return
         try:
-            yield
-        finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            fh.close()
+
+    def __enter__(self) -> Claim:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
+
+
+@contextmanager
+def claim(data_dir: Path, key: str) -> Iterator[None]:
+    with Claim.take(data_dir, key):
+        yield
+
+
+def held(data_dir: Path, key: str) -> bool:
+    """Is the claim for ``key`` held now, by this process or another? Takes and drops it at
+    once when free, so a Generate racing this check may see Busy for that instant."""
+    try:
+        c = Claim.take(data_dir, key)
+    except Busy:
+        return True
+    c.release()
+    return False
 
 
 @contextmanager

@@ -18,6 +18,12 @@ only on an explicit click or confirmation: a CLI failure raises :class:`Generate
 Every version is checked by ``apply/factcheck.py``; the advisory entailment pass (Haiku, no
 effort setting) runs after a generation on the same runner when ``[apply] entailment_check``.
 A question on the never-store list never reaches a model.
+
+:func:`generate` is :func:`start` (every refusal, the ``inflight`` claim and the ``draft_run``
+row, synchronously) then :func:`run_claimed` (the run). The extension calls them apart so the
+run goes on a background thread that owns the claim (specs/022 "Drafting in the background").
+The CLI runner is passed as ``cli`` (``app.state.packet_runner`` in the console), so tests
+replace it.
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ from jobhunter.apply import (
     answers,
     cli_runner,
     documents,
+    draft_runs,
     factcheck,
     inflight,
     labels,
@@ -579,6 +586,7 @@ def _run_cli(
     allow_overage: bool,
     max_budget_usd: str = cli_runner.MAX_BUDGET_USD,
     confirmed_paid: bool = False,
+    cli: Any = None,
 ) -> tuple[Call, bool]:
     """One CLI call; returns (call, paid). Turns the runner off on an init or auth failure.
 
@@ -601,6 +609,7 @@ def _run_cli(
         environ=environ,
         allow_overage=allow_overage,
         max_budget_usd=max_budget_usd,
+        cli=cli,
     )
     if confirmed_paid:
         return _run_cli_call(conn, settings, req, **args)
@@ -631,20 +640,23 @@ def _run_cli_call(
     environ: Mapping[str, str] | None,
     allow_overage: bool,
     max_budget_usd: str,
+    cli: Any = None,
 ) -> tuple[Call, bool]:
-    """``_run_cli`` without the probe lock."""
+    """``_run_cli`` without the probe lock. ``cli`` is the runner (``app.state.packet_runner``
+    in the console; the ``cli_runner`` module when None)."""
+    cli = cli or cli_runner
     data_dir = settings.paths.data_dir
-    binary = cli_runner.find_binary()
+    binary = cli.find_binary()
     if binary is None:
         raise GenerateFailed("the claude command is not installed", offer_api=True)
-    cwd = cli_runner.work_dir(settings.paths.cache_dir)
+    cwd = cli.work_dir(settings.paths.cache_dir)
 
     def off(reason: str) -> None:
         runner_state.turn_off(data_dir, reason, now)
         logger.warning("apply CLI runner turned off: %s", reason)
 
     try:
-        cli_runner.check_auth(binary, cwd, environ)
+        cli.check_auth(binary, cwd, environ)
     except cli_runner.CliFailure as f:
         if f.turn_off:
             off(f.reason)
@@ -655,7 +667,7 @@ def _run_cli_call(
         return allow_overage and remaining_cap(conn, settings, now) >= estimate_usd
 
     try:
-        res = cli_runner.run(
+        res = cli.run(
             binary=binary,
             cwd=cwd,
             model=model,
@@ -733,6 +745,7 @@ def _preflight(
     estimate_usd: float,
     confirm_paid: bool,
     environ: Mapping[str, str] | None,
+    cli: Any = None,
 ) -> None:
     """Every refusal that must happen before anything runs or is spent."""
     env = os.environ if environ is None else environ
@@ -752,7 +765,7 @@ def _preflight(
     state = runner_state.load(settings.paths.data_dir)
     if state.off:
         raise ApplyRefused(f"the CLI runner is off: {state.off_reason}", offer_api=True)
-    if cli_runner.find_binary() is None:
+    if (cli or cli_runner).find_binary() is None:
         raise ApplyRefused("the claude command is not installed", offer_api=True)
     if state.overage:
         if not confirm_paid:
@@ -936,6 +949,7 @@ def _entail(
     environ: Mapping[str, str] | None,
     client_factory: Callable[[], Any] | None,
     paid_confirmed: bool = False,
+    cli: Any = None,
 ) -> tuple[dict[str, str], dict[str, Any], float]:
     """Advisory verdicts per item key, the report's ``entailment`` block, and the CLI's
     API-equivalent figure. Never raises: a failure is recorded and generation stands.
@@ -978,6 +992,7 @@ def _entail(
                 estimate_usd=check_usd,
                 environ=environ,
                 allow_overage=paid_confirmed,
+                cli=cli,
             )
             if held:
                 # A confirmed paid run: the cap check, call and logged spend are one section,
@@ -1031,7 +1046,23 @@ def numeric_evidence(lines: Mapping[str, str], question: str) -> list[tuple[str,
     return out
 
 
-def generate(
+class EstimateChanged(ApplyRefused):
+    """The estimate differs from the one the user confirmed (its token): nothing ran."""
+
+
+@dataclass
+class Prepared:
+    """A validated draft request, before any claim: what ``estimate`` and ``start`` share."""
+
+    packet_id: int
+    kind: str
+    qkey: str
+    ctx: Context
+    req: Request
+    est: Estimate
+
+
+def prepare(
     conn: sqlite3.Connection,
     settings: Settings,
     profile: Profile,
@@ -1039,14 +1070,13 @@ def generate(
     kind: str,
     *,
     runner: str,
-    now: datetime,
     question: str = "",
     instruction: str = "",
-    confirm_paid: bool = False,
-    client_factory: Callable[[], Any] | None = None,
-    environ: Mapping[str, str] | None = None,
-) -> Outcome:
-    """Generate the next version of ``kind`` on ``runner``. See the module docstring."""
+    notes: list[str] | None = None,
+) -> Prepared:
+    """Every refusal about the request itself (kind, question, posting, resume first), the
+    request and its API estimate. Runs nothing and writes nothing. ``notes`` stands in for the
+    saved employer notes when the caller will save these with the run."""
     if kind not in documents.KINDS:
         raise ApplyRefused(f"unknown document kind {kind!r}")
     qkey = ""
@@ -1064,31 +1094,184 @@ def generate(
             raise ApplyRefused("write one to three lines of the story's facts first")
         qkey = labels.question_key(question)
     ctx = load_context(conn, profile, packet_id)
+    if notes is not None:
+        ctx.notes = list(notes)
     if not ctx.posting.strip():
         raise ApplyRefused("paste the posting text first: drafts are built from it")
     if kind == "cover_letter" and ctx.resume_doc_id is None:
         raise ApplyRefused("make the resume version first (generate it or use the base resume)")
     req = build_request(conn, ctx, kind, question=question, instruction=instruction)
     est = estimate(conn, settings, kind, req.chars, runner=runner)
+    return Prepared(packet_id, kind, qkey, ctx, req, est)
+
+
+def claim_key(packet_id: int, kind: str, qkey: str) -> str:
+    """The ``inflight`` claim key of one document (a packet's resume, letter, or one question)."""
+    return f"{packet_id}-{kind}-{qkey}"
+
+
+@dataclass
+class Started:
+    """A run that ``start`` admitted: it holds the document's claim and its ``draft_run`` row.
+
+    ``run_claimed`` consumes it, possibly on another thread with another connection, and
+    releases the claim when it ends."""
+
+    prepared: Prepared
+    runner: str
+    now: datetime
+    confirm_paid: bool
+    claim: inflight.Claim
+    run_id: int
+
+    @property
+    def packet_id(self) -> int:
+        return self.prepared.packet_id
+
+    @property
+    def kind(self) -> str:
+        return self.prepared.kind
+
+
+def start(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    profile: Profile,
+    packet_id: int,
+    kind: str,
+    *,
+    runner: str,
+    now: datetime,
+    question: str = "",
+    instruction: str = "",
+    notes: list[str] | None = None,
+    confirm_paid: bool = False,
+    check: Callable[[Prepared], bool | None] | None = None,
+    environ: Mapping[str, str] | None = None,
+    cli: Any = None,
+) -> Started:
+    """Admit a run, synchronously: the request's refusals, ``check`` (the extension's
+    estimate token), every pre-run refusal (``_preflight``), the ``inflight`` claim and the
+    ``draft_run`` row. ``check`` raises to refuse, and may return False to withdraw
+    ``confirm_paid``. Raises ApplyRefused (EstimateChanged for a stale token) with nothing
+    claimed or written; nothing runs and nothing is spent here."""
+    prepared = prepare(
+        conn,
+        settings,
+        profile,
+        packet_id,
+        kind,
+        runner=runner,
+        question=question,
+        instruction=instruction,
+        notes=notes,
+    )
+    if check is not None and check(prepared) is False:
+        confirm_paid = False  # the check withdrew the confirm (the line is not charged)
+    _preflight(
+        conn,
+        settings,
+        runner,
+        now=now,
+        estimate_usd=prepared.est.usd,
+        confirm_paid=confirm_paid,
+        environ=environ,
+        cli=cli,
+    )
     try:
-        with inflight.claim(settings.paths.data_dir, f"{packet_id}-{kind}-{qkey}"):
-            return _generate_locked(
-                conn,
-                settings,
-                ctx,
-                req,
-                est,
-                packet_id=packet_id,
-                kind=kind,
-                qkey=qkey,
-                runner=runner,
-                now=now,
-                confirm_paid=confirm_paid,
-                client_factory=client_factory,
-                environ=environ,
-            )
+        key = claim_key(packet_id, kind, prepared.qkey)
+        held = inflight.Claim.take(settings.paths.data_dir, key)
     except inflight.Busy as exc:
         raise ApplyRefused(str(exc)) from exc
+    try:
+        run_id = draft_runs.begin(conn, packet_id, kind, prepared.qkey, runner, now)
+    except BaseException:
+        held.release()
+        raise
+    return Started(prepared, runner, now, confirm_paid, held, run_id)
+
+
+def run_claimed(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    started: Started,
+    *,
+    client_factory: Callable[[], Any] | None = None,
+    environ: Mapping[str, str] | None = None,
+    cli: Any = None,
+) -> Outcome:
+    """Run an admitted draft: the runner call, the fact check, the version write, and the
+    ``draft_run`` outcome. Releases the claim when it ends, however it ends."""
+    p = started.prepared
+    try:
+        try:
+            out = _generate_locked(
+                conn,
+                settings,
+                p.ctx,
+                p.req,
+                p.est,
+                packet_id=p.packet_id,
+                kind=p.kind,
+                qkey=p.qkey,
+                runner=started.runner,
+                now=started.now,
+                confirm_paid=started.confirm_paid,
+                client_factory=client_factory,
+                environ=environ,
+                cli=cli,
+            )
+        except ApplyRefused as exc:
+            draft_runs.finish(conn, started.run_id, datetime.now(UTC), error=exc.message)
+            raise
+        except GenerateFailed as exc:
+            draft_runs.finish(conn, started.run_id, datetime.now(UTC), error=exc.reason)
+            raise
+        except Exception as exc:
+            error = f"failed ({type(exc).__name__})"
+            draft_runs.finish(conn, started.run_id, datetime.now(UTC), error=error)
+            raise
+        draft_runs.finish(conn, started.run_id, datetime.now(UTC), doc_id=out.doc_id)
+        return out
+    finally:
+        started.claim.release()
+
+
+def generate(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    profile: Profile,
+    packet_id: int,
+    kind: str,
+    *,
+    runner: str,
+    now: datetime,
+    question: str = "",
+    instruction: str = "",
+    confirm_paid: bool = False,
+    client_factory: Callable[[], Any] | None = None,
+    environ: Mapping[str, str] | None = None,
+    cli: Any = None,
+) -> Outcome:
+    """Generate the next version of ``kind`` on ``runner``: ``start`` then ``run_claimed`` on
+    this thread (the packet page and ``apply draft``). See the module docstring."""
+    started = start(
+        conn,
+        settings,
+        profile,
+        packet_id,
+        kind,
+        runner=runner,
+        now=now,
+        question=question,
+        instruction=instruction,
+        confirm_paid=confirm_paid,
+        environ=environ,
+        cli=cli,
+    )
+    return run_claimed(
+        conn, settings, started, client_factory=client_factory, environ=environ, cli=cli
+    )
 
 
 def _budget(left: float) -> str:
@@ -1111,9 +1294,10 @@ def _generate_locked(
     confirm_paid: bool,
     client_factory: Callable[[], Any] | None,
     environ: Mapping[str, str] | None,
+    cli: Any = None,
 ) -> Outcome:
     data_dir = settings.paths.data_dir
-    pre = dict(now=now, estimate_usd=est.usd, confirm_paid=confirm_paid, environ=environ)
+    pre = dict(now=now, estimate_usd=est.usd, confirm_paid=confirm_paid, environ=environ, cli=cli)
     paid_confirmed = False
     if runner == "api":
         # Cap check, call and logged spend are one section, so two runs cannot both pass.
@@ -1138,6 +1322,7 @@ def _generate_locked(
             estimate_usd=est.usd,
             environ=environ,
             allow_overage=True,
+            cli=cli,
         )
         if paid_confirmed:
             with inflight.spend_section(data_dir):
@@ -1176,6 +1361,7 @@ def _generate_locked(
         environ=environ,
         client_factory=client_factory,
         paid_confirmed=paid_confirmed,
+        cli=cli,
     )
     doc_id, version, report = write_version(
         conn,

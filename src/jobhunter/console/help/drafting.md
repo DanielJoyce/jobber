@@ -64,6 +64,37 @@ A question on the never-store list (personal details jobhunter must not keep) is
 refused and never reaches a model. A years-of-experience question gets resume evidence, never a
 number.
 
+## Drafting from the extension
+
+The browser extension can draft a resume, a cover letter or an answer to a question for the job
+you are applying to. It needs a packet: if the job has none yet, it offers **Prepare** first
+(free).
+
+Before **Generate**, it shows one line saying which runner and model will draft and what that
+costs. The runner is the one you chose on `/models` (or `[apply] runner` in `config.toml`):
+
+- On your subscription: "$0 on your subscription", with what the same draft would cost at API
+  prices. **Generate** runs it.
+- On your subscription while it is on paid extra usage, or on the API: the amount and what is
+  left of today's apply cap. The button names the amount, and nothing runs without that click.
+- If `models.toml` has an invalid drafting value, the notice saying which setting was used
+  instead appears above the line.
+
+A draft takes up to a few minutes, so it runs in the background in the console. The extension
+checks on it; the packet page shows "being drafted" meanwhile. A second **Generate** for the
+same document is refused while the first one runs: wait for it to finish. A console
+**Restart** is refused while a draft runs (it names the draft), and while a restart is under
+way **Generate** answers "jobhunter is restarting; try again in a moment".
+
+If the console (or a `jobhunter apply draft` command) stops in the middle of a draft, the draft
+reads as **did not finish** and nothing is saved. A subscription draft uses no API credit
+unless your plan was on paid extra usage; any charge already logged shows on the Costs page.
+Press **Generate** again. The notice goes away once the document has a newer version.
+
+If a subscription draft fails, the extension offers **Run on the API** with its estimate, as its
+own click. It never switches by itself. Drafting does not run in a container: the extension
+shows the `jobhunter apply draft` command to run on the host.
+
 ## The fact check
 
 Every version, generated or edited, is checked for invention before it can be marked ready.

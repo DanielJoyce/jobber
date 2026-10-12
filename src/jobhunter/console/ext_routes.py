@@ -19,6 +19,7 @@ with its own connection; ``capture/fetch`` gives up after 15 seconds.
 
 # No ``from __future__ import annotations``: FastAPI must resolve the route signatures.
 import concurrent.futures
+import json
 import logging
 import sqlite3
 import threading
@@ -31,7 +32,18 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from jobhunter.apply import capture, export, ext_pairing, packets, paste
+from jobhunter import container
+from jobhunter.apply import (
+    answers,
+    capture,
+    draft_runs,
+    export,
+    ext_pairing,
+    generator,
+    labels,
+    packets,
+    paste,
+)
 from jobhunter.apply import score as group_score
 from jobhunter.apply.capture_models import (
     API_VERSION,
@@ -39,6 +51,12 @@ from jobhunter.apply.capture_models import (
     AddRequest,
     CaptureRequest,
     DescribeRequest,
+    DraftAccepted,
+    DraftError,
+    DraftEstimateResponse,
+    DraftGenerateRequest,
+    DraftRequest,
+    DraftStatusResponse,
     ErrorResponse,
     EstimateResponse,
     FetchRequest,
@@ -54,6 +72,7 @@ from jobhunter.apply.capture_models import (
     VersionRequest,
     VersionResponse,
 )
+from jobhunter.console import packet_docs
 from jobhunter.console.inbox_routes import load_console_profile
 from jobhunter.console.work import Restarting, refused
 from jobhunter.core import bucketnames
@@ -74,6 +93,7 @@ FETCH_TIMEOUT_S = 15.0
 PREFILTER_LINE = "It skips your prefilter rules, because you chose this posting."
 NOTICE_HOSTS = (_LINKEDIN_HOST.pattern, _INDEED_HOST.pattern)
 _ALLOW_HEADERS = "Authorization, Content-Type, X-Jobhunter-Ext"
+RESTARTING_DRAFT = "jobhunter is restarting; try again in a moment"
 
 
 def _version(value: str | None) -> tuple[int, ...] | None:
@@ -610,3 +630,298 @@ def register(
             return with_conn(inner)
 
         return await run(request, GroupRequest, go)
+
+    # ─── drafting in the background (specs/022 A7) ─────────────────────────
+    #
+    # estimate shows the runner line and its token; generate checks that token, enters the
+    # work registry, takes the document's claim and its draft_run row (generator.start), and
+    # answers 202 with the run on a daemon thread that owns the claim and leaves the registry
+    # when it ends; draft-status reads the stored state. The runners are app.state.packet_runner
+    # and app.state.packet_api_client_factory (set by packet_routes), so tests replace both.
+
+    app.state.ext_draft_threads: list[threading.Thread] = []
+    app.state.ext_draft_live: dict[int, threading.Thread] = {}
+    draft_answers: dict[str, tuple[int, dict[str, Any]]] = {}
+
+    def require_packet(conn: sqlite3.Connection, pid: int) -> packets.Packet:
+        p = packets.get_packet(conn, pid)
+        if p is None:
+            raise _Error(
+                404,
+                DraftError(
+                    error="No packet for this job yet: Prepare one first (free)",
+                    needs_packet=True,
+                ).model_dump(mode="json"),
+            )
+        return p
+
+    def note_lines(raw: str | None) -> list[str] | None:
+        if raw is None:
+            return None
+        lines = answers.clean_lines(raw)
+        if len(raw.strip().splitlines()) > answers.MAX_LINES:
+            raise _Error(422, {"error": "employer notes are one to three lines"})
+        return lines
+
+    def qkey_of(kind: str, question: str) -> str:
+        if kind != "question_draft" or not question.strip():
+            return ""
+        return labels.question_key(question)
+
+    def draft_estimate(
+        conn: sqlite3.Connection, pid: int, req: DraftRequest | DraftGenerateRequest
+    ) -> tuple[DraftEstimateResponse, packet_docs.DraftLine, generator.Prepared]:
+        """The runner line for this request; raises ApplyRefused for the request's own
+        refusals (no posting, numeric question, never-store, letter before resume)."""
+        profile = profile_or_error()
+        runner = req.runner or settings().apply.runner
+        prepared = generator.prepare(
+            conn, settings(), profile, pid, req.kind, runner=runner,
+            question=req.question, notes=note_lines(req.notes),
+        )  # fmt: skip
+        return line_response(conn, pid, req, prepared, runner)
+
+    def line_response(
+        conn: sqlite3.Connection,
+        pid: int,
+        req: DraftRequest | DraftGenerateRequest,
+        prepared: generator.Prepared,
+        runner: str,
+    ) -> tuple[DraftEstimateResponse, packet_docs.DraftLine, generator.Prepared]:
+        line = packet_docs.draft_line(
+            conn, settings(), req.kind, prepared.est, packet_id=pid, runner=runner,
+            now=now(), cli=app.state.packet_runner,
+        )  # fmt: skip
+        resp = DraftEstimateResponse(
+            packet_id=pid,
+            kind=req.kind,
+            question_key=prepared.qkey,
+            runner=line.runner,
+            model=line.model,
+            line=line.line,
+            notices=line.notices,
+            estimated_usd=line.estimated_usd,
+            estimate_source=line.estimate_source,
+            charged=line.charged,
+            cap_usd=line.cap_usd,
+            cap_left_usd=line.cap_left_usd,
+            confirm_label=line.confirm_label,
+            refusal=line.refusal,
+            help=line.help,
+            token=line.token(pid, req.kind, prepared.qkey),
+        )
+        return resp, line, prepared
+
+    def refused_draft(exc: generator.ApplyRefused) -> _Error:
+        return _Error(409, DraftError(error=exc.message).model_dump(mode="json"))
+
+    @app.post(PREFIX + "packets/{pid}/estimate")
+    async def ext_draft_estimate(request: Request, pid: int) -> Response:
+        def go(req: DraftRequest) -> Response:
+            def inner(conn: sqlite3.Connection) -> Response:
+                require_packet(conn, pid)
+                try:
+                    return ok(draft_estimate(conn, pid, req)[0])
+                except generator.ApplyRefused as exc:
+                    raise refused_draft(exc) from exc
+
+            return with_conn(inner)
+
+        return await run(request, DraftRequest, go)
+
+    def run_draft(started: generator.Started, work: int) -> None:
+        conn = None
+        try:
+            conn = app.state.conn_factory()  # its own connection: never the request's
+            generator.run_claimed(
+                conn,
+                settings(),
+                started,
+                client_factory=app.state.packet_api_client_factory,
+                cli=app.state.packet_runner,
+            )
+            # The new version is current: the employer-named attach files must follow it, as
+            # the packet page's redirect does, or a superseded version stays attachable.
+            warn = export.safe_sync(conn, settings().paths.data_dir, started.packet_id)
+            if warn:
+                logger.warning("draft for packet %s: %s", started.packet_id, warn)
+        except (generator.ApplyRefused, generator.GenerateFailed):
+            pass  # recorded on the draft_run row for draft-status
+        except Exception:
+            logger.exception("draft for packet %s failed", started.packet_id)
+        finally:
+            started.claim.release()  # idempotent: run_claimed released it unless it never ran
+            if conn is not None:
+                conn.close()
+            app.state.ext_draft_live.pop(started.run_id, None)
+            app.state.work.leave(work)  # entered by ext_draft_generate before the claim
+
+    @app.post(PREFIX + "packets/{pid}/generate")
+    async def ext_draft_generate(request: Request, pid: int) -> Response:
+        def go(req: DraftGenerateRequest) -> Response:
+            with score_lock:
+                if req.action_id in draft_answers:
+                    status, body = draft_answers[req.action_id]
+                    return JSONResponse(body, status_code=status)
+
+            def inner(conn: sqlite3.Connection) -> Response:
+                require_packet(conn, pid)
+                if container.is_container():
+                    cmd = packet_docs.host_draft_command(pid, req.kind)
+                    raise _Error(409, {"error": f"Drafting runs on the host: `{cmd}`"})
+                runner = req.runner or settings().apply.runner
+                notes = note_lines(req.notes)
+                # The work registry (019 S12b): entered before the claim and the draft_run
+                # row, left when the thread ends; 503 with nothing written while restarting.
+                try:
+                    work = app.state.work.enter(f"an extension draft (packet {pid})")
+                except Restarting:
+                    return refused(JSONResponse({"error": RESTARTING_DRAFT}))
+                thread_started = False
+                try:
+                    profile = profile_or_error()
+                    seen: dict[str, DraftEstimateResponse] = {}
+
+                    def check(prepared: generator.Prepared) -> bool:
+                        """The click's token must name this line; spend needs its confirm.
+                        Returns whether the confirm stands: only for a charged line."""
+                        resp, line, _ = line_response(conn, pid, req, prepared, runner)
+                        seen["estimate"] = resp
+                        if line.refusal is not None:
+                            raise generator.ApplyRefused(line.refusal)
+                        if req.token != resp.token:
+                            raise generator.EstimateChanged(
+                                "The estimate changed since you saw it: check it and press "
+                                "Generate again. Nothing was run"
+                            )
+                        if line.charged and not req.confirm_paid:
+                            raise generator.ApplyRefused(
+                                f"This draft is charged (≈ ${line.estimated_usd:.2f}): confirm "
+                                "the spend first. Nothing was run"
+                            )
+                        return req.confirm_paid and line.charged
+
+                    try:
+                        started = generator.start(
+                            conn, settings(), profile, pid, req.kind, runner=runner, now=now(),
+                            question=req.question, notes=notes,
+                            confirm_paid=req.confirm_paid, check=check,
+                            cli=app.state.packet_runner,
+                        )  # fmt: skip
+                    except generator.ApplyRefused as exc:
+                        body = DraftError(error=exc.message, estimate=seen.get("estimate"))
+                        return JSONResponse(body.model_dump(mode="json"), status_code=409)
+                    try:
+                        if notes is not None and req.kind == "cover_letter":
+                            # Notes typed beside the letter go with it (as the packet page).
+                            answers.save_packet_answer(
+                                conn, pid, answers.NOTES_KEY, "Employer notes", "\n".join(notes)
+                            )
+                        thread = threading.Thread(
+                            target=run_draft,
+                            args=(started, work),
+                            name=f"ext-draft-{pid}-{started.run_id}",
+                            daemon=True,
+                        )
+                        app.state.ext_draft_live[started.run_id] = thread
+                        thread.start()
+                        thread_started = True
+                        # Only a started thread: the shutdown joins every listed one.
+                        app.state.ext_draft_threads.append(thread)
+                    finally:
+                        if not thread_started:
+                            app.state.ext_draft_live.pop(started.run_id, None)
+                            started.claim.release()  # first: the row write below may fail
+                            draft_runs.finish(conn, started.run_id, now(), error="not started")
+                finally:
+                    if not thread_started:
+                        app.state.work.leave(work)
+                body = DraftAccepted(
+                    status="drafting",
+                    packet_id=pid,
+                    kind=req.kind,
+                    question_key=started.prepared.qkey,
+                    run_id=started.run_id,
+                    started_at=started.now.isoformat(),
+                ).model_dump(mode="json")
+                with score_lock:
+                    draft_answers[req.action_id] = (202, body)
+                return JSONResponse(body, status_code=202)
+
+            try:
+                return with_conn(inner)
+            except answers.NeverStore as exc:
+                raise _Error(409, {"error": str(exc)}) from exc
+
+        return await run(request, DraftGenerateRequest, go)
+
+    def live_run(run_id: int) -> bool:
+        t = app.state.ext_draft_live.get(run_id)
+        return t is not None and t.is_alive()
+
+    @app.post(PREFIX + "packets/{pid}/draft-status")
+    async def ext_draft_status(request: Request, pid: int) -> Response:
+        def go(req: DraftRequest) -> Response:
+            def inner(conn: sqlite3.Connection) -> Response:
+                require_packet(conn, pid)
+                qkey = qkey_of(req.kind, req.question)
+                data_dir = settings().paths.data_dir
+                r = draft_runs.latest(conn, data_dir, pid, req.kind, qkey, live=live_run)
+                base = {"packet_id": pid, "kind": req.kind, "question_key": qkey}
+                if r is None:
+                    return ok(DraftStatusResponse(**base, state="none", message="Not drafted"))
+                base.update(
+                    run_id=r.id, runner=r.runner, started_at=r.started_at,
+                    finished_at=r.finished_at,
+                )  # fmt: skip
+                sub = "on your subscription" if r.runner == "cli" else "on the API"
+                if r.state == draft_runs.DRAFTING:
+                    msg = f"Drafting {sub}"
+                    return ok(DraftStatusResponse(**base, state="drafting", message=msg))
+                if r.state == draft_runs.STOPPED:
+                    msg = draft_runs.stopped_message(r.runner)
+                    return ok(DraftStatusResponse(**base, state="stopped", message=msg))
+                if r.state == draft_runs.FAILED:
+                    offer, usd = r.runner == "cli", None
+                    if offer:
+                        api_est = api_offer(conn, pid, req)
+                        offer, usd = api_est is not None, api_est
+                    failed = DraftStatusResponse(
+                        **base, state="failed", message=r.error or "The draft failed",
+                        offer_api=offer, api_estimated_usd=usd,
+                    )  # fmt: skip
+                    return ok(failed)
+                return ok(DraftStatusResponse(**base, state="done", **done_summary(conn, r)))
+
+            return with_conn(inner)
+
+        return await run(request, DraftRequest, go)
+
+    def api_offer(conn: sqlite3.Connection, pid: int, req: DraftRequest) -> float | None:
+        """**Run on the API** after a subscription failure: its estimate, when it can run."""
+        api_req = req.model_copy(update={"runner": "api"})
+        try:
+            resp = draft_estimate(conn, pid, api_req)[0]
+        except (generator.ApplyRefused, _Error):
+            return None
+        return None if resp.refusal else resp.estimated_usd
+
+    def done_summary(conn: sqlite3.Connection, r: draft_runs.Run) -> dict[str, Any]:
+        row = conn.execute(
+            "SELECT version, check_report FROM packet_document WHERE id = ?", (r.doc_id,)
+        ).fetchone()
+        if row is None:
+            return {"message": "Drafted", "doc_id": r.doc_id}
+        report = json.loads(row["check_report"] or "{}")
+        items = report.get("items") or []
+        ent = report.get("entailment") or {}
+        return {
+            "message": f"v{row['version']} drafted",
+            "doc_id": r.doc_id,
+            "version": row["version"],
+            "check_ok": bool(report.get("ok")),
+            "unsupported": sum(1 for i in items if i.get("status") == "unsupported"),
+            "entailment": ent.get("status"),
+            "entail_no": sum(1 for i in items if i.get("entail") == "no"),
+            "entail_partly": sum(1 for i in items if i.get("entail") == "partly"),
+        }

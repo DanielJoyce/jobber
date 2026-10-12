@@ -8,6 +8,8 @@ runs a model, reads the network or launches a process: the CLI's presence is a `
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sqlite3
 from collections.abc import Mapping
@@ -15,10 +17,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from jobhunter import container
+from jobhunter import container, model_access
 from jobhunter.apply import cli_runner, generator, runner_state
 from jobhunter.apply.review import Version
 from jobhunter.config import Settings
+from jobhunter.scoring import catalog
 
 
 @dataclass
@@ -300,3 +303,118 @@ def runner_status(
         spent_today_usd=spent,
         estimates=estimates,
     )
+
+
+# ─── the runner line before Generate (specs/022 "Runner and cost") ──────────
+
+
+@dataclass
+class DraftLine:
+    """What a Generate click runs, on what, and what it costs; with 020's fallback notices."""
+
+    runner: str
+    model: str
+    line: str
+    notices: list[str]
+    estimated_usd: float
+    estimate_source: str
+    charged: bool
+    cap_usd: float
+    cap_left_usd: float
+    confirm_label: str | None
+    refusal: str | None = None
+    help: str | None = None
+
+    def token(self, packet_id: int, kind: str, qkey: str) -> str:
+        """Identifies this exact line; Generate posts it back and runs only on a match."""
+        blob = json.dumps(
+            [packet_id, kind, qkey, self.runner, self.model, f"{self.estimated_usd:.6f}",
+             self.charged, self.refusal]
+        )  # fmt: skip
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _no_access(detail: str, provider: str) -> tuple[str, str]:
+    access = model_access.Access(
+        provider, model_access.MISSING, detail, model_access.HELP[provider],
+        uses=(model_access.DRAFT,),
+    )  # fmt: skip
+    return model_access.summary(access), f"/help/{access.help}"
+
+
+def draft_line(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    kind: str,
+    est: generator.Estimate,
+    *,
+    packet_id: int,
+    runner: str | None,
+    now: datetime,
+    environ: Mapping[str, str] | None = None,
+    cli: Any = None,
+) -> DraftLine:
+    """The runner line for one draft on the effective runner (``models.toml`` over
+    ``config.toml``, already merged into ``settings``) or the one the click names.
+
+    ``est`` is ``generator.estimate`` for this request on that runner (API prices). Local and
+    free: the API runner's credential through ``credential_for``, the subscription's through
+    the runner's binary lookup and the runner state file, as ``generator._preflight``."""
+    apply = settings.apply
+    runner = runner or apply.runner
+    model = apply.cli_model if runner == "cli" else apply.api_model
+    cap = apply.daily_cap_usd
+    left = max(cap - generator.packet_spent_today(conn, now), 0.0)
+    base = dict(
+        runner=runner,
+        model=model,
+        notices=list(getattr(settings, "models_notices", [])),
+        estimated_usd=round(est.usd, 6),
+        estimate_source=est.source,
+        cap_usd=cap,
+        cap_left_usd=round(left, 6),
+    )
+    if container.is_container():
+        msg = f"Drafting runs on the host: `{host_draft_command(packet_id, kind)}`"
+        return DraftLine(**base, line=msg, charged=False, confirm_label=None, refusal=msg)
+    spend = f"≈ ${est.usd:.2f}"
+    if runner == "api":
+        access = model_access.anthropic_api_access(model, settings, environ=environ)
+        line = f"Drafted on the Anthropic API ({model}), {spend}; apply cap ${left:.2f} left today"
+        if access.status == model_access.MISSING:
+            msg, help_link = _no_access(access.detail, model_access.ANTHROPIC)
+            return DraftLine(**base, line=line, charged=True, confirm_label=None, refusal=msg,
+                             help=help_link)  # fmt: skip
+        charged = True
+    elif runner == "cli":
+        state = runner_state.load(settings.paths.data_dir)
+        detail = None
+        if (cli or cli_runner).find_binary() is None:
+            detail = "the claude command is not installed"
+        elif state.off:
+            detail = f"the CLI runner is off: {state.off_reason}"
+        if detail is not None:
+            msg, help_link = _no_access(detail, model_access.SUBSCRIPTION)
+            return DraftLine(**base, line=msg, charged=False, confirm_label=None, refusal=msg,
+                             help=help_link)  # fmt: skip
+        charged = state.overage
+        if charged:
+            line = (
+                f"Your subscription is on paid extra usage: this draft is charged, {spend}; "
+                f"apply cap ${left:.2f} left today"
+            )
+        else:
+            api = catalog.cli_api_equivalent(conn, kind, model)
+            at_api = api.usd if api.usd is not None else est.usd
+            line = (
+                f"Drafted on your Claude subscription with `claude -p` ({model}): $0 on your "
+                f"subscription; about ${at_api:.2f} at API prices"
+            )
+    else:
+        msg = f"unknown runner {runner!r}"
+        return DraftLine(**base, line=msg, charged=False, confirm_label=None, refusal=msg)
+    if charged and left < est.usd:
+        msg = f"Over today's apply cap (${cap:.2f})"
+        return DraftLine(**base, line=line, charged=True, confirm_label=None, refusal=msg)
+    label = f"Generate, spend {spend}" if charged else "Generate"
+    return DraftLine(**base, line=line, charged=charged, confirm_label=label)

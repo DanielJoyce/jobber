@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -9,6 +10,7 @@ import logging
 import secrets
 import sqlite3
 import threading
+import time
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -210,6 +212,20 @@ def with_frame_ancestors(csp: str | None) -> str:
     return "; ".join([*kept, "frame-ancestors 'none'"])
 
 
+def join_draft_threads(app: FastAPI, timeout: float) -> list[str]:
+    """Wait up to ``timeout`` seconds in all for the extension's live ``ext-draft-*`` threads;
+    return the names still running (logged: their runs will read as stopped)."""
+    deadline = time.monotonic() + timeout
+    for thread in list(getattr(app.state, "ext_draft_threads", [])):
+        if thread.ident is None:
+            continue  # never started: joining it would raise and skip the shutdown's kill_all
+        thread.join(max(deadline - time.monotonic(), 0.0))
+    left = [t.name for t in getattr(app.state, "ext_draft_threads", []) if t.is_alive()]
+    for name in left:
+        logger.warning("console: %s still running at shutdown; it will read as stopped", name)
+    return left
+
+
 def create_app(
     settings: Settings,
     conn_factory: ConnFactory | None = None,
@@ -270,6 +286,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
+        # The extension's background drafts (specs/022): let each finish, log its usage and
+        # set its outcome, up to the CLI's timeout, before any claude child is killed.
+        await asyncio.to_thread(join_draft_threads, _app, cli_runner.TIMEOUT_S + 30.0)
         # Backstop only: uvicorn runs this after every request has finished, so a drafting
         # run has already logged its usage; any claude child still tracked here has lost its
         # run and is killed with its process group (a7a1b40 (4)).
