@@ -18,7 +18,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +26,14 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from jobhunter.config import Local, OpenAICompat, OpenRouter, Scoring, check_scorer_spec
+from jobhunter.config import (
+    DECISIONS_PROVIDERS,
+    Local,
+    OpenAICompat,
+    OpenRouter,
+    Scoring,
+    check_scorer_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +81,123 @@ def split_scorer(spec: str) -> tuple[str, str]:
     if not name:
         raise ScorerError(f"scorer {spec!r} has no model name")
     return provider, name
+
+
+# --- credentials (specs/019 "Scorer credentials") ----------------------------------------
+
+PRESENT = "present"
+MISSING = "missing"
+UNKNOWN = "unknown"
+ANTHROPIC_KEY_PREFIX = "sk-ant-"
+OPENROUTER_KEY_PREFIX = "sk-or-"
+SDK_NOTE = "via SDK profile, not checked locally"
+
+
+@dataclass(frozen=True)
+class Credential:
+    """Whether a scorer's credential can be found, without calling anything.
+
+    ``status`` is ``present``, ``missing`` or ``unknown`` (only the server can say). ``names``
+    are the variables involved, never values. ``note`` is fixed wording, never a value."""
+
+    status: str
+    names: tuple[str, ...] = ()
+    note: str = ""
+
+
+def _env_value(environ: Mapping[str, str], name: str) -> str:
+    return environ.get(name, "").strip()
+
+
+def anthropic_config_dir(environ: Mapping[str, str], home: Path | None = None) -> Path:
+    """The SDK's config directory: ``ANTHROPIC_CONFIG_DIR``, else ``~/.config/anthropic``."""
+    if value := _env_value(environ, "ANTHROPIC_CONFIG_DIR"):
+        return Path(value).expanduser()
+    return (home if home is not None else Path.home()) / ".config" / "anthropic"
+
+
+def _anthropic_credential(environ: Mapping[str, str], home: Path | None) -> Credential:
+    # The order ``anthropic`` 1.13 resolves in (lib/credentials/_chain.py). Stats only: no
+    # profile file is ever read here, and nothing is validated beyond its shape.
+    if _env_value(environ, "ANTHROPIC_API_KEY"):
+        note = ""
+        if not _env_value(environ, "ANTHROPIC_API_KEY").startswith(ANTHROPIC_KEY_PREFIX):
+            note = "doesn't look like an Anthropic API key"
+        return Credential(PRESENT, ("ANTHROPIC_API_KEY",), note)
+    if _env_value(environ, "ANTHROPIC_AUTH_TOKEN"):
+        return Credential(PRESENT, ("ANTHROPIC_AUTH_TOKEN",))
+    for name in ("ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR"):
+        if _env_value(environ, name):
+            return Credential(PRESENT, (name,), SDK_NOTE)
+    federation = (
+        _env_value(environ, "ANTHROPIC_FEDERATION_RULE_ID")
+        and _env_value(environ, "ANTHROPIC_ORGANIZATION_ID")
+        and (
+            "ANTHROPIC_IDENTITY_TOKEN" in environ
+            or _env_value(environ, "ANTHROPIC_IDENTITY_TOKEN_FILE")
+        )
+    )
+    if federation:
+        names = (
+            "ANTHROPIC_FEDERATION_RULE_ID",
+            "ANTHROPIC_ORGANIZATION_ID",
+            "ANTHROPIC_IDENTITY_TOKEN_FILE"
+            if _env_value(environ, "ANTHROPIC_IDENTITY_TOKEN_FILE")
+            else "ANTHROPIC_IDENTITY_TOKEN",
+        )
+        return Credential(PRESENT, names, SDK_NOTE)
+    config_dir = anthropic_config_dir(environ, home)
+    for relative in ("active_config", "configs/default.json"):
+        try:
+            found = (config_dir / relative).is_file()
+        except OSError:
+            found = False
+        if found:
+            return Credential(PRESENT, (relative,), SDK_NOTE)
+    return Credential(MISSING, ("ANTHROPIC_API_KEY",))
+
+
+def credential_for(
+    spec: str,
+    scoring: Scoring,
+    *,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Credential:
+    """Is there a credential for the scorer ``spec``? Local and free: environment variables and
+    ``stat`` only, never a network call, a keyring or a file read. The score stage (S7) and the
+    readiness checks (specs/019) both ask this, so they cannot disagree.
+
+    ``local:`` answers ``unknown``: its key is optional and only the server can say whether it
+    is up (a live check). ``unknown`` and ``present`` both try to score; only ``missing`` skips.
+    """
+    env = os.environ if environ is None else environ
+    provider, _, _ = spec.partition(":")
+    if ":" not in spec:
+        provider = "anthropic"  # a bare name is an Anthropic model
+    if provider == "anthropic":
+        return _anthropic_credential(env, home)
+    if provider in ("openrouter", *DECISIONS_PROVIDERS):
+        var = scoring.openrouter.api_key_env
+        if var and _env_value(env, var):
+            note = ""
+            if not _env_value(env, var).startswith(OPENROUTER_KEY_PREFIX):
+                note = "doesn't look like an OpenRouter key"
+            return Credential(PRESENT, (var,), note)
+        return Credential(MISSING, (var,) if var else ())
+    if provider == "openai-compat":
+        var = scoring.openai_compat.api_key_env
+        if not var:
+            return Credential(PRESENT, (), "no key needed (api_key_env is empty)")
+        if _env_value(env, var):
+            return Credential(PRESENT, (var,))
+        return Credential(MISSING, (var,))
+    if provider == "local":
+        var = scoring.local.api_key_env
+        return Credential(
+            UNKNOWN, (var,) if var else (), "key optional; the server is a live check"
+        )
+    return Credential(UNKNOWN)
 
 
 def model_id(scorer: str) -> str:

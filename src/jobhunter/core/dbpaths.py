@@ -261,6 +261,23 @@ def count_absolute_paths(conn: sqlite3.Connection, data_dir: Path | str | None =
     return sum(absolute_path_counts(conn, data_dir).values())
 
 
+def absolute_path_count(db_path: Path, data_dir: Path) -> tuple[int | None, str]:
+    """Stored paths that are absolute or escape the data dir (C14), read-only: ``(count,
+    "")``, ``(None, "")`` when there is no database yet, ``(None, why)`` when unreadable.
+
+    Shared by ``container preflight`` and the readiness checks (specs/019)."""
+    if not db_path.is_file():
+        return None, ""
+    try:
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            return count_absolute_paths(conn, data_dir), ""
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 RELATIVIZE = "relativize"
 COPY = "copy"
 DUPLICATE = "duplicate"  # an attachment row that would repeat another: removed

@@ -29,6 +29,7 @@ MAX_FILE_BYTES = 64 * 1024
 # Names that exist without any config: the SDK's own variable and the registry/scorer defaults.
 DEFAULT_NAMES = (
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",  # the SDK's bearer-token variable (specs/019); no podman secret
     "OPENROUTER_API_KEY",
     "OPENAI_COMPAT_API_KEY",
     "LLAMA_API_KEY",
