@@ -328,17 +328,20 @@ class MailAlertsAdapter:
     ) -> Iterator[JobStub]:
         """Yield partial stubs for new alert entries. ``query`` and ``since`` do not apply:
         the alert subscriptions are the query and Gmail's historyId is the watermark."""
-        from jobhunter.mail import sync
+        from jobhunter.mail import auth, sync
 
         del query, since
         conn = ctx.conn
         settings = ctx.settings
         service = self._service(settings)
         label = settings.mail.label
-        batch = sync.plan_batch(service, conn, label, self.limit)
+        # A RefreshError becomes GmailTokenExpired: the source status gets fixed wording.
+        with auth.translate_refresh_error():
+            batch = sync.plan_batch(service, conn, label, self.limit)
         index = DedupeIndex.build(conn, src.key)
         for mid in batch.message_ids:
-            msg = sync.fetch_message(service, mid)
+            with auth.translate_refresh_error():
+                msg = sync.fetch_message(service, mid)
             yield from self._process(conn, src, msg, index)
         sync.store_watermark(conn, label, batch.label_id, batch.history_id, self._clock())
 
