@@ -280,7 +280,6 @@ def test_page_offers_hide_only_on_recommended_rows(client):
 
 
 def test_host_mode_secret_fix_is_env_file_with_restart(client, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY")  # conftest sets a placeholder (S7)
     r = row(client.get("/setup").text, "scorer.screen")
     t = text_of(r)
     assert "ANTHROPIC_API_KEY" in t
@@ -318,7 +317,6 @@ def test_rows_read_from_config_toml_carry_restart_note(client):
 
 
 def test_replace_flag_only_when_the_secret_row_is_broken(tmp_path, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY")  # conftest sets a placeholder (S7)
     s = make_settings(tmp_path)
     c = make_client(s, mode=readiness.CONTAINER)
     missing = text_of(row(c.get("/setup").text, "scorer.screen"))
