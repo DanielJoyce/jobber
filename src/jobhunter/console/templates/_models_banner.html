@@ -26,7 +26,9 @@
   {% if b.pending %}
   <div class="mo-warn">
     <p><span aria-hidden="true">!</span> models.toml changed outside the console: {{ b.pending | length }} setting{{ "s" if b.pending | length != 1 }} ({{ b.pending | join(", ") }}) differ from what this console is running.</p>
-    {% if ctx.peer_ok %}
+    {% if b.watching %}
+    <p>Review it on <a href="/config/changes">Config changes</a> and press Apply now there; it takes the change in with any <code>config.toml</code> edit.</p>
+    {% elif ctx.peer_ok %}
     <form method="post" action="/models/load" class="su-form">
       <input type="hidden" name="page_digest" value="{{ digest }}">
       <button type="submit">Load</button>

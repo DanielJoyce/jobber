@@ -164,7 +164,21 @@ line appears there: "config.toml changed: 3 settings", with **Apply now**, **Det
   one. While its `api_key_env` or a `.env` file has a change waiting, the rest of that
   `[scoring.*]` table waits for the restart too.
 - A change to `models.toml` (the models you pick on the console's models page, or with
-  `jobhunter models set`) is listed under that file and applies the same way.
+  `jobhunter models set`) is listed under that file and applies the same way. Saves made on
+  the models page are already running and never show here. A change made outside the
+  console (`jobhunter models set`, or editing the file) is applied here, with **Apply now**;
+  the models page says it is waiting and links to Details instead of offering its own Load
+  button, so the same change is never applied twice.
+- `models.toml` overrides `config.toml`. If you edit a model setting in `config.toml` that the
+  models page has set, the line says "no effect: set on /models", with a link to that row on
+  the models page. Press **Reset** there to go back to the `config.toml` value.
+- For model settings, Details also shows each layer: the default, `config.toml`,
+  `models.toml`, what the console is running, and what the files give now. An invalid value
+  in `models.toml` shows only as "invalid", never the value itself.
+- If `models.toml` has a new error (it is not valid TOML, or a scorer or model in it is
+  invalid), the console keeps its settings and offers no Apply until you fix the file or
+  reset it on the models page. The nightly run reads the file itself, so a broken scorer
+  there skips that scoring step rather than falling back to `config.toml`.
 - If `config.toml` disappears or is emptied, the console keeps its settings and says so; it
   never offers to apply the defaults.
 - A `.env` change always needs a restart: secrets are read once, at start. Details names the

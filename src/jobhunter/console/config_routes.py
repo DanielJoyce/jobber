@@ -99,6 +99,8 @@ def summary(state: cw.State, read_at: datetime, just_applied: bool = False) -> s
     """The notice's first line. Names and counts only, never a value."""
     if state.errors:
         return f"config.toml has errors; the console keeps the settings from {hhmm(read_at)}."
+    if state.models_errors:
+        return f"models.toml has errors; the console keeps the settings from {hhmm(read_at)}."
     parts: list[str] = []
     if state.replaced:
         parts.append(
@@ -106,20 +108,22 @@ def summary(state: cw.State, read_at: datetime, just_applied: bool = False) -> s
             "file until it restarts."
         )
     if state.fields:
-        n_effect = state.reload_count + state.restart_count
         if just_applied and state.reload_count == 0 and state.restart_count:
             verb = "needs" if state.restart_count == 1 else "need"
             parts.append(f"{plural(state.restart_count, 'setting')} still {verb} a restart.")
-        elif n_effect == 0:
-            parts.append(
-                f"config.toml changed: {plural(len(state.fields), 'setting')} "
-                "(no effect: set on the command line)."
-            )
         else:
             for source in ("config.toml", "models.toml"):
-                n = sum(1 for f in state.fields if f.source == source)
-                if n:
-                    parts.append(f"{source} changed: {plural(n, 'setting')}.")
+                mine = [f for f in state.fields if f.source == source]
+                if not mine:
+                    continue
+                inert = [f for f in mine if f.cls == cw.NO_EFFECT]
+                where = " and ".join(dict.fromkeys(f.set_on or cw.SET_ON_CLI for f in inert))
+                text = f"{source} changed: {plural(len(mine), 'setting')}"
+                if inert and len(inert) == len(mine):
+                    text += f" (no effect: set on {where})"
+                elif inert:
+                    text += f"; {len(inert)} with no effect (set on {where})"
+                parts.append(text + ".")
     for change in state.env:
         parts.append(f"{change.file} changed: {plural(change.count, 'key')}.")
     return " ".join(parts)
@@ -144,6 +148,8 @@ def register(
             "applied": "Applied.",
             "moved": "config.toml changed again before Apply; this is the new change.",
             "nothing": "Nothing to apply.",
+            "models": "A models.toml change made outside the console is applied here, with "
+            "Apply now, together with any config.toml change.",
         }
         return templates.TemplateResponse(
             request,

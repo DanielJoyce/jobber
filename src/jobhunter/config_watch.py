@@ -51,6 +51,8 @@ _TOML_POS = re.compile(r"\(at line (\d+), column (\d+)\)")
 MAX_BAR_LINES = 3
 RELOAD, RESTART, NO_EFFECT = "reload", "restart", "no-effect"
 CLASS_TEXT = {RELOAD: "reloads", RESTART: "needs restart", NO_EFFECT: "no effect"}
+# Why a no-effect change has none: a higher layer sets the field.
+SET_ON_CLI, SET_ON_MODELS = "the command line", "/models"
 
 # One random salt per process, never written or logged: a digest only says "changed".
 _SALT = os.urandom(16)
@@ -192,12 +194,20 @@ class FieldChange:
     note: str = ""  # "changed", "changed (not shown)", "3 entries, was 2"
     source: str = "config.toml"  # or "models.toml" (specs/020)
     held: str = ""  # why a reloadable field waits for a restart ("held with its API key")
+    set_on: str = ""  # NO_EFFECT only: SET_ON_CLI or SET_ON_MODELS
 
     @property
     def class_text(self) -> str:
         if self.held:
             return f"needs restart ({self.held})"
+        if self.cls == NO_EFFECT:
+            return f"no effect: set on {self.set_on or SET_ON_CLI}"
         return CLASS_TEXT[self.cls]
+
+    @property
+    def models_row(self) -> str:
+        """The /models row (its anchor ``#models-row-<row>``) for a model key, else ""."""
+        return MODEL_ROWS.get(self.field, "")
 
 
 def _fmt(value: Any) -> str:
@@ -232,6 +242,17 @@ HELD_DATA_DIR = "models.toml moves with the data folder"
 
 def _model_fields() -> list[str]:
     return [f"{s}.{k}" for s, keys in config.MODEL_KEYS.items() for k in keys]
+
+
+def _row_of(name: str) -> str:
+    section, key = name.split(".", 1)
+    if section == "scoring":
+        return "screen" if key == "screen_scorer" else "deep"
+    return "check" if "entailment" in key else "drafting"
+
+
+# Model key -> its /models row (model_choices.USE_OF, without importing the console side).
+MODEL_ROWS: dict[str, str] = {name: _row_of(name) for name in _model_fields()}
 
 
 def held_fields(running: Settings, new: Settings, env_pending: bool = False) -> dict[str, str]:
@@ -288,8 +309,137 @@ def diff(
             cls = RESTART
         old, shown_new, note = describe(name, a, b)
         source = "models.toml" if name in from_models else "config.toml"
-        out.append(FieldChange(name, cls, old, shown_new, note, source, why))
+        set_on = SET_ON_CLI if cls == NO_EFFECT else ""
+        out.append(FieldChange(name, cls, old, shown_new, note, source, why, set_on))
     return out
+
+
+def _base_of(settings: Settings) -> Settings:
+    """``settings`` without models.toml: the defaults, config.toml and the environment."""
+    layers = getattr(settings, "_models", None)
+    return layers.base if isinstance(layers, config.Layers) else settings
+
+
+def overridden(running: Settings, new: Any, listed: Iterable[str] = ()) -> list[FieldChange]:
+    """config.toml edits that have no effect because models.toml sets the field (specs/020
+    "Config watch"): a model key the new models.toml layer sets (or blocks) whose config.toml
+    value changed. ``listed`` are fields already in the diff (models.toml changed them too)."""
+    if not isinstance(new, config.Layers):
+        return []
+    skip = set(listed)
+    old_base = _base_of(running)
+    out: list[FieldChange] = []
+    for name in _model_fields():
+        if name in skip or name not in _layer_keys(new):
+            continue
+        a, b = config.field_value(old_base, name), config.field_value(new.base, name)
+        if a == b:
+            continue
+        old, shown_new, note = describe(name, a, b)
+        out.append(
+            FieldChange(name, NO_EFFECT, old, shown_new, note, "config.toml", set_on=SET_ON_MODELS)
+        )
+    return out
+
+
+# --- the layers of a model key, for Details ----------------------------------------------------
+
+NOT_SET = "not set"
+NOT_SHOWN = "(not shown)"
+
+
+@dataclass(frozen=True)
+class LayerRow:
+    """One model key, layer by layer: what each layer says and what is in effect. Every value
+    is text from ``show_layer_value``: a model id, a choice, true/false, or a placeholder."""
+
+    field: str
+    default: str
+    config_toml: str
+    models_toml: str
+    running: str
+    after: str  # what the files on disk give now: in effect after Apply
+
+    @property
+    def models_row(self) -> str:
+        return MODEL_ROWS.get(self.field, "")
+
+
+def show_layer_value(value: Any) -> str:
+    """A model key's value as Details may show it: never anything key-shaped."""
+    if value is None:
+        return NOT_SET
+    if value == config.BLOCKED_SPEC:
+        return "blocked"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return config.shown_value(value) or NOT_SHOWN
+    return NOT_SHOWN
+
+
+def _defaults(section: str) -> BaseModel:
+    return {"scoring": config.Scoring, "apply": config.Apply}[section]()
+
+
+def layer_rows(running: Settings, new: Any, names: Iterable[str]) -> tuple[LayerRow, ...]:
+    """Layer by layer for each model key in ``names``: the code default, config.toml,
+    models.toml (an invalid value there is never shown, only "invalid"), the running value and
+    what the files give now."""
+    if not isinstance(new, config.Layers):
+        return ()
+    wanted = set(names)
+    rows: list[LayerRow] = []
+    for name in _model_fields():
+        if name not in wanted:
+            continue
+        section, key = name.split(".", 1)
+        default = show_layer_value(getattr(_defaults(section), key))
+        if (section, key) in new.config_keys:
+            in_config = show_layer_value(config.field_value(new.base, name))
+        else:
+            in_config = NOT_SET
+        if key in new.layer.get(section, {}):
+            in_models = show_layer_value(new.layer[section][key])
+        elif section == "scoring" and key in new.blocked:
+            in_models = "invalid (blocks this use)"
+        elif key in new.invalid.get(section, {}):
+            in_models = "invalid (ignored)"
+        elif new.broken:
+            in_models = "unreadable"
+        else:
+            in_models = NOT_SET
+        rows.append(
+            LayerRow(
+                name,
+                default,
+                in_config,
+                in_models,
+                show_layer_value(config.field_value(running, name)),
+                show_layer_value(config.field_value(new.merged, name)),
+            )
+        )
+    return tuple(rows)
+
+
+def models_errors(running: Settings, new: Any) -> tuple[str, ...]:
+    """Problems in models.toml on disk that the running settings do not already have: the file
+    is not TOML, or a known key has a bad value. Shown as validation errors; the running
+    settings stay until the file is fixed (specs/020 "Config watch"). A problem the console
+    already runs with is in effect (a blocked use stays blocked) and blocks nothing.
+    The messages never carry a value other than a scorer spec or model id."""
+    if not isinstance(new, config.Layers):
+        return ()
+    have = getattr(running, "_models", None)
+    known = {p.message for p in have.problems} if isinstance(have, config.Layers) else set()
+    out: list[str] = []
+    for p in new.problems:
+        if p.kind not in ("broken", "invalid") or p.message in known:
+            continue
+        line = p.message if p.message.startswith("models.toml") else f"models.toml {p.message}"
+        if line not in out:
+            out.append(line)
+    return tuple(out)
 
 
 def _set_leaf(settings: BaseModel, name: str, value: Any) -> None:
@@ -380,6 +530,8 @@ class State:
     env: tuple[EnvChange, ...] = ()
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()  # scorer problems of the new file (Apply is not blocked)
+    models_errors: tuple[str, ...] = ()  # new problems in models.toml: Apply waits for a fix
+    layers: tuple[LayerRow, ...] = ()  # model keys in the change, layer by layer (Details)
     replaced: bool = False  # container: config.toml may have been replaced on the host
     key: str = ""  # what Dismiss remembers: the new file's hash plus the .env state
     new_settings: Settings | None = field(default=None, compare=False, repr=False)
@@ -397,7 +549,12 @@ class State:
 
     @property
     def can_apply(self) -> bool:
-        return self.reload_count > 0 and not self.errors and self.new_settings is not None
+        return (
+            self.reload_count > 0
+            and not self.errors
+            and not self.models_errors
+            and self.new_settings is not None
+        )
 
     @property
     def needs_restart(self) -> bool:
@@ -405,11 +562,19 @@ class State:
 
     @property
     def pending(self) -> bool:
-        return bool(self.fields or self.env or self.errors or self.replaced)
+        return bool(self.fields or self.env or self.errors or self.models_errors or self.replaced)
+
+    @property
+    def all_errors(self) -> tuple[str, ...]:
+        return self.errors + self.models_errors
 
     @property
     def bar_errors(self) -> tuple[str, ...]:
-        return self.errors[:MAX_BAR_LINES]
+        return self.all_errors[:MAX_BAR_LINES]
+
+    @property
+    def set_on_models(self) -> tuple[FieldChange, ...]:
+        return tuple(f for f in self.fields if f.cls == NO_EFFECT and f.set_on == SET_ON_MODELS)
 
 
 EMPTY = State()
@@ -424,6 +589,7 @@ class _Loaded:
     models_fp: Fingerprint = (False,)
     models_digest: str | None = None
     models_keys: frozenset[str] = frozenset()  # fields models.toml sets (specs/020)
+    layers: Any = None  # the config.Layers loaded, when the loader returns layers
 
 
 def _layer_keys(layers: Any) -> frozenset[str]:
@@ -501,9 +667,9 @@ class ConfigWatcher:
         self._dismissed: set[str] = set()
         self.applied_at: datetime | None = None
         self.applied_count = 0
-        # Hooks for 020 M8: models.toml is fingerprinted and its fields are listed under it;
-        # M8 adds layer-by-layer diffs, "no effect: set on /models" (as ``cli_overrides``
-        # does) and takes ``app.state.settings_lock`` like Apply.
+        # models.toml (020 M8) is fingerprinted with config.toml; its changes are diffed
+        # layer by layer, an overridden config.toml edit is "no effect: set on /models", and
+        # Apply and every /models write take ``app.state.settings_lock``.
 
     # -- public --------------------------------------------------------------------------
 
@@ -571,7 +737,7 @@ class ConfigWatcher:
         ):
             # A touch or chmod: adopt the new fingerprints, nothing to load.
             self._loaded = _Loaded(
-                fp, digest, prev.settings, prev.errors, mfp, mdigest, prev.models_keys
+                fp, digest, prev.settings, prev.errors, mfp, mdigest, prev.models_keys, prev.layers
             )
             return
         start = self._start_fp
@@ -586,7 +752,10 @@ class ConfigWatcher:
             return
         loaded, errors = load_errors(lambda: self._loader(path))
         settings = loaded.merged if isinstance(loaded, config.Layers) else loaded
-        self._loaded = _Loaded(fp, digest, settings, errors, mfp, mdigest, _layer_keys(loaded))
+        layers = loaded if isinstance(loaded, config.Layers) else None
+        self._loaded = _Loaded(
+            fp, digest, settings, errors, mfp, mdigest, _layer_keys(loaded), layers
+        )
 
     def _refresh_env(self) -> None:
         paths = list(dict.fromkeys([*self._env_start, *map(Path, self._env_candidates())]))
@@ -608,23 +777,40 @@ class ConfigWatcher:
                 env.append(change)
         fields: tuple[FieldChange, ...] = ()
         warnings: tuple[str, ...] = ()
+        m_errors: tuple[str, ...] = ()
+        rows: tuple[LayerRow, ...] = ()
         if loaded.settings is not None:
             models_keys = loaded.models_keys | _layer_keys(getattr(running, "_models", None))
-            fields = tuple(
-                diff(
-                    running,
-                    loaded.settings,
-                    self.cli_overrides,
-                    env_pending=bool(env),
-                    models_keys=models_keys,
-                )
+            changed = diff(
+                running,
+                loaded.settings,
+                self.cli_overrides,
+                env_pending=bool(env),
+                models_keys=models_keys,
             )
+            listed = [f.field for f in changed]
+            fields = tuple(changed + overridden(running, loaded.layers, listed))
+            m_errors = models_errors(running, loaded.layers)
             if fields:
                 warnings = scorer_warnings(loaded.settings)
+            rows = layer_rows(running, loaded.layers, [f.field for f in fields])
+        # models.toml enters the key by what it changes, not by its bytes: the console's own
+        # writes (/models) rewrite the file but are already running, so they neither move an
+        # Apply's key ("changed again") nor bring back a dismissed notice (specs/020).
+        models_part = (
+            sorted(
+                (f.field, repr(config.field_value(loaded.settings, f.field)))
+                for f in fields
+                if f.source == "models.toml"
+            )
+            if loaded.settings is not None
+            else loaded.models_digest,
+            m_errors,
+        )
         key_src = repr(
             (
                 loaded.digest,
-                loaded.models_digest,
+                models_part,
                 sorted((str(p), sorted(d.items())) for p, d in self._env_now.items()),
             )
         )
@@ -633,6 +819,8 @@ class ConfigWatcher:
             env=tuple(env),
             errors=loaded.errors,
             warnings=warnings,
+            models_errors=m_errors,
+            layers=rows,
             replaced=self._replaced,
             key=hashlib.sha256(_SALT + key_src.encode()).hexdigest()[:32],
             new_settings=loaded.settings,
@@ -645,6 +833,8 @@ class ConfigWatcher:
         self._logged_key = state.key
         for line in state.errors:
             logger.warning("config watch: config.toml has errors: %s", line)
+        for line in state.models_errors:
+            logger.warning("config watch: models.toml has errors: %s", line)
         if state.fields:
             logger.info(
                 "config watch: config.toml changed: %s",

@@ -25,6 +25,13 @@
   </div>
   {% endif %}
 
+  {% if state.models_errors %}
+  <div class="callout alert" id="cfg-models-errors">
+    <p><strong>models.toml has errors</strong>; the console keeps the settings it has, and nothing here can be applied until the file is fixed. Fix the file, or reset it on <a href="/models">/models</a>. The nightly run reads the file itself: a broken scorer key blocks that use there.</p>
+    <ul>{% for line in state.models_errors %}<li><code>{{ line }}</code></li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
   {% if state.replaced %}
   <div class="callout alert" id="cfg-replaced">
     <p><strong>config.toml may have been replaced on the host.</strong> This console cannot see the new file until it restarts. Check the new file first: <code>{{ ctr_doctor }}</code>, then restart: <code>{{ restart }}</code>.</p>
@@ -39,12 +46,34 @@
     {% for f in state.fields %}
     <tr>
       <td><code>{{ f.field }}</code>{% if f.source != "config.toml" %} <span class="muted">({{ f.source }})</span>{% endif %}</td>
-      <td>{% if f.cls == 'no-effect' %}no effect: set on the command line{% else %}{{ f.class_text }}{% endif %}</td>
+      <td>{% if f.cls == 'no-effect' and f.set_on == '/models' %}no effect: set on <a href="/models#models-row-{{ f.models_row }}">/models</a> (Reset there to use config.toml){% else %}{{ f.class_text }}{% endif %}</td>
       {% if f.note %}<td colspan="2" class="note">{{ f.note }}</td>{% else %}<td><code>{{ f.old }}</code></td><td><code>{{ f.new }}</code></td>{% endif %}
     </tr>
     {% endfor %}
     </tbody>
   </table>
+  {% endif %}
+
+  {% if state.layers %}
+  <h2>Model settings, layer by layer</h2>
+  <p class="muted">Each layer overrides the one to its left: the default, then <code>config.toml</code>, then <code>models.toml</code> (what you pick on <a href="/models">/models</a>). An invalid value is never shown.</p>
+  <div class="cfgw-scroll">
+  <table class="pg-table" id="cfg-layers">
+    <thead><tr><th>Setting</th><th>Default</th><th>config.toml</th><th>models.toml</th><th>Running</th><th>From the files now</th></tr></thead>
+    <tbody>
+    {% for l in state.layers %}
+    <tr>
+      <td><a href="/models#models-row-{{ l.models_row }}"><code>{{ l.field }}</code></a></td>
+      <td><code>{{ l.default }}</code></td>
+      <td><code>{{ l.config_toml }}</code></td>
+      <td><code>{{ l.models_toml }}</code></td>
+      <td><code>{{ l.running }}</code></td>
+      <td><code>{{ l.after }}</code></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
   {% endif %}
 
   {% if state.warnings %}
