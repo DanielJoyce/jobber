@@ -222,6 +222,29 @@ def stub_from_item(src: SourceRow, item: dict[str, Any]) -> JobStub:
 class UsajobsAdapter:
     family = "usajobs"
 
+    @staticmethod
+    def unavailable(settings: Any) -> str | None:
+        """Why the runner should skip this source: no USAJOBS credentials at all.
+
+        Only the fully unconfigured case is a skip (specs/019, S10), so a fresh install does
+        not fail the nightly run. A partly configured pair (one variable set) is not skipped:
+        the search raises ``UsajobsAuthMissing`` naming the missing one. A key USAJOBS rejects
+        also still fails. Names only, never values. ``*_FILE`` secrets are already resolved
+        into the environment at CLI start (secrets.py).
+        """
+        from jobhunter import secrets
+
+        names = ("USAJOBS_EMAIL", "USAJOBS_API_KEY")
+        bad = secrets.invalid_names()
+        # Setting N_FILE is configuration even if the file is broken (resolve then removes N
+        # from the environment), and so is an inline value startup rejected: those must fail.
+        for n in names:
+            if os.environ.get(n, "").strip() or os.environ.get(f"{n}_FILE", "").strip():
+                return None
+            if n in bad:
+                return None
+        return "no USAJOBS credentials; set " + " and ".join(names)
+
     def search(
         self, src: SourceRow, query: Query, since: datetime, ctx: FetchContext
     ) -> Iterator[JobStub]:
