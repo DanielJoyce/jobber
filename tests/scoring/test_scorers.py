@@ -339,6 +339,7 @@ def test_cli_prints_privacy_notice_once(tmp_path, monkeypatch):
         '[scoring.openai_compat]\nbase_url = "https://llm.example.com"\n'
     )
     monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "test-key")
     settings = load_settings()
     c = db.connect(settings.paths.db_path)
     db.migrate(c)
@@ -356,3 +357,28 @@ def test_cli_prints_privacy_notice_once(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert result.output.count("https://llm.example.com") == 1
     assert "resume" in result.output
+
+
+def test_score_submit_exits_2_without_credential(tmp_path, monkeypatch):
+    import os
+
+    from jobhunter import cli
+
+    for name in list(os.environ):
+        if name.startswith("ANTHROPIC_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[paths]\ndata_dir = "{tmp_path / "data"}"\n')
+    monkeypatch.setenv("JOBHUNTER_CONFIG", str(cfg))
+    from jobhunter.scoring import profile as profile_mod
+
+    stub = SimpleNamespace(filter_version="f", scoring_version="s")
+    monkeypatch.setattr(profile_mod, "load_profile", lambda *a, **k: stub)
+    monkeypatch.setattr(
+        "anthropic.Anthropic", lambda *a, **k: pytest.fail("no client without a credential")
+    )
+    result = CliRunner().invoke(cli.app, ["score", "--submit"])
+    assert result.exit_code == 2, result.output
+    assert "no credential for" in result.output and "ANTHROPIC_API_KEY" in result.output
