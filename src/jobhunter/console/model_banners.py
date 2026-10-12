@@ -9,6 +9,7 @@ No value is rendered: ``Access.detail`` is fixed wording plus variable names.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from datetime import datetime
 
@@ -87,10 +88,14 @@ def register(app: FastAPI, templates: Jinja2Templates, now: Callable[[], datetim
                     }
                 )
             if blocked_uses:
+                # The reason can quote the bad value, so only a digest of it goes in the key.
+                reasons = hashlib.sha1(
+                    ";".join(str(blocked.get(FIELD_OF_USE[u], "")) for u in blocked_uses).encode()
+                ).hexdigest()[:10]
                 names = _list([ma.USE_LABELS[u] for u in blocked_uses])
                 out.append(
                     {
-                        "key": "blocked|" + ",".join(blocked_uses),
+                        "key": "blocked|" + ",".join(blocked_uses) + "|" + reasons,
                         "text": f"models.toml holds an invalid value, so {names.lower()} is "
                         "blocked and cannot run.",
                         "help_href": BLOCKED_HELP[0],
