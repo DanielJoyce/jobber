@@ -1,1 +1,1 @@
-{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":3,"timestamp":1791790818,"nonce":"J+lZ6Xv1jt+Z5tzW05paVodzewc=","message":"Fixed on bug/c9725cf-bare-header-config alongside c9725cf; tests added for the directory case.","files":null}]}
+{"author":{"id":"337a442880d7106d509ff84f2f7fef51acce8bce88b081d4f4c3f0298b7e7941"},"ops":[{"type":4,"timestamp":1791792098,"nonce":"Y/cRFaqCTcSb1VkBxraWkByzNYA=","status":2}]}
