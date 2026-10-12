@@ -190,9 +190,13 @@ class FieldChange:
     old: str | None = None  # shown text, only for allowlisted fields
     new: str | None = None
     note: str = ""  # "changed", "changed (not shown)", "3 entries, was 2"
+    source: str = "config.toml"  # or "models.toml" (specs/020)
+    held: bool = False  # reloadable, but held with its scorer section until a restart
 
     @property
     def class_text(self) -> str:
+        if self.held:
+            return "needs restart (held with its API key)"
         return CLASS_TEXT[self.cls]
 
 
@@ -203,6 +207,9 @@ def _fmt(value: Any) -> str:
 
 def describe(field_name: str, old: Any, new: Any) -> tuple[str | None, str | None, str]:
     if field_name in config.SHOWN_VALUES:
+        # A scorer spec or model id is shown only when it cannot be a pasted key (020).
+        if any(isinstance(v, str) and config.shown_value(v) is None for v in (old, new)):
+            return None, None, "changed (not shown)"
         return _fmt(old), _fmt(new), ""
     if field_name in config.SHOWN_AS_COUNT:
         n_old = len(old) if hasattr(old, "__len__") else 0
@@ -215,18 +222,57 @@ def describe(field_name: str, old: Any, new: Any) -> tuple[str | None, str | Non
     return None, None, "changed"
 
 
-def diff(running: Settings, new: Settings, overrides: Iterable[str] = ()) -> list[FieldChange]:
+# Scorer sections whose endpoint reloads but whose credential does not. A reload of the
+# endpoint alone would send the running key to the new host, so a section is held whole while
+# its credential side (api_key_env, or any .env file) has a pending change.
+SCORER_SECTIONS = ("scoring.openai_compat", "scoring.openrouter", "scoring.local")
+
+
+def held_sections(running: Settings, new: Settings, env_pending: bool = False) -> set[str]:
+    """Scorer sections Apply must keep at their running value: every one while a ``.env``
+    change is pending (a key's value may change with its endpoint), else those with a changed
+    restart-class field (``api_key_env``, ``catalog_cache``)."""
+    if env_pending:
+        return set(SCORER_SECTIONS)
+    held: set[str] = set()
+    for name in config.leaf_fields():
+        section = name.rsplit(".", 1)[0]
+        if (
+            section in SCORER_SECTIONS
+            and config.reload_class(name) != RELOAD
+            and config.field_value(running, name) != config.field_value(new, name)
+        ):
+            held.add(section)
+    return held
+
+
+def diff(
+    running: Settings,
+    new: Settings,
+    overrides: Iterable[str] = (),
+    *,
+    env_pending: bool = False,
+    models_keys: Iterable[str] = (),
+) -> list[FieldChange]:
     """Every leaf field whose value differs, classified. ``overrides`` are fields set on the
-    command line (``--host``/``--port``): a change to them has no effect."""
+    command line (``--host``/``--port``): a change to them has no effect. A reloadable field
+    in a held scorer section is classed as restart. ``models_keys`` are the fields that come
+    from models.toml (listed under that file)."""
     pinned = set(overrides)
+    from_models = set(models_keys)
+    held = held_sections(running, new, env_pending)
     out: list[FieldChange] = []
     for name in config.leaf_fields():
         a, b = config.field_value(running, name), config.field_value(new, name)
         if a == b:
             continue
         cls = NO_EFFECT if name in pinned else config.reload_class(name)
+        is_held = cls == RELOAD and name.rsplit(".", 1)[0] in held
+        if is_held:
+            cls = RESTART
         old, shown_new, note = describe(name, a, b)
-        out.append(FieldChange(name, cls, old, shown_new, note))
+        source = "models.toml" if name in from_models else "config.toml"
+        out.append(FieldChange(name, cls, old, shown_new, note, source, is_held))
     return out
 
 
@@ -238,14 +284,18 @@ def _set_leaf(settings: BaseModel, name: str, value: Any) -> None:
     object.__setattr__(obj, leaf, value)
 
 
-def partial(running: Settings, new: Settings) -> Settings:
+def partial(running: Settings, new: Settings, *, env_pending: bool = False) -> Settings:
     """``new`` with every restart-class field kept at its running value (``paths`` and
-    ``console`` whole), so Apply swaps in only what reloads."""
+    ``console`` whole, and each held scorer section whole), so Apply swaps in only what
+    reloads on its own."""
     out = new.model_copy(deep=True)
     object.__setattr__(out, "paths", running.paths)
     object.__setattr__(out, "console", running.console)
+    held = held_sections(running, new, env_pending)
     for name in config.leaf_fields():
-        if config.reload_class(name) != RELOAD and not name.startswith(("paths.", "console.")):
+        if name.startswith(("paths.", "console.")):
+            continue
+        if config.reload_class(name) != RELOAD or name.rsplit(".", 1)[0] in held:
             _set_leaf(out, name, config.field_value(running, name))
     return out
 
@@ -343,10 +393,24 @@ EMPTY = State()
 
 @dataclass
 class _Loaded:
-    fp: Fingerprint
-    digest: str | None  # sha256 of the bytes, None when absent or unreadable
+    fp: Fingerprint  # config.toml
+    digest: str | None  # sha256 of config.toml's bytes, None when absent or unreadable
     settings: Settings | None
     errors: tuple[str, ...]
+    models_fp: Fingerprint = (False,)
+    models_digest: str | None = None
+    models_keys: frozenset[str] = frozenset()  # fields models.toml sets (specs/020)
+
+
+def _layer_keys(layers: Any) -> frozenset[str]:
+    """Dotted fields a ``config.Layers`` took (or tried to take) from models.toml."""
+    if not isinstance(layers, config.Layers):
+        return frozenset()
+    keys = {
+        f"{s}.{k}" for part in (layers.layer, layers.invalid) for s, d in part.items() for k in d
+    }
+    keys |= {f"scoring.{k}" for k in layers.blocked}
+    return frozenset(keys)
 
 
 class ConfigWatcher:
@@ -357,7 +421,8 @@ class ConfigWatcher:
         *,
         config_path: Callable[[], Path] | None = None,
         env_candidates: Callable[[], list[Path]] | None = None,
-        loader: Callable[[Path], Settings] | None = None,
+        loader: Callable[[Path], Any] | None = None,
+        models_path: Callable[[Settings], Path] | None = None,
         stat: StatFn = os.stat,
         clock: Callable[[], float] = time.monotonic,
         container_mode: bool | None = None,
@@ -368,7 +433,10 @@ class ConfigWatcher:
     ) -> None:
         self._config_path = config_path or (lambda: config.config_file(None))
         self._env_candidates = env_candidates or config.env_files
-        self._loader = loader or (lambda path: config.load_settings(path))
+        # load_layers: the same merge the CLI's load_settings does, models.toml included, so the
+        # diff compares like with like and Apply keeps models.toml's values (specs/020).
+        self._loader = loader or (lambda path: config.load_layers(path))
+        self._models_path = models_path or (lambda s: config.models_file(s.paths.data_dir))
         self._stat = stat
         self._clock = clock
         self._container = container.is_container() if container_mode is None else container_mode
@@ -398,9 +466,9 @@ class ConfigWatcher:
         self._dismissed: set[str] = set()
         self.applied_at: datetime | None = None
         self.applied_count = 0
-        # Hooks for 020 M8 (models.toml): it fingerprints its file next to these, diffs layers
-        # instead of ``self._loader``'s merged result, marks keys set on /models as no effect
-        # (as ``cli_overrides`` does), and takes ``app.state.settings_lock`` like Apply.
+        # Hooks for 020 M8: models.toml is fingerprinted and its fields are listed under it;
+        # M8 adds layer-by-layer diffs, "no effect: set on /models" (as ``cli_overrides``
+        # does) and takes ``app.state.settings_lock`` like Apply.
 
     # -- public --------------------------------------------------------------------------
 
@@ -412,7 +480,7 @@ class ConfigWatcher:
             if not force and self._last_at is not None and now - self._last_at < THROTTLE_S:
                 return self._state
             self._last_at = now
-            self._refresh_config()
+            self._refresh_config(running)
             self._refresh_env()
             self._state = self._compose(running)
             self._log(self._state)
@@ -427,17 +495,24 @@ class ConfigWatcher:
         return bool(state.key) and state.key in self._dismissed
 
     def mark_applied(self, count: int, when: datetime) -> None:
-        self.applied_at, self.applied_count = when, count
+        """After Apply the running settings changed, so an old dismissal no longer describes
+        the same diff: forget them all."""
+        with self._lock:
+            self.applied_at, self.applied_count = when, count
+            self._dismissed.clear()
 
     # -- internals -----------------------------------------------------------------------
 
-    def _refresh_config(self) -> None:
+    def _refresh_config(self, running: Settings) -> None:
         path = self._config_path()
         fp = fingerprint(path, self._stat)
+        mpath = self._models_path(running)
+        mfp = fingerprint(mpath, self._stat)
         prev = self._loaded
-        if prev is not None and prev.fp == fp:
+        if prev is not None and prev.fp == fp and prev.models_fp == mfp:
             return
         digest = _file_digest(path) if fp[0] else None
+        mdigest = _file_digest(mpath) if mfp[0] else None
         prev_fp = prev.fp if prev is not None else self._start_fp
         prev_digest = prev.digest if prev is not None else self._start_digest
         if self._container and fp[0]:
@@ -453,12 +528,30 @@ class ConfigWatcher:
                 and (digest is None or digest == prev_digest)
             ):
                 self._replaced = True  # renamed to a backup, then a new file saved by rename
-        if prev is not None and digest is not None and digest == prev.digest:
-            # A touch or chmod: adopt the new fingerprint, nothing to load.
-            self._loaded = _Loaded(fp, digest, prev.settings, prev.errors)
+        if (
+            prev is not None
+            and digest is not None
+            and digest == prev.digest
+            and mdigest == prev.models_digest
+        ):
+            # A touch or chmod: adopt the new fingerprints, nothing to load.
+            self._loaded = _Loaded(
+                fp, digest, prev.settings, prev.errors, mfp, mdigest, prev.models_keys
+            )
             return
-        settings, errors = load_errors(lambda: self._loader(path))
-        self._loaded = _Loaded(fp, digest, settings, errors)
+        start = self._start_fp
+        if start[0] and not fp[0]:
+            # Loading would give the defaults (higher caps, other scorers): not a change to offer.
+            errors: tuple[str, ...] = ("config.toml is missing; save it again",)
+            self._loaded = _Loaded(fp, digest, None, errors, mfp, mdigest)
+            return
+        if start[0] and start[3] > 0 and fp[0] and fp[3] == 0:
+            errors = ("config.toml is empty; save it again",)
+            self._loaded = _Loaded(fp, digest, None, errors, mfp, mdigest)
+            return
+        loaded, errors = load_errors(lambda: self._loader(path))
+        settings = loaded.merged if isinstance(loaded, config.Layers) else loaded
+        self._loaded = _Loaded(fp, digest, settings, errors, mfp, mdigest, _layer_keys(loaded))
 
     def _refresh_env(self) -> None:
         paths = list(dict.fromkeys([*self._env_start, *map(Path, self._env_candidates())]))
@@ -472,20 +565,33 @@ class ConfigWatcher:
     def _compose(self, running: Settings) -> State:
         loaded = self._loaded
         assert loaded is not None
-        fields: tuple[FieldChange, ...] = ()
-        warnings: tuple[str, ...] = ()
-        if loaded.settings is not None:
-            fields = tuple(diff(running, loaded.settings, self.cli_overrides))
-            if fields:
-                warnings = tuple(loaded.settings.scoring.scorer_problems().values())
         known = list(self._known_names(running))
         env: list[EnvChange] = []
         for path, now_digests in self._env_now.items():
             change = env_diff(path, self._env_start.get(path, {}), now_digests, known, self._home)
             if change is not None:
                 env.append(change)
+        fields: tuple[FieldChange, ...] = ()
+        warnings: tuple[str, ...] = ()
+        if loaded.settings is not None:
+            models_keys = loaded.models_keys | _layer_keys(getattr(running, "_models", None))
+            fields = tuple(
+                diff(
+                    running,
+                    loaded.settings,
+                    self.cli_overrides,
+                    env_pending=bool(env),
+                    models_keys=models_keys,
+                )
+            )
+            if fields:
+                warnings = scorer_warnings(loaded.settings)
         key_src = repr(
-            (loaded.digest, sorted((str(p), sorted(d.items())) for p, d in self._env_now.items()))
+            (
+                loaded.digest,
+                loaded.models_digest,
+                sorted((str(p), sorted(d.items())) for p, d in self._env_now.items()),
+            )
         )
         return State(
             fields=fields,
@@ -518,6 +624,19 @@ class ConfigWatcher:
             )
         if state.replaced:
             logger.warning("config watch: config.toml may have been replaced on the host")
+
+
+def scorer_warnings(settings: Settings) -> tuple[str, ...]:
+    """``scorer_problems`` messages, which quote the spec; a spec that may be a pasted key is
+    named by field only."""
+    out: list[str] = []
+    for name, message in settings.scoring.scorer_problems().items():
+        spec = getattr(settings.scoring, name, "")
+        if config.shown_value(spec) is None:
+            out.append(f"{name}: not a usable scorer spec (the value is not shown)")
+        else:
+            out.append(message)
+    return tuple(out)
 
 
 def _file_digest(path: Path) -> str | None:

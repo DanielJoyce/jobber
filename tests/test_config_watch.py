@@ -426,12 +426,12 @@ def test_throttle_holds_with_three_pollers(env):
         t.start()
     for t in threads:
         t.join()
-    assert env.stat.calls - before == 2  # one round: config.toml and one .env candidate
+    assert env.stat.calls - before == 3  # one round: config.toml, models.toml, one .env
     env.clock.t += 1.0  # still inside 2 s of that round
     w.check(env.running)
-    assert env.stat.calls - before == 2
+    assert env.stat.calls - before == 3
     w.check(env.running, force=True)
-    assert env.stat.calls - before == 4
+    assert env.stat.calls - before == 6
 
 
 def test_invalid_file_keeps_old_settings_and_dismiss_remembers_by_hash(env):
@@ -452,3 +452,122 @@ def test_reload_table_marks_each_table():
     table = cw.reload_table()
     assert "| `[paths]` | Restart the console |" in table
     assert "`[fetch]` | Apply now (reloads in place); except `global_concurrency`" in table
+
+
+# --- review fixes: coupled scorer sections, missing file, key-shaped values, models.toml -------
+
+
+@pytest.mark.parametrize("section", ["openai_compat", "openrouter", "local"])
+def test_endpoint_and_key_name_changed_together_are_held_whole(section):
+    """The running key must never go to a new host: a section whose api_key_env changes is
+    held at its running value, base_url included, and listed as needing a restart."""
+    a = _settings(scoring={section: {"base_url": "https://provider-a.example/v1"}})
+    b = _settings(
+        scoring={
+            section: {"base_url": "https://provider-b.example/v1", "api_key_env": "PROVIDER_B_KEY"}
+        }
+    )
+    changes = {c.field: c for c in cw.diff(a, b)}
+    url = changes[f"scoring.{section}.base_url"]
+    assert url.cls == "restart" and url.held
+    assert "needs restart" in url.class_text
+    new = cw.partial(a, b)
+    assert getattr(new.scoring, section) == getattr(a.scoring, section)
+
+
+def test_endpoint_with_a_pending_env_change_is_held():
+    a = _settings(scoring={"openai_compat": {"base_url": "https://provider-a.example/v1"}})
+    b = _settings(
+        scoring={"openai_compat": {"base_url": "https://provider-b.example/v1"}},
+        fetch={"default_rps": 0.5},
+    )
+    (url,) = [c for c in cw.diff(a, b, env_pending=True) if c.field.endswith("base_url")]
+    assert url.cls == "restart"
+    new = cw.partial(a, b, env_pending=True)
+    assert new.scoring.openai_compat.base_url == "https://provider-a.example/v1"
+    assert new.fetch.default_rps == 0.5  # unrelated reloads still apply
+    # Without a pending .env change the endpoint alone reloads.
+    assert cw.partial(a, b).scoring.openai_compat.base_url == "https://provider-b.example/v1"
+
+
+def test_watcher_holds_the_endpoint_while_env_changes(env):
+    w = env.make()
+    env.cfg.write_text('[scoring.openai_compat]\nbase_url = "https://provider-b.example/v1"\n')
+    env.home_env.write_text("OPENAI_COMPAT_API_KEY=placeholder\n")
+    state = w.check(env.running)
+    assert state.env and not state.can_apply
+    assert [f.cls for f in state.fields] == ["restart"]
+
+
+def test_deleted_or_emptied_config_is_an_error_not_a_change_to_defaults(env):
+    env.cfg.write_text("[scoring]\ndaily_cap_usd = 0.25\n")
+    running = load_settings(env.cfg)
+    w = env.make()
+    env.cfg.unlink()
+    state = w.check(running)
+    assert state.errors == ("config.toml is missing; save it again",)
+    assert not state.can_apply and not state.fields
+    env.cfg.write_text("")
+    tick(env)
+    state = w.check(running)
+    assert state.errors == ("config.toml is empty; save it again",) and not state.can_apply
+    env.cfg.write_text("[scoring]\ndaily_cap_usd = 0.25\n")
+    tick(env)
+    assert not w.check(running).pending
+
+
+def test_key_shaped_scorer_spec_is_not_shown_and_its_warning_is_named_only():
+    a = _settings()
+    b = _settings(
+        scoring={"screen_scorer": f"anthropic:sk-ant-api03-{SENTINEL}"},
+        apply={"api_model": f"sk-ant-api03-{SENTINEL}"},
+    )
+    changes = cw.diff(a, b)
+    assert {c.note for c in changes} == {"changed (not shown)"}
+    warnings = cw.scorer_warnings(b)
+    assert warnings == ("screen_scorer: not a usable scorer spec (the value is not shown)",)
+    assert SENTINEL not in repr(changes) + repr(warnings)
+
+
+def test_apply_forgets_old_dismissals(env):
+    from datetime import datetime
+
+    w = env.make()
+    env.cfg.write_text("[scoring]\nweekly_cap_usd = 20.0\n")
+    first = w.check(env.running)
+    w.dismiss(first.key)
+    env.cfg.write_text("[scoring]\nweekly_cap_usd = 30.0\n")
+    tick(env)
+    applied = load_settings(env.cfg)
+    w.mark_applied(1, datetime.now())
+    env.cfg.write_text("[scoring]\nweekly_cap_usd = 20.0\n")  # the dismissed bytes again
+    tick(env)
+    state = w.check(applied)
+    assert state.key == first.key and state.fields
+    assert not w.is_dismissed(state)
+
+
+def test_models_toml_is_watched_and_listed_under_its_name(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[paths]\ndata_dir = "{data}"\n[scoring]\nweekly_cap_usd = 10.0\n')
+    running = load_settings(cfg)
+    clock = Clock()
+    w = cw.ConfigWatcher(
+        config_path=lambda: cfg, env_candidates=lambda: [], clock=clock,
+        container_mode=False, start_env={},
+    )  # fmt: skip
+    assert not w.check(running).pending
+    (data / "models.toml").write_text('[scoring]\nscreen_scorer = "local:qwen3"\n')
+    clock.t += 3
+    state = w.check(running)
+    (change,) = state.fields
+    assert change.field == "scoring.screen_scorer" and change.source == "models.toml"
+    # An unrelated config.toml edit applied later keeps models.toml's value.
+    cfg.write_text(f'[paths]\ndata_dir = "{data}"\n[scoring]\nweekly_cap_usd = 12.0\n')
+    clock.t += 3
+    state = w.check(running)
+    new = cw.partial(running, state.new_settings)
+    assert new.scoring.screen_scorer == "local:qwen3"
+    assert new.scoring.weekly_cap_usd == 12.0

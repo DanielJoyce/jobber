@@ -291,6 +291,7 @@ def register(
             "groups": groups,
             "mode": mode,
             "started": getattr(request.app.state, "settings_read_at", started),
+            "boot": started,  # secret and env rows are only ever read at start
             "applied": getattr(request.app.state, "settings_applied", False),
             "essentials_ok": rd.essentials_ok(checks),
             "todo_count": sum(1 for g in groups for r in g.rows if not r.quiet),

@@ -79,7 +79,10 @@ def notice_context(request: Request, now: datetime) -> dict[str, Any]:
         "cfg_summary": summary(state, read_at, applied is not None) if show else "",
         "cfg_applied": applied,
         "cfg_peer_ok": peer_is_loopback(request),
-        "cfg_restart": restart_command(request) if show and state.needs_restart else "",
+        # A browser that may not press Apply gets the command that picks the change up instead.
+        "cfg_restart": restart_command(request)
+        if show and (state.needs_restart or (state.can_apply and not peer_is_loopback(request)))
+        else "",
         "cfg_ctr_doctor": CTR_DOCTOR,
     }
 
@@ -113,7 +116,10 @@ def summary(state: cw.State, read_at: datetime, just_applied: bool = False) -> s
                 "(no effect: set on the command line)."
             )
         else:
-            parts.append(f"config.toml changed: {plural(len(state.fields), 'setting')}.")
+            for source in ("config.toml", "models.toml"):
+                n = sum(1 for f in state.fields if f.source == source)
+                if n:
+                    parts.append(f"{source} changed: {plural(n, 'setting')}.")
     for change in state.env:
         parts.append(f"{change.file} changed: {plural(change.count, 'key')}.")
     return " ".join(parts)
@@ -176,7 +182,7 @@ def register(
                 return _flash(request, "moved")
             if not state.can_apply or state.new_settings is None:
                 return _flash(request, "nothing")
-            new = cw.partial(running, state.new_settings)
+            new = cw.partial(running, state.new_settings, env_pending=bool(state.env))
             request.app.state.settings = new  # one attribute assignment: atomic
             when = now()
             request.app.state.settings_read_at = when

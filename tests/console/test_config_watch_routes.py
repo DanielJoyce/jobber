@@ -289,7 +289,10 @@ def test_setup_note_says_applied_after_apply(console):
     assert "Read when the console started" in client.get("/setup?all=1").text
     console.write("[scoring]\nweekly_cap_usd = 20.0\n")
     apply(client, console)
-    assert "(applied)" in client.get("/setup?all=1").text
+    page = client.get("/setup?all=1").text
+    assert "(applied)" in page  # rows read from config.toml (or its defaults)
+    # Secret and environment rows are only read at start: Apply never re-reads them.
+    assert "Read when the console started" in page
 
 
 def test_no_watcher_means_no_notice(tmp_path):
@@ -341,3 +344,38 @@ def test_every_settings_annotation_is_handled_by_the_swap_test():
         assert changed_value(leaf, old) != old, leaf
     assert set(LITERAL_ALT) <= config.RELOADABLE
     assert get_args(config.Apply.model_fields["runner"].annotation)
+
+
+def test_apply_with_a_pending_env_edit_keeps_the_running_endpoint(console):
+    client = console.client()
+    console.write(
+        "[scoring]\nweekly_cap_usd = 20.0\n"
+        '[scoring.openai_compat]\nbase_url = "https://provider-b.example/v1"\n'
+    )
+    console.env_file.write_text("OPENAI_COMPAT_API_KEY=placeholder\n")
+    page = client.get("/config/changes").text
+    assert "held with its API key" in page
+    apply(client, console)
+    assert console.settings.scoring.weekly_cap_usd == 20.0
+    assert console.settings.scoring.openai_compat.base_url == "http://localhost:8000"
+
+
+def test_non_loopback_peer_gets_the_command_for_a_reload_only_change(console):
+    lan = console.client(LAN)
+    console.write("[scoring]\nweekly_cap_usd = 20.0\n")
+    bar = lan.get("/activity").text
+    assert "Or restart to pick it up: <code>Ctrl-C and jobhunter console</code>" in bar
+    assert "Or restart to pick it up" in lan.get("/config/changes").text
+    # A loopback browser gets the button and no command.
+    assert "Or restart" not in console.client().get("/activity").text
+
+
+def test_deleted_config_offers_no_apply(console):
+    client = console.client()
+    console.cfg.unlink()
+    console.clock.t += 3
+    bar = client.get("/activity").text
+    assert "config.toml is missing" in bar and "Apply now" not in bar
+    r = apply(client, console, follow_redirects=False)
+    assert r.headers["location"].endswith("flash=nothing")
+    assert console.settings.scoring.daily_cap_usd == 2.0

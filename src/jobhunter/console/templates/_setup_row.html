@@ -33,7 +33,7 @@
 {% macro body() %}
   <p class="su-unlocks">{{ c.unlocks | replace("`", "") }}</p>
   <p class="su-detail">{{ r.detail }}</p>
-  {% if c.source or r.restart %}<p class="su-source muted">{% if c.source %}From: {{ c.source }}. {% endif %}{% if r.restart %}{% if applied %}Read at {{ started.isoformat() | localtime }} (applied){% else %}Read when the console started ({{ started.isoformat() | localtime }}){% endif %}; after a change the console offers <a href="/config/changes">Apply</a> where it can, else restart: <code>{{ r.restart }}</code>.{% endif %}</p>{% endif %}
+  {% if c.source or r.restart %}<p class="su-source muted">{% if c.source %}From: {{ c.source }}. {% endif %}{% if r.restart %}{% if applied and c.source in ("config.toml", "default") %}Read at {{ started.isoformat() | localtime }} (applied){% else %}Read when the console started ({{ boot.isoformat() | localtime }}){% endif %}; after a change the console offers <a href="/config/changes">Apply</a> where it can, else restart: <code>{{ r.restart }}</code>.{% endif %}</p>{% endif %}
   {% if r.help %}<p class="su-help"><a href="{{ r.help }}">Help: {{ r.help_title }}</a></p>{% endif %}
   {% if r.waiting_on %}
     <p class="su-wait">Waiting on step {{ r.waiting_on }}.</p>

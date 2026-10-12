@@ -158,6 +158,13 @@ line appears there: "config.toml changed: 3 settings", with **Apply now**, **Det
 - **Details** in the console lists each changed setting and whether it reloads. Values are
   shown only for caps, scorers, models, rates, timeouts, ports and switches. Anything personal
   (your contact, alerts address, sender lists), URLs and paths show only "changed".
+- A scorer's endpoint (`base_url`) changed together with its `api_key_env`, or while a `.env`
+  change is waiting, needs a restart too: applying the new endpoint alone would send the old
+  key to the new host, so that whole `[scoring.*]` table waits for the restart.
+- A change to `models.toml` (the models you pick on the console's models page, or with
+  `jobhunter models set`) is listed under that file and applies the same way.
+- If `config.toml` disappears or is emptied, the console keeps its settings and says so; it
+  never offers to apply the defaults.
 - A `.env` change always needs a restart: secrets are read once, at start. Details names the
   keys that changed only when they are known secret names, never their values.
 - If the new file has an error, the console keeps the settings it has, and the line says

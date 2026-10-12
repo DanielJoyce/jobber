@@ -217,7 +217,15 @@ def model_prices() -> str:
     return "\n".join(rows)
 
 
+def config_reload() -> str:
+    """Which settings reload in place (019 Addendum B, S12a), from ``config.RELOADABLE``."""
+    from jobhunter import config_watch
+
+    return config_watch.reload_table()
+
+
 GENERATORS: dict[str, Callable[[], str]] = {
+    "config-reload": config_reload,
     "cloud-steps": cloud_steps,
     "env-vars": env_var_table,
     "scorer-providers": scorer_providers,

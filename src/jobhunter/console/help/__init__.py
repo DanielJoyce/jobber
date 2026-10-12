@@ -285,13 +285,3 @@ def render(topic: str) -> Page:
     with _cache_lock:
         _cache[topic] = (mtime, page)
     return page
-
-
-def _register_config_watch_block() -> None:
-    """The reload table (019 Addendum B, S12a), built from ``config.RELOADABLE``."""
-    from jobhunter import config_watch
-
-    BLOCKS["config-reload"] = config_watch.reload_table
-
-
-_register_config_watch_block()
