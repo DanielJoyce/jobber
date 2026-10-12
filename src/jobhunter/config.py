@@ -755,6 +755,16 @@ def relayer(layers: Layers) -> Layers:
     return _layer_models(layers._inputs, layers.base)
 
 
+def layers_for(settings: Settings) -> Layers:
+    """The layers ``settings`` was built with; for Settings built without ``load_settings``
+    (tests, an embedding app), layers that treat ``settings`` itself as the base below
+    models.toml, so ``relayer`` and the /models page work the same way."""
+    if settings.models_layers is not None:
+        return settings.models_layers
+    inputs = _Inputs(settings.model_dump(), {}, {}, {})
+    return _layer_models(inputs, settings)
+
+
 def _layer_models(inputs: _Inputs, base: Settings) -> Layers:
     lower, file_data = inputs.lower, inputs.file_data
     env_paths, overrides = inputs.env_paths, inputs.overrides

@@ -1,5 +1,6 @@
 /* /models (specs/020). Colors come from app.css tokens, so light and dark both work. */
 .mo h2 { font-size: 1.05rem; margin: 0; }
+.mo code { overflow-wrap: anywhere; word-break: break-word; }
 .mo-banner p, .mo-banner .mo-warn { margin: 6px 0; }
 .mo-alert, .mo-warn, .mo-blocked { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--surface-1); color: var(--text-primary); overflow-wrap: anywhere; }
 .mo-alert, .mo-blocked { border-left: 4px solid var(--status-critical); }

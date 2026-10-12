@@ -39,7 +39,7 @@ from starlette.concurrency import run_in_threadpool
 from jobhunter import model_access as ma
 from jobhunter import model_choices as mc
 from jobhunter import readiness as rd
-from jobhunter.config import BLOCKED_SPEC, Settings, relayer, shown_value
+from jobhunter.config import BLOCKED_SPEC, Settings, layers_for, relayer, shown_value
 from jobhunter.console import prefs_graceful as gr
 from jobhunter.scoring import catalog
 from jobhunter.scoring.scorers import privacy_notice
@@ -507,7 +507,7 @@ def access_rows(ctx: Ctx) -> list[AccessRow]:
             provider = ma.provider_of(choice.model)
         else:
             provider = ma.SUBSCRIPTION if choice.runner == "cli" else ma.ANTHROPIC
-        needs.setdefault(provider, []).append(ma.USE_LABELS[use])
+        needs.setdefault(provider, []).append(ma.USE_LABELS[use].lower())
     providers = [ma.ANTHROPIC, ma.SUBSCRIPTION, ma.OPENROUTER]
     if ma.OPENAI_COMPAT in needs:
         providers.append(ma.OPENAI_COMPAT)
@@ -609,13 +609,8 @@ def register(
         request: Request, conn: sqlite3.Connection, local_ids: list[str] | None = None
     ) -> Ctx:
         settings: Settings = request.app.state.settings
-        layers = settings.models_layers
-        disk = None
-        if layers is not None:
-            try:
-                disk = relayer(layers)
-            except ValueError:
-                disk = layers
+        layers = layers_for(settings)
+        disk = relayer(layers)  # one small read of models.toml: what a write is based on
         return Ctx(
             settings=settings,
             layers=layers,
@@ -628,7 +623,7 @@ def register(
             cache=catalog.load_openrouter_cache(settings.scoring.openrouter.catalog_cache),
             local_ids=local_ids,
             history_times=history_times(conn),
-            peer_ok=peer_is_loopback(request) and layers is not None,
+            peer_ok=peer_is_loopback(request),
             allow_remote=bool(request.app.state.allow_remote),
         )
 
@@ -774,10 +769,7 @@ def register(
         first read of the running settings to the assignment, so two writes serialize."""
         with request.app.state.settings_lock:
             running: Settings = request.app.state.settings
-            layers = running.models_layers
-            if layers is None:
-                state.message, state.kind = "This console cannot write models.toml.", "error"
-                return Outcome(409, state)
+            layers = layers_for(running)
             reasons: list[str] = []
             for name, value in changes.items():
                 if value is None:
@@ -900,7 +892,7 @@ def register(
         context["primary"] = row or "history"
         return render("_models_write.html", request, context, outcome.status)
 
-    @app.post("/models/{row}")
+    # Registered last (below): "/models/{row}" would otherwise match /models/load and friends.
     async def models_save(request: Request, row: str) -> Response:
         if row not in ROWS:
             return PlainTextResponse("unknown row", status_code=404)
@@ -1007,9 +999,7 @@ def register(
         def work() -> Response:
             with request.app.state.settings_lock:
                 running: Settings = request.app.state.settings
-                layers = running.models_layers
-                if layers is None:
-                    return PlainTextResponse("this console cannot write models.toml", 409)
+                layers = layers_for(running)
                 try:
                     mc.reset_file(layers.path, digest_of(form), now=now())
                 except mc.StaleDigest:
@@ -1032,9 +1022,7 @@ def register(
         def work() -> Response:
             with request.app.state.settings_lock:
                 running: Settings = request.app.state.settings
-                layers = running.models_layers
-                if layers is None:
-                    return PlainTextResponse("this console cannot read models.toml", 409)
+                layers = layers_for(running)
                 fresh = relayer(layers)
                 if fresh.digest != digest_of(form):
                     return RedirectResponse("/models?done=stale", status_code=303)
@@ -1098,3 +1086,5 @@ def register(
         context = page_context(request, ctx, local=local)
         name = "_models_local.html" if request.headers.get("hx-request") else "models.html"
         return render(name, request, context)
+
+    app.add_api_route("/models/{row}", models_save, methods=["POST"])
