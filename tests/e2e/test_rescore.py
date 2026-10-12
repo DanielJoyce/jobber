@@ -54,8 +54,14 @@ def test_rescore_now_confirms_runs_and_links_to_the_inbox(page, server):
     page.goto(f"{server.url}/prefs")
     panel = page.locator("#sec-rescore")
     expect(panel).to_contain_text("Re-score now")
-    panel.locator("select[name=scope]").select_option("all")
+    # Changing the scope swaps the whole panel (hx-get on the select). "Will score" is already
+    # on screen from the first render, so waiting for it proves nothing: wait for the swap
+    # itself, or the click can hit the old form while it is replaced and the run never starts.
+    with page.expect_response(lambda r: "/prefs/rescore/panel" in r.url and "scope=all" in r.url):
+        panel.locator("select[name=scope]").select_option("all")
+    expect(panel.locator("select[name=scope]")).to_have_value("all")
     expect(panel.locator("#rescore-estimate")).to_contain_text("Will score")
+    expect(panel.locator("#rescore-run")).to_be_enabled()
     panel.locator("#rescore-run").click()
     expect(panel.locator(".rescore-done")).to_contain_text("Done.", timeout=15000)
     assert dialogs and "spends credits" in dialogs[0] and "openrouter:test/model" in dialogs[0]
