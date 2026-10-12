@@ -38,6 +38,7 @@ from jobhunter.console import (
     ext_routes,
     help_routes,
     inbox_routes,
+    log_routes,
     model_banners,
     models_routes,
     packet_routes,
@@ -98,6 +99,7 @@ PAGES: list[tuple[str, str | None, str]] = [
     ("/costs", "Costs", "Costs"),
     ("/prefs", "Prefs", "Preferences"),
     ("/models", "Models", "Models"),
+    ("/log", "Log", "Log"),
     ("/setup", "Setup", "Setup"),
     ("/alerts", None, "Alerts"),
     # Hidden from the nav while achievements are off (base.html asks achievements_on()).
@@ -492,6 +494,7 @@ def create_app(
                 now(),
                 achievements_routes.essentials_judge(request.app),
             ),
+            "card": log_routes.today_card(request, conn, now(), get_profile),
             **kpi_context(conn, range_, dash.clamp_buckets(buckets)),
             **table_context(conn, range_, metric_, sort, dir, dash.clamp_buckets(buckets)),
         }
@@ -585,6 +588,7 @@ def create_app(
     rescore_routes.register(app, templates, get_conn, now)
     deep_routes.register(app, templates, get_conn, now)
     activity_routes.register(app, templates, get_conn, now)
+    log_routes.register(app, templates, get_conn, NAV, now)
     config_routes.register(app, templates, NAV, now)
     prefs_routes.register(app, templates, get_conn, NAV, now)
     proposals_routes.register(app, templates, get_conn, NAV, now)

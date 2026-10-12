@@ -27,3 +27,26 @@
 
 /* Config changes: the model layers table scrolls inside its box on a phone (020 M8). */
 .cfgw-scroll { overflow-x: auto; max-width: 100%; }
+
+/* Log page and the Today card (bug be1d232). Status is always a word, never colour alone. */
+.lg-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.lg-filter a { padding: 3px 10px; border: 1px solid var(--grid); border-radius: 999px; text-decoration: none; font-size: 0.85rem; }
+.lg-filter a.on { background: var(--grid); color: var(--text-primary); font-weight: 600; }
+.lg-detail { font-size: 0.8rem; }
+.lg-error { color: var(--text-primary); border-left: 3px solid var(--series-2); padding-left: 6px; font-size: 0.8rem; word-break: break-word; }
+.lg-status { font-weight: 600; }
+.lg-failed, .lg-interrupted { text-decoration: underline; text-decoration-color: var(--series-2); text-decoration-thickness: 2px; }
+.lg-card h2 { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.lg-card-link { font-size: 0.85rem; font-weight: 400; }
+.lg-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin: 8px 0 0; }
+.lg-stats dt { color: var(--text-secondary); font-size: 0.8rem; }
+.lg-stats dd { margin: 0; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .lg-table thead { display: none; }
+  .lg-table, .lg-table tbody, .lg-table tr, .lg-table td { display: block; width: 100%; }
+  .lg-table tr { border-bottom: 1px solid var(--grid); padding: 6px 0; }
+  .lg-table td { border: 0; padding: 2px 0; text-align: left; }
+  .lg-table td.num { text-align: left; }
+  .lg-table td:empty { display: none; }
+  .lg-table td::before { content: attr(data-label) ": "; color: var(--text-secondary); font-size: 0.75rem; }
+}

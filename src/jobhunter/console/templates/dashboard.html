@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block head %}
+  <link rel="stylesheet" href="{{ static_url('pages.css') }}">
   <link rel="stylesheet" href="{{ static_url('deep.css') }}">
   <script src="{{ static_url('vendor/d3-7.9.0.min.js') }}" defer></script>
   <script src="{{ static_url('vendor/topojson-client-3.1.0.min.js') }}" defer></script>
@@ -28,6 +29,8 @@
          hx-get="/dash/kpis" hx-include="#dash-controls" hx-trigger="dash-refresh from:body" hx-swap="innerHTML">
   {% include "_kpis.html" %}
 </section>
+
+{% include "_today_card.html" %}
 
 {% if ach_strip %}
 <p class="ach-strip" id="ach-strip">

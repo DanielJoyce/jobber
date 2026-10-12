@@ -7,7 +7,7 @@
 {% block main %}
 <div class="pg su">
   <h1>Setup</h1>
-  <p class="muted">New here? Read <a href="/help/getting-started">Getting started</a>.</p>
+  <p class="muted">New here? Read <a href="/help/getting-started">Getting started</a>. To see what ran lately, open the <a href="/log">Log</a>.</p>
   {% if flash %}<p class="callout" role="status">{{ flash }}</p>{% endif %}
   {% include "_setup_summary.html" %}
   {% for g in groups %}

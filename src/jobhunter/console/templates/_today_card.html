@@ -1,0 +1,24 @@
+<section class="panel lg-card" id="last-24h" aria-labelledby="lg-card-title">
+  <h2 id="lg-card-title">Last 24 hours <a class="lg-card-link" href="/log">Open the log &#9656;</a></h2>
+  <p class="lg-card-run">
+    {% if card.last_run %}
+      Last run:
+      {% if card.last_run.status == "running" %}<span class="lg-status lg-running">running</span> since {{ card.last_run.started_at | localtime }}
+      {% else %}{{ card.last_run.started_at | localtime }},
+        <span class="lg-status lg-{{ card.last_run.status }}">{{ card.last_run.status }}</span>{% if card.last_run.duration %}, {{ card.last_run.duration }}{% endif %}
+      {% endif %}
+      <span class="muted">({{ card.last_run.trigger }})</span>
+    {% else %}
+      No run yet.
+    {% endif %}
+  </p>
+  <dl class="lg-stats">
+    <div><dt>Jobs pulled in</dt><dd>{{ card.jobs if card.jobs is not none else "?" }}</dd></div>
+    <div><dt>New groups</dt><dd>{{ card.groups if card.groups is not none else "?" }}</dd></div>
+    <div><dt>Passed prefilter</dt><dd>{{ card.passed if card.passed is not none else "?" }}</dd></div>
+    <div><dt>Scored</dt><dd>{{ card.scored if card.scored is not none else "?" }}</dd></div>
+    <div><dt>Failed to score</dt><dd>{{ card.failed if card.failed is not none else "?" }}</dd></div>
+    <div><dt>Unscored backlog</dt><dd>{{ card.backlog if card.backlog is not none else "?" }}</dd></div>
+    <div><dt>Spend</dt><dd>${{ "%.2f"|format(card.spend or 0) }}</dd></div>
+  </dl>
+</section>
