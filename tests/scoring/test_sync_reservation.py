@@ -19,7 +19,10 @@ from test_screen import (
     NOW,
     FakeClient,
     add_group,
+    cold_batch_usd,
+    cold_prefix,
     conn,  # noqa: F401
+    default_prefix,
     profile,  # noqa: F401
     screen_json,
     succeeded,
@@ -311,8 +314,10 @@ def _unpriced_batch(conn, profile) -> FakeClient:
 
 def test_pending_unpriced_batch_reserves_the_dearest_rates(conn, profile):
     _unpriced_batch(conn, profile)
-    ceiling = ceiling_cost(screen.TYPICAL_USAGE, batch=True)
-    assert ceiling > SONNET_TABLE
+    # A batch from before the stored hold, no history: the dearest rates ($5 / $25), its
+    # prefix all cache writes, sized with no profile at hand.
+    ceiling = cold_batch_usd(5.0, 25.0, default_prefix())
+    assert ceiling > ceiling_cost(screen.TYPICAL_USAGE, batch=True) > SONNET_TABLE
     assert screen._pending_batch_usd(conn) == pytest.approx(ceiling)
 
 
@@ -351,7 +356,10 @@ def test_backfill_estimate_prices_pending_batches_per_model(conn, profile):
     est = bf.estimate(
         conn, profile, AnthropicScorer(FakeClient(), HAIKU55), budget_usd=5.0, now=NOW
     )
-    expected = 100 * 0.002 + 100 * SONNET_TABLE
+    # Rows from before the stored hold, no history: Haiku 5.5 stays at the $0.002 floor;
+    # Sonnet is held with its prefix all cache writes (no profile at hand: the default size).
+    assert cold_batch_usd(0.10, 0.50, default_prefix()) < 0.002
+    expected = 100 * 0.002 + 100 * cold_batch_usd(2.0, 10.0, default_prefix())
     assert est.pending_jobs == 200
     assert est.pending_usd == pytest.approx(expected)  # not 200 x Haiku's $0.002
     assert est.committed_usd == pytest.approx(expected)
@@ -370,8 +378,11 @@ def test_prefs_estimate_prices_the_configured_scorer(conn, profile, tmp_path):
         (add_group(conn, 1, profile, passed=False), HAIKU55),
     )
     assert pf.cost_per_job(conn) == (pytest.approx(0.0001), "fit_score")  # unconfigured: as before
+    # No Sonnet history: priced at its first batch's hold, the prefix all cache writes.
     sonnet = pf.cost_per_job(conn, Scoring(screen_scorer=SONNET))
-    assert sonnet == (pytest.approx(SONNET_TABLE), "default")
+    assert sonnet == (pytest.approx(cold_batch_usd(2.0, 10.0, default_prefix())), "default")
+    sonnet = pf.cost_per_job(conn, Scoring(screen_scorer=SONNET), profile)
+    assert sonnet == (pytest.approx(cold_batch_usd(2.0, 10.0, cold_prefix(profile))), "default")
     write_catalog(tmp_path / "cat.json", {PRICEY: (1.0, 5.0)})
     routed = Scoring(
         screen_scorer=f"openrouter:{PRICEY}",
@@ -388,9 +399,9 @@ def test_prefs_estimate_prices_the_configured_scorer(conn, profile, tmp_path):
         "fit_score",
     )
     est = pf.rescore_estimate(conn, profile, NOW, Scoring(screen_scorer=SONNET))
-    assert est["cost_per_job"] == pytest.approx(SONNET_TABLE)
+    assert est["cost_per_job"] == pytest.approx(cold_batch_usd(2.0, 10.0, cold_prefix(profile)))
     for option in est["options"]:
-        assert option.cost_usd == pytest.approx(option.jobs * SONNET_TABLE)
+        assert option.cost_usd == pytest.approx(option.jobs * est["cost_per_job"])
 
 
 # ─── Re-score plans price from a refreshed catalog ──────────────────────────

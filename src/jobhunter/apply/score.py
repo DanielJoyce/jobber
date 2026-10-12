@@ -143,8 +143,13 @@ def estimate(
             check_scorer_spec(spec, "screen_scorer")
         except ValueError as exc:
             bad_spec = str(exc)
-    per_job, source = (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec, scoring)
-    reserve = 0.0 if bad_spec else rescore.reserve_per_job(conn, spec, scoring)
+    per_job, source = (
+        (0.0, "unknown") if bad_spec else rescore.cost_per_job(conn, spec, scoring, profile)
+    )
+    # One job: a packed scorer sends it as a pack of one, held at that pack's estimate.
+    reserve = (
+        0.0 if bad_spec else rescore.reserve_per_job(conn, spec, scoring, profile, now, jobs=1)
+    )
     est = Estimate(
         group_id=group_id,
         scorer=spec,
@@ -169,19 +174,21 @@ def estimate(
         est.refusal = "this posting is in a submitted batch; it is scored when that is collected"
     elif (claim := _group_claim_refusal(conn, group_id, now)) is not None:
         est.refusal = claim
-    elif est.reserve_usd > est.remaining_usd:
+    elif screen.jobs_affordable(est.remaining_usd, est.reserve_usd) < 1:
         # The run's own cap check holds ``reserve_usd`` (020 M5b): with less left, it would
         # send nothing after the confirm, so it is refused here.
-        held = (
-            f" (the spend cap holds ${est.reserve_usd:.4f} while it runs)"
-            if est.reserve_differs
-            else ""
-        )
-        est.refusal = (
-            f"estimated ${est.estimated_usd:.4f}{held} is over the remaining spend cap "
-            f"(${max(est.remaining_usd, 0):.4f}); raise scoring.daily_cap_usd / weekly_cap_usd "
-            "in config.toml"
-        )
+        left = rescore.usd(max(est.remaining_usd, 0))
+        if est.reserve_differs:
+            est.refusal = (
+                f"the spend cap holds {rescore.usd(est.reserve_usd)} for this job while it runs "
+                f"(estimated {rescore.usd(est.estimated_usd)}), more than the {left} left; "
+                "raise scoring.daily_cap_usd / weekly_cap_usd in config.toml"
+            )
+        else:
+            est.refusal = (
+                f"estimated {rescore.usd(est.estimated_usd)} is over the remaining spend cap "
+                f"({left}); raise scoring.daily_cap_usd / weekly_cap_usd in config.toml"
+            )
     return est
 
 

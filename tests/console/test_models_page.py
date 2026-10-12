@@ -771,12 +771,39 @@ def test_screen_price_line_shows_the_hold_when_it_is_above_the_estimate(client):
     row = unescape(row_html(client.get("/models").text, "screen"))
     # Haiku 5.5 at about $0.26 per 1,000; the cap holds the $0.002 floor.
     assert "About $0.26 per 1,000 jobs (price table)." in row
-    assert "The spend cap holds $0.002 a job while a run is in flight ($2.00 per 1,000)" in row
+    assert "While a run is in flight the spend cap holds $0.002 a job ($2.00 per 1,000)" in row
+    assert "never passes" not in row  # no overclaim (review B1)
+
+
+def test_screen_price_line_for_a_new_model_shows_its_cold_hold(tmp_path):
+    cfg = write_config(tmp_path, '[scoring]\nscreen_scorer = "anthropic:claude-sonnet-5-5"\n')
+    row = unescape(row_html(make_client(settings_from(cfg)).get("/models").text, "screen"))
+    assert "About $5.07 per 1,000 jobs (price table)." in row
+    # No history: its first batch is held with the cached prefix as cache writes (B1).
+    held = re.search(r"the spend cap holds \$([0-9.]+) a job", row)
+    assert held and float(held.group(1)) > 0.00507
+    assert "not offered" not in row  # offered for screening now
 
 
 def test_screen_price_line_has_no_hold_when_it_equals_the_estimate(tmp_path):
     cfg = write_config(tmp_path, '[scoring]\nscreen_scorer = "anthropic:claude-sonnet-5-5"\n')
-    row = unescape(row_html(make_client(settings_from(cfg)).get("/models").text, "screen"))
-    assert "About $5.07 per 1,000 jobs (price table)." in row
-    assert "The spend cap holds" not in row
-    assert "not offered" not in row  # offered for screening now
+    client = make_client(settings_from(cfg))
+    conn = db.connect(client.app.state.settings.paths.db_path)
+    with conn:
+        for gid in (1, 2):
+            conn.execute(
+                "INSERT INTO job_group (id, canonical_job_id, method, created_at) "
+                "VALUES (?, NULL, 'exact_hash', 'x')",
+                (gid,),
+            )
+            conn.execute(
+                "INSERT INTO fit_score (job_group_id, tier, model, prompt_version, "
+                "scoring_version, verdict, overall, dimensions, evidence, cost_usd, created_at) "
+                "VALUES (?, 'screen', 'anthropic:claude-sonnet-5-5', 'p', 'v', 'weak', 10, "
+                "'{}', '[]', 0.006, 'x')",
+                (gid,),
+            )
+    conn.close()
+    row = unescape(row_html(client.get("/models").text, "screen"))
+    assert "About $6.00 per 1,000 jobs (measured over 2 jobs)." in row
+    assert "the spend cap holds" not in row  # measured, and that is what the cap holds

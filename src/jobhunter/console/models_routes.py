@@ -378,13 +378,16 @@ def price_lines(ctx: Ctx, row: str, values: Mapping[str, Any]) -> list[str]:
         if est.usd is None:
             return [f"No known price ({est.source})."]
         lines = [f"About {_money(est.usd * 1000)} per 1,000 jobs ({est.source})."]
-        # 020 M5b: the cap reserves per model, at least this estimate. Say so when it is more.
-        held = rescore.reserve_per_job(conn, spec, scoring)
+        # 020 M5b: the cap holds per model, at least this estimate, and the same figure the
+        # run checks (prefix sized from the profile). Say so when it is more.
+        st = gr.lenient_state(ctx.settings)
+        profile = st.profile if st.kind == "ok" else None
+        held = rescore.reserve_per_job(conn, spec, scoring, profile, ctx.now)
         if held > est.usd * (1 + 1e-9):
             lines.append(
-                f"The spend cap holds {_money(held)} a job while a run is in flight "
-                f"({_money(held * 1000)} per 1,000), more than this estimate, so a run never "
-                "passes a cap on an estimate that is too low."
+                f"While a run is in flight the spend cap holds {_money(held)} a job "
+                f"({_money(held * 1000)} per 1,000), more than this estimate; a run stops "
+                "when what is left no longer covers that."
             )
         n = catalog.jobs_screened_last_week(conn, ctx.now)
         if n:

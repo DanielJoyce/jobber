@@ -1,10 +1,14 @@
 """020 M5b (git-bug a322711): the per-model spend reservation is switched on.
 
-A screening model reserves its own per-job price on every path (batch submit and collect, sync
-screen, re-score plans, Score now), estimates never undercount what the cap holds, admission
-stops exactly at the cap, in-flight batches keep and then release their reservation across the
-switch, and the deep pass is unaffected. Fake clients and MockTransport only: no network, no
-paid API.
+A screening model holds its own per-job price on every path (batch submit and collect, sync
+screen, re-score plans, Score now). A model with no history is held with its cached prefix,
+sized from the real rubric and profile, priced as cache writes (review B1). Plans and runs
+use one boundary comparison, in-flight batches keep and then release their hold across the
+switch, packed runs and pages agree, and the deep pass is unaffected. Fake clients and
+MockTransport only: no network, no paid API.
+
+Expected dollar figures are worked out here by hand (``cold_batch_usd``, ``cold_prefix`` in
+test_screen), not by calling the pricing code under test.
 """
 
 # ruff: noqa: F811
@@ -18,31 +22,29 @@ from test_screen import (
     NOW,
     FakeClient,
     add_group,
+    cold_batch_usd,
+    cold_prefix,
     conn,  # noqa: F401
     profile,  # noqa: F401
     screen_json,
     succeeded,
 )
-from test_sync_reservation import CHEAP, PRICEY, PRICEY_PER_JOB, ChatAPI, router
+from test_sync_reservation import PRICEY, PRICEY_PER_JOB, ChatAPI, router, write_catalog
 
+from jobhunter import model_choices as mc
 from jobhunter.apply import score as group_score
-from jobhunter.config import Scoring
+from jobhunter.config import OpenRouter, Scoring
 from jobhunter.scoring import catalog, deep, deep_run, rescore, screen
+from jobhunter.scoring.profile import scoring_inputs
+from jobhunter.scoring.rubric import RUBRIC_TEXT
 
 HAIKU55 = "anthropic:claude-haiku-5-5"
 SONNET = "anthropic:claude-sonnet-5-5"
 OPUS55 = "anthropic:claude-opus-5-5"
 QUOTE = "Write Terraform modules and Go tooling."
-# Table prices at screen.TYPICAL_USAGE (2,600 in, 3,900 cache reads, 455 out), worked by hand:
-# Haiku 5.5 $0.10/$0.50, cache reads 0.1x: 260 + 19.5 + 227.5 = 507 micro-USD unbatched.
-# Sonnet 5.5 $2/$10, cache reads 0.05x: 5,200 + 390 + 4,550 = 10,140 micro-USD unbatched.
-# Opus 5.5 $4/$20, cache reads 0.05x: 10,400 + 780 + 9,100 = 20,280 micro-USD unbatched.
-# Batch prices are half. The floor is the flat $0.002.
-RESERVE = {
-    HAIKU55: (0.002, 0.002),  # (batch, sync): both under the floor
-    SONNET: (0.00507, 0.01014),
-    OPUS55: (0.01014, 0.02028),
-}
+RATES = {HAIKU55: (0.10, 0.50), SONNET: (2.0, 10.0), OPUS55: (4.0, 20.0)}  # $ per Mtok
+# Warm table prices at screen.TYPICAL_USAGE (2,600 in, 3,900 cache reads, 455 out), batched:
+SONNET_WARM = (2600 * 2.0 + 3900 * 2.0 * 0.05 + 455 * 10.0) * 0.5 / 1e6  # 0.00507
 
 
 def add_groups(conn, profile, n: int, start: int = 1) -> list[int]:
@@ -68,17 +70,41 @@ def scoring_with(daily: float, model: str = HAIKU55) -> Scoring:
     return Scoring(screen_scorer=model, daily_cap_usd=daily, weekly_cap_usd=1000.0)
 
 
+def spent(conn) -> float:
+    return float(conn.execute("SELECT coalesce(sum(cost_usd), 0) FROM llm_spend").fetchone()[0])
+
+
 # ─── Haiku vs Sonnet vs Opus ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("model", list(RESERVE))
-def test_each_model_reserves_its_own_price(conn, model):
-    batch, sync = RESERVE[model]
-    assert screen.reserve_per_request_usd(conn, model) == pytest.approx(batch)
-    assert screen.reserve_per_job_usd(conn, model, batch=True) == pytest.approx(batch)
-    assert screen.reserve_per_job_usd(conn, model, batch=False) == pytest.approx(sync)
-    # An Anthropic re-score or Score now goes through the batch: its reservation is the batch's.
-    assert rescore.reserve_per_job(conn, model) == pytest.approx(batch)
+@pytest.mark.parametrize("model", list(RATES))
+def test_each_model_with_no_history_is_held_cold(conn, profile, model):
+    cold = cold_batch_usd(*RATES[model], cold_prefix(profile))
+    expected = max(0.002, cold)  # never below the flat floor
+    assert screen.reserve_per_request_usd(conn, model, profile) == pytest.approx(expected)
+    assert screen.reserve_per_job_usd(conn, model, batch=False, profile=profile) == pytest.approx(
+        max(0.002, 2 * cold)
+    )  # unbatched: no 50% discount
+    assert rescore.reserve_per_job(conn, model, profile=profile) == pytest.approx(expected)
+    assert rescore.cost_per_job(conn, model, profile=profile)[0] == pytest.approx(expected)
+
+
+def test_the_holds_in_numbers(conn, profile):
+    p = cold_prefix(profile)
+    assert screen.reserve_per_request_usd(conn, HAIKU55, profile) == 0.002  # cold is ~$0.0007
+    sonnet = screen.reserve_per_request_usd(conn, SONNET, profile)
+    opus = screen.reserve_per_request_usd(conn, OPUS55, profile)
+    assert sonnet > SONNET_WARM and opus == pytest.approx(2 * sonnet)
+    assert p > screen.TYPICAL_USAGE.cache_read_input_tokens  # the rubric alone is ~5,200
+
+
+def test_with_history_the_measured_mean_takes_over(conn, profile):
+    add_measured(conn, profile, SONNET, 0.009)
+    assert screen.reserve_per_request_usd(conn, SONNET, profile) == pytest.approx(0.009)
+    assert rescore.cost_per_job(conn, SONNET, profile=profile) == (
+        pytest.approx(0.009),
+        "fit_score",
+    )
 
 
 def test_which_screening_models_are_offered_now():
@@ -89,40 +115,132 @@ def test_which_screening_models_are_offered_now():
     assert SONNET in [o.value for o in catalog.options("screen").options]
 
 
+def test_the_prefix_is_sized_from_the_real_profile(profile):
+    big = profile.model_copy(update={"resume_text": "x" * 30_000})
+    assert screen.prefix_tokens(big) == cold_prefix(big) > screen.prefix_tokens(profile)
+    # The rubric and schema are counted, not assumed.
+    assert screen.prefix_tokens(profile) * 3 >= len(RUBRIC_TEXT) + len(scoring_inputs(profile))
+
+
+# ─── B1: the reviewer's case ────────────────────────────────────────────────
+
+
+def _real_profile(profile):
+    """A profile whose prefix is about the 7,100 tokens measured on real data, taking the
+    newer tokenizer at 3.08 characters a token (4 / 1.3)."""
+    fixed = cold_prefix(profile) * 3 - len(scoring_inputs(profile))  # rubric + schema chars
+    pad = int(7100 * 3.08) - fixed
+    return profile.model_copy(update={"resume_text": "y" * pad})
+
+
+def _billed(custom_id: str):
+    """A Sonnet answer billed as on real data: 2,600 posting tokens, a 7,100-token prefix
+    with 30% read from the cache and 70% written, 455 out."""
+    message = {
+        "id": "msg_x",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": screen_json([QUOTE])}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 2600,
+            "output_tokens": 455,
+            "cache_read_input_tokens": 2130,
+            "cache_creation_input_tokens": 4970,
+        },
+    }
+    from anthropic.types.messages import MessageBatchIndividualResponse
+
+    return MessageBatchIndividualResponse.model_validate(
+        {"custom_id": custom_id, "result": {"type": "succeeded", "message": message}}
+    )
+
+
+# Sonnet, batched, by hand: 2,600 x $2 + 4,970 x $2 x 1.25 + 2,130 x $2 x 0.05 + 455 x $10.
+REAL_SONNET_JOB = (2600 * 2.0 + 4970 * 2.0 * 1.25 + 2130 * 2.0 * 0.05 + 455 * 10.0) * 0.5 / 1e6
+
+
+def test_a_new_models_first_batch_stays_under_the_cap_at_a_30pc_cache_hit_rate(conn, profile):
+    """Review B1: Sonnet, $2 cap, 400 groups. The warm hold ($0.00507) admitted 394 jobs that
+    cost about $4.41 at a 30% cache hit rate. The cold hold admits what $2 really covers."""
+    real = _real_profile(profile)
+    assert round(REAL_SONNET_JOB, 6) == 0.011194
+    assert 394 * REAL_SONNET_JOB > 2 * 2.0  # what the old hold let through: over twice the cap
+    add_groups(conn, real, 400)
+    scoring = scoring_with(2.0, SONNET)
+    client = FakeClient()
+    batch_id = screen.submit_batch(
+        conn,
+        client,
+        real,
+        limit=1000,
+        now=NOW,
+        scorer=SONNET,
+        remaining_usd=lambda: screen.remaining_budget(conn, scoring, NOW),
+    )
+    n = sent(client)
+    assert 0 < n < 394
+    assert screen._pending_batch_usd(conn) <= 2.0
+    client.messages.batches.results_by_id[batch_id] = [
+        _billed(r["custom_id"]) for r in client.messages.batches.created[0]
+    ]
+    result = screen.collect_batch(conn, client, batch_id, real, now=NOW)
+    assert result.written == n
+    assert spent(conn) == pytest.approx(n * REAL_SONNET_JOB)
+    assert spent(conn) <= 2.0  # what it really cost stays under the cap
+
+
+def test_save_rerun_all_on_a_new_model_is_planned_at_the_cold_hold(conn, profile):
+    """The flow the review named: "Save + re-score -> All" on a model with no history."""
+    real = _real_profile(profile)
+    add_groups(conn, real, 400)
+    plan = rescore.make_plan(conn, real, scoring_with(2.0, SONNET), "all", SONNET, NOW)
+    cold = cold_batch_usd(2.0, 10.0, cold_prefix(real))
+    assert plan.cost_per_job == pytest.approx(cold) and plan.reserve_per_job == pytest.approx(cold)
+    assert plan.fits_now == math.floor(2.0 / cold)
+    assert plan.fits_now * REAL_SONNET_JOB <= 2.0
+
+
 # ─── Estimates match what is reserved ───────────────────────────────────────
 
 
-def test_without_history_the_plan_price_is_the_reservation(conn):
-    for model in (HAIKU55, SONNET):
-        per_job, source = rescore.cost_per_job(conn, model)
-        assert source == "default"
-        assert per_job == pytest.approx(rescore.reserve_per_job(conn, model))
-        assert per_job == pytest.approx(screen.reserve_per_request_usd(conn, model))
-
-
 def test_a_measured_price_below_the_reservation_is_shown_with_it(conn, profile):
-    add_measured(conn, profile, SONNET, 0.003)  # below the 0.00507 table price
+    add_measured(conn, profile, SONNET, 0.003)  # below the warm 0.00507 table price
     add_groups(conn, profile, 10)
     plan = rescore.make_plan(conn, profile, scoring_with(100.0, SONNET), "all", SONNET, NOW)
     assert plan.cost_per_job == pytest.approx(0.003) and plan.cost_source == "fit_score"
-    assert plan.reserve_per_job == pytest.approx(0.00507)
-    assert plan.reserve_differs and plan.reserved_usd == pytest.approx(10 * 0.00507)
+    assert plan.reserve_per_job == pytest.approx(SONNET_WARM)
+    assert plan.reserve_differs and plan.reserved_usd == pytest.approx(10 * SONNET_WARM)
     assert plan.refusal is None and plan.fits_now == 10
 
 
-def test_a_jev_plan_reserves_its_own_estimate(conn, profile):
+def test_a_jev_plan_reserves_its_own_estimate(conn):
     """Decisions models check the cap per request on their own estimate (unchanged)."""
-    spec = "jev:typesafe/jev-1.13"
-    assert rescore.reserve_per_job(conn, spec) == rescore.DECISIONS_FALLBACK_COST
+    assert rescore.reserve_per_job(conn, "jev:typesafe/jev-1.13") == rescore.DECISIONS_FALLBACK_COST
 
 
-def test_a_packed_openrouter_plan_keeps_its_own_estimate(conn):
-    """Packed requests check the cap per wave; the plan does not invent a per-job hold."""
-    from jobhunter.config import OpenRouter
-
-    packed = Scoring(openrouter=OpenRouter(jobs_per_request=8))
-    per_job, _ = rescore.cost_per_job(conn, f"openrouter:{CHEAP}", packed)
-    assert rescore.reserve_per_job(conn, f"openrouter:{CHEAP}", packed) == per_job
+def test_packed_holds_agree_with_what_the_packed_run_checks(conn, tmp_path):
+    """Review N2: the page and plan show the per-wave figure the packed run uses."""
+    path = tmp_path / "openrouter_models.json"
+    write_catalog(path, {PRICEY: (1.0, 5.0)})
+    cfg = OpenRouter(catalog_cache=path, jobs_per_request=8)
+    scoring = Scoring(screen_scorer=f"openrouter:{PRICEY}", openrouter=cfg)
+    api = ChatAPI(cost=0.0)
+    scorer = router(tmp_path, PRICEY, api)
+    scorer.jobs_per_request = 8
+    run = screen.estimated_request_cost(conn, scorer, NOW, 8)
+    # By hand: the $0.04 default per request, or 8 postings + one shared prefix at $1 / $5.
+    pack = ((3900 + 2600 * 8) * 1.0 + 455 * 8 * 5.0) / 1e6
+    assert run == pytest.approx(max(0.04, pack))
+    spec = f"openrouter:{PRICEY}"
+    assert rescore.reserve_per_job(conn, spec, scoring, now=NOW) == pytest.approx(run / 8)
+    assert rescore.reserve_per_job(conn, spec, scoring, now=NOW) < PRICEY_PER_JOB
+    # Score now sends a pack of one, held at that pack's figure.
+    one = screen.estimated_request_cost(conn, scorer, NOW, 1)
+    assert rescore.reserve_per_job(conn, spec, scoring, now=NOW, jobs=1) == pytest.approx(one)
+    assert api.calls == 0
 
 
 # ─── Cap admission at the boundary ──────────────────────────────────────────
@@ -131,7 +249,7 @@ def test_a_packed_openrouter_plan_keeps_its_own_estimate(conn):
 @pytest.mark.parametrize("model", [HAIKU55, SONNET])
 def test_batch_admission_stops_exactly_at_the_cap(conn, profile, model):
     add_groups(conn, profile, 20)
-    per = screen.reserve_per_request_usd(conn, model)
+    per = max(0.002, cold_batch_usd(*RATES[model], cold_prefix(profile)))
     client = FakeClient()
     screen.submit_batch(
         conn, client, profile, limit=100, now=NOW, scorer=model, remaining_usd=lambda: 7 * per
@@ -147,26 +265,30 @@ def test_batch_admission_stops_exactly_at_the_cap(conn, profile, model):
         limit=100,
         now=NOW,
         scorer=model,
-        remaining_usd=lambda: 7 * per - 1e-9,
+        remaining_usd=lambda: 7 * per * 0.999,
     )
     assert sent(client) == 6  # a hair under seven: six
 
 
-def test_a_sonnet_batch_after_the_switch_never_reserves_past_the_cap(conn, profile):
-    add_groups(conn, profile, 600)
-    scoring = scoring_with(2.0, SONNET)
-    client = FakeClient()
-
-    def remaining() -> float:
-        return screen.remaining_budget(conn, scoring, NOW)
-
-    screen.submit_batch(
-        conn, client, profile, limit=1000, now=NOW, scorer=SONNET, remaining_usd=remaining
-    )
-    n = sent(client)
-    assert n == math.floor(2.0 / 0.00507) == 394  # the flat $0.002 would have let 1000 go
-    assert screen._pending_batch_usd(conn) <= 2.0
-    assert remaining() >= 0
+def test_the_plan_and_the_batch_agree_at_the_boundary(conn, profile):
+    """Review N6: ``fits_now`` and ``submit_batch`` make the same comparison."""
+    add_groups(conn, profile, 20)
+    per = cold_batch_usd(2.0, 10.0, cold_prefix(profile))
+    for left in (7 * per, 7 * per * (1 - 1e-12), 7 * per * 0.999):
+        conn.execute("DELETE FROM score_batch_item")
+        conn.execute("DELETE FROM score_batch")
+        plan = rescore.make_plan(conn, profile, scoring_with(left, SONNET), "all", SONNET, NOW)
+        client = FakeClient()
+        screen.submit_batch(
+            conn,
+            client,
+            profile,
+            limit=100,
+            now=NOW,
+            scorer=SONNET,
+            remaining_usd=lambda left=left: left,
+        )
+        assert sent(client) == plan.fits_now, left
 
 
 def test_sync_admission_stops_exactly_at_the_cap(conn, profile, tmp_path):
@@ -181,7 +303,7 @@ def test_sync_admission_stops_exactly_at_the_cap(conn, profile, tmp_path):
     assert res.submitted == api.calls == 3
     assert res.cost_usd <= 3 * per + 1e-12
     res = screen.score_sync(
-        conn, scorer, profile, limit=100, now=NOW, remaining_usd=lambda: per - 1e-9
+        conn, scorer, profile, limit=100, now=NOW, remaining_usd=lambda: per * 0.999
     )
     assert res.submitted == 0 and api.calls == 3  # less than one job's reservation: nothing
 
@@ -197,6 +319,7 @@ def test_plan_fits_now_at_the_boundary(conn, profile):
     plan = rescore.make_plan(conn, profile, scoring_with(0.0019), "all", HAIKU55, NOW)
     assert plan.fits_now == 0
     assert plan.refusal and "holds $0.0020 a job" in plan.refusal
+    assert "$0.0019 is left" in plan.refusal  # under a cent: four decimals, not "$0.00"
     # Exactly one job's hold: one fits, not refused.
     plan = rescore.make_plan(conn, profile, scoring_with(0.002), "all", HAIKU55, NOW)
     assert plan.refusal is None and plan.fits_now == 1
@@ -208,7 +331,10 @@ def test_score_now_is_refused_when_the_hold_does_not_fit(conn, profile):
     est = group_score.estimate(conn, profile, scoring_with(0.001), gid, NOW)
     assert est.estimated_usd == pytest.approx(0.0003)  # the estimate fits the $0.001 left
     assert est.reserve_usd == pytest.approx(0.002) and est.reserve_differs
-    assert est.refusal and "holds $0.0020" in est.refusal
+    # Review N4: it is the hold that is over, and it says so.
+    assert est.refusal and est.refusal.startswith("the spend cap holds $0.0020 for this job")
+    assert "estimated $0.0003" in est.refusal and "the $0.0010 left" in est.refusal
+    assert "is over the remaining" not in est.refusal
     est = group_score.estimate(conn, profile, scoring_with(0.002), gid, NOW)
     assert est.refusal is None  # exactly the hold: admitted
 
@@ -224,23 +350,41 @@ def _submit(conn, profile, client, model, ids) -> str:
     return batch_id
 
 
-def test_batches_in_flight_keep_and_then_release_their_reservation(conn, profile, monkeypatch):
+def test_batches_in_flight_keep_and_then_release_their_hold_across_the_switch(
+    conn, profile, monkeypatch
+):
     client = FakeClient()
-    # Before the switch: a Haiku 5.5 batch (the flat rule, $0.002 each) and a Sonnet batch
-    # that was saved with "save anyway" (``--force``) under the old rule.
+    # Before the switch, the save rule (which reads the flag) asks for "save anyway" for
+    # Sonnet; a Sonnet batch exists only because it was saved that way, beside a Haiku one.
     monkeypatch.setattr(catalog, "RESERVATION_PER_MODEL", False)
-    assert not catalog.judge("screen", SONNET).offered
+    assert mc.check_save("screen", SONNET).needs_force
     haiku_ids = add_groups(conn, profile, 4)
     sonnet_ids = add_groups(conn, profile, 3, start=5)
     haiku_batch = _submit(conn, profile, client, HAIKU55, haiku_ids)
     _submit(conn, profile, client, SONNET, sonnet_ids)
+    sonnet_hold = cold_batch_usd(2.0, 10.0, cold_prefix(profile))
     before = screen._pending_batch_usd(conn)
-    assert before == pytest.approx(4 * 0.002 + 3 * 0.00507)
+    assert before == pytest.approx(4 * 0.002 + 3 * sonnet_hold)
 
-    # The switch: nothing in flight moves, because the hold was per model already.
+    # The switch: the save rule now lets Sonnet through, and nothing in flight moves.
     monkeypatch.setattr(catalog, "RESERVATION_PER_MODEL", True)
-    assert catalog.judge("screen", SONNET).offered
+    assert mc.check_save("screen", SONNET).ok
     assert screen._pending_batch_usd(conn) == pytest.approx(before)
+    # A new Sonnet submission sees the in-flight holds: with room for exactly two more jobs
+    # on top of them, it sends two.
+    more = add_groups(conn, profile, 5, start=8)
+    cap = before + 2 * sonnet_hold
+    screen.submit_batch(
+        conn,
+        client,  # one client, so its batch ids stay unique
+        profile,
+        limit=10,
+        now=NOW,
+        scorer=SONNET,
+        group_ids=more,
+        remaining_usd=lambda: cap - screen._pending_batch_usd(conn),
+    )
+    assert len(client.messages.batches.created[-1]) == 2
 
     # Collecting the Haiku batch releases exactly its hold and records what it really cost.
     client.messages.batches.results_by_id[haiku_batch] = [
@@ -248,25 +392,23 @@ def test_batches_in_flight_keep_and_then_release_their_reservation(conn, profile
     ]
     result = screen.collect_batch(conn, client, haiku_batch, profile, now=NOW)
     assert result.written == 4
-    assert screen._pending_batch_usd(conn) == pytest.approx(3 * 0.00507)
-    spent = conn.execute("SELECT coalesce(sum(cost_usd), 0) FROM llm_spend").fetchone()[0]
-    assert spent == pytest.approx(result.cost_usd) and spent > 0
-    assert screen.remaining_daily_budget(conn, 1.0, NOW) == pytest.approx(1.0 - spent - 3 * 0.00507)
+    assert screen._pending_batch_usd(conn) == pytest.approx(5 * sonnet_hold)
+    assert spent(conn) == pytest.approx(result.cost_usd) and spent(conn) > 0
     # Collecting it again releases nothing more and records nothing twice.
     assert screen.collect_batch(conn, client, haiku_batch, profile, now=NOW).status == (
         "already_collected"
     )
-    assert screen._pending_batch_usd(conn) == pytest.approx(3 * 0.00507)
+    assert screen._pending_batch_usd(conn) == pytest.approx(5 * sonnet_hold)
 
 
-def test_a_plan_confirmed_at_the_flat_price_runs_at_the_model_price(conn, profile):
+def test_a_plan_confirmed_at_the_flat_price_runs_at_the_model_hold(conn, profile):
     """A re-score confirmed before per-model pricing, at $0.002 a job for Sonnet, is cut to
-    what its confirmed ceiling covers at Sonnet's price (rescore._priced_on_flat_default)."""
+    what its confirmed ceiling covers at Sonnet's hold (rescore._priced_on_flat_default)."""
     add_groups(conn, profile, 40)
     plan = rescore.make_plan(conn, profile, scoring_with(100.0, SONNET), "all", SONNET, NOW)
     rid = rescore.create_request(conn, profile, plan, NOW)
     conn.execute(
-        "UPDATE rescore_request SET cost_per_job_usd = 0.002, max_usd = 0.05 WHERE id = ?", (rid,)
+        "UPDATE rescore_request SET cost_per_job_usd = 0.002, max_usd = 0.10 WHERE id = ?", (rid,)
     )
     client = FakeClient()
     rescore.run_request(
@@ -278,11 +420,8 @@ def test_a_plan_confirmed_at_the_flat_price_runs_at_the_model_price(conn, profil
         client_factory=lambda: client,
         scorer=SONNET,
     )
-    assert sent(client) == math.floor(0.05 / 0.00507) == 9
-    stored = rescore.stored_plan(
-        conn, rescore.get_request(conn, rid), profile, scoring_with(100.0, SONNET), NOW
-    )
-    assert stored.reserve_per_job == pytest.approx(0.00507)
+    cold = cold_batch_usd(2.0, 10.0, cold_prefix(profile))
+    assert sent(client) == math.floor(0.10 / cold)
 
 
 # ─── The deep pass ──────────────────────────────────────────────────────────
@@ -311,4 +450,4 @@ def test_a_sonnet_screen_batch_in_flight_holds_its_own_price_against_the_deep_pa
     client = FakeClient()
     _submit(conn, profile, client, SONNET, add_groups(conn, profile, 10))
     after = deep_run.make_plan(conn, profile, scoring, mode="next", n=3, now=NOW).daily_left
-    assert before - after == pytest.approx(10 * 0.00507)
+    assert before - after == pytest.approx(10 * cold_batch_usd(2.0, 10.0, cold_prefix(profile)))

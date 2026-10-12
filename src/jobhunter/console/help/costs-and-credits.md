@@ -76,20 +76,30 @@ uncollected batch is counted against the cap straight away, at an estimate per r
 replaced by the real cost when the batch is collected. This is what stops two runs in a row
 from each thinking the whole budget is free.
 
-Every screening model holds its own price against the cap: the highest of a flat $0.002 a
-job, the average it has actually cost you, and its list price for a typical job. A batched
-Anthropic model holds its batch price. So Haiku 5.5 holds $0.002 a job (its real cost is
-about a tenth of that), Sonnet 5.5 about $0.005 a job in a batch, and a model scored one job
-at a time (OpenRouter, say) its unbatched price. This is why a dearer screening model, such
-as Sonnet 5.5, is offered on [Models](/models) without **Save anyway**: it can no longer run
-past a cap on a price that is too low.
+Every screening model holds its own price against the cap, per job: the highest of a flat
+$0.002, the average it has actually cost you, and its list price for a typical job (a batched
+Anthropic model at its batch price). So Haiku 5.5 holds $0.002 a job (its real cost is about
+a tenth of that), and Sonnet 5.5 about $0.005 a job in a batch once it has been measured.
 
-The same figure decides how many jobs a run may send. A batch or a run is cut to what is left
-of the cap at that price, and a single job is sent only when one whole job fits. When what
+A model you have not used yet has no average, and the real cost of its first batch depends on
+how often the batch reuses the cached part of the prompt (your rubric and profile), which the
+batch service does not promise. So until its first batch is collected, an Anthropic model is
+held at its price with none of that cached part reused, sized from your own profile: about
+$0.012 to $0.014 a job for Sonnet 5.5. After the first collect, the measured average takes
+over.
+
+The same figure decides how many jobs a run may send: a batch or a run is cut to what is left
+of the cap at that figure, and a single job is sent only when one whole job fits. When what
 the cap holds is more than the estimate, the Models page, the re-score panel and Score now
-say so, and the re-score panel says how many jobs fit under the cap now.
+say so, and the re-score panel says how many jobs fit under the cap now. This is why a dearer
+screening model, such as Sonnet 5.5, is offered on [Models](/models) without **Save anyway**.
 
-Batches already submitted keep the hold of the model they were sent with until they are
+What this does and does not promise: a run never sends more jobs than the cap covers at the
+figure it holds. The hold is an estimate, not a bill: a batch of unusually long postings can
+still cost more than was held, and the cap then shows it the next time anything is scored.
+The cap stops new work; it does not cancel a batch already sent.
+
+Batches already submitted stay held at the figure they were sent with until they are
 collected; collecting one replaces its hold with what it really cost.
 
 A model the price table does not list is refused for `anthropic:` specs, because its cost

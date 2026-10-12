@@ -549,9 +549,10 @@ def test_sonnet_saves_without_save_anyway_and_its_plan_is_its_reservation(client
     text = unescape(r.text)
     assert "Save anyway" not in text and "Saved at" in text
     assert client.app.state.settings.scoring.screen_scorer == SONNET
-    # No history: the plan is priced at Sonnet's batch table price, which is what the cap
-    # holds, so the panel has no separate hold line.
-    assert "at $0.00507 per job" in text
+    # No history: the plan is priced at what the cap holds for Sonnet's first batch (its
+    # prefix as cache writes, above the warm $0.00507), so there is no separate hold line.
+    priced = re.search(r"at \$([0-9.]+) per job", text)
+    assert priced and float(priced.group(1)) > 0.00507
     assert 'id="rescore-reserve"' not in text
     assert requests_of(client) == [] and client.sent == []
 

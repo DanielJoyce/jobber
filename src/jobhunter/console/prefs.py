@@ -735,7 +735,9 @@ def signed(n: int | float) -> str:
 # ─── estimate (paid changes) ────────────────────────────────────────────────
 
 
-def cost_per_job(conn: sqlite3.Connection, scoring: Scoring | None = None) -> tuple[float, str]:
+def cost_per_job(
+    conn: sqlite3.Connection, scoring: Scoring | None = None, profile: Profile | None = None
+) -> tuple[float, str]:
     """Screen cost per job for the configured ``scoring.screen_scorer``.
 
     With ``scoring``, ``rescore.cost_per_job`` for that scorer: measured history for that
@@ -747,7 +749,7 @@ def cost_per_job(conn: sqlite3.Connection, scoring: Scoring | None = None) -> tu
     jobs, so its cost per call overstates the cost per job (about 8x for Jev).
     """
     if scoring is not None and "screen_scorer" not in scoring.scorer_problems():
-        return rs.cost_per_job(conn, scoring.screen_scorer, scoring)
+        return rs.cost_per_job(conn, scoring.screen_scorer, scoring, profile)
     row = conn.execute(
         "SELECT avg(cost_usd), count(*) FROM fit_score WHERE tier = 'screen' AND cost_usd > 0"
     ).fetchone()
@@ -770,7 +772,7 @@ def rescore_estimate(
     """Re-score options for a paid change: none / open A-E in 14 days / all open.
 
     Priced for ``scoring.screen_scorer`` when ``scoring`` is given (``cost_per_job``)."""
-    cost, source = cost_per_job(conn, scoring)
+    cost, source = cost_per_job(conn, scoring, profile)
     open_total, recent_ids = rs.open_scored(conn, profile, now)
     recent = len(recent_ids)
     options = [
