@@ -1,0 +1,33 @@
+/* Achievements board (specs/021 UI). Theme tokens only, so light and dark both follow. */
+.ach-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ach-summary { margin-top: 0; color: var(--text-secondary); }
+.ach-section h2 { border-bottom: 1px solid var(--grid); padding-bottom: 4px; margin-top: 24px; }
+.ach-grid { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); }
+.ach-card { display: flex; gap: 12px; padding: 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.ach-body { min-width: 0; flex: 1; }
+.ach-body h3 { margin: 0 0 2px; font-size: 1rem; overflow-wrap: anywhere; }
+.ach-body p { margin: 4px 0; }
+.ach-badge { width: 48px; height: 48px; flex: none; color: var(--text-secondary); }
+.ach-badge .ring { fill: none; stroke: currentColor; stroke-width: 2; stroke-dasharray: 4 3; }
+.ach-card[data-state="earned"] .ach-badge { color: var(--series-1); }
+.ach-card[data-state="earned"] .ach-badge .ring { stroke-dasharray: none; stroke-width: 3; }
+.ach-card[data-state="locked"], .ach-secret { border-style: dashed; }
+.ach-tier { font-size: 0.85rem; color: var(--text-secondary); }
+.ach-pips { letter-spacing: 2px; margin-right: 6px; color: var(--series-1); }
+.ach-desc { color: var(--text-primary); }
+.ach-hint, .ach-note, .ach-earned { font-size: 0.85rem; color: var(--text-secondary); }
+.ach-prog { display: flex; align-items: center; gap: 8px; }
+.ach-prog progress { appearance: none; -webkit-appearance: none; flex: 1; min-width: 0; height: 8px; border: 0; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.ach-prog progress::-webkit-progress-bar { background: var(--grid); border-radius: 4px; }
+.ach-prog progress::-webkit-progress-value { background: var(--series-1); border-radius: 4px; }
+.ach-prog progress::-moz-progress-bar { background: var(--series-1); border-radius: 4px; }
+.ach-count { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; }
+.ach-why summary { cursor: pointer; font-size: 0.85rem; color: var(--link); }
+.ach-why ul { margin: 4px 0 0; padding-left: 18px; font-size: 0.85rem; }
+.ach-settings { margin-top: 28px; }
+.ach-settings fieldset { border: 1px solid var(--grid); border-radius: 6px; margin: 8px 0; min-width: 0; }
+.ach-settings label { display: inline-block; margin-right: 14px; }
+@media (prefers-reduced-motion: no-preference) {
+  .ach-card { animation: ach-fade 150ms ease-out; }
+  @keyframes ach-fade { from { opacity: 0; } to { opacity: 1; } }
+}

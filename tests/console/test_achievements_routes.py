@@ -71,6 +71,12 @@ def unlocks(db_path):
     }
 
 
+def earned(page, ach_id):
+    m = re.search(rf'<li class="ach-card" data-state="(\w+)" data-id="{re.escape(ach_id)}"', page)
+    assert m, ach_id
+    return m.group(1) == "earned"
+
+
 def test_nav_entry_and_stub_page(client, db_path):
     prefs_save(db_path)
     r = client.get("/achievements")
@@ -198,9 +204,10 @@ def test_busy_database_still_renders_from_stored_rows(client, db_path):
         holder.execute("ROLLBACK")
         holder.close()
     assert r.status_code == 200
-    assert "Tuned in" in r.text and "Found it yourself" not in r.text
+    assert earned(r.text, "search.found") is False and earned(r.text, "setup.prefs")
     assert elapsed < 1.5
-    assert "Found it yourself" in client.get("/achievements").text  # the next visit retries
+    # the next visit retries
+    assert earned(client.get("/achievements").text, "search.found")
 
 
 def test_busy_evaluate_skips_the_seen_write(client, db_path, monkeypatch):
@@ -225,3 +232,46 @@ def test_busy_evaluate_skips_the_seen_write(client, db_path, monkeypatch):
     assert calls == []
     client.get("/achievements")
     assert len(calls) == 1  # the next, unblocked visit marks it
+
+
+def test_board_cards_sections_and_copy(client, db_path):
+    prefs_save(db_path)
+    page = client.get("/achievements").text
+    for label in ("Setup", "Search", "Apply", "Follow-up", "Outcomes", "Rhythm"):
+        assert f">{label}</h2>" in page
+    assert earned(page, "setup.prefs") and not earned(page, "apply.momentum")
+    # locked tiered card: tier text beside the pips, a hint, and a visible count
+    assert "Locked" in page and "Hint: " in page
+    assert re.search(r"0 of 5</span>", page)
+    # hidden achievements stay secret until earned, and never name rejections
+    assert "Hidden achievement" in page and "Bounce back" not in page
+    assert "The long game" not in page
+    assert re.search(r"\bsymbol id=\"ach-apply\"", page) and 'aria-hidden="true"' in page
+    for word in ("rejected", "Rejection"):
+        assert word not in page
+
+
+def test_why_lists_evidence_with_resolvable_links(client, db_path):
+    prefs_save(db_path)
+    page = client.get("/achievements").text
+    assert "<summary>Why</summary>" in page and "Earned Oct" in page
+    assert "Prefs saved" in page
+
+
+def test_board_marks_progress_for_tiered_search_card(client, db_path):
+    for i in range(3):
+        capture(db_path, i)
+    page = client.get("/achievements").text
+    assert 'data-state="earned" data-id="search.found"' in page
+    assert "Tier " not in page.split('data-id="search.found"')[1].split("</li>")[0]
+
+
+def test_settings_form_labels_and_state(client, db_path):
+    client.post("/achievements/settings", data={"hidden_set": "1", "hidden": ["rhythm"]})
+    client.post("/achievements/settings", data={"notify": "0"})
+    page = client.get("/achievements").text
+    assert re.search(r'name="notify" value="0" checked', page)
+    assert re.search(r'name="hidden" value="rhythm" checked', page)
+    assert "<legend>Hide categories</legend>" in page
+    assert ">Rhythm</h2>" not in page
+    assert page.count("<label>") == page.count("</label>") >= 8
