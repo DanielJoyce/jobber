@@ -33,6 +33,7 @@ from jobhunter.core.fetch.cache import ContentCache
 from jobhunter.core.fetch.errors import (
     AccessDenied,
     FetchError,
+    RobotsDisallowed,
     SourceBlocked,
     TierError,
     TransientFetchError,
@@ -146,6 +147,8 @@ class FetchContext:
         self._pw: Any = None
         self._browser: Any = None
         self._page: Page | None = None
+        # Counts for the run's progress lines (bug 85e102e): never URLs or content.
+        self.stats = {"pages": 0, "cached": 0, "robots_skips": 0}
 
     # ─── public API ────────────────────────────────────────────────────────
 
@@ -265,8 +268,14 @@ class FetchContext:
         hops = 0
         while True:
             if check_robots:
-                self._check_robots(str(request.url))
+                try:
+                    self._check_robots(str(request.url))
+                except RobotsDisallowed:
+                    self.stats["robots_skips"] += 1
+                    raise
             result, response = self._fetch_one(request, ttl_s)
+            if check_robots:
+                self.stats["cached" if response is None else "pages"] += 1
             if response is None:
                 result.url = url
                 return result

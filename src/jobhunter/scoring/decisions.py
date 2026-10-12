@@ -40,6 +40,7 @@ from typing import Any
 
 import httpx
 
+from jobhunter import logsetup
 from jobhunter.config import DECISIONS_PROVIDERS, OpenRouter
 from jobhunter.core import rejections
 from jobhunter.core.models import LocationScope, Verdict
@@ -918,6 +919,7 @@ def score_decisions(
     out = DecisionsResult()
     groups = eligible(conn, profile, scorer.name, limit, group_ids=group_ids, new_only=new_only)
     if not groups:
+        logger.info("decisions scoring: no eligible groups")
         return out
     by_cid = {f"g{g['group_id']}": g for g in groups}
     items = profile_items(profile)
@@ -927,10 +929,17 @@ def score_decisions(
         jobs_per_request=scorer.jobs_per_request,
         max_input_tokens=scorer.max_input_tokens,
     )
+    label = logsetup.spec_label(scorer.name)
+    logger.info(
+        "decisions scoring %d groups in %d requests with %s", len(groups), len(batches), label
+    )
+    progress = logsetup.Throttle(logger)
+    t0 = time.monotonic()
     for batch in batches:
         body = build_body(scorer.model, profile, batch, items=items)
         if remaining_usd is not None and remaining_usd() < scorer.estimate_cost(body):
             logger.warning("spend cap reached: %d requests not sent", len(batches) - out.requests)
+            logger.info("decisions scoring stopped at the spend cap")
             out.capped = True
             break
         out.requests += 1
@@ -988,6 +997,28 @@ def score_decisions(
                 resp.usage.output_tokens,
                 cost,
             )
+        progress.tick(
+            "decisions scoring %s: %d/%d requests, %d written, %d errored, cost $%.4f",
+            label,
+            out.requests,
+            len(batches),
+            out.written,
+            out.errored,
+            out.cost_usd,
+        )
+    logger.info(
+        "decisions scoring %s done in %.1fs: %d requests, %d written, %d duplicate, %d invalid, "
+        "%d errored, capped=%s, cost $%.4f",
+        label,
+        time.monotonic() - t0,
+        out.requests,
+        out.written,
+        out.duplicate,
+        out.invalid,
+        out.errored,
+        out.capped,
+        out.cost_usd,
+    )
     return out
 
 

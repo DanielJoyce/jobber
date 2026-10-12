@@ -182,7 +182,15 @@ def _say_waiting(lock: Path) -> None:
 
 
 @app.callback()
-def _load_env(ctx: typer.Context) -> None:
+def _load_env(
+    ctx: typer.Context,
+    verbose: Annotated[
+        int, typer.Option("--verbose", "-v", count=True, help="More log output (DEBUG).")
+    ] = 0,
+    quiet: Annotated[
+        int, typer.Option("--quiet", "-q", count=True, help="Less log output (WARNING, ERROR).")
+    ] = 0,
+) -> None:
     """Load .env secrets (e.g. USAJOBS_API_KEY) before any command runs, then refuse to run
     against a new database while the real one is still in the old layout."""
     if ctx.invoked_subcommand == "console":
@@ -198,6 +206,8 @@ def _load_env(ctx: typer.Context) -> None:
     _SECRETS_REPORT = secrets.startup(
         load_settings, load_env_files, lambda line: typer.echo(line, err=True)
     )
+    if not ctx.resilient_parsing:
+        _configure_logging(verbose, quiet)
     if ctx.invoked_subcommand == "console":
         # The console's config watch compares .env files against what was loaded now
         # (salted digests, in memory only; specs/019 Addendum B).
@@ -209,6 +219,20 @@ def _load_env(ctx: typer.Context) -> None:
     if "--help" in sys.argv[1:]:
         return
     _refuse_split_data()
+
+
+def _configure_logging(verbose: int, quiet: int) -> None:
+    """One stderr handler for the whole process (bug 85e102e); the level comes from -v/-q, then
+    JOBHUNTER_LOG_LEVEL, then [logging] level in config.toml, else INFO."""
+    from jobhunter import logsetup
+
+    try:
+        config_level = load_settings().logging.level
+    except Exception:  # a broken config file: the command itself reports it
+        config_level = None
+    logsetup.configure(
+        logsetup.resolve_level(verbose=verbose, quiet=quiet, config_level=config_level)
+    )
 
 
 def _refuse_split_data() -> None:
@@ -1293,11 +1317,16 @@ def console(
 def _serve(app_, bind_host: str, bind_port: int, uvicorn) -> None:
     """Run uvicorn with a handle on the server, so a console Restart can stop it gracefully
     and then re-exec or exit 42 (specs/019 Addendum B "Restart", S12b)."""
+    from jobhunter import logsetup
     from jobhunter.console import restart
     from jobhunter.ops import version
 
     config = uvicorn.Config(
-        app_, host=bind_host, port=bind_port, timeout_graceful_shutdown=restart.drain_seconds()
+        app_,
+        host=bind_host,
+        port=bind_port,
+        timeout_graceful_shutdown=restart.drain_seconds(),
+        log_config=logsetup.uvicorn_log_config(),
     )
     server = uvicorn.Server(config)
     how = restart.kind()

@@ -16,6 +16,7 @@ import logging
 import math
 import re
 import sqlite3
+import time
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from jobhunter import logsetup
 from jobhunter.config import Scoring
 from jobhunter.core import rejections
 from jobhunter.core.models import LocationScope, Screen
@@ -776,11 +778,13 @@ def submit_batch(
             logger.warning("spend cap: screening limited to %d groups", affordable)
         limit = min(limit, affordable)
     if limit <= 0:
+        logger.info("screen batch not submitted: spend cap leaves room for 0 groups")
         return None
     groups = eligible_groups(
         conn, profile, scorer=scorer, limit=limit, group_ids=group_ids, new_only=new_only
     )
     if not groups:
+        logger.info("screen batch not submitted: no eligible groups")
         return None
 
     requests = _score_requests(conn, groups, profile, now=now, rejection_days=rejection_days)
@@ -806,7 +810,13 @@ def submit_batch(
             "VALUES (?, ?, ?, ?)",
             [(batch_id, f"g{g['group_id']}", g["group_id"], g["input_rev"]) for g in groups],
         )
-    logger.info("submitted screen batch %s with %d requests", batch_id, len(requests))
+    logger.info(
+        "submitted screen batch %s: %d requests, model %s, hold $%.2f against the cap",
+        batch_id,
+        len(requests),
+        logsetup.spec_label(scorer),
+        per_request * len(requests),
+    )
     return batch_id
 
 
@@ -871,7 +881,9 @@ def collect_batch(
         return CollectResult(status="already_collected")
     scorer = AnthropicScorer(client, batch_row["model"])
     if not scorer.ready(batch_id):
+        logger.info("batch %s is still in progress", batch_id)
         return CollectResult(status="in_progress")
+    logger.info("batch %s ended; collecting %s requests", batch_id, batch_row["request_count"])
     if batch_row["scoring_version"] != profile.scoring_version:
         logger.warning("batch %s was scored with an older profile scoring_version", batch_id)
 
@@ -973,6 +985,19 @@ def collect_batch(
     out.cache_read_zero = check_cache_reads(cache_reads)
     if out.unknown_ids:
         logger.warning("batch %s returned unknown custom_ids: %s", batch_id, out.unknown_ids)
+    logger.info(
+        "batch %s collected: %d succeeded, %d written, %d duplicate, %d invalid, %d errored, "
+        "%d canceled, %d expired, cost $%.4f",
+        batch_id,
+        out.succeeded,
+        out.written,
+        out.duplicate,
+        out.invalid,
+        out.errored,
+        out.canceled,
+        out.expired,
+        out.cost_usd,
+    )
     return out
 
 
@@ -1023,7 +1048,9 @@ def collect_pending(
     others; it stays uncollected and is retried on the next call.
     """
     results: dict[str, CollectResult] = {}
-    for batch_id in pending_batch_ids(conn):
+    pending = pending_batch_ids(conn)
+    logger.info("collecting %d pending screen batches", len(pending))
+    for batch_id in pending:
         try:
             results[batch_id] = collect_batch(conn, client, batch_id, profile, now=now)
         except Exception as exc:  # one bad batch must not block the rest
@@ -1194,15 +1221,21 @@ def score_sync(
             )
         limit = min(limit, affordable)
     if limit <= 0:
+        logger.info("sync scoring skipped: spend cap leaves room for 0 groups")
         return out
     groups = eligible_groups(
         conn, profile, scorer=scorer.name, limit=limit, group_ids=group_ids, new_only=new_only
     )
     if not groups:
+        logger.info("sync scoring: no eligible groups")
         return out
     workers = max(1, int(getattr(getattr(scorer, "config", None), "max_concurrency", 1) or 1))
     chunk = max(SYNC_CHUNK, workers)
     key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
+    label = logsetup.spec_label(scorer.name)
+    logger.info("sync scoring %d groups with %s in chunks of %d", len(groups), label, chunk)
+    progress = logsetup.Throttle(logger)
+    t0 = time.monotonic()
     pos = 0
     reserved = 0.0  # what this run has reserved for the chunks it sent
     while pos < len(groups):
@@ -1227,8 +1260,29 @@ def score_sync(
             reserved += len(part) * per
         pos += len(part)
         _score_sync_chunk(conn, scorer, profile, part, key, out, now, rejection_days)
+        progress.tick(
+            "sync scoring %s: %d/%d groups sent, %d written, %d errored, cost $%.4f",
+            label,
+            pos,
+            len(groups),
+            out.written,
+            out.errored,
+            out.cost_usd,
+        )
         if len(part) < size:
             break
+    logger.info(
+        "sync scoring %s done in %.1fs: %d sent, %d written, %d duplicate, %d invalid, "
+        "%d errored, cost $%.4f",
+        label,
+        time.monotonic() - t0,
+        out.submitted,
+        out.written,
+        out.duplicate,
+        out.invalid,
+        out.errored,
+        out.cost_usd,
+    )
     return out
 
 
@@ -1590,6 +1644,7 @@ def _score_sync_packed(
         key=lambda g: g["group_id"],
     )
     if not groups:
+        logger.info("packed scoring: no eligible groups")
         return out
     by_id = {f"g{g['group_id']}": g for g in groups}
     texts = [
@@ -1604,6 +1659,16 @@ def _score_sync_packed(
     )
     workers = max(1, int(getattr(getattr(scorer, "config", None), "max_concurrency", 1)))
     key = _Key(scorer.name, PROMPT_VERSION, profile.scoring_version)
+    label = logsetup.spec_label(scorer.name)
+    logger.info(
+        "packed scoring %d groups in %d requests with %s (%d at a time)",
+        len(groups),
+        len(packs),
+        label,
+        workers,
+    )
+    progress = logsetup.Throttle(logger)
+    t0 = time.monotonic()
     pos = 0
     # Nothing known about the price: one pack goes alone first, so its real cost is measured
     # before a full wave is sent.
@@ -1694,4 +1759,25 @@ def _score_sync_packed(
                     else:
                         out.written += 1
                         out.unverified += int(unverified)
+        progress.tick(
+            "packed scoring %s: %d/%d requests done, %d written, %d errored, cost $%.4f",
+            label,
+            pos,
+            len(packs),
+            out.written,
+            out.errored,
+            out.cost_usd,
+        )
+    logger.info(
+        "packed scoring %s done in %.1fs: %d requests, %d written, %d duplicate, %d invalid, "
+        "%d errored, cost $%.4f",
+        label,
+        time.monotonic() - t0,
+        out.requests,
+        out.written,
+        out.duplicate,
+        out.invalid,
+        out.errored,
+        out.cost_usd,
+    )
     return out

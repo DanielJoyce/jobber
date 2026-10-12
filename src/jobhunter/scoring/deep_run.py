@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from jobhunter import logsetup
 from jobhunter.config import Scoring
 from jobhunter.core import rejections
 from jobhunter.pipeline.listing import to_iso
@@ -408,6 +409,13 @@ def run_request(
     worst = deep.worst_case_usd(scorer)
     pr = _Progress(request_id)
     status, error = "done", None
+    logger.info(
+        "deep pass #%s start: %d groups, scorer %s, ceiling $%.2f",
+        request_id,
+        len(group_ids),
+        logsetup.spec_label(scorer),
+        max_usd,
+    )
     try:
         client = (client_factory or anthropic.Anthropic)()
     except Exception as exc:
@@ -467,4 +475,13 @@ def run_request(
                 )
             if not pr.save(conn, now()):
                 return  # marked interrupted elsewhere; never turn that back into done
+    logger.info(
+        "deep pass #%s %s: %d of %d groups run, %d scored, spent $%.4f",
+        request_id,
+        status,
+        pr.done,
+        len(group_ids),
+        pr.scored,
+        pr.spent,
+    )
     pr.save(conn, now(), status=status, error=error, done_at=to_iso(now()))

@@ -339,11 +339,19 @@ class MailAlertsAdapter:
         with auth.translate_refresh_error():
             batch = sync.plan_batch(service, conn, label, self.limit)
         index = DedupeIndex.build(conn, src.key)
+        log.info("mail fetch: %d new messages to read", len(batch.message_ids))
+        before = (self.stats.messages, self.stats.entries, self.stats.new)
         for mid in batch.message_ids:
             with auth.translate_refresh_error():
                 msg = sync.fetch_message(service, mid)
             yield from self._process(conn, src, msg, index)
         sync.store_watermark(conn, label, batch.label_id, batch.history_id, self._clock())
+        log.info(
+            "mail fetch done: %d messages, %d alert entries, %d new",
+            self.stats.messages - before[0],
+            self.stats.entries - before[1],
+            self.stats.new - before[2],
+        )
 
     def _process(
         self, conn: sqlite3.Connection, src: SourceRow, msg: MailMessage, index: DedupeIndex

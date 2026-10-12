@@ -25,11 +25,13 @@ import logging
 import math
 import sqlite3
 import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from jobhunter import logsetup
 from jobhunter.config import Scoring
 from jobhunter.core import db
 from jobhunter.core.models import Bucket
@@ -734,6 +736,13 @@ def run_request(
         attach_plan(conn, request_id, plan)
     _claim(conn, request_id, spec, plan.total, now())
     st = RunState(request_id, total=plan.total)
+    t_start = time.monotonic()
+    logger.info(
+        "re-score #%d start: %d groups, scorer %s",
+        request_id,
+        plan.total,
+        logsetup.spec_label(spec),
+    )
     # The caller's own plan (the estimate it showed) already ran the prefilter, so its counts
     # are the ones worth reporting; this run's plan then finds nothing left to evaluate.
     pre = prefiltered if prefiltered and prefiltered.get("evaluated") else plan.prefilter
@@ -749,6 +758,16 @@ def run_request(
         except Exception as exc:  # recorded on the row; the caller reads it
             logger.warning("re-score #%d failed: %s", request_id, exc)
             status, error = "failed", str(exc) or type(exc).__name__
+    logger.info(
+        "re-score #%d %s in %.1fs: %d attempted, %d scored, %d errored, cost $%.4f",
+        request_id,
+        status,
+        time.monotonic() - t_start,
+        st.attempted,
+        st.scored,
+        st.errored,
+        st.cost_usd,
+    )
     if not _save(conn, st, now(), status=status, error=error, done_at=to_iso(now())):
         # Marked interrupted meanwhile: keep that status, but record what this run did.
         conn.execute(
@@ -844,6 +863,7 @@ def _execute(
         return
     make = scorer_factory or (lambda s: scorer_from_string(s, scoring=scoring))
     scorer = make(spec)
+    progress = logsetup.Throttle(logger)
     pos = 0
     stop: str | None = None
     while pos < len(ids):
@@ -876,6 +896,15 @@ def _execute(
         st.scored += res.written
         st.errored += res.errored + res.invalid
         st.cost_usd += res.cost_usd
+        progress.tick(
+            "re-score #%d: %d/%d groups attempted, %d scored, %d errored, cost $%.4f",
+            st.request_id,
+            st.attempted,
+            len(ids),
+            st.scored,
+            st.errored,
+            st.cost_usd,
+        )
         if not _save(conn, st, now()):
             raise LostClaim("stopped: another process marked this run interrupted")
         if getattr(res, "capped", False) or res.submitted < waiting:
