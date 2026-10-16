@@ -114,6 +114,15 @@ Not for every job. Resolution costs requests, and most jobs are never looked at.
 - **Re-checked** nightly for every application still at `interested` or `preparing`, so a
   posting that closed while you were drafting a cover letter is flagged the next morning.
 
+**Retries (bug c369bcc).** A link is *settled* when the user set it, or it is `expired` or
+`blocked`, or `live` anywhere but a job board copy or a tracker (`HostTier.aggregator`,
+`HostTier.tracker`). Anything else (no row, a deferred try, `unresolved`, a live board copy) is
+tried again, nightly and on demand, up to `apply_links.max_attempts` (default 5) tries in all,
+counted per group in `apply_link_attempt` (migration 0043) and spaced 1 h, 4 h, 12 h, then 20 h
+apart. A retry replaces the stored row only with a link no worse (`resolve_group(
+only_if_better=True)`); a live board copy stays the Apply target meanwhile. Reset on the job
+page clears the count.
+
 ## Data model
 
 ```sql

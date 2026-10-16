@@ -616,6 +616,7 @@ def resolve_group(
     max_fetches: int = MAX_FETCH_STARTS,
     only_if_settled: bool = False,
     defer_transient: bool = False,
+    only_if_better: bool = False,
 ) -> ApplyLink:
     """Resolve a job group's apply link and upsert its ``apply_link`` row.
 
@@ -632,6 +633,10 @@ def resolve_group(
     ``Resolution.transient``) and no start settled the group, raise :class:`Deferred` and
     write nothing, so an outage never stores a worse link in place of the one a later walk
     would find.
+
+    ``only_if_better`` (a retry of a link that is not settled, bug c369bcc): the new result
+    replaces the stored row only when it is no worse by ``link_rank``, so a retry never trades
+    a live board copy for a failed fetch.
     """
     existing = get_apply_link(conn, group_id)
     if existing is not None and existing.chosen_by == "user":
@@ -685,8 +690,31 @@ def resolve_group(
     answered = best.status in (ApplyStatus.live, ApplyStatus.expired) or best.login
     if only_if_settled and existing is not None and not answered:
         return existing
+    if (
+        only_if_better
+        and existing is not None
+        and existing.chosen_by != "user"
+        and link_rank(link, classes) > link_rank(existing, classes)
+    ):
+        return existing
     _save(conn, link)
     return link
+
+
+def link_rank(link: ApplyLink, classes: HostClasses) -> tuple[int, int, int]:
+    """Lower is better, for replacing a stored row (bug c369bcc): an answer from the ATS or
+    the employer's site (live, or closed there), then a live link elsewhere (a board copy, a
+    tracker), then anything else (unresolved, a dead copy, a login wall); then by final host
+    and status."""
+    tier = classes.tier(link.final_url)
+    on_employer = tier <= HostTier.employer and not is_login_link(link)
+    if on_employer and link.status in (ApplyStatus.live, ApplyStatus.expired):
+        group = 0
+    elif link.status == ApplyStatus.live and not is_login_link(link):
+        group = 1
+    else:
+        group = 2
+    return (group, int(tier), _RANK[link.status])
 
 
 def set_user_link(conn: sqlite3.Connection, group_id: int, url: str, now: datetime) -> ApplyLink:

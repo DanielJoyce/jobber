@@ -36,18 +36,31 @@ the Apply button do not wait on a slow site the next morning:
 - jobs you shortlisted (an application at **interested** or **preparing**), then
 - jobs not yet triaged whose fit is in bucket **A** or **B**, best first.
 
-Only jobs with no apply link yet are taken. A link you set by hand is never touched, and a job
-whose link already stopped at a login page is never fetched again, here or anywhere else: set
-the link by hand on the job page if you find the real one. Postings past their closing date
-are skipped. Requests respect robots.txt and each site's rate limit, and nothing is charged:
+Only jobs whose apply link is not resolved yet are taken: no link yet, a link that could not
+be resolved, or a link that ends on a job board's copy of the posting (such as the NLX
+`*.dejobs.org` mirrors) or a tracking redirect rather than the employer's site or applicant
+tracking system. Until something better is found, Apply still opens that board copy, and the
+job page says "not resolved yet (board copy)". A link you set by hand is never touched, a
+closed posting is not tried again, and a job whose link already stopped at a login page is
+never fetched again, here or anywhere else: set the link by hand on the job page if you find
+the real one. Postings past their closing date are skipped.
+
+Each job gets up to `apply_links.max_attempts` tries (default 5), counting this stage and the
+tries the job page makes when you open it. A job gets at most one try per run, and the tries
+are spaced: 1 hour after the first, then 4 hours, 12 hours, and 20 hours, so the next night's
+run always qualifies. A try that finds nothing better than the link already stored keeps that
+link. After the last try the job keeps **Open posting** (or the board copy) and the job page
+says it gave up; the count shows there while the link is unresolved ("tried 2 of 5 times").
+To start over, set a link by hand and then press **Reset to the found link**: that clears the
+count. Requests respect robots.txt and each site's rate limit, and nothing is charged:
 no scorer runs in this stage. A redirect on the way (most aggregator links are one) is read
 from its headers alone; only a page the walk has to look at, such as the posting itself, is
 downloaded.
 
 If a site is having trouble when the run reaches it (it answers 429 or a 5xx error, asks for a
 long pause, cannot be reached, or its robots.txt cannot be read) and no other link for the job
-settled it, nothing is saved for that job: it is counted as `deferred` and tried again next
-run, so a bad night never fixes a worse link in place.
+settled it, nothing is saved for that job: it is counted as `deferred` and tried again on a
+later run while it has tries left, so a bad night never fixes a worse link in place.
 
 At most `apply_links.per_run` jobs per run (default 200), with `apply_links.workers`
 (default 4) at once, and no job starts after `apply_links.max_minutes` (default 20) so the run

@@ -179,6 +179,24 @@ def test_resolved_final_url_triggers_merge_and_prefers_live_link(conn):
     assert len(row) == 1 and (row[0]["job_group_id"], row[0]["status"]) == (g1, "live")
 
 
+@pytest.mark.parametrize("survivor_has", [True, False])
+def test_merge_moves_apply_link_tries(conn, survivor_has):
+    """Bug c369bcc: apply_link_attempt has a job_group FK; a merge keeps the survivor's count,
+    or takes the absorbed group's, and never fails on it."""
+    g1, g2 = mkgroup(conn), mkgroup(conn)
+    mkjob(conn, "a", gid=g1, apply_url=LEVER)
+    mkjob(conn, "b", gid=g2, apply_url=LEVER + "/apply")
+    tries = {g2: 4, g1: 2} if survivor_has else {g2: 4}
+    for gid, n in tries.items():
+        conn.execute(
+            "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at) VALUES (?, ?, ?)",
+            (gid, n, ISO),
+        )
+    assert merge_by_apply_url(conn, now=NOW).groups_merged == 1
+    rows = conn.execute("SELECT job_group_id, attempts FROM apply_link_attempt").fetchall()
+    assert [tuple(r) for r in rows] == [(g1, 2 if survivor_has else 4)]
+
+
 def test_manual_split_groups_are_not_remerged(conn):
     g1, g2 = mkgroup(conn), mkgroup(conn, method="manual")
     mkjob(conn, "a", gid=g1, apply_url=GH)

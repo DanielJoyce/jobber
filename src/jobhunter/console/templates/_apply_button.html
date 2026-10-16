@@ -13,6 +13,7 @@
   </div>
   {% if b.chain %}<div class="apply-chain muted">{{ b.chain }}</div>{% endif %}
   {% if b.why %}<div class="apply-why muted" id="apply-why">{{ b.why }}</div>{% endif %}
+  {% if b.note %}<div class="apply-note muted" id="apply-note">{{ b.note }}</div>{% endif %}
   {% if not b.pending %}
   {% if b.user_set %}
   <form method="post" action="/job/{{ b.group_id }}/apply-link" class="apply-override">

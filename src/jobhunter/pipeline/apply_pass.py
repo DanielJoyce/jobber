@@ -9,16 +9,24 @@ them ahead of time for the groups most likely to be opened:
 - **A/B fit**: untriaged groups whose latest score (deep preferred) lands in bucket A or B
   under the current profile, best first.
 
-Only groups with no ``apply_link`` row are taken, so a link you set by hand, a link already
-resolved and a row already stopped at a login wall (``blocked``) are never fetched here; the
-pass never retries a blocked row. Postings past their closing date are skipped.
+Only groups whose link is not settled are taken (bug c369bcc, ``apply_attempts``): no row yet
+(or a deferred try that stored none), an ``unresolved`` row, or a ``live`` row that ends on a
+job board copy or a tracker. A link you set by hand, and a row that is ``expired``,
+``blocked`` (a login wall) or live on an ATS or the employer's site, are never fetched here.
+Each group gets at most one try per run and ``apply_links.max_attempts`` tries in all (counted
+with the console's on-demand tries in ``apply_link_attempt``), spaced by
+``apply_attempts.BACKOFF_H``; after the last the group keeps "Open posting" (or its board copy).
+A retry replaces a stored row only with a link no worse (``only_if_better``). Postings past
+their closing date are skipped.
 
 Bounds: at most ``apply_links.per_run`` groups, and no group starts after
-``apply_links.max_minutes`` (the collect unit waits for the run lock only so long).
+``apply_links.max_minutes`` (the collect unit waits for the run lock only so long). A group
+the pass did not start (``late``) is not counted as a try.
 
 An outage never freezes a worse link: when a start failed transiently (429, 5xx, a transport
 error, a host held by Retry-After, an unreachable robots.txt) and nothing settled the group,
-no row is written (``resolve_group(defer_transient=True)``) and the group stays eligible.
+no row is written (``resolve_group(defer_transient=True)``); the try counts and the group
+stays eligible while it has tries left.
 
 Network only through ``FetchContext`` (``applylink.resolve_group``): robots.txt and the
 process-wide per-host rate limits hold across threads. Nothing here spends credits. With a
@@ -43,7 +51,8 @@ from jobhunter.config import Settings
 from jobhunter.core import db
 from jobhunter.core.fetch import fetch_context_for_url
 from jobhunter.core.models import Bucket
-from jobhunter.pipeline import applylink
+from jobhunter.pipeline import apply_attempts, applylink
+from jobhunter.pipeline.apply_rank import HostClasses
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.pipeline.locations import load_many_job_group_locations
 from jobhunter.scoring.buckets import compute_row
@@ -57,6 +66,8 @@ LIKELY_BUCKETS = (Bucket.A, Bucket.B)
 USER_LINK = "user_link"
 DEFERRED = "deferred"
 LATE = "late"  # not started: the pass ran out of time
+KEPT = "kept"  # a retry found nothing better: the stored row stays
+BOARD = "board"  # live, but on a job board copy or a tracker: not resolved yet
 
 
 class PassCancelled(BaseException):
@@ -72,7 +83,7 @@ class Candidate:
 
 @dataclass
 class PassResult:
-    candidates: int = 0  # groups that qualified (no row yet), before the bound
+    candidates: int = 0  # groups that qualified (link not settled, a try due), before the bound
     shortlist: int = 0
     ab: int = 0
     tried: int = 0  # groups started
@@ -93,6 +104,8 @@ class PassResult:
             "expired": o["expired"],
             "left": max(0, self.candidates - self.tried),
             "late": o[LATE],
+            "board": o[BOARD],
+            "kept": o[KEPT],
             "user_link": o[USER_LINK],
             "candidates": self.candidates,
             "shortlist": self.shortlist,
@@ -102,15 +115,18 @@ class PassResult:
 
 
 _OPEN = "(j.closes_at IS NULL OR j.closes_at > :now)"
+_MAYBE = apply_attempts.MAYBE_UNSETTLED_SQL
+_TRIES = "(t.attempts IS NULL OR t.attempts < :max_attempts)"
 
 _SHORTLIST_SQL = f"""
 SELECT g.id
 FROM job_group g
 JOIN job j ON j.id = g.canonical_job_id
 LEFT JOIN apply_link a ON a.job_group_id = g.id
+LEFT JOIN apply_link_attempt t ON t.job_group_id = g.id
 LEFT JOIN label l ON l.job_group_id = g.id
 LEFT JOIN application ap ON ap.job_group_id = g.id
-WHERE a.job_group_id IS NULL AND {_OPEN}
+WHERE {_MAYBE} AND {_TRIES} AND {_OPEN}
   AND (ap.status IN ('interested', 'preparing')
        OR (ap.id IS NULL AND l.label = 'interesting'))
 ORDER BY g.id DESC
@@ -126,23 +142,44 @@ JOIN fit_score fs ON fs.id = (
     SELECT f2.id FROM fit_score f2 WHERE f2.job_group_id = g.id
     ORDER BY (f2.tier = 'deep') DESC, f2.created_at DESC, f2.id DESC LIMIT 1)
 LEFT JOIN apply_link a ON a.job_group_id = g.id
+LEFT JOIN apply_link_attempt t ON t.job_group_id = g.id
 LEFT JOIN label l ON l.job_group_id = g.id
-WHERE a.job_group_id IS NULL AND l.job_group_id IS NULL AND {_OPEN}
+WHERE {_MAYBE} AND {_TRIES} AND l.job_group_id IS NULL AND {_OPEN}
   AND NOT EXISTS (SELECT 1 FROM application ap WHERE ap.job_group_id = g.id)
 """
 
 
+def eligible(conn: sqlite3.Connection, group_id: int, *, now: datetime, max_attempts: int) -> bool:
+    """A group the SQL let through: its link is not settled and a try is due."""
+    if not apply_attempts.may_retry(conn, group_id, now=now, max_attempts=max_attempts):
+        return False
+    link = applylink.get_apply_link(conn, group_id)
+    return apply_attempts.unsettled(conn, link, HostClasses.load(conn, group_id) if link else None)
+
+
 def select_groups(
-    conn: sqlite3.Connection, profile: Profile | None, *, now: datetime
+    conn: sqlite3.Connection,
+    profile: Profile | None,
+    *,
+    now: datetime,
+    max_attempts: int = apply_attempts.DEFAULT_MAX_ATTEMPTS,
 ) -> list[Candidate]:
     """Every group the pass would resolve, in order: shortlisted (newest first), then A, then
     B (best overall first). A/B needs the profile; without one only the shortlist counts."""
-    params = {"now": to_iso(now)}
-    out = [Candidate(r[0], "shortlist") for r in conn.execute(_SHORTLIST_SQL, params)]
+    params = {"now": to_iso(now), "max_attempts": max_attempts}
+
+    def ok(gid: int) -> bool:
+        return eligible(conn, gid, now=now, max_attempts=max_attempts)
+
+    out = [Candidate(r[0], "shortlist") for r in conn.execute(_SHORTLIST_SQL, params) if ok(r[0])]
     if profile is None:
         return out
     taken = {c.group_id for c in out}
-    rows = [r for r in conn.execute(_SCORED_SQL, params) if r["group_id"] not in taken]
+    rows = [
+        r
+        for r in conn.execute(_SCORED_SQL, params)
+        if r["group_id"] not in taken and ok(r["group_id"])
+    ]
     locs = load_many_job_group_locations(conn, (r["job_id"] for r in rows))
     likely: list[Candidate] = []
     for r in rows:
@@ -156,12 +193,33 @@ def select_groups(
 def resolve_one(
     conn: sqlite3.Connection, group_id: int, *, now: datetime, ctx_factory: applylink.CtxFactory
 ) -> str:
-    """Resolve one group; the outcome label: a stored status, ``user_link`` (a link set by
-    hand, before or during the walk, left as it is) or ``deferred`` (nothing written).
-    ``ValueError``: the group has no URL to start from."""
+    """Resolve one group and count the try (``apply_attempts``); the outcome label: a stored
+    status, ``board`` (stored live on a board copy or tracker), ``kept`` (nothing better than
+    the stored row), ``user_link`` (a link set by hand, before or during the walk, left as it
+    is) or ``deferred`` (nothing written). ``ValueError``: the group has no URL to start from."""
+    try:
+        outcome = _resolve_one(conn, group_id, now=now, ctx_factory=ctx_factory)
+    except ValueError:
+        apply_attempts.record(conn, group_id, now=now, outcome="no_url")
+        raise
+    except Exception:
+        apply_attempts.record(conn, group_id, now=now, outcome="error")
+        raise
+    apply_attempts.record(conn, group_id, now=now, outcome=outcome)
+    return outcome
+
+
+def _resolve_one(
+    conn: sqlite3.Connection, group_id: int, *, now: datetime, ctx_factory: applylink.CtxFactory
+) -> str:
     try:
         link = applylink.resolve_group(
-            conn, group_id, now=now, ctx_factory=ctx_factory, defer_transient=True
+            conn,
+            group_id,
+            now=now,
+            ctx_factory=ctx_factory,
+            defer_transient=True,
+            only_if_better=True,
         )
     except applylink.Deferred as exc:
         logger.info("apply link: %s", exc)
@@ -170,7 +228,13 @@ def resolve_one(
         stored = applylink.get_apply_link(conn, group_id)
         if stored is not None and stored.chosen_by == "user":
             link = stored  # set while the walk ran: _save kept it
-    return USER_LINK if link.chosen_by == "user" else link.status.value
+    if link.chosen_by == "user":
+        return USER_LINK
+    if link.resolved_at != now:
+        return KEPT  # the try found nothing better than the stored row (only_if_better)
+    if apply_attempts.board_copy(link, HostClasses.load(conn, group_id)):
+        return BOARD
+    return link.status.value
 
 
 def resolve_likely(
@@ -184,12 +248,15 @@ def resolve_likely(
     max_seconds: float | None = None,
     ctx_factory: applylink.CtxFactory | None = None,
     clock: Callable[[], float] = time.monotonic,
+    max_attempts: int | None = None,
 ) -> PassResult:
     """Resolve up to ``limit`` likely groups' apply links, starting none after
     ``max_seconds``. One group failing never stops the others. ``ctx_factory`` (tests) runs
     everything on ``conn``, one group at a time."""
     result = PassResult()
-    picked = select_groups(conn, profile, now=now)
+    if max_attempts is None:
+        max_attempts = settings.apply_links.max_attempts
+    picked = select_groups(conn, profile, now=now, max_attempts=max_attempts)
     result.candidates = len(picked)
     result.shortlist = sum(1 for c in picked if c.why == "shortlist")
     result.ab = result.candidates - result.shortlist

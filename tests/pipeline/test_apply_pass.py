@@ -21,6 +21,7 @@ from jobhunter.pipeline import apply_pass, applylink, runner
 from jobhunter.scoring.profile import Profile
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+NIGHT2 = NOW + timedelta(days=1)  # the next nightly run
 PROFILE = Profile.model_validate({"hard": {"states_allowed": ["CO"]}})
 PAGE = "<html><body><h1>Analyst</h1><p>Apply today.</p></body></html>"
 
@@ -189,9 +190,9 @@ def linked(conn) -> set[int]:
     return {r[0] for r in conn.execute("SELECT job_group_id FROM apply_link")}
 
 
-def resolve(conn, settings, factory, *, limit=200, profile=PROFILE):
+def resolve(conn, settings, factory, *, limit=200, profile=PROFILE, now=NOW):
     return apply_pass.resolve_likely(
-        conn, settings, profile, now=NOW, limit=limit, ctx_factory=factory
+        conn, settings, profile, now=now, limit=limit, ctx_factory=factory
     )
 
 
@@ -450,7 +451,7 @@ def test_retry_after_outage_defers_instead_of_storing(conn, settings, factory, s
     assert result.counts()["deferred"] == 2 and result.counts()["unresolved"] == 0
     server.routes.clear()
     reset_shared_state()  # the next night: a new process
-    resolve(conn, settings, factory)
+    resolve(conn, settings, factory, now=NIGHT2)
     assert {applylink.get_apply_link(conn, g).status.value for g in gids} == {"live"}
 
 
@@ -466,7 +467,7 @@ def test_unreadable_robots_on_the_redirector_defers(conn, settings, factory, ser
     assert result.counts()["deferred"] == 1 and linked(conn) == set()
     del server.routes["https://redirect.example.net/robots.txt"]
     reset_shared_state()
-    resolve(conn, settings, factory)
+    resolve(conn, settings, factory, now=NIGHT2)
     link = applylink.get_apply_link(conn, gid)
     assert link.ats == "greenhouse" and link.status.value == "live"
 
@@ -581,3 +582,134 @@ def test_ctrl_c_stops_within_about_one_request(file_db, tmp_path, server, monkey
     # Only requests already in flight finish: at most one per other worker.
     assert len(server.requests) - at[0] <= 3
     assert applylink.get_apply_link(file_db, quick) is not None
+
+
+# ─── retries of links that are not settled (bug c369bcc) ────────────────────
+
+BOARD = "https://acme.dejobs.org/denver-co/analyst/ABC123/job/"
+GH = "https://boards.greenhouse.io/acme/jobs/567"
+
+
+def put_link(conn, gid: int, status: str, final: str, *, chosen_by=None, error=None) -> None:
+    at = (NOW - timedelta(days=2)).isoformat()
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, status, resolved_at, "
+        "verified_at, chosen_by, error) VALUES (?, ?, ?, '[]', ?, ?, ?, ?, ?)",
+        (gid, f"https://{host(gid)}/j/{gid}", final, status, at, at, chosen_by, error),
+    )
+
+
+def tries(conn, gid: int) -> tuple[int, str] | None:
+    row = conn.execute(
+        "SELECT attempts, last_outcome FROM apply_link_attempt WHERE job_group_id = ?", (gid,)
+    ).fetchone()
+    return None if row is None else (row[0], row[1])
+
+
+def test_unresolved_and_board_copy_rows_are_retried(conn, settings, factory, server):
+    unresolved = add(conn, 1, skills=90)
+    put_link(conn, unresolved, "unresolved", f"https://{host(1)}/j/1", error="HTTP 500")
+    board = add(conn, 2, skills=90)
+    put_link(conn, board, "live", BOARD)
+    server.routes[f"https://{host(2)}/j/2"] = httpx.Response(302, headers={"Location": GH})
+    settled = [add(conn, gid, skills=90) for gid in (3, 4, 5, 6, 7)]
+    put_link(conn, 3, "live", GH)
+    put_link(conn, 4, "live", f"https://{host(4)}/careers/4")  # not a board: settled
+    put_link(conn, 5, "expired", GH)
+    put_link(conn, 6, "blocked", f"https://{host(6)}/j/6", error=applylink.LOGIN_ERROR)
+    put_link(conn, 7, "live", BOARD, chosen_by="user")
+    picked = {c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NOW)}
+    assert picked == {unresolved, board}
+    result = resolve(conn, settings, factory)
+    assert applylink.get_apply_link(conn, unresolved).status.value == "live"
+    link = applylink.get_apply_link(conn, board)
+    assert link.status.value == "live" and link.final_url.startswith(GH)
+    assert tries(conn, unresolved) == (1, "live") and tries(conn, board) == (1, "live")
+    assert result.counts()["live"] == 2
+    assert server.hosts() == {host(1), host(2), "boards.greenhouse.io"}
+    assert all(tries(conn, gid) is None for gid in settled)
+
+
+def test_a_retry_never_trades_a_board_copy_for_a_worse_link(conn, settings, factory, server):
+    gid = add(conn, 1, skills=90)
+    put_link(conn, gid, "live", BOARD)
+    server.routes[f"https://{host(1)}/j/1"] = httpx.Response(404)
+    result = resolve(conn, settings, factory)
+    link = applylink.get_apply_link(conn, gid)
+    assert link.final_url == BOARD and link.status.value == "live"  # still the best known
+    assert result.counts()["kept"] == 1 and tries(conn, gid) == (1, "kept")
+
+
+def test_a_board_copy_found_counts_as_not_resolved(conn, settings, factory, server):
+    gid = add(conn, 1, skills=90)
+    server.routes[f"https://{host(1)}/j/1"] = httpx.Response(302, headers={"Location": BOARD})
+    result = resolve(conn, settings, factory)
+    assert applylink.get_apply_link(conn, gid).final_url == BOARD
+    assert result.counts()["board"] == 1 and tries(conn, gid) == (1, "board")
+    assert [c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NIGHT2)] == [gid]
+
+
+def test_tries_are_spaced_and_stop_at_max_attempts(conn, settings, factory, server):
+    gid = add(conn, 1, skills=90)
+    server.routes[f"https://{host(1)}/j/1"] = httpx.Response(429, headers={"Retry-After": "60"})
+    at = NOW
+    for n in range(1, 6):
+        reset_shared_state()
+        result = resolve(conn, settings, factory, now=at)
+        assert result.counts()["deferred"] == 1 and tries(conn, gid) == (n, "deferred")
+        # one try per run, and none again before the back-off is over
+        assert apply_pass.select_groups(conn, PROFILE, now=at + timedelta(minutes=30)) == []
+        at += timedelta(days=1)
+    before = len(server.requests)
+    reset_shared_state()
+    result = resolve(conn, settings, factory, now=at + timedelta(days=30))
+    assert result.tried == 0 and len(server.requests) == before  # gave up after five
+    assert linked(conn) == set() and tries(conn, gid) == (5, "deferred")
+
+
+def test_backoff_schedule():
+    from jobhunter.pipeline import apply_attempts as aa
+
+    def due(count: int, hours_ago: float, max_attempts: int = 5) -> bool:
+        a = aa.Attempts(1, count, NOW - timedelta(hours=hours_ago))
+        return aa.due(a, now=NOW, max_attempts=max_attempts)
+
+    assert aa.due(None, now=NOW, max_attempts=5) and not aa.due(None, now=NOW, max_attempts=0)
+    assert not due(1, 0.5) and due(1, 1)
+    assert not due(2, 3) and due(2, 4)
+    assert not due(3, 11) and due(3, 12)
+    assert not due(4, 19) and due(4, 20) and due(4, 23)  # the next nightly run qualifies
+    assert not due(5, 1000) and due(5, 1000, max_attempts=6)
+
+
+def test_failures_and_missing_urls_count_as_tries(conn, settings, factory, monkeypatch):
+    add(conn, 1, skills=90)
+    add(conn, 2, skills=90)
+
+    def boom(c, gid, **kw):
+        if gid == 1:
+            raise RuntimeError("boom")
+        raise ValueError("no usable URL")
+
+    monkeypatch.setattr(applylink, "resolve_group", boom)
+    result = resolve(conn, settings, factory)
+    assert result.errors == 1 and result.no_url == 1
+    assert tries(conn, 1) == (1, "error") and tries(conn, 2) == (1, "no_url")
+
+
+def test_max_attempts_setting_is_read(conn, tmp_path, factory, server):
+    s = Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "c")}, "apply_links": {"max_attempts": 0}}
+    )
+    assert Settings().apply_links.max_attempts == 5
+    add(conn, 1, skills=90)
+    result = apply_pass.resolve_likely(conn, s, PROFILE, now=NOW, limit=10, ctx_factory=factory)
+    assert result.tried == 0 and server.requests == []
+
+
+def test_late_groups_are_not_counted(conn, settings, factory):
+    add(conn, 1, skills=90)
+    result = apply_pass.resolve_likely(
+        conn, settings, PROFILE, now=NOW, limit=10, max_seconds=0, ctx_factory=factory
+    )
+    assert result.counts()["late"] == 1 and tries(conn, 1) is None
