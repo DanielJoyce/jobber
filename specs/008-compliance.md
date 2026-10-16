@@ -11,6 +11,7 @@ accidental.
 |---|---|---|
 | `respect_robots` | **true** | A source whose `robots.txt` disallows us is marked `blocked` and not fetched |
 | Rate limit | **0.2 req/s per source** (1 per 5s), concurrency 1, jittered | Slower than a human browsing. 55 sources in parallel is still fast overall |
+| Per-host overrides | `nlx.jobsyn.org` and `usnlx.com` at **1 req/s**; others none (`[fetch.hosts."<host>"] rps`, 0 < rps ≤ 2) | The NLX apply redirectors start ~95% of apply-link walks. Their robots.txt (checked 2026-10-15) disallows only `/*feed/` and `/*feeds/` with no `Crawl-delay` (`nlx.jobsyn.org/robots.txt` redirects to a 404 on `dejobs.org`, so it allows all), and they have answered only 200 and 301, never 429. An override matches the exact hostname (no subdomains, any port), replaces the default and a source's own rate for that host, and is still floored by `Crawl-delay` and paused by `429`/`Retry-After`. User entries merge with the built-ins; set a built-in host's `rps` to slow it back down |
 | Global concurrency | 8 requests in flight at once | Caps total outbound load |
 | Parallel sources | 6 (`fetch.parallel_sources`, capped by global concurrency) | `jobhunter run` lists and resolves this many sources at once. Every per-host limit, `Crawl-delay` and robots rule still holds across them: the host limiter is process-wide, so two sources on one host share its spacing |
 | User-Agent | `jobhunter/0.1 (personal job search; <your-email>)` | Identifies the client and gives an admin someone to contact |

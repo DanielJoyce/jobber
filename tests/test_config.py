@@ -82,6 +82,43 @@ def test_unknown_key_raises_naming_the_key(tmp_path):
         load_settings(config_path=cfg)
 
 
+def test_fetch_hosts_from_toml_merges_with_builtin_defaults(tmp_path):
+    cfg = _write(
+        tmp_path / "config.toml",
+        '[fetch.hosts."Jobs.Example.org"]\nrps = 0.5\n\n[fetch.hosts."usnlx.com"]\nrps = 0.2\n',
+    )
+    fetch = load_settings(config_path=cfg).fetch
+    assert fetch.host_rps("jobs.example.org") == 0.5  # keys are lowercased
+    assert fetch.host_rps("usnlx.com") == 0.2  # the user's entry beats the built-in one
+    assert fetch.host_rps("nlx.jobsyn.org") == 1.0  # untouched built-in stays
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        ('[fetch.hosts."a.example.org"]\nrps = 0\n', "greater than 0"),
+        ('[fetch.hosts."a.example.org"]\nrps = -1\n', "greater than 0"),
+        ('[fetch.hosts."a.example.org"]\nrps = 2.5\n', "less than or equal to 2"),
+        ('[fetch.hosts."a.example.org"]\nrps = "fast"\n', "rps"),
+        ('[fetch.hosts."a.example.org"]\nrps = 1\nburst = 3\n', "burst"),
+        ('[fetch.hosts."a.example.org"]\n', "rps"),
+        ('[fetch.hosts."https://a.example.org"]\nrps = 1\n', "bare hostname"),
+        ('[fetch.hosts."a.example.org:8443"]\nrps = 1\n', "bare hostname"),
+        ('[fetch.hosts."*.example.org"]\nrps = 1\n', "bare hostname"),
+        ('[fetch.hosts."a.example.org/x"]\nrps = 1\n', "bare hostname"),
+        (
+            '[fetch.hosts."A.example.org"]\nrps = 1\n[fetch.hosts."a.example.org"]\nrps = 1\n',
+            "twice",
+        ),
+        ("[fetch]\nhosts = 3\n", "hosts"),
+    ],
+)
+def test_fetch_hosts_rejects_bad_entries(tmp_path, body, match):
+    cfg = _write(tmp_path / "config.toml", body)
+    with pytest.raises(ValidationError, match=match):
+        load_settings(config_path=cfg)
+
+
 def test_unknown_top_level_section_raises(tmp_path):
     cfg = _write(tmp_path / "config.toml", "[spend]\nmonthly_cap_usd = 1\n")
     with pytest.raises(ValidationError, match="spend"):

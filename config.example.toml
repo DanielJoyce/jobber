@@ -23,6 +23,14 @@
 # user_agent_contact = "<you>@example.com"
 # timeout_s = 20.0
 # max_retries = 5
+#
+# Per-host rate overrides (requests per second, above 0 and at most 2). Exact hostname only:
+# "usnlx.com" does not cover "www.usnlx.com". Replaces default_rps and a source's own rate for
+# that host; a robots.txt Crawl-delay still wins when it is slower, and 429 / Retry-After still
+# pause the host. Built in: nlx.jobsyn.org and usnlx.com (the NLX apply redirectors) at 1.
+# Your entries merge with those; to slow one back down, give it its own rps.
+# [fetch.hosts."usnlx.com"]
+# rps = 0.2
 
 [scoring]
 # Scorer specs are "<provider>:<model>" (a bare model name is not accepted). A malformed

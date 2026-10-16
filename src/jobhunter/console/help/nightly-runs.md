@@ -77,6 +77,20 @@ slower, and two sources on the same host share that host's limit. So a run takes
 as its slowest source rather than the sum of all of them. Set `parallel_sources = 1` to fetch
 one source at a time as before.
 
+A host can have its own rate in `config.toml`, for example:
+
+```toml
+[fetch.hosts."usnlx.com"]
+rps = 1
+```
+
+`rps` is requests per second, above 0 and at most 2. It matches that exact hostname only (not
+`www.usnlx.com`) and replaces the default rate for it; a robots.txt `Crawl-delay` still wins
+when it is slower, and 429 / `Retry-After` still pause the host. The two NLX apply redirectors,
+`nlx.jobsyn.org` and `usnlx.com`, are built in at 1 per second, since most apply-link walks
+start there; your entries merge with them, so set one to `0.2` to slow it back down. The
+resolve log line names the reason, e.g. `one request every 1.0s (per-host override)`.
+
 If a host answers 429 or sends `Retry-After`, every source on that host waits it out, not just
 the one that was told, including requests already waiting their turn. When the pause asked for
 is longer than 10 minutes, sources on that host stop for this run (marked `suspect`) and try

@@ -27,7 +27,15 @@ from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from jobhunter import container
 from jobhunter.xdg import cache_home, config_home, data_home, xdg_source
@@ -106,6 +114,27 @@ class Paths(BaseModel):
         return self
 
 
+# Fastest per-host rate a ``[fetch.hosts."<host>"]`` override may ask for (specs/008#defaults).
+MAX_HOST_RPS = 2.0
+_HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_HOSTNAME_RE = re.compile(rf"^(?=.{{1,253}}$){_HOST_LABEL}(?:\.{_HOST_LABEL})*$")
+
+
+class HostRate(BaseModel):
+    """A per-host request rate (``[fetch.hosts."nlx.jobsyn.org"] rps = 1``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rps: float = Field(gt=0, le=MAX_HOST_RPS)
+
+
+# Built-in overrides, merged under the user's [fetch.hosts] (a user entry for the same host
+# wins). The NLX apply redirectors start ~95% of apply-link walks; their robots.txt (checked
+# 2026-10-15, bug d9b07ff) disallows only feed paths and sets no Crawl-delay, and they have
+# answered only 200 and 301, never 429. To slow one back down, set its rps (e.g. 0.2).
+DEFAULT_HOST_RATES: dict[str, float] = {"nlx.jobsyn.org": 1.0, "usnlx.com": 1.0}
+
+
 class Fetch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -118,6 +147,38 @@ class Fetch(BaseModel):
     user_agent_contact: str = "<you>@example.com"
     timeout_s: float = 20.0
     max_retries: int = 5
+    # Per-host rate overrides, keyed by exact hostname (no subdomain matching; the port is
+    # ignored). For that host it replaces default_rps and a source's own rate; robots
+    # Crawl-delay stays a floor and Retry-After holds still apply.
+    hosts: dict[str, HostRate] = Field(
+        default_factory=lambda: {h: HostRate(rps=r) for h, r in DEFAULT_HOST_RATES.items()}
+    )
+
+    @field_validator("hosts", mode="before")
+    @classmethod
+    def _merge_host_defaults(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value  # pydantic reports the type error
+        merged: dict[str, Any] = {h: {"rps": r} for h, r in DEFAULT_HOST_RATES.items()}
+        seen: set[str] = set()
+        for key, rate in value.items():
+            host = str(key).strip().lower()
+            if not _HOSTNAME_RE.match(host):
+                # Value-free message (tests/test_config_watch.py): never quote the input.
+                raise ValueError(
+                    "every key must be a bare hostname, e.g. nlx.jobsyn.org "
+                    "(no scheme, port, path or wildcard)"
+                )
+            if host in seen:
+                raise ValueError("a host is listed twice (hostnames ignore case)")
+            seen.add(host)
+            merged[host] = rate
+        return merged
+
+    def host_rps(self, host: str) -> float | None:
+        """The ``[fetch.hosts]`` rate for ``host`` (exact hostname, any case), or None."""
+        rate = self.hosts.get(host.lower().rstrip("."))
+        return rate.rps if rate is not None else None
 
 
 class OpenAICompat(BaseModel):
@@ -1009,6 +1070,7 @@ RELOADABLE: frozenset[str] = frozenset(
         "fetch.timeout_s",
         "fetch.max_retries",
         "fetch.parallel_sources",  # read per run
+        "fetch.hosts",  # read per request
         # scorers are built per run
         "scoring.screen_scorer",
         "scoring.deep_scorer",

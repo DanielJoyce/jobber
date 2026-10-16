@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import threading
 import time
@@ -497,6 +498,89 @@ def test_default_rate_limit_from_settings(make_ctx, server, settings):
     ctx.get(f"{HOST}/a")
     gap = server.times[1] - server.times[0]
     assert 0.75 * 5 <= gap <= 1.25 * 5
+
+
+# ─── per-host overrides ([fetch.hosts], bug d9b07ff) ──────────────────────
+
+FAST = "https://fast.example.org"
+
+
+def host_settings(tmp_path, hosts: dict) -> Settings:
+    return Settings.model_validate(
+        {"paths": {"cache_dir": str(tmp_path / "cache")}, "fetch": {"hosts": hosts}}
+    )
+
+
+def gaps(server, host: str) -> list[float]:
+    times = [t for r, t in zip(server.requests, server.times, strict=True) if r.url.host == host]
+    return [b - a for a, b in itertools.pairwise(times)]
+
+
+def test_host_override_speeds_up_that_host_only(make_ctx, server, tmp_path):
+    for p in ("a", "b", "c"):
+        server.route(f"{FAST}/{p}", httpx.Response(200, text=p))
+        server.route(f"{HOST}/{p}", httpx.Response(200, text=p))
+    s = host_settings(tmp_path, {"fast.example.org": {"rps": 2}})
+    ctx = make_ctx(make_source(rate_limit=None), s)  # default_rps 0.2, jittered
+    for p in ("a", "b", "c"):
+        ctx.get(f"{FAST}/{p}")
+    for p in ("a", "b", "c"):
+        ctx.get(f"{HOST}/{p}")
+    # robots.txt then three pages: 0.5s apart (jittered 0.375-0.625s) on the overridden host...
+    assert all(0.375 - 1e-9 <= g <= 0.625 + 1e-9 for g in gaps(server, "fast.example.org"))
+    # ...while the other host keeps default_rps (one per 5s, jittered 3.75-6.25s).
+    assert all(g >= 3.75 - 1e-9 for g in gaps(server, "jobs.example.gov"))
+    assert ctx.spacing(f"{FAST}/a") == (0.5, "per-host override")
+    assert ctx.spacing(f"{HOST}/a") == (5.0, "rate limit")
+
+
+def test_host_override_beats_a_sources_own_rate(make_ctx, server, tmp_path):
+    for p in ("a", "b"):
+        server.route(f"{FAST}/{p}", httpx.Response(200, text=p))
+    s = host_settings(tmp_path, {"fast.example.org": {"rps": 1}})
+    ctx = make_ctx(make_source(rate_limit={"rps": 0.1}), s)
+    ctx.get(f"{FAST}/a")
+    ctx.get(f"{FAST}/b")
+    assert gaps(server, "fast.example.org") == [1.0, 1.0]
+
+
+def test_crawl_delay_floors_a_host_override(make_ctx, server, tmp_path):
+    server.route(f"{FAST}/robots.txt", httpx.Response(200, text="User-agent: *\nCrawl-delay: 7\n"))
+    for p in ("a", "b", "c"):
+        server.route(f"{FAST}/{p}", httpx.Response(200, text=p))
+    s = host_settings(tmp_path, {"fast.example.org": {"rps": 2}})
+    ctx = make_ctx(make_source(rate_limit=None), s)
+    for p in ("a", "b", "c"):
+        ctx.get(f"{FAST}/{p}")
+    page_gaps = gaps(server, "fast.example.org")[1:]  # after robots.txt is known
+    assert page_gaps and all(g >= 7 - 1e-9 for g in page_gaps)
+    assert ctx.spacing(f"{FAST}/a") == (7.0, "robots Crawl-delay")
+
+
+def test_host_override_matches_exact_hostname_only(make_ctx, server, tmp_path):
+    """No subdomain matching: an override for example.org leaves www.example.org alone. Case
+    and the port do not matter."""
+    s = host_settings(tmp_path, {"Fast.Example.org": {"rps": 2}})
+    ctx = make_ctx(make_source(rate_limit=None), s)
+    assert ctx.spacing("https://fast.example.org/x")[1] == "per-host override"
+    assert ctx.spacing("https://FAST.example.org:8443/x")[1] == "per-host override"
+    assert ctx.spacing("https://www.fast.example.org/x") == (5.0, "rate limit")
+    assert ctx.spacing("https://example.org/x") == (5.0, "rate limit")
+
+
+def test_host_override_keeps_retry_after_holds(make_ctx, server, tmp_path):
+    calls = iter([httpx.Response(429, headers={"Retry-After": "30"}), httpx.Response(200)])
+    server.route(f"{FAST}/a", lambda _r: next(calls))
+    s = host_settings(tmp_path, {"fast.example.org": {"rps": 2}})
+    ctx = make_ctx(make_source(rate_limit=None), s)
+    ctx.get(f"{FAST}/a")
+    assert gaps(server, "fast.example.org")[-1] >= 30
+
+
+def test_nlx_redirectors_have_a_default_override(settings):
+    assert settings.fetch.host_rps("nlx.jobsyn.org") == 1.0
+    assert settings.fetch.host_rps("usnlx.com") == 1.0
+    assert settings.fetch.host_rps("jobs.example.gov") is None
 
 
 def test_per_source_timeout_overrides_settings(make_ctx, server, settings):
