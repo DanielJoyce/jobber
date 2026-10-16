@@ -13,8 +13,10 @@ Only groups whose link is not settled are taken (bug c369bcc, ``apply_attempts``
 (or a deferred try that stored none), an ``unresolved`` row, or a ``live`` row that ends on a
 job board copy or a tracker (a USAJOBS posting counts as settled). A link you set by hand or a
 capture supplied, and a row that is ``expired``, ``blocked`` (a login wall) or live on an ATS
-or the employer's site, are never fetched here. Within each of shortlist, A and B, groups never
-tried come before retries, so retries never crowd new groups out of ``per_run``.
+or the employer's site, are never fetched here. Order is by score (the user: "we should process
+links in order of score"): shortlisted groups first, best latest overall score first (unscored
+ones after, newest first), then every A and B group in one list, best score first; a group
+never tried goes before a retry only on equal score.
 
 Each group gets at most one try per run and ``apply_links.max_attempts`` tries in all (counted
 with the console's on-demand tries in ``apply_link_attempt``, by the current
@@ -159,6 +161,19 @@ WHERE {_MAYBE} AND {_TRIES} AND l.job_group_id IS NULL AND {_OPEN}
   AND NOT EXISTS (SELECT 1 FROM application ap WHERE ap.job_group_id = g.id)
 """
 
+# The latest score of given groups (shortlisted ones, for their order).
+_SCORE_OF_SQL = """
+SELECT g.id AS group_id, j.id AS job_id, j.salary_min, j.salary_max, j.salary_period,
+       j.salary_stated, j.location_scope, j.description_completeness,
+       fs.dimensions, fs.blockers
+FROM job_group g
+JOIN job j ON j.id = g.canonical_job_id
+JOIN fit_score fs ON fs.id = (
+    SELECT f2.id FROM fit_score f2 WHERE f2.job_group_id = g.id
+    ORDER BY (f2.tier = 'deep') DESC, f2.created_at DESC, f2.id DESC LIMIT 1)
+WHERE g.id IN ({ids})
+"""
+
 
 def eligible(conn: sqlite3.Connection, group_id: int, *, now: datetime, max_attempts: int) -> bool:
     """A group the SQL let through: its link is not settled and a try is due."""
@@ -185,24 +200,40 @@ def select_groups(
     now: datetime,
     max_attempts: int = apply_attempts.DEFAULT_MAX_ATTEMPTS,
 ) -> list[Candidate]:
-    """Every group the pass would resolve, in order: shortlisted (newest first), then A, then
-    B (best overall first). Within each, groups never tried come before retries, so retries
-    of links not resolved yet never crowd new groups out of ``per_run``. A/B needs the
+    """Every group the pass would resolve, in score order (the user, c369bcc: "we should
+    process links in order of score"):
+
+    1. shortlisted groups (you picked them), highest latest overall score first; one without
+       a score (or with no profile) after the scored ones, newest first;
+    2. then A and B groups in one list, highest latest overall score first (the score
+       outranks the bucket letter).
+
+    Ties on score: a group never tried before a retry, then the newest. A/B needs the
     profile; without one only the shortlist counts."""
     params = {"now": to_iso(now), "max_attempts": max_attempts, "walk_version": WALK_VERSION}
     retry: dict[int, bool] = {}
-    out: list[Candidate] = []
+    short: list[Candidate] = []
     for (gid,) in conn.execute(_SHORTLIST_SQL, params).fetchall():
         if gid in retry:
             continue
         state = _retry_state(conn, gid, now=now, max_attempts=max_attempts)
         if state is not None:
             retry[gid] = state
-            out.append(Candidate(gid, "shortlist", retry=state))
-    out.sort(key=lambda c: c.retry)  # stable: newest first within each
+            short.append(Candidate(gid, "shortlist", retry=state))
+    scored: dict[int, float] = {}
+    if profile is not None and short:
+        ids = [c.group_id for c in short]
+        marks = ",".join("?" * len(ids))
+        rows = conn.execute(_SCORE_OF_SQL.format(ids=marks), ids).fetchall()
+        locs = load_many_job_group_locations(conn, (r["job_id"] for r in rows))
+        for r in rows:
+            scored[r["group_id"]] = compute_row(r, r, locs.get(r["job_id"], []), profile).overall
+    for c in short:
+        c.overall = scored.get(c.group_id, 0.0)
+    short.sort(key=lambda c: (c.group_id not in scored, -c.overall, c.retry, -c.group_id))
     if profile is None:
-        return out
-    taken = {c.group_id for c in out}
+        return short
+    taken = {c.group_id for c in short}
     rows = []
     for r in conn.execute(_SCORED_SQL, params):
         gid = r["group_id"]
@@ -219,8 +250,8 @@ def select_groups(
         if fit.bucket in LIKELY_BUCKETS:
             gid = r["group_id"]
             likely.append(Candidate(gid, fit.bucket.value, fit.overall, retry=retry[gid]))
-    likely.sort(key=lambda c: (c.why, c.retry, -c.overall, -c.group_id))
-    return out + likely
+    likely.sort(key=lambda c: (-c.overall, c.retry, -c.group_id))
+    return short + likely
 
 
 def resolve_one(

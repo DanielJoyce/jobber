@@ -123,7 +123,10 @@ retry can never find a better link (`apply_rank.RESOLVED_BOARD_HOSTS`). Anything
 a deferred try, `unresolved`, a live board copy or tracker) is tried again, nightly and on
 demand, up to `apply_links.max_attempts` (default 5) tries in all, counted per group in
 `apply_link_attempt` (migration 0043) and spaced 1 h, 4 h, 12 h, then 20 h apart from when each
-try started. The nightly pass takes never-tried groups before retries in each bucket. A retry
+try started. The nightly pass goes in score order (the user: "we should process links in order of
+score"): shortlisted groups by latest overall score (unscored ones after, newest first), then A
+and B groups in one list by score, whatever the letter; never-tried before a retry only on an
+equal score. A retry
 replaces the stored row only with a link no worse (`resolve_group(only_if_better=True)`,
 compared with the row as it is at write time, under the write lock); a capture is never
 replaced by a ranked link; a live board copy stays the Apply target meanwhile. A retry that

@@ -746,27 +746,44 @@ def test_a_capture_is_never_replaced_by_a_retry(conn, settings, factory, server)
     assert link.chosen_by == stored.chosen_by == "capture" and stored.start_url == dest
 
 
-def test_never_tried_groups_come_before_retries(conn, settings, factory):
-    retry_hi = add(conn, 1, skills=95)
+def test_groups_go_in_score_order(conn, settings, factory):
+    """The user (c369bcc): "we should process links in order of score". Shortlisted first by
+    score (unscored after, newest first); then A and B in one list by score, not by bucket
+    letter; never-tried before a retry only on equal score."""
+    short_lo = add(conn, 1, skills=70, label="interesting")
+    short_hi = add(conn, 2, skills=90, label="interesting")
+    put_link(conn, short_hi, "live", BOARD)  # a retry, but the best shortlisted score
+    short_old = add(conn, 3, label="interesting")  # no score
+    short_new = add(conn, 4, label="interesting")
+    retry_hi = add(conn, 5, skills=95)
     put_link(conn, retry_hi, "live", BOARD)
-    fresh_lo = add(conn, 2, skills=90)
-    short_retry = add(conn, 3, label="interesting")
-    put_link(conn, short_retry, "live", BOARD)
-    short_fresh = add(conn, 4, label="interesting")
+    b_hi = add(conn, 6, skills=93)
+    conn.execute("UPDATE job SET description_completeness = 'partial' WHERE id = ?", (b_hi,))
+    fresh_lo = add(conn, 7, skills=90)
+    tie_retry = add(conn, 9, skills=85)
+    put_link(conn, tie_retry, "live", BOARD)
+    tie_fresh = add(conn, 8, skills=85)
     picked = apply_pass.select_groups(conn, PROFILE, now=NOW)
-    assert [(c.group_id, c.why) for c in picked] == [
-        (short_fresh, "shortlist"),
-        (short_retry, "shortlist"),
-        (fresh_lo, "A"),
-        (retry_hi, "A"),
+    assert [c.group_id for c in picked] == [
+        short_hi,
+        short_lo,
+        short_new,
+        short_old,
+        retry_hi,
+        b_hi,
+        fresh_lo,
+        tie_fresh,
+        tie_retry,
     ]
-    assert (
-        apply_pass.resolve_likely(
-            conn, settings, PROFILE, now=NOW, limit=3, ctx_factory=factory
-        ).counts()["left"]
-        == 1
+    why = {c.group_id: c.why for c in picked}
+    assert why[b_hi] == "B" and why[fresh_lo] == "A"  # the score outranks the letter
+    overall = [c.overall for c in picked[4:]]
+    assert overall == sorted(overall, reverse=True)
+    result = apply_pass.resolve_likely(
+        conn, settings, PROFILE, now=NOW, limit=5, ctx_factory=factory
     )
-    assert tries(conn, retry_hi) is None  # the retry waited, not the new group
+    assert result.counts()["left"] == 4
+    assert tries(conn, retry_hi)[0] == 1 and tries(conn, fresh_lo) is None  # score first
 
 
 def test_a_better_walk_restarts_the_count(conn, settings, factory, monkeypatch):

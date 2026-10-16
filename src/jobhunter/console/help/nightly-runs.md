@@ -33,8 +33,12 @@ The last stage of `jobhunter run`, `apply_links`, runs after scoring and never h
 works out where Apply should go for the jobs you are most likely to open, so the job page and
 the Apply button do not wait on a slow site the next morning:
 
-- jobs you shortlisted (an application at **interested** or **preparing**), then
-- jobs not yet triaged whose fit is in bucket **A** or **B**, best first.
+- jobs you shortlisted (an application at **interested** or **preparing**), highest score
+  first (ones not scored yet after them, newest first), then
+- jobs not yet triaged whose fit is in bucket **A** or **B**, in one list by score, highest
+  first: a better score goes first whatever its letter.
+
+On an equal score, a job never tried goes before one being tried again.
 
 Only jobs whose apply link is not resolved yet are taken: no link yet, a link that could not
 be resolved, or a link that ends on a job board's copy of the posting (such as the NLX
@@ -46,8 +50,7 @@ Apply button reaches the agency's system only after you sign in. A link you set 
 your browser extension capture supplied is never touched, a closed posting is not tried again,
 and a job whose link already stopped at a login page is never fetched again, here or anywhere
 else: set the link by hand on the job page if you find the real one. Postings past their
-closing date are skipped. Jobs never tried go before retries, so retries never keep a new job
-from being resolved.
+closing date are skipped.
 
 Each job gets up to `apply_links.max_attempts` tries (default 5), counting this stage and the
 tries the job page makes when you open it. A job gets at most one try per run, and the tries
