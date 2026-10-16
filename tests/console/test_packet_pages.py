@@ -567,6 +567,8 @@ class _Links(HTMLParser):
         a = dict(attrs)
         if tag == "a" and a.get("href", "").startswith("/"):
             self.hrefs.append(a["href"])
+        if tag == "form" and (a.get("method") or "").lower() == "get":
+            return  # a GET form (the Inbox min-score filter) is not a POST target
         if tag in ("form", "button") and (a.get("action") or a.get("formaction") or "").startswith(
             "/"
         ):

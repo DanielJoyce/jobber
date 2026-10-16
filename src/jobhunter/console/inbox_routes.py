@@ -23,6 +23,17 @@ def load_console_profile(settings: Settings) -> tuple[Profile | None, str | None
         return None, str(exc)
 
 
+MIN_COOKIE = "inbox_min"
+
+
+def parse_min(raw: str | None) -> int | None:
+    """A minimum score from text: whole numbers clamp to 0..100; anything else is None."""
+    try:
+        return max(0, min(100, int(float((raw or "").strip()))))
+    except (ValueError, OverflowError):
+        return None
+
+
 def _days(request: Request) -> int:
     """The configured employer-rejection window (``scoring.employer_rejection_days``)."""
     return request.app.state.settings.scoring.employer_rejection_days
@@ -43,11 +54,19 @@ def register(
         state: str | None = None,
         bucket: str | None = None,
         triaged: str | None = None,
+        min: str | None = None,  # the query parameter is ?min=N
     ) -> HTMLResponse:
         profile, error = load_console_profile(request.app.state.settings)
         state = (state or "").strip().upper() or None
         picked = parse_letters(bucket)  # ?bucket=B or ?bucket=A,B
         bucket = ",".join(picked) or None
+        # ?min=N sets it (and is remembered in a cookie); ?min= (empty) clears it; text that is
+        # not a number is ignored; with no ?min the remembered value applies.
+        min_score = parse_min(min) if min is not None else None
+        set_cookie = min is not None and min_score is not None
+        clear_cookie = min is not None and not min.strip()
+        if min is None:
+            min_score = parse_min(request.cookies.get(MIN_COOKIE))
         data = None
         if profile is not None:
             days = request.app.state.settings.scoring.employer_rejection_days
@@ -58,8 +77,9 @@ def register(
                 bucket=bucket,
                 triaged=triaged in ("1", "true"),
                 rejection_days=days,
+                min_score=min_score,
             )
-        return templates.TemplateResponse(
+        response = templates.TemplateResponse(
             request,
             "inbox.html",
             {
@@ -73,8 +93,17 @@ def register(
                 "picked": picked,
                 "titles": inbox.BUCKET_TITLES,
                 "all_buckets": inbox.BUCKETS,
+                "min_score": min_score,
+                "triaged": triaged in ("1", "true"),
             },
         )
+        if set_cookie:
+            response.set_cookie(
+                MIN_COOKIE, str(min_score), max_age=365 * 86400, samesite="lax", httponly=True
+            )
+        elif clear_cookie:
+            response.delete_cookie(MIN_COOKIE)
+        return response
 
     def bulk_ids(conn: sqlite3.Connection, group_id: list[int]) -> list[int]:
         ids = list(dict.fromkeys(group_id))  # de-duplicate, keep order

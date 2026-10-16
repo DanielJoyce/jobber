@@ -7,6 +7,7 @@
     <a class="act new-packet" id="new-packet" href="/apply/new" title="a packet for a posting from anywhere: paste its URL or text">New packet (n)</a>
     <a class="act captured-link" id="captured-link" href="/captured" title="postings you sent from the browser extension or pasted, scored or not">Captured</a>
     <a class="act deep-link" id="deep-link" href="/#deep-pass" title="deep-score your top screened jobs; may use more money than screening, and runs only when you confirm">Deep pass</a>
+    {% set mq = ("&amp;min=" ~ min_score) if min_score is not none else "" %}
     {% if data %}
     <nav class="chips" aria-label="Buckets">
       {% for b in all_buckets %}
@@ -15,12 +16,12 @@
       {% if on_page %}
       <a class="chip{% if b in picked %} on{% endif %}" data-bucket="{{ b }}" href="#bucket-{{ b }}" title="{{ titles[b][1] }}">{{ titles[b][0] | title }} {{ data.counts[b] }}</a>
       {% else %}
-      <a class="chip" data-bucket="{{ b }}" href="/inbox?{% if state %}state={{ state }}&amp;{% endif %}bucket={{ b }}" title="{{ titles[b][1] }}">{{ titles[b][0] | title }} <span class="muted">{% if b == "G" %}&middot;hidden&middot; {% endif %}{{ data.counts[b] }}</span></a>
+      <a class="chip" data-bucket="{{ b }}" href="/inbox?{% if state %}state={{ state }}&amp;{% endif %}bucket={{ b }}{{ mq | safe }}" title="{{ titles[b][1] }}">{{ titles[b][0] | title }} <span class="muted">{% if b == "G" %}&middot;hidden&middot; {% endif %}{{ data.counts[b] }}</span></a>
       {% endif %}
       {% endfor %}
-      {% if bucket %}<a class="chip" href="/inbox{% if state %}?state={{ state }}{% endif %}">all</a>{% endif %}
+      {% if bucket %}<a class="chip" href="/inbox?{% if state %}state={{ state }}{% endif %}{{ mq | safe }}">all</a>{% endif %}
     </nav>
-    {% if state %}<span class="muted">state {{ state }} <a href="/inbox">clear</a></span>{% endif %}
+    {% if state %}<span class="muted">state {{ state }} <a href="/inbox{% if min_score is not none %}?min={{ min_score }}{% endif %}">clear</a></span>{% endif %}
     {% if data.weekly_cost is not none %}<span class="muted cost">${{ "%.2f" | format(data.weekly_cost) }} / wk</span>{% endif %}
     {% endif %}
   </header>
@@ -29,6 +30,16 @@
   {% if profile_error is not none %}
   <p class="muted">Nothing is listed until a profile loads. {{ profile_error }}</p>
   {% elif data %}
+  <form class="minscore" id="minscore" method="get" action="/inbox" aria-label="Minimum score">
+    {% if state %}<input type="hidden" name="state" value="{{ state }}">{% endif %}
+    {% if bucket %}<input type="hidden" name="bucket" value="{{ bucket }}">{% endif %}
+    {% if triaged %}<input type="hidden" name="triaged" value="1">{% endif %}
+    <label for="min-score">Min score</label>
+    <input type="number" id="min-score" name="min" min="0" max="100" step="1" inputmode="numeric" value="{{ min_score if min_score is not none else '' }}" placeholder="0-100">
+    <button type="submit" class="act">Apply</button>
+    {% if min_score is not none %}<a class="act" id="min-clear" href="/inbox?min={% if state %}&amp;state={{ state }}{% endif %}{% if bucket %}&amp;bucket={{ bucket }}{% endif %}{% if triaged %}&amp;triaged=1{% endif %}">Clear</a>
+    <span class="muted" id="min-note">{{ data.below_min }} below {{ min_score }} hidden; counts above exclude them</span>{% endif %}
+  </form>
   <div class="bulk-bar" id="bulk-bar" role="toolbar" aria-label="Bulk actions">
     <label class="bulk-all"><input type="checkbox" id="select-all"> <span id="bulk-count">Select all visible</span></label>
     <span class="bulk-actions" id="bulk-actions" hidden>
