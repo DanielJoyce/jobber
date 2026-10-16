@@ -161,7 +161,10 @@ equal score. A retry
 replaces the stored row only with a link no worse (`resolve_group(only_if_better=True)`,
 compared with the row as it is at write time, under the write lock); a capture is never
 replaced by a ranked link; a live board copy stays the Apply target meanwhile. A retry that
-finds a live link on the employer's site keeps it even when another start failed transiently.
+finds a live link on the employer's site keeps it even when another start failed transiently;
+when the job's own starts failed, a link from the posting's text counts only when it is matched
+by an id number, never by title words alone (bug 5c1d738: those also match a same-title
+opening).
 Each try stores `applylink.WALK_VERSION`; when a change to the walk bumps it, tries by the
 older walk stop counting. Reset on the job page clears the count.
 
@@ -213,8 +216,14 @@ single-sign-on page won over copies whose links led to the employer's ATS.
   little else, stops the walk *before* the wall: status `blocked`, error `login wall at <host>`,
   final URL the page before it. The wall is never requested, and its URL never merges groups.
   An ATS's own steps are not walls: a login-looking path on the ATS posting path (iCIMS
-  `/jobs/<id>/<slug>/login`), or an ATS page redirecting to the same ATS's sign-in (Taleo
-  `jobapply.ftl` → `login.jsf`), keeps the ATS page as a live link.
+  `/jobs/<id>/<slug>/login`), or an ATS page redirecting to the same ATS's own sign-in page
+  (`AtsRule.sign_in`: Workday `/<site>/login`, Taleo `iam/accessmanagement/login.jsf`; e.g.
+  Taleo `jobapply.ftl` → `login.jsf`), keeps the ATS page as a live link (bug 5c1d738). The
+  sign-in hop stays in the chain, but the row is not a login link (`ends_at_own_sign_in`): Apply
+  opens the ATS page, it is re-verified like any live link, and a re-verify that meets the same
+  redirect keeps it live. Only those paths count: a login-looking board slug on the same ATS
+  (Greenhouse `/cas`, `/sso`, a NEOGOV or Workday site named `CAS`) is a board home, so a
+  posting redirecting there is closed.
 - **Every member's start URL is a candidate** (deduplicated), resolved in this order: links an
   extension capture supplied, then by where the start points (ATS, employer, other, trackers,
   boards last), one per host before a second from the same host. At most 6 starts that cost

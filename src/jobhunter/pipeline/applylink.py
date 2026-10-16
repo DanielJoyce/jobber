@@ -48,7 +48,7 @@ from jobhunter.pipeline.apply_hints import (
     MAX_HINTS,
     ats_posting,
     description_hints,
-    matches_job,
+    match_kind,
     page_apply_hrefs,
 )
 from jobhunter.pipeline.apply_rank import TIER_LABEL, HostClasses, HostTier
@@ -259,17 +259,25 @@ def _is_html(resp: CachedResponse) -> bool:
 # ─── the walk ──────────────────────────────────────────────────────────────
 
 
+def _own_sign_in(from_url: str, to_url: str) -> bool:
+    """A page on an ATS sending to that ATS's own sign-in page (Workday ``/login``, Taleo
+    ``login.jsf``; ``AtsRule.sign_in``): a step on the way to applying, so the ATS page was
+    reached and is the link (bug 5c1d738). A login-looking board slug (``/cas``, ``/sso``)
+    never counts."""
+    rule = match_ats(from_url)
+    return rule is not None and rule.is_sign_in(to_url)
+
+
 def _left_posting(rule: AtsRule | None, from_url: str, to_url: str) -> bool:
     """An ATS posting redirecting to a non-posting page on the same ATS (e.g. Greenhouse's
-    ``/acme?error=true``) means the posting is gone. Its own sign-in page (Workday
-    ``/login``, Taleo ``login.jsf``) does not: that is a step on the way to applying, which
-    the walk's login rule handles."""
+    ``/acme?error=true``, or a board whose slug is ``cas``) means the posting is gone. Its own
+    sign-in page (``_own_sign_in``) does not: that is a step on the way to applying."""
     return (
         rule is not None
         and rule.is_posting(from_url)
         and match_ats(to_url) is rule
         and not rule.is_posting(to_url)
-        and not is_login_wall(to_url)
+        and not rule.is_sign_in(to_url)
     )
 
 
@@ -413,9 +421,10 @@ def resolve_url(
         res.chain.append(ApplyHop(url=target, host=host_of(target), method=method))
         if is_login_wall(target):
             here = match_ats(url)
-            if here is not None and match_ats(target) is here:
+            if here is not None and _own_sign_in(url, target):
                 # The ATS's own sign-in step on the way to its application (Taleo's
                 # jobapply.ftl -> login.jsf): the ATS page was reached, so it is the link.
+                # The hop stays in the chain; is_login_link knows it for what it is.
                 res.status, res.ats, res.fetched = ApplyStatus.live, here.name, True
                 res.final_url = here.canonical(url)
                 return False
@@ -585,6 +594,9 @@ class Candidate:
     # "fallback" is a cued ATS posting that does not and is tried only when nothing else
     # reached an ATS or the employer's site.
     hint: Literal["matched", "fallback"] | None = None
+    # A matched hint that shares an id number with the job's own links (``match_kind``), not
+    # just its title words: only such a link may stand in on a bad night (bug 5c1d738).
+    by_id: bool = False
 
 
 def _usable(url: str | None) -> bool:
@@ -606,12 +618,13 @@ def _candidates(conn: sqlite3.Connection, group_id: int, classes: HostClasses) -
         seen: str | None,
         capture: bool,
         hint: Literal["matched", "fallback"] | None = None,
+        by_id: bool = False,
     ) -> None:
         if not url or not _usable(url):
             return
         c = by_url.get(url)
         if c is None:
-            c = by_url[url] = Candidate(url, len(by_url), hint=hint)
+            c = by_url[url] = Candidate(url, len(by_url), hint=hint, by_id=by_id)
         c.members.add(member)
         c.seen_at = max(c.seen_at, seen or "")
         c.capture = c.capture or capture
@@ -649,9 +662,9 @@ def _candidates(conn: sqlite3.Connection, group_id: int, classes: HostClasses) -
         for m in members:
             add(m[col], m["id"], m["last_seen_at"], False)
     for m in members:
-        for url, kind in _description_starts(m, classes):
+        for url, kind, by_id in _description_starts(m, classes):
             if url not in by_url:  # a source's own link keeps its standing
-                add(url, m["id"], m["last_seen_at"], False, kind)
+                add(url, m["id"], m["last_seen_at"], False, kind, by_id)
     return list(by_url.values())
 
 
@@ -672,7 +685,7 @@ def _unwrapped(url: str) -> str | None:
 
 def _description_starts(
     member: sqlite3.Row, classes: HostClasses
-) -> list[tuple[str, Literal["matched", "fallback"]]]:
+) -> list[tuple[str, Literal["matched", "fallback"], bool]]:
     """A member's description links that may be starts (bug 3bab68d, review of PR 188).
 
     Each link is graded by where it points once unwrapped. Never a tracker, an ATS link
@@ -681,9 +694,10 @@ def _description_starts(
     site is ``matched``: an ordinary start. A cued ATS posting that does not name it (a stale
     template link, another opening) is a ``fallback``. Everything else is dropped: uncued
     links, and employer pages that do not name the job (careers home pages). When two links
-    both seem to name the job, neither is trusted as matched."""
+    both seem to name the job, neither is trusted as matched. The third value says a matched
+    link shares an id number with the job (``match_kind``), not just its title words."""
     own = [member["url"], member["apply_url"], member["external_id"]]
-    kept: list[tuple[str, bool, bool]] = []  # (url, matched, cued)
+    kept: list[tuple[str, str | None, bool]] = []  # (url, match kind, cued)
     for h in description_hints(member["description_raw"], member["url"]):
         url = _unwrapped(h.url)
         if url is None or host_in(host_of(url), TRACKER_HOSTS):
@@ -696,15 +710,15 @@ def _description_starts(
             continue
         if tier not in (HostTier.ats, HostTier.employer):
             continue
-        matched = matches_job(url, title=member["title"], own=own)
-        if not matched and not (h.cued and tier == HostTier.ats):
+        kind = match_kind(url, title=member["title"], own=own)
+        if kind is None and not (h.cued and tier == HostTier.ats):
             continue
-        kept.append((url, matched, h.cued))
-    if sum(1 for _, matched, _ in kept if matched) > 1:
-        kept = [(u, False, c) for u, _, c in kept if c and classes.tier(u) == HostTier.ats]
-    out: list[tuple[str, Literal["matched", "fallback"]]] = []
-    for url, matched, _ in kept[:MAX_HINTS]:
-        out.append((url, "matched" if matched else "fallback"))
+        kept.append((url, kind, h.cued))
+    if sum(1 for _, kind, _ in kept if kind) > 1:
+        kept = [(u, None, c) for u, _, c in kept if c and classes.tier(u) == HostTier.ats]
+    out: list[tuple[str, Literal["matched", "fallback"], bool]] = []
+    for url, kind, _ in kept[:MAX_HINTS]:
+        out.append((url, "matched" if kind else "fallback", kind == "id"))
     return out
 
 
@@ -1001,10 +1015,11 @@ def resolve_group(
     if defer_transient:
         failed = [r.error or "transient failure" for _, r in results if r.transient]
         own_failed = [r for c, r in results if r.transient and c.hint is None]
-        if own_failed and win_cand.hint is not None and not on_employer:
+        if own_failed and win_cand.hint is not None and not (on_employer and win_cand.by_id):
             # A link from the text never stands in for the job's own link on a bad night,
-            # unless it names the job and is live on the employer's site or ATS (c369bcc keeps
-            # such an answer).
+            # unless it names the job by id number and is live on the employer's site or ATS
+            # (c369bcc keeps such an answer). Title words alone also match a same-title
+            # opening elsewhere (bug 5c1d738).
             raise Deferred(group_id, failed)
         if (
             (failed or fallback_failed)
@@ -1108,13 +1123,27 @@ def clear_user_link(conn: sqlite3.Connection, group_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def ends_at_own_sign_in(link: ApplyLink) -> bool:
+    """A walk that reached an ATS page which sent it on to that ATS's own sign-in page
+    (``_own_sign_in``): the stored link is the ATS page, and the last hop is the sign-in
+    step, never requested (bug 5c1d738)."""
+    if not link.chain or not link.final_url:
+        return False
+    before = link.chain[-2].url if len(link.chain) >= 2 else link.start_url
+    last = link.chain[-1].url
+    return _own_sign_in(before, last) and match_ats(link.final_url) is match_ats(last)
+
+
 def is_login_link(link: ApplyLink) -> bool:
-    """A link stopped at a login wall, or an older row that took one for the posting."""
+    """A link stopped at a login wall, or an older row that took one for the posting. The
+    ATS's own sign-in step after the posting (``ends_at_own_sign_in``) is not a wall: the
+    link is the posting."""
     if link.chosen_by == "user":
         return False
     if link.error and link.error.startswith(LOGIN_ERROR):
         return True
-    return is_login_wall(link.final_url) or any(is_login_wall(h.url) for h in link.chain)
+    hops = link.chain[:-1] if ends_at_own_sign_in(link) else link.chain
+    return is_login_wall(link.final_url) or any(is_login_wall(h.url) for h in hops)
 
 
 def needs_reresolve(link: ApplyLink) -> bool:
@@ -1265,6 +1294,12 @@ def reverify(
         if resp.is_redirect and resp.location:
             if not _http_target(resp.location):
                 link.error = f"non-http destination: {resp.location[:200]}"
+                _save(conn, link)
+                return link
+            if _own_sign_in(url, resp.location):
+                # The walk's rule: the ATS's own sign-in step means the posting is there
+                # (bug 5c1d738). The sign-in page is never requested.
+                link.status, link.verified_at, link.error = ApplyStatus.live, now, None
                 _save(conn, link)
                 return link
             left_posting = _left_posting(rule, url, resp.location)

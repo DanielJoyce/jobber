@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from html import unescape
+from typing import Literal
 from urllib.parse import urljoin, urlsplit
 
 from selectolax.lexbor import LexborHTMLParser, LexborNode
@@ -130,11 +131,14 @@ def _ids(text: str | None) -> set[str]:
     }
 
 
-def matches_job(url: str, *, title: str | None, own: list[str | None]) -> bool:
-    """Whether ``url`` is this job's own posting: it shares an id number (``_ids``) with one of
-    the job's own links or ids (``own``); or every word of the title is in its path (levels and
-    letters too: "Manager I" never matches "Manager II") and no own link on the same host names
-    a different number (a sibling requisition)."""
+def match_kind(
+    url: str, *, title: str | None, own: list[str | None]
+) -> Literal["id", "title"] | None:
+    """How ``url`` names this job, if it does: ``"id"`` when it shares an id number (``_ids``)
+    with one of the job's own links or ids (``own``); ``"title"`` when every word of the title
+    is in its path (levels and letters too: "Manager I" never matches "Manager II") and no own
+    link on the same host names a different number (a sibling requisition). A title match is
+    weaker: a same-title opening elsewhere matches too (bug 5c1d738)."""
     try:
         p = urlsplit(url)
         hay = f"{p.path}?{p.query}".lower()
@@ -143,16 +147,22 @@ def matches_job(url: str, *, title: str | None, own: list[str | None]) -> bool:
         for o in own:
             own_ids |= _ids(o)
         if hint_ids & own_ids:
-            return True
+            return "id"
         host = host_of(url)
         for o in own:
             if o and _ids(o) and host_of(o) == host:
-                return False  # the job's own posting on this host carries another number
+                return None  # the job's own posting on this host carries another number
     except ValueError:  # a malformed URL
-        return False
+        return None
     words = [w for w in _WORDS.findall((title or "").lower()) if w not in _STOP]
     tokens = set(_WORDS.findall(hay))
-    return bool(words) and all(w in tokens for w in words)
+    return "title" if words and all(w in tokens for w in words) else None
+
+
+def matches_job(url: str, *, title: str | None, own: list[str | None]) -> bool:
+    """Whether ``url`` is this job's own posting (``match_kind``): a shared id number, or
+    every word of the title, and not a sibling requisition."""
+    return match_kind(url, title=title, own=own) is not None
 
 
 def _boilerplate(url: str, *texts: str) -> bool:
@@ -294,6 +304,7 @@ __all__ = [
     "Hint",
     "ats_posting",
     "description_hints",
+    "match_kind",
     "matches_job",
     "page_apply_hrefs",
 ]

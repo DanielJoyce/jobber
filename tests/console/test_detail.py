@@ -926,3 +926,30 @@ def test_a_thread_that_cannot_start_leaves_nothing_behind(monkeypatch):
     monkeypatch.setattr(apply_bg, "threading", real)
     assert worker.run(7, lambda c, cf: ran.append(1), wait_s=5) == "done"
     assert ran == [1]
+
+
+def test_ats_posting_behind_its_own_sign_in_opens_the_posting(client, conn, pages):
+    """Bug 5c1d738: the row a walk stores for board -> Apply button -> Workday posting ->
+    Workday's own sign-in. The job page offers Apply on Workday and the click goes to the
+    posting, with no re-walk, never to the board copy the walk started from."""
+    post = "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Austin-TX/Engineer_R123"
+    login = "https://acme.wd5.myworkdayjobs.com/en-US/External/login"
+    chain = [
+        {"url": "https://board.example/job/1", "host": "board.example", "method": "3xx",
+         "status": 200},
+        {"url": post, "host": "acme.wd5.myworkdayjobs.com", "method": "meta", "via": "button",
+         "status": 302},
+        {"url": login, "host": "acme.wd5.myworkdayjobs.com", "method": "3xx"},
+    ]  # fmt: skip
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, employer_host, "
+        "status, resolved_at, verified_at) VALUES (2, 'https://nlx.example/start', ?, ?, "
+        "'workday', 'acme.wd5.myworkdayjobs.com', 'live', ?, ?)",
+        (post + "/apply", json.dumps(chain), NOW.isoformat(), NOW.isoformat()),
+    )
+    conn.commit()
+    t = client.get("/job/2").text
+    assert "Apply on Workday" in t
+    r = client.get("/apply/2")
+    assert r.headers["location"] == post + "/apply"
+    assert pages.hits == []  # fresh: neither re-walked nor re-verified

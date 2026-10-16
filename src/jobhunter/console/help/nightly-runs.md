@@ -64,7 +64,9 @@ Apply button is followed on to the employer; the job page shows that step as
 **(Apply button)**. If it finds the posting closed on the employer's site or tracking
 system, the job shows as closed. If it ends at a sign-in page, an error or another job board,
 the board copy is kept; a posting that asks you to sign in to the tracking system itself (a
-Workday or Taleo sign-in) counts as the posting. A link to another opening never replaces a
+Workday or Taleo sign-in page) counts as the posting: Apply opens that posting, and it is
+re-checked like any other live link. A board whose name only looks like a sign-in word (`cas`,
+`sso`, `login`) is not a sign-in page: a posting sent there is closed. A link to another opening never replaces a
 board copy found earlier. A USAJOBS posting is the federal apply page and is not walked past.
 
 Only jobs whose apply link is not resolved yet are taken: no link yet, a link that could not
@@ -96,7 +98,8 @@ downloaded.
 If a site is having trouble when the run reaches it (it answers 429 or a 5xx error, asks for a
 long pause, cannot be reached, or its robots.txt cannot be read) and no other link for the job
 settled it, nothing is saved for that job (unless the link found is live on the employer's own
-site): it is counted as `deferred` and tried again later while it has tries left, so a bad
+site; a link from the posting's text counts only when it carries the job's requisition number,
+since title words alone also match a same-title opening elsewhere): it is counted as `deferred` and tried again later while it has tries left, so a bad
 night never fixes a worse link in place. Opening the job page does the same.
 
 At most `apply_links.per_run` jobs per run (default 200), with `apply_links.workers`
