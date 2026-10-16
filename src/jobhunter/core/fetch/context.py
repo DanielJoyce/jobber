@@ -7,7 +7,8 @@ Every request, on every redirect hop, goes through the same ladder:
 3. ttl short-circuit / conditional headers from fetch_log (GET only)
 4. per-host rate limit, global and per-source concurrency caps
 5. send; 429/5xx/connection errors retried with backoff (TransientFetchError when exhausted)
-6. body into the content cache, one fetch_log row
+6. body into the content cache, one fetch_log row (``get_hop``: a 3xx with a Location is
+   logged from its status and headers alone; its body is never read)
 7. 401/403 → AccessDenied (no retry); other 4xx returned to the caller
 """
 
@@ -101,6 +102,17 @@ def _is_http_url(value: str) -> bool:
 
 
 _RAW_RESPONSE = "jobhunter.raw_response"
+# Request extension: the response is streamed, and _send reads the body only when it is needed.
+_STREAMED = "jobhunter.streamed"
+
+
+def _headers_suffice(response: httpx.Response) -> bool:
+    """A redirect whose Location is all a link walk needs (``FetchContext.get_hop``)."""
+    return (
+        300 <= response.status_code < 400
+        and response.status_code != 304
+        and ("location" in response.headers)
+    )
 
 
 def _keep_response(response: httpx.Response) -> None:
@@ -108,8 +120,10 @@ def _keep_response(response: httpx.Response) -> None:
 
     httpx raises while building that hop when Location is not http(s) (mailto:, javascript:,
     malformed). Keeping the 3xx here lets _send return it instead of leaking the exception.
+    A streamed request's body is left for _send to read or skip.
     """
-    response.read()
+    if not response.request.extensions.get(_STREAMED):
+        response.read()
     response.request.extensions[_RAW_RESPONSE] = response
 
 
@@ -201,6 +215,21 @@ class FetchContext:
             "GET", url, params=params, headers=headers, ttl=ttl, follow_redirects=follow_redirects
         )
 
+    def get_hop(self, url: str, *, headers: dict[str, str] | None = None) -> CachedResponse:
+        """One hop of a link walk (specs/015): a GET that never follows redirects, where a 3xx
+        with a Location is read as status and headers only.
+
+        The request is streamed and closed after the headers when they carry a redirect, so a
+        redirector's page is never downloaded (bug a1cdb1d). Every other response (2xx, 4xx,
+        a 3xx without Location) has its body read and cached exactly as ``get`` does. The
+        ladder is the same as ``get``: policy, robots.txt, per-host rate limit and holds,
+        concurrency caps, retries, one fetch_log row (``bytes`` 0 and no ``content_hash`` for
+        a redirect read from its headers). The redirect's ``content`` is empty.
+        """
+        return self._request(
+            "GET", url, headers=headers, follow_redirects=False, redirect_headers_only=True
+        )
+
     def post(
         self,
         url: str,
@@ -268,6 +297,7 @@ class FetchContext:
         follow_redirects: bool = True,
         check_robots: bool = True,
         raise_on_denied: bool = True,
+        redirect_headers_only: bool = False,
     ) -> CachedResponse:
         self._check_policy()
         client = self.session()
@@ -286,7 +316,7 @@ class FetchContext:
                 except RobotsDisallowed:
                     self.stats["robots_skips"] += 1
                     raise
-            result, response = self._fetch_one(request, ttl_s)
+            result, response = self._fetch_one(request, ttl_s, redirect_headers_only)
             if check_robots:
                 self.stats["cached" if response is None else "pages"] += 1
             if response is None:
@@ -309,9 +339,11 @@ class FetchContext:
             return result
 
     def _fetch_one(
-        self, request: httpx.Request, ttl: float | None
+        self, request: httpx.Request, ttl: float | None, streamed: bool = False
     ) -> tuple[CachedResponse, httpx.Response | None]:
-        """One hop. Returns (result, raw response); raw is None when served from cache."""
+        """One hop. Returns (result, raw response); raw is None when served from cache.
+
+        ``streamed``: a redirect with a Location comes back with its body unread (get_hop)."""
         url = str(request.url)
         rhash = request_hash(request.method, url, request.read())
         prior = self._latest_ok(rhash) if request.method == "GET" else None
@@ -327,8 +359,35 @@ class FetchContext:
             if prior["last_modified"]:
                 request.headers["If-Modified-Since"] = prior["last_modified"]
 
-        response = self._exchange(request, rhash)
+        response = self._exchange(request, rhash, streamed)
         headers = {k.lower(): v for k, v in response.headers.items()}
+
+        if streamed and _headers_suffice(response):
+            fetched_at = _now()
+            self._log(
+                url,
+                request.method,
+                rhash,
+                None,
+                response.status_code,
+                headers.get("etag"),
+                headers.get("last-modified"),
+                fetched_at,
+                0,
+                content_type=headers.get("content-type"),
+            )
+            result = CachedResponse(
+                url=url,
+                final_url=url,
+                status=response.status_code,
+                headers=headers,
+                content_hash="",
+                from_cache=False,
+                fetched_at=fetched_at,
+                _cache=self.cache,
+                _content=b"",
+            )
+            return result, response
 
         if response.status_code == 304 and prior is not None:
             fetched_at = _now()
@@ -397,7 +456,9 @@ class FetchContext:
             _cache=self.cache,
         )
 
-    def _exchange(self, request: httpx.Request, rhash: str) -> httpx.Response:
+    def _exchange(
+        self, request: httpx.Request, rhash: str, streamed: bool = False
+    ) -> httpx.Response:
         """Send with rate limiting and the retry ladder. Logs every failed attempt."""
         client = self.session()
         url = str(request.url)
@@ -431,7 +492,7 @@ class FetchContext:
             retry_after: float | None = None
             with gsem, self._source_sem:
                 try:
-                    response = self._send(client, request)
+                    response = self._send(client, request, streamed)
                 except httpx.TransportError as exc:
                     status, detail = None, f"{type(exc).__name__}: {exc}"
                     self._log(url, request.method, rhash, None, None, None, None, _now(), None)
@@ -490,19 +551,33 @@ class FetchContext:
         delay = rules.crawl_delay() if rules is not None else None
         return delay or 0.0
 
-    def _send(self, client: httpx.Client, request: httpx.Request) -> httpx.Response:
+    def _send(
+        self, client: httpx.Client, request: httpx.Request, streamed: bool = False
+    ) -> httpx.Response:
         """client.send, except that a 3xx whose Location httpx cannot turn into a request is
-        returned (with no next hop) instead of raising."""
+        returned (with no next hop) instead of raising.
+
+        ``streamed``: a redirect with a Location is closed after its headers, body unread;
+        any other response is read in full here, while the caller holds its concurrency slots.
+        """
         request.extensions.pop(_RAW_RESPONSE, None)
+        request.extensions[_STREAMED] = streamed
         try:
-            return client.send(request)
+            response = client.send(request, stream=streamed)
         except (httpx.InvalidURL, httpx.TransportError) as exc:
             raw = request.extensions.pop(_RAW_RESPONSE, None)
-            if raw is not None:
-                return raw
-            if isinstance(exc, httpx.InvalidURL):
-                raise FetchError(f"invalid URL: {exc}", url=str(request.url)) from exc
-            raise
+            if raw is None:
+                if isinstance(exc, httpx.InvalidURL):
+                    raise FetchError(f"invalid URL: {exc}", url=str(request.url)) from exc
+                raise
+            response = raw
+        if streamed:
+            try:
+                if not _headers_suffice(response):
+                    response.read()
+            finally:
+                response.close()
+        return response
 
     def _backoff(self, attempt: int) -> float:
         base = min(BACKOFF_CAP_S, BACKOFF_BASE_S * (2**attempt))

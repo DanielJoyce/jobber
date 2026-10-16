@@ -3,8 +3,10 @@
 Walks from the best source-provided link to the employer's application: tracking links are
 unwrapped locally (``ats_rules.unwrap``), everything else is followed one hop at a time through
 ``FetchContext`` (3xx ``Location``, ``<meta http-equiv=refresh>``, literal ``window.location``
-assignments), so every hop gets its own robots.txt check and rate limit. The walk stops at a
-known ATS, which is canonicalized to its apply URL, or at the first page that goes nowhere.
+assignments), so every hop gets its own robots.txt check and rate limit. A 3xx hop is read
+from its status and Location alone (``FetchContext.get_hop``); only a page the walk inspects
+(meta refresh, script redirect, login form, closed-posting text) is downloaded. The walk stops at
+a known ATS, which is canonicalized to its apply URL, or at the first page that goes nowhere.
 
 The chain stored in ``apply_link.chain`` lists the hops *after* ``start_url``; each hop's
 ``status`` is the HTTP status of fetching it (None when it was never fetched: unwrapped through,
@@ -311,7 +313,7 @@ def resolve_url(
 
         previous = res.chain[-2].url if len(res.chain) >= 2 else start_url
         try:
-            resp = ctx.get(_fetchable(url), follow_redirects=False)
+            resp = ctx.get_hop(_fetchable(url))
         except RobotsDisallowed as exc:
             res.status = ApplyStatus.blocked
             res.final_url = previous if res.chain else start_url
@@ -871,7 +873,7 @@ def reverify(
     left_posting = False
     ctx = ctx_factory(url)
     try:
-        resp = ctx.get(_fetchable(url), follow_redirects=False)
+        resp = ctx.get_hop(_fetchable(url))
         if resp.is_redirect and resp.location:
             if not _http_target(resp.location):
                 link.error = f"non-http destination: {resp.location[:200]}"
@@ -890,7 +892,7 @@ def reverify(
                 return link
             if not left_posting:
                 url = resp.location
-                resp = ctx.get(_fetchable(url), follow_redirects=False)
+                resp = ctx.get_hop(_fetchable(url))
     except RobotsDisallowed as exc:
         link.status, link.error = ApplyStatus.blocked, str(exc)
         _save(conn, link)

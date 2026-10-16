@@ -40,7 +40,9 @@ Only jobs with no apply link yet are taken. A link you set by hand is never touc
 whose link already stopped at a login page is never fetched again, here or anywhere else: set
 the link by hand on the job page if you find the real one. Postings past their closing date
 are skipped. Requests respect robots.txt and each site's rate limit, and nothing is charged:
-no scorer runs in this stage.
+no scorer runs in this stage. A redirect on the way (most aggregator links are one) is read
+from its headers alone; only a page the walk has to look at, such as the posting itself, is
+downloaded.
 
 If a site is having trouble when the run reaches it (it answers 429 or a 5xx error, asks for a
 long pause, cannot be reached, or its robots.txt cannot be read) and no other link for the job

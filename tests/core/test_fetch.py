@@ -704,6 +704,151 @@ def test_non_http_location_is_returned_not_raised(make_ctx, server, location, fo
     assert server.hits("/go") == 1  # never followed
 
 
+# ─── get_hop: redirects read from headers only (bug a1cdb1d) ────────────────
+
+
+class CountedBody(httpx.SyncByteStream):
+    """A response body that records each time it is read; ``fail`` raises mid-read."""
+
+    def __init__(self, data: bytes, reads: list[str], name: str, fail: bool = False) -> None:
+        self.data, self.reads, self.name, self.fail = data, reads, name, fail
+        self.closed = False
+
+    def __iter__(self):
+        self.reads.append(self.name)
+        if self.fail:
+            raise httpx.ReadError("connection reset mid-body")
+        yield self.data
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class Counted:
+    """A handler that builds a fresh response with a counted body for every request."""
+
+    def __init__(
+        self, status: int, body: bytes, reads: list[str], name: str, *, fail: bool = False, **h
+    ) -> None:
+        self.status, self.body, self.reads, self.name, self.fail = status, body, reads, name, fail
+        self.headers = {k.replace("_", "-"): v for k, v in h.items()}
+        self.streams: list[CountedBody] = []
+
+    def __call__(self, _req: httpx.Request) -> httpx.Response:
+        stream = CountedBody(self.body, self.reads, self.name, self.fail)
+        self.streams.append(stream)
+        return httpx.Response(self.status, headers=self.headers, stream=stream)
+
+
+REDIRECT_PAGE = b"<html><body>" + b"x" * 50_000 + b"</body></html>"
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_get_hop_reads_redirect_headers_only(make_ctx, server, conn, status):
+    reads: list[str] = []
+    handler = Counted(status, REDIRECT_PAGE, reads, "go", Location="/dest?id=1")
+    server.route(f"{HOST}/go", handler)
+    resp = make_ctx().get_hop(f"{HOST}/go")
+    assert resp.status == status and resp.is_redirect
+    assert resp.location == f"{HOST}/dest?id=1"
+    assert resp.content == b""
+    assert reads == []  # the redirector's page was never read
+    assert handler.streams[0].closed  # the connection was released
+    assert server.hits("/dest") == 0  # not followed
+    (row,) = log_rows(conn, f"{HOST}/go")
+    assert row["http_status"] == status
+    assert row["bytes"] == 0 and row["content_hash"] is None and row["from_cache"] == 0
+
+
+def test_get_still_reads_redirect_bodies(make_ctx, server, conn):
+    reads: list[str] = []
+    server.route(f"{HOST}/go", Counted(301, REDIRECT_PAGE, reads, "go", Location="/dest"))
+    make_ctx().get(f"{HOST}/go", follow_redirects=False)
+    assert reads == ["go"]
+    assert log_rows(conn, f"{HOST}/go")[0]["bytes"] == len(REDIRECT_PAGE)
+
+
+@pytest.mark.parametrize(
+    ("status", "headers"),
+    [(200, {"Content_Type": "text/html"}), (404, {}), (410, {}), (300, {})],
+)
+def test_get_hop_reads_and_caches_every_other_body(make_ctx, server, conn, status, headers):
+    reads: list[str] = []
+    body = b"<p>the posting</p>"
+    server.route(f"{HOST}/job", Counted(status, body, reads, "job", **headers))
+    ctx = make_ctx()
+    resp = ctx.get_hop(f"{HOST}/job")
+    assert resp.status == status and resp.text == body.decode()
+    assert reads == ["job"]
+    (row,) = log_rows(conn, f"{HOST}/job")
+    assert row["bytes"] == len(body) and row["content_hash"] == resp.content_hash
+    assert ctx.cache.get(resp.content_hash) == body
+
+
+def test_get_hop_304_still_serves_the_cached_body(make_ctx, server):
+    server.route(f"{HOST}/job", httpx.Response(200, text="first", headers={"ETag": '"v1"'}))
+    ctx = make_ctx()
+    ctx.get_hop(f"{HOST}/job")
+    server.route(f"{HOST}/job", httpx.Response(304, headers={"ETag": '"v1"'}))
+    resp = ctx.get_hop(f"{HOST}/job")
+    assert resp.from_cache and resp.text == "first"
+
+
+def test_get_hop_retries_5xx_then_reads_redirect_headers(make_ctx, server, conn, clock):
+    reads: list[str] = []
+    first = Counted(503, b"busy", reads, "503", Retry_After="3")
+    then = Counted(301, REDIRECT_PAGE, reads, "301", Location="https://ats.example.com/j")
+    handlers = iter([first, then])
+    server.route(f"{HOST}/go", lambda req: next(handlers)(req))
+    resp = make_ctx().get_hop(f"{HOST}/go")
+    assert resp.status == 301 and resp.location == "https://ats.example.com/j"
+    assert reads == ["503"]  # the error body is logged as before; the redirect's is not read
+    assert 3 in clock.sleeps
+    assert [(r["http_status"], r["bytes"]) for r in log_rows(conn, f"{HOST}/go")] == [
+        (503, 4),
+        (301, 0),
+    ]
+
+
+def test_get_hop_body_read_error_is_retried_as_transient(make_ctx, server, settings):
+    reads: list[str] = []
+    server.route(f"{HOST}/job", Counted(200, b"page", reads, "job", fail=True))
+    with pytest.raises(TransientFetchError) as info:
+        make_ctx().get_hop(f"{HOST}/job")
+    assert "ReadError" in str(info.value)
+    assert server.hits("/job") == settings.fetch.max_retries + 1
+
+
+def test_get_hop_still_checks_robots_and_denials(make_ctx, server):
+    server.route(f"{HOST}/robots.txt", httpx.Response(200, text="User-agent: *\nDisallow: /x\n"))
+    server.route(f"{HOST}/x", httpx.Response(301, headers={"Location": "/y"}))
+    server.route(f"{HOST}/d", httpx.Response(403))
+    ctx = make_ctx()
+    with pytest.raises(RobotsDisallowed):
+        ctx.get_hop(f"{HOST}/x")
+    assert server.hits("/x") == 0
+    with pytest.raises(AccessDenied):
+        ctx.get_hop(f"{HOST}/d")
+
+
+@pytest.mark.parametrize("location", ["mailto:jobs@example.com", "javascript:void(0)", "http://["])
+def test_get_hop_non_http_location_is_returned_unread(make_ctx, server, location):
+    reads: list[str] = []
+    server.route(f"{HOST}/go", Counted(302, REDIRECT_PAGE, reads, "go", Location=location))
+    resp = make_ctx().get_hop(f"{HOST}/go")
+    assert resp.status == 302 and resp.location == location
+    assert reads == []
+
+
+def test_get_hop_keeps_the_per_host_rate_limit(make_ctx, server):
+    for p in ("a", "b", "c"):
+        server.route(f"{HOST}/{p}", httpx.Response(301, headers={"Location": "/next"}))
+    ctx = make_ctx(make_source(rate_limit={"rps": 0.5}))
+    for p in ("a", "b", "c"):
+        ctx.get_hop(f"{HOST}/{p}")
+    assert server.times == [0.0, 2.0, 4.0, 6.0]  # robots, then one hop every 2s
+
+
 # ─── robots wildcards (RFC 9309) ───────────────────────────────────────────
 
 
