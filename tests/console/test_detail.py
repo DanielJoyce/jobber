@@ -11,7 +11,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from jobhunter.config import Settings
+from jobhunter.config import ApplyLinks, Settings
 from jobhunter.console import apply_bg, detail
 from jobhunter.console.app import create_app
 from jobhunter.core import db
@@ -237,11 +237,152 @@ def test_button_expired(client, conn):
     assert "Apply on" not in t
 
 
-@pytest.mark.parametrize("status", ["unresolved", "blocked"])
-def test_button_open_posting(client, conn, status):
-    add_link(conn, 4, status, ats=None)
+def test_button_open_posting(client, conn):
+    add_link(conn, 4, "blocked", ats=None)
     t = client.get("/job/4").text
     assert "Open posting" in t and "Apply on" not in t and "apply-button" not in t
+
+
+def test_unresolved_link_is_tried_again_until_the_limit(client, conn):
+    """Bug c369bcc: an unresolved row is not settled; the page resolves it again while tries
+    are left, then keeps Open posting and says it gave up."""
+    add_link(conn, 4, "unresolved", ats=None)
+    t = client.get("/job/4").text
+    assert "Open posting" in t and 'hx-get="/job/4/apply-button"' in t
+    conn.execute(
+        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at, last_outcome) "
+        "VALUES (4, 5, ?, 'unresolved')",
+        ((NOW - timedelta(days=3)).isoformat(),),
+    )
+    t = client.get("/job/4").text
+    assert "Open posting" in t and "apply-button" not in t
+    assert "gave up after 5 tries" in t
+
+
+BOARD = "https://acme.dejobs.org/denver-co/analyst/ABC123/job/"
+
+
+def test_board_copy_is_not_resolved_and_a_retry_keeps_it(client, conn, pages):
+    """Bug c369bcc: a live link on a job board copy is offered for Apply, marked not resolved
+    yet, and resolved again; a retry that finds nothing better keeps it and counts the try."""
+    add_link(conn, 2, "live", final=BOARD, ats="unknown")
+    t = client.get("/job/2").text
+    assert "Apply on" in t and "not resolved yet (board copy)" in t
+    assert 'hx-get="/job/2/apply-button"' in t
+    frag = client.get("/job/2/apply-button").text  # every start answers 500 here
+    assert pages.hits and "hx-get" not in frag
+    assert "not resolved yet (board copy); tried 1 of 5 times, trying again later" in frag
+    row = conn.execute("SELECT final_url, status FROM apply_link WHERE job_group_id = 2").fetchone()
+    assert (row["final_url"], row["status"]) == (BOARD, "live")
+    hits = len(pages.hits)
+    client.get("/job/2/apply-button")
+    assert len(pages.hits) == hits  # backed off
+    r = client.get("/apply/2")
+    assert r.headers["location"] == BOARD and len(pages.hits) == hits
+
+
+def test_board_copy_retry_moves_to_the_ats(client, conn, pages):
+    add_link(conn, 2, "live", final=BOARD, ats="unknown")
+    pages.responses["https://example.com/2"] = httpx.Response(302, headers={"Location": WD})
+    pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    frag = client.get("/job/2/apply-button").text
+    assert "Apply on Workday" in frag and "not resolved yet" not in frag
+    att = conn.execute("SELECT attempts, last_outcome FROM apply_link_attempt").fetchone()
+    assert tuple(att) == (1, "live")
+
+
+def test_reset_gives_a_fresh_set_of_tries(client, conn):
+    conn.execute(
+        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at) VALUES (2, 5, ?)",
+        (NOW.isoformat(),),
+    )
+    client.post("/job/2/apply-link", data={"url": MINE})
+    assert conn.execute("SELECT COUNT(*) FROM apply_link_attempt").fetchone()[0] == 1
+    client.post("/job/2/apply-link", data={"reset": "1"})
+    assert conn.execute("SELECT COUNT(*) FROM apply_link_attempt").fetchone()[0] == 0
+    assert 'hx-get="/job/2/apply-button"' in client.get("/job/2").text
+
+
+def tries_of(conn, gid):
+    row = conn.execute(
+        "SELECT attempts, last_outcome FROM apply_link_attempt WHERE job_group_id = ?", (gid,)
+    ).fetchone()
+    return None if row is None else tuple(row)
+
+
+def set_max_attempts(client, n):
+    app = client.app
+    app.state.settings = app.state.settings.model_copy(
+        update={"apply_links": ApplyLinks(max_attempts=n)}
+    )
+
+
+def test_max_attempts_setting_limits_the_job_page(client, conn, pages):
+    set_max_attempts(client, 0)
+    t = client.get("/job/2").text  # no row: never resolved with a limit of 0
+    assert "Open posting" in t and "apply-button" not in t
+    client.get("/job/2/apply-button")
+    assert pages.hits == [] and tries_of(conn, 2) is None
+    set_max_attempts(client, 2)
+    add_link(conn, 4, "unresolved", ats=None)
+    conn.execute(
+        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at) VALUES (4, 2, ?)",
+        ((NOW - timedelta(days=3)).isoformat(),),
+    )
+    t = client.get("/job/4").text
+    assert "gave up after 2 tries" in t and "apply-button" not in t
+
+
+def test_apply_click_on_a_login_wall_row_keeps_the_back_off(client, conn, pages):
+    add_link(conn, 1, "live", final=LOGIN, ats="unknown")
+    client.get("/apply/1")  # the first click walks (and finds nothing)
+    hits = len(pages.hits)
+    assert hits and tries_of(conn, 1)[0] == 1
+    r = client.get("/apply/1")
+    assert len(pages.hits) == hits and tries_of(conn, 1)[0] == 1  # within the back-off
+    assert r.headers["location"] == "https://nlx.example/start"
+
+
+def test_a_capture_link_is_settled_on_the_job_page(client, conn, pages):
+    add_link(conn, 2, "unresolved", ats=None)
+    conn.execute("UPDATE apply_link SET chosen_by = 'capture', final_url = NULL")
+    t = client.get("/job/2").text
+    assert "apply-button" not in t and "not resolved yet" not in t
+    assert "apply link not found" not in t and pages.hits == []
+
+
+def test_a_console_retry_during_an_outage_stores_nothing(client, conn, pages):
+    """Review: the console walk defers on a transient failure (5xx here) like the nightly pass,
+    so an outage never freezes a worse row in place."""
+    add_link(conn, 4, "unresolved", ats=None)
+    before = conn.execute("SELECT * FROM apply_link WHERE job_group_id = 4").fetchone()
+    client.get("/job/4/apply-button")  # every start answers 500
+    assert pages.hits
+    after = conn.execute("SELECT * FROM apply_link WHERE job_group_id = 4").fetchone()
+    assert tuple(after) == tuple(before) and tries_of(conn, 4) == (1, "deferred")
+
+
+def test_a_due_retry_is_not_swallowed_by_a_re_verify(client, conn, pages):
+    """Review: the page's re-verify of a stale board copy took the group's single flight, so
+    the fragment's walk joined it and no retry ran."""
+    add_link(conn, 2, "live", final=BOARD, ats="unknown", verified_hours=48)
+    t = client.get("/job/2").text
+    assert 'hx-get="/job/2/apply-button"' in t
+    assert client.app.state.apply_link_worker.wait_idle(5) and pages.hits == []  # no re-verify
+    pages.responses["https://example.com/2"] = httpx.Response(302, headers={"Location": WD})
+    pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
+    frag = client.get("/job/2/apply-button").text
+    assert "Apply on Workday" in frag and tries_of(conn, 2) == (1, "live")
+
+
+def test_tracker_and_usajobs_links_on_the_job_page(client, conn):
+    add_link(conn, 2, "live", final="https://www.aplitrak.com/?adid=synthetic", ats="unknown")
+    t = client.get("/job/2").text
+    assert "not resolved yet (redirect not followed to the end)" in t
+    assert 'hx-get="/job/2/apply-button"' in t
+    add_link(conn, 4, "live", final="https://www.usajobs.gov/job/123456789", ats="unknown")
+    t = client.get("/job/4").text
+    assert "not resolved yet" not in t and "apply-button" not in t
 
 
 def test_apply_redirects_live_and_logs(client, conn, pages):
@@ -526,12 +667,17 @@ def test_legacy_login_wall_row_resolves_again_on_the_job_page(client, conn, page
     assert r.headers["location"] == "https://nlx.example/start"
     pages.responses["https://example.com/1"] = httpx.Response(302, headers={"Location": WD})
     pages.responses[WD] = httpx.Response(200, html="<html><body>Analyst</body></html>")
-    # A walk that found no answer is not repeated within the day (e0d047b review N6)...
+    # A try is not repeated before its back-off is over (c369bcc, e0d047b review N6)...
     hits = len(pages.hits)
     frag = client.get("/job/1/apply-button").text
     assert len(pages.hits) == hits and "Apply on Workday" not in frag and "hx-get" not in frag
-    # ...and is once the day is over.
-    monkeypatch.setattr(apply_bg, "WALK_BACKOFF_S", 0.0)
+    assert conn.execute("SELECT attempts FROM apply_link_attempt").fetchone()[0] == 1
+    assert "gave up" not in frag  # the nightly run also re-walks login-wall rows
+    # ...and is once it is.
+    conn.execute(
+        "UPDATE apply_link_attempt SET last_at = ? WHERE job_group_id = 1",
+        ((NOW - timedelta(hours=2)).isoformat(),),
+    )
     frag = client.get("/job/1/apply-button").text
     assert "Apply on Workday" in frag
     assert not any("utah.gov" in h for h in pages.hits)

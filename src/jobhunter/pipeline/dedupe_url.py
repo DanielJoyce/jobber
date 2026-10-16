@@ -195,6 +195,11 @@ def _absorb(conn: sqlite3.Connection, s: int, a: int, now: datetime, res: MergeR
     # foreign_keys=ON (rejection and mail_proposal are facts about the posting, not the group).
     for table in ("apply_click", "score_batch_item", "rejection", "mail_proposal"):
         conn.execute(f"UPDATE {table} SET job_group_id = ? WHERE job_group_id = ?", (s, a))
+    # Apply-link tries (bug c369bcc): the survivor keeps its own count, else takes this one.
+    conn.execute(
+        "UPDATE OR IGNORE apply_link_attempt SET job_group_id = ? WHERE job_group_id = ?", (s, a)
+    )
+    conn.execute("DELETE FROM apply_link_attempt WHERE job_group_id = ?", (a,))
     _merge_scores(conn, s, a, res)
     _merge_label(conn, s, a, res)
     _merge_application(conn, s, a, now, res)

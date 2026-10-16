@@ -5,6 +5,7 @@ Nothing here submits an application: /apply only redirects the browser to the em
 """
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
+import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
@@ -18,12 +19,14 @@ from fastapi.templating import Jinja2Templates
 from jobhunter.apply import paste
 from jobhunter.console import apply_bg, capture_routes, detail
 from jobhunter.core.models import ApplyLink, ApplyStatus
-from jobhunter.pipeline import applylink
+from jobhunter.pipeline import apply_attempts, applylink
 from jobhunter.pipeline.apply_rank import HostClasses
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
 from jobhunter.scoring.profile import Profile
 
 MAX_VERIFY_AGE_H = 24
+
+logger = logging.getLogger(__name__)
 
 
 def register(
@@ -46,19 +49,38 @@ def register(
     worker = apply_bg.ApplyLinkWorker(lambda: app.state.conn_factory(), ctx_factory)
     app.state.apply_link_worker = worker
 
-    def walk(group_id: int, legacy: bool, at: datetime) -> apply_bg.Work:
-        """Resolve a group with no row, or again for an older login-wall row (334d9eb).
-        Returns whether it settled the link (else the worker backs the group off)."""
+    def max_attempts() -> int:
+        return int(app.state.settings.apply_links.max_attempts)
 
-        def work(c: sqlite3.Connection, cf: applylink.CtxFactory) -> bool:
-            if legacy:
-                link = applylink.reresolve_legacy(c, group_id, now=at, ctx_factory=cf)
-                return link is not None and not applylink.needs_reresolve(link)
+    def walk(group_id: int, legacy: bool, at: datetime) -> apply_bg.Work:
+        """One counted try (bug c369bcc) at a link that is not settled: a group with no row,
+        an unresolved row or a board copy (replaced only by a link no worse), or an older
+        login-wall row (334d9eb). Callers walk only when ``apply_attempts`` says a try is due."""
+
+        def work(c: sqlite3.Connection, cf: applylink.CtxFactory) -> None:
+            outcome = "error"
             try:
-                applylink.resolve_group(c, group_id, now=at, ctx_factory=cf)
+                if legacy:
+                    link = applylink.reresolve_legacy(c, group_id, now=at, ctx_factory=cf)
+                else:
+                    # defer_transient: an outage (a robots.txt that cannot be read, a 5xx)
+                    # stores nothing, as in the nightly pass, rather than a blocked row.
+                    link = applylink.resolve_group(
+                        c,
+                        group_id,
+                        now=at,
+                        ctx_factory=cf,
+                        only_if_better=True,
+                        defer_transient=True,
+                    )
+                outcome = link.status.value if link is not None else "no_url"
+            except applylink.Deferred as exc:
+                logger.info("apply link: %s", exc)
+                outcome = "deferred"
             except ValueError:
-                return False  # no usable URL: Open posting stays
-            return True
+                outcome = "no_url"  # no usable URL: Open posting stays
+            finally:
+                apply_attempts.record(c, group_id, now=at, outcome=outcome)
 
         return work
 
@@ -83,11 +105,16 @@ def register(
     @app.get("/job/{group_id}", response_class=HTMLResponse)
     def job_page(request: Request, conn: Conn, group_id: int) -> HTMLResponse:
         days = request.app.state.settings.scoring.employer_rejection_days
-        d = detail.load_detail(conn, get_profile(), group_id, now(), rejection_days=days)
+        d = detail.load_detail(
+            conn, get_profile(), group_id, now(), rejection_days=days, max_attempts=max_attempts()
+        )
         if d is None:
             raise HTTPException(404, "no such job group")
         extras = capture_routes.job_extras(request, conn, d, now())
-        freshen(group_id, applylink.get_apply_link(conn, group_id), now())
+        if d.button is None or not d.button.pending:
+            # A due retry goes first: a re-verify started here would take the group's single
+            # flight and the fragment's walk would join it instead (c369bcc review).
+            freshen(group_id, applylink.get_apply_link(conn, group_id), now())
         return templates.TemplateResponse(
             request,
             "job.html",
@@ -99,13 +126,17 @@ def register(
         require_job(conn, group_id)
         link = applylink.get_apply_link(conn, group_id)
         outcome: apply_bg.Outcome = "done"
-        if link is None or applylink.needs_reresolve(link):
-            # No row yet, or an older row that took a login wall for the posting (334d9eb).
-            outcome = worker.run(group_id, walk(group_id, link is not None, now()), walk=True)
+        n = max_attempts()
+        btn = detail.apply_button(conn, group_id, now(), link, fetch_link=False, max_attempts=n)
+        if btn.pending:
+            # Not settled and a try is due (c369bcc): no row yet, unresolved, a board copy,
+            # or an older row that took a login wall for the posting (334d9eb).
+            legacy = link is not None and applylink.needs_reresolve(link)
+            outcome = worker.run(group_id, walk(group_id, legacy, now()))
             link = applylink.get_apply_link(conn, group_id)
+            btn = detail.apply_button(conn, group_id, now(), link, fetch_link=False, max_attempts=n)
         else:
             freshen(group_id, link, now())
-        btn = detail.apply_button(conn, group_id, now(), link, fetch_link=False)
         # Still resolving: the fragment asks again (hx-trigger=load) and shows the stored link.
         btn.pending = btn.pending and outcome == "pending"
         return templates.TemplateResponse(request, "_apply_button.html", {"b": btn})
@@ -128,7 +159,11 @@ def register(
         if link is None and not is_http_url(detail.posting_url(job)):
             # A posting pasted without a URL (specs/017): its url is a placeholder, never opened.
             raise HTTPException(404, "this posting has no URL to open")
-        legacy = link is not None and applylink.needs_reresolve(link)
+        legacy = (
+            link is not None
+            and applylink.needs_reresolve(link)
+            and apply_attempts.may_retry(conn, group_id, now=current, max_attempts=max_attempts())
+        )
         if link is not None and (legacy or applylink.reverify_due(link, current, MAX_VERIFY_AGE_H)):
             # An older row that took a login wall for the posting (334d9eb) resolves again,
             # so Open application on a packet goes to the employer, not the sign-in page; a
@@ -137,7 +172,7 @@ def register(
             # carries on in the background (bug e0d047b): the click goes to the best link
             # already known instead of hanging on slow sites.
             if legacy:
-                outcome = worker.run(group_id, walk(group_id, True, current), walk=True)
+                outcome = worker.run(group_id, walk(group_id, True, current))
             else:
                 outcome = worker.run(
                     group_id, reverify(group_id, current), wait_s=apply_bg.REVERIFY_WAIT_S
@@ -184,7 +219,8 @@ def register(
         require_job(conn, group_id)
         form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
         if (form.get("reset") or [""])[-1]:
-            applylink.clear_user_link(conn, group_id)
+            if applylink.clear_user_link(conn, group_id):
+                apply_attempts.reset(conn, group_id)  # a fresh set of tries (c369bcc)
         else:
             url = (form.get("url") or [""])[-1]
             try:

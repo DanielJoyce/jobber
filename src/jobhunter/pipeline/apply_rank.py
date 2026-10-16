@@ -148,3 +148,22 @@ class HostClasses:
         if host_in(host, TRACKER_HOSTS):
             return HostTier.tracker
         return HostTier.other
+
+
+# ─── resolved or not (bug c369bcc) ───────────────────────────────────────────
+
+# Final hosts where a live link is not resolved: it takes you to a board's copy of the posting
+# or stops at a tracking redirect, not the page where you apply.
+NOT_RESOLVED_TIERS = (HostTier.tracker, HostTier.aggregator)
+# USAJOBS is the federal government's apply entry point, not a copy: its Apply button hands off
+# to the agency's hiring system only after sign-in, so no walk can find a better link than the
+# USAJOBS posting. A live link ending there counts as resolved although the host is a board.
+RESOLVED_BOARD_HOSTS = ("usajobs.gov", "*.usajobs.gov")
+
+
+def not_resolved_live(url: str | None, classes: HostClasses) -> bool:
+    """Whether a live link ending at ``url`` is not resolved yet: a board copy or a tracker
+    (except a USAJOBS posting)."""
+    if not url or classes.tier(url) not in NOT_RESOLVED_TIERS:
+        return False
+    return not host_in(host_of(url), RESOLVED_BOARD_HOSTS)

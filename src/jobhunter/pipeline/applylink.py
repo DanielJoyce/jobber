@@ -67,6 +67,10 @@ MAX_META_DELAY_S = 10
 # Start URLs per group that may cost requests (board starts with nothing to unwrap cost none
 # and are not counted). Each one goes through FetchContext's per-host rate limits.
 MAX_FETCH_STARTS = 6
+# Bump when the walk learns to reach links it could not before (a new hop kind, a new board
+# step): tries counted by an older walk stop counting, so groups not resolved yet get a full
+# set of tries with the better walk (``apply_attempts``, bug c369bcc).
+WALK_VERSION = 1
 # A page with a password field and less text than this is a login page, not a posting.
 LOGIN_PAGE_MAX_TEXT = 2500
 LOGIN_ERROR = "login wall"
@@ -616,6 +620,7 @@ def resolve_group(
     max_fetches: int = MAX_FETCH_STARTS,
     only_if_settled: bool = False,
     defer_transient: bool = False,
+    only_if_better: bool = False,
 ) -> ApplyLink:
     """Resolve a job group's apply link and upsert its ``apply_link`` row.
 
@@ -632,6 +637,10 @@ def resolve_group(
     ``Resolution.transient``) and no start settled the group, raise :class:`Deferred` and
     write nothing, so an outage never stores a worse link in place of the one a later walk
     would find.
+
+    ``only_if_better`` (a retry of a link that is not settled, bug c369bcc): the new result
+    replaces the stored row only when it is no worse by ``link_rank``, so a retry never trades
+    a live board copy for a failed fetch.
     """
     existing = get_apply_link(conn, group_id)
     if existing is not None and existing.chosen_by == "user":
@@ -663,7 +672,14 @@ def resolve_group(
     if not results:
         raise ValueError(f"job_group {group_id}: no start URL could be tried")
     win_cand, best = rank_results(results, classes)[0]
-    if defer_transient and not _settled(win_cand, best, classes):
+    # A live answer on the employer's site is kept even when another start failed: it is
+    # settled for retries (apply_attempts), so deferring it would only throw it away (c369bcc).
+    on_employer = (
+        best.status == ApplyStatus.live
+        and not best.login
+        and classes.tier(best.final_url) <= HostTier.employer
+    )
+    if defer_transient and not on_employer and not _settled(win_cand, best, classes):
         failed = [r.error or "transient failure" for _, r in results if r.transient]
         if failed:
             raise Deferred(group_id, failed)
@@ -685,8 +701,43 @@ def resolve_group(
     answered = best.status in (ApplyStatus.live, ApplyStatus.expired) or best.login
     if only_if_settled and existing is not None and not answered:
         return existing
-    _save(conn, link)
+    if not only_if_better:
+        _save(conn, link)
+        return link
+    # Compare with the row as it is now, under the write lock: another walk, a capture or a
+    # re-verify may have stored a better link while this one ran (c369bcc review).
+    with _txn(conn):
+        current = get_apply_link(conn, group_id)
+        if current is not None and _keeps(current, link, classes):
+            return current
+        _save(conn, link)
     return link
+
+
+def _keeps(current: ApplyLink, new: ApplyLink, classes: HostClasses) -> bool:
+    """``only_if_better``: whether the stored row stays. A link the user set or a capture
+    supplied is never replaced by a ranked one; otherwise the new link must be no worse."""
+    if current.chosen_by == "user":
+        return True
+    if current.chosen_by == "capture" and new.chosen_by != "capture":
+        return True
+    return link_rank(new, classes) > link_rank(current, classes)
+
+
+def link_rank(link: ApplyLink, classes: HostClasses) -> tuple[int, int, int]:
+    """Lower is better, for replacing a stored row (bug c369bcc): an answer from the ATS or
+    the employer's site (live, or closed there), then a live link elsewhere (a board copy, a
+    tracker), then anything else (unresolved, a dead copy, a login wall); then by final host
+    and status."""
+    tier = classes.tier(link.final_url)
+    on_employer = tier <= HostTier.employer and not is_login_link(link)
+    if on_employer and link.status in (ApplyStatus.live, ApplyStatus.expired):
+        group = 0
+    elif link.status == ApplyStatus.live and not is_login_link(link):
+        group = 1
+    else:
+        group = 2
+    return (group, int(tier), _RANK[link.status])
 
 
 def set_user_link(conn: sqlite3.Connection, group_id: int, url: str, now: datetime) -> ApplyLink:

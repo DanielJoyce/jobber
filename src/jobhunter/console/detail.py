@@ -21,6 +21,8 @@ from jobhunter.console.tracking import APPLY_CLICK_NOTE, rebuild_status
 from jobhunter.core import rejections
 from jobhunter.core.manual_sources import EMAIL_MANUAL
 from jobhunter.core.models import ApplyLink, ApplyStatus
+from jobhunter.pipeline import apply_attempts
+from jobhunter.pipeline.apply_rank import HostClasses
 from jobhunter.pipeline.applylink import get_apply_link, needs_reresolve
 from jobhunter.pipeline.ats_rules import host_of, is_http_url
 from jobhunter.pipeline.dedupe import _refresh_group, group_members
@@ -157,9 +159,10 @@ class ApplyButton:
     chain: str | None = None
     verified: str | None = None
     host: str | None = None
-    pending: bool = False  # no apply_link row yet: resolve on demand
+    pending: bool = False  # a try is due (no row yet, not resolved yet): resolve on demand
     why: str | None = None  # one line: where the link came from and why it was chosen
     user_set: bool = False  # the user set this link (offer Reset)
+    note: str | None = None  # not resolved yet: a board copy, how many tries (bug c369bcc)
 
 
 def chain_text(link: ApplyLink) -> str:
@@ -190,13 +193,21 @@ def apply_button(
     link: ApplyLink | None = None,
     *,
     fetch_link: bool = True,
+    max_attempts: int = apply_attempts.DEFAULT_MAX_ATTEMPTS,
 ) -> ApplyButton:
+    """The Apply button. ``pending`` when the link is not settled and a try is due
+    (``apply_attempts``): the page then asks the apply-button fragment, which resolves."""
     if link is None and fetch_link:
         link = get_apply_link(conn, group_id)
     apply_href = f"/apply/{group_id}"
     if link is None or needs_reresolve(link):
         # An older row that took a login wall for the posting resolves again too (334d9eb).
-        return ApplyButton(group_id, "open", "Open posting ↗", apply_href, pending=True)
+        tries = apply_attempts.get(conn, group_id)
+        due = apply_attempts.due(tries, now=now, max_attempts=max_attempts)
+        note = None
+        if link is None and not due:  # a login-wall row is also re-walked by the nightly run
+            note = apply_attempts.summary(tries, now=now, max_attempts=max_attempts)
+        return ApplyButton(group_id, "open", "Open posting ↗", apply_href, pending=due, note=note)
     if link.chosen_by == "user":
         name = ats_display(link.ats) if link.ats and link.ats != "unknown" else link.employer_host
         return ApplyButton(
@@ -210,6 +221,14 @@ def apply_button(
         )
     verified = f"verified {ago(link.verified_at, now)}" if link.verified_at else "not verified"
     chain, host = chain_text(link), link.employer_host
+    retry, note = False, None
+    if link.status in (ApplyStatus.live, ApplyStatus.unresolved):
+        classes = HostClasses.load(conn, group_id)
+        if apply_attempts.unsettled(conn, link, classes):  # not resolved yet (c369bcc)
+            kind = apply_attempts.not_resolved_kind(link, classes)
+            tries = apply_attempts.get(conn, group_id)
+            retry = apply_attempts.due(tries, now=now, max_attempts=max_attempts)
+            note = apply_attempts.summary(tries, now=now, max_attempts=max_attempts, kind=kind)
     if link.status == ApplyStatus.live:
         name = ats_display(link.ats) if link.ats and link.ats != "unknown" else (host or "site")
         return ApplyButton(
@@ -221,6 +240,8 @@ def apply_button(
             verified=verified,
             host=host,
             why=link.why,
+            pending=retry,
+            note=note,
         )
     if link.status == ApplyStatus.expired:
         return ApplyButton(
@@ -243,6 +264,8 @@ def apply_button(
         verified=verified,
         host=host,
         why=link.why,
+        pending=retry,
+        note=note,
     )
 
 
@@ -386,6 +409,7 @@ def load_detail(
     group_id: int,
     now: datetime,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+    max_attempts: int = apply_attempts.DEFAULT_MAX_ATTEMPTS,
 ) -> Detail | None:
     job = group_job(conn, group_id)
     if job is None:
@@ -456,7 +480,9 @@ def load_detail(
         )
     link = get_apply_link(conn, group_id)
     if link is not None or is_http_url(posting_url(job)):
-        d.button = apply_button(conn, group_id, now, link, fetch_link=False)
+        d.button = apply_button(
+            conn, group_id, now, link, fetch_link=False, max_attempts=max_attempts
+        )
     # else: a posting pasted without a URL (specs/017) has nowhere to apply; no button.
     d.packet_id = live_packet_id(conn, group_id)
     d.prompt = did_you_apply(conn, group_id)

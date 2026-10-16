@@ -453,6 +453,10 @@ class ApplyLinks(BaseModel):
     ``per_run`` caps the groups resolved per run (0 turns the pass off); ``workers`` is how
     many resolve at once. Requests go through FetchContext, so robots.txt and per-host rate
     limits hold whatever ``workers`` is. Nothing here spends credits.
+
+    ``max_attempts`` (bug c369bcc, ``pipeline/apply_attempts.py``): how many times a group
+    whose link is not settled (none yet, deferred, unresolved, a board copy) is tried, nightly
+    or on the job page, before it keeps "Open posting" for good (0: never resolve).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -462,6 +466,7 @@ class ApplyLinks(BaseModel):
     # No group starts after this many minutes, so the run ends before the collect unit gives
     # up waiting for the run lock.
     max_minutes: float = Field(default=20, gt=0)
+    max_attempts: int = Field(default=5, ge=0)
 
 
 class Settings(BaseModel):
@@ -1111,6 +1116,7 @@ RELOADABLE: frozenset[str] = frozenset(
         "apply_links.per_run",
         "apply_links.workers",
         "apply_links.max_minutes",
+        "apply_links.max_attempts",
         # read on use
         "mail.alerts_address",
         "mail.label",
@@ -1195,6 +1201,7 @@ SHOWN_VALUES: frozenset[str] = frozenset(
         "apply_links.per_run",
         "apply_links.workers",
         "apply_links.max_minutes",
+        "apply_links.max_attempts",
         "mail.label",
         "console.port",
         "console.public_port",
