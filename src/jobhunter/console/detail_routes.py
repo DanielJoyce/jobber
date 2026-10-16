@@ -5,6 +5,7 @@ Nothing here submits an application: /apply only redirects the browser to the em
 """
 
 # No ``from __future__ import annotations``: FastAPI must resolve the local ``Conn`` alias.
+import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
@@ -24,6 +25,8 @@ from jobhunter.pipeline.ats_rules import host_of, is_http_url
 from jobhunter.scoring.profile import Profile
 
 MAX_VERIFY_AGE_H = 24
+
+logger = logging.getLogger(__name__)
 
 
 def register(
@@ -60,10 +63,20 @@ def register(
                 if legacy:
                     link = applylink.reresolve_legacy(c, group_id, now=at, ctx_factory=cf)
                 else:
+                    # defer_transient: an outage (a robots.txt that cannot be read, a 5xx)
+                    # stores nothing, as in the nightly pass, rather than a blocked row.
                     link = applylink.resolve_group(
-                        c, group_id, now=at, ctx_factory=cf, only_if_better=True
+                        c,
+                        group_id,
+                        now=at,
+                        ctx_factory=cf,
+                        only_if_better=True,
+                        defer_transient=True,
                     )
                 outcome = link.status.value if link is not None else "no_url"
+            except applylink.Deferred as exc:
+                logger.info("apply link: %s", exc)
+                outcome = "deferred"
             except ValueError:
                 outcome = "no_url"  # no usable URL: Open posting stays
             finally:
@@ -98,7 +111,10 @@ def register(
         if d is None:
             raise HTTPException(404, "no such job group")
         extras = capture_routes.job_extras(request, conn, d, now())
-        freshen(group_id, applylink.get_apply_link(conn, group_id), now())
+        if d.button is None or not d.button.pending:
+            # A due retry goes first: a re-verify started here would take the group's single
+            # flight and the fragment's walk would join it instead (c369bcc review).
+            freshen(group_id, applylink.get_apply_link(conn, group_id), now())
         return templates.TemplateResponse(
             request,
             "job.html",

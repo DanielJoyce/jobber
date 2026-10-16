@@ -455,8 +455,8 @@ class ApplyLinks(BaseModel):
     limits hold whatever ``workers`` is. Nothing here spends credits.
 
     ``max_attempts`` (bug c369bcc, ``pipeline/apply_attempts.py``): how many times a group
-    whose link is not settled (none yet, deferred, unresolved) is tried, nightly or on the job
-    page, before it keeps "Open posting" for good (0: never resolve).
+    whose link is not settled (none yet, deferred, unresolved, a board copy) is tried, nightly
+    or on the job page, before it keeps "Open posting" for good (0: never resolve).
     """
 
     model_config = ConfigDict(extra="forbid")

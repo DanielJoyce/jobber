@@ -204,7 +204,9 @@ def apply_button(
         # An older row that took a login wall for the posting resolves again too (334d9eb).
         tries = apply_attempts.get(conn, group_id)
         due = apply_attempts.due(tries, now=now, max_attempts=max_attempts)
-        note = None if due else apply_attempts.summary(tries, now=now, max_attempts=max_attempts)
+        note = None
+        if link is None and not due:  # a login-wall row is also re-walked by the nightly run
+            note = apply_attempts.summary(tries, now=now, max_attempts=max_attempts)
         return ApplyButton(group_id, "open", "Open posting ↗", apply_href, pending=due, note=note)
     if link.chosen_by == "user":
         name = ats_display(link.ats) if link.ats and link.ats != "unknown" else link.employer_host
@@ -221,13 +223,12 @@ def apply_button(
     chain, host = chain_text(link), link.employer_host
     retry, note = False, None
     if link.status in (ApplyStatus.live, ApplyStatus.unresolved):
-        board = link.status == ApplyStatus.live and apply_attempts.board_copy(
-            link, HostClasses.load(conn, group_id)
-        )
-        if board or link.status == ApplyStatus.unresolved:
+        classes = HostClasses.load(conn, group_id)
+        if apply_attempts.unsettled(conn, link, classes):  # not resolved yet (c369bcc)
+            kind = apply_attempts.not_resolved_kind(link, classes)
             tries = apply_attempts.get(conn, group_id)
             retry = apply_attempts.due(tries, now=now, max_attempts=max_attempts)
-            note = apply_attempts.summary(tries, now=now, max_attempts=max_attempts, board=board)
+            note = apply_attempts.summary(tries, now=now, max_attempts=max_attempts, kind=kind)
     if link.status == ApplyStatus.live:
         name = ats_display(link.ats) if link.ats and link.ats != "unknown" else (host or "site")
         return ApplyButton(

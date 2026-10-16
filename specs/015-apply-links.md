@@ -114,14 +114,22 @@ Not for every job. Resolution costs requests, and most jobs are never looked at.
 - **Re-checked** nightly for every application still at `interested` or `preparing`, so a
   posting that closed while you were drafting a cover letter is flagged the next morning.
 
-**Retries (bug c369bcc).** A link is *settled* when the user set it, or it is `expired` or
-`blocked`, or `live` anywhere but a job board copy or a tracker (`HostTier.aggregator`,
-`HostTier.tracker`). Anything else (no row, a deferred try, `unresolved`, a live board copy) is
-tried again, nightly and on demand, up to `apply_links.max_attempts` (default 5) tries in all,
-counted per group in `apply_link_attempt` (migration 0043) and spaced 1 h, 4 h, 12 h, then 20 h
-apart. A retry replaces the stored row only with a link no worse (`resolve_group(
-only_if_better=True)`); a live board copy stays the Apply target meanwhile. Reset on the job
-page clears the count.
+**Retries (bug c369bcc).** A link is *settled* when the user set it or a capture supplied it
+(`chosen_by`), or it is `expired` or `blocked`, or `live` anywhere but a job board copy or a
+tracker (`HostTier.aggregator`, `HostTier.tracker`). Exception: a live link ending on a USAJOBS
+posting is settled although `usajobs.gov` is a board host. USAJOBS is the federal apply entry
+point, and its Apply button hands off to the agency's hiring system only after sign-in, so a
+retry can never find a better link (`apply_rank.RESOLVED_BOARD_HOSTS`). Anything else (no row,
+a deferred try, `unresolved`, a live board copy or tracker) is tried again, nightly and on
+demand, up to `apply_links.max_attempts` (default 5) tries in all, counted per group in
+`apply_link_attempt` (migration 0043) and spaced 1 h, 4 h, 12 h, then 20 h apart from when each
+try started. The nightly pass takes never-tried groups before retries in each bucket. A retry
+replaces the stored row only with a link no worse (`resolve_group(only_if_better=True)`,
+compared with the row as it is at write time, under the write lock); a capture is never
+replaced by a ranked link; a live board copy stays the Apply target meanwhile. A retry that
+finds a live link on the employer's site keeps it even when another start failed transiently.
+Each try stores `applylink.WALK_VERSION`; when a change to the walk bumps it, tries by the
+older walk stop counting. Reset on the job page clears the count.
 
 ## Data model
 
@@ -139,6 +147,15 @@ CREATE TABLE apply_link (
   error         TEXT,
   chosen_by     TEXT,              -- NULL (ranked) | capture | user   (migration 0036)
   why           TEXT               -- one line under the button       (migration 0036)
+);
+
+CREATE TABLE apply_link_attempt (   -- tries per group (migration 0043, bug c369bcc)
+  job_group_id  INTEGER PRIMARY KEY REFERENCES job_group(id),
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  last_at       TEXT NOT NULL,     -- when the last try started; never moves back
+  last_outcome  TEXT,              -- live | expired | unresolved | blocked | board | kept |
+                                   -- deferred | user_link | no_url | error
+  walk_version  INTEGER NOT NULL DEFAULT 1  -- applylink.WALK_VERSION of the last try
 );
 
 CREATE TABLE apply_click (

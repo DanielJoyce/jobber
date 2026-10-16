@@ -11,13 +11,19 @@ them ahead of time for the groups most likely to be opened:
 
 Only groups whose link is not settled are taken (bug c369bcc, ``apply_attempts``): no row yet
 (or a deferred try that stored none), an ``unresolved`` row, or a ``live`` row that ends on a
-job board copy or a tracker. A link you set by hand, and a row that is ``expired``,
-``blocked`` (a login wall) or live on an ATS or the employer's site, are never fetched here.
+job board copy or a tracker (a USAJOBS posting counts as settled). A link you set by hand or a
+capture supplied, and a row that is ``expired``, ``blocked`` (a login wall) or live on an ATS
+or the employer's site, are never fetched here. Within each of shortlist, A and B, groups never
+tried come before retries, so retries never crowd new groups out of ``per_run``.
+
 Each group gets at most one try per run and ``apply_links.max_attempts`` tries in all (counted
-with the console's on-demand tries in ``apply_link_attempt``), spaced by
-``apply_attempts.BACKOFF_H``; after the last the group keeps "Open posting" (or its board copy).
-A retry replaces a stored row only with a link no worse (``only_if_better``). Postings past
-their closing date are skipped.
+with the console's on-demand tries in ``apply_link_attempt``, by the current
+``applylink.WALK_VERSION``), spaced by ``apply_attempts.BACKOFF_H`` from when each try started
+(the run's ``now`` plus the time elapsed in the stage). Just before its walk a group is checked
+again (``skipped`` when the console tried or settled it since selection). After the last try
+the group keeps "Open posting" (or its board copy). A retry replaces a stored row only with a
+link no worse (``only_if_better``, compared under the write lock). Postings past their closing
+date are skipped.
 
 Bounds: at most ``apply_links.per_run`` groups, and no group starts after
 ``apply_links.max_minutes`` (the collect unit waits for the run lock only so long). A group
@@ -26,7 +32,8 @@ the pass did not start (``late``) is not counted as a try.
 An outage never freezes a worse link: when a start failed transiently (429, 5xx, a transport
 error, a host held by Retry-After, an unreachable robots.txt) and nothing settled the group,
 no row is written (``resolve_group(defer_transient=True)``); the try counts and the group
-stays eligible while it has tries left.
+stays eligible while it has tries left. A live link on the employer's site found meanwhile is
+stored rather than deferred: it is settled, and deferring would throw it away.
 
 Network only through ``FetchContext`` (``applylink.resolve_group``): robots.txt and the
 process-wide per-host rate limits hold across threads. Nothing here spends credits. With a
@@ -45,7 +52,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from jobhunter.config import Settings
 from jobhunter.core import db
@@ -53,6 +60,7 @@ from jobhunter.core.fetch import fetch_context_for_url
 from jobhunter.core.models import Bucket
 from jobhunter.pipeline import apply_attempts, applylink
 from jobhunter.pipeline.apply_rank import HostClasses
+from jobhunter.pipeline.applylink import WALK_VERSION
 from jobhunter.pipeline.listing import to_iso
 from jobhunter.pipeline.locations import load_many_job_group_locations
 from jobhunter.scoring.buckets import compute_row
@@ -68,6 +76,7 @@ DEFERRED = "deferred"
 LATE = "late"  # not started: the pass ran out of time
 KEPT = "kept"  # a retry found nothing better: the stored row stays
 BOARD = "board"  # live, but on a job board copy or a tracker: not resolved yet
+SKIPPED = "skipped"  # not started: settled or tried elsewhere (the console) since selection
 
 
 class PassCancelled(BaseException):
@@ -79,6 +88,7 @@ class Candidate:
     group_id: int
     why: str  # shortlist | A | B
     overall: float = 0.0
+    retry: bool = False  # tried before or has a row (not resolved yet): after new groups
 
 
 @dataclass
@@ -97,15 +107,16 @@ class PassResult:
         return {
             "tried": self.tried,
             "live": o["live"],
+            "board": o[BOARD],
+            "kept": o[KEPT],
             "unresolved": o["unresolved"],
             "deferred": o[DEFERRED],
             "errors": self.errors,
+            "left": max(0, self.candidates - self.tried),
             "blocked": o["blocked"],
             "expired": o["expired"],
-            "left": max(0, self.candidates - self.tried),
             "late": o[LATE],
-            "board": o[BOARD],
-            "kept": o[KEPT],
+            "skipped": o[SKIPPED],
             "user_link": o[USER_LINK],
             "candidates": self.candidates,
             "shortlist": self.shortlist,
@@ -116,7 +127,7 @@ class PassResult:
 
 _OPEN = "(j.closes_at IS NULL OR j.closes_at > :now)"
 _MAYBE = apply_attempts.MAYBE_UNSETTLED_SQL
-_TRIES = "(t.attempts IS NULL OR t.attempts < :max_attempts)"
+_TRIES = apply_attempts.TRIES_LEFT_SQL
 
 _SHORTLIST_SQL = f"""
 SELECT g.id
@@ -151,10 +162,20 @@ WHERE {_MAYBE} AND {_TRIES} AND l.job_group_id IS NULL AND {_OPEN}
 
 def eligible(conn: sqlite3.Connection, group_id: int, *, now: datetime, max_attempts: int) -> bool:
     """A group the SQL let through: its link is not settled and a try is due."""
-    if not apply_attempts.may_retry(conn, group_id, now=now, max_attempts=max_attempts):
-        return False
+    return _retry_state(conn, group_id, now=now, max_attempts=max_attempts) is not None
+
+
+def _retry_state(
+    conn: sqlite3.Connection, group_id: int, *, now: datetime, max_attempts: int
+) -> bool | None:
+    """None: not eligible. Else whether this is a retry (False: never tried, no row)."""
+    tries = apply_attempts.get(conn, group_id)
+    if not apply_attempts.due(tries, now=now, max_attempts=max_attempts):
+        return None
     link = applylink.get_apply_link(conn, group_id)
-    return apply_attempts.unsettled(conn, link, HostClasses.load(conn, group_id) if link else None)
+    if not apply_attempts.unsettled(conn, link, HostClasses.load(conn, group_id) if link else None):
+        return None
+    return link is not None or tries is not None
 
 
 def select_groups(
@@ -165,28 +186,40 @@ def select_groups(
     max_attempts: int = apply_attempts.DEFAULT_MAX_ATTEMPTS,
 ) -> list[Candidate]:
     """Every group the pass would resolve, in order: shortlisted (newest first), then A, then
-    B (best overall first). A/B needs the profile; without one only the shortlist counts."""
-    params = {"now": to_iso(now), "max_attempts": max_attempts}
-
-    def ok(gid: int) -> bool:
-        return eligible(conn, gid, now=now, max_attempts=max_attempts)
-
-    out = [Candidate(r[0], "shortlist") for r in conn.execute(_SHORTLIST_SQL, params) if ok(r[0])]
+    B (best overall first). Within each, groups never tried come before retries, so retries
+    of links not resolved yet never crowd new groups out of ``per_run``. A/B needs the
+    profile; without one only the shortlist counts."""
+    params = {"now": to_iso(now), "max_attempts": max_attempts, "walk_version": WALK_VERSION}
+    retry: dict[int, bool] = {}
+    out: list[Candidate] = []
+    for (gid,) in conn.execute(_SHORTLIST_SQL, params).fetchall():
+        if gid in retry:
+            continue
+        state = _retry_state(conn, gid, now=now, max_attempts=max_attempts)
+        if state is not None:
+            retry[gid] = state
+            out.append(Candidate(gid, "shortlist", retry=state))
+    out.sort(key=lambda c: c.retry)  # stable: newest first within each
     if profile is None:
         return out
     taken = {c.group_id for c in out}
-    rows = [
-        r
-        for r in conn.execute(_SCORED_SQL, params)
-        if r["group_id"] not in taken and ok(r["group_id"])
-    ]
+    rows = []
+    for r in conn.execute(_SCORED_SQL, params):
+        gid = r["group_id"]
+        if gid in taken:
+            continue
+        state = _retry_state(conn, gid, now=now, max_attempts=max_attempts)
+        if state is not None:
+            retry[gid] = state
+            rows.append(r)
     locs = load_many_job_group_locations(conn, (r["job_id"] for r in rows))
     likely: list[Candidate] = []
     for r in rows:
         fit = compute_row(r, r, locs.get(r["job_id"], []), profile)
         if fit.bucket in LIKELY_BUCKETS:
-            likely.append(Candidate(r["group_id"], fit.bucket.value, fit.overall))
-    likely.sort(key=lambda c: (c.why, -c.overall, -c.group_id))
+            gid = r["group_id"]
+            likely.append(Candidate(gid, fit.bucket.value, fit.overall, retry=retry[gid]))
+    likely.sort(key=lambda c: (c.why, c.retry, -c.overall, -c.group_id))
     return out + likely
 
 
@@ -275,7 +308,8 @@ def resolve_likely(
     if not todo:
         return result
 
-    deadline = None if max_seconds is None else clock() + max_seconds
+    started = clock()
+    deadline = None if max_seconds is None else started + max_seconds
     stop = threading.Event()
     progress = _Progress(len(todo))
 
@@ -294,20 +328,29 @@ def resolve_likely(
 
     def work(cand: Candidate, c: sqlite3.Connection | None = None) -> str:
         check()
-        if deadline is not None and clock() >= deadline:
+        t = clock()
+        if deadline is not None and t >= deadline:
             return LATE
+        # The try's own start, for its back-off (the run's ``now`` may be an hour earlier).
+        at = now + timedelta(seconds=max(0.0, t - started))
         if c is not None:
-            return resolve_one(c, cand.group_id, now=now, ctx_factory=factory_on(c))
+            return try_one(c, cand.group_id, at)
         assert path is not None
         own = db.connect(path)
         try:
-            return resolve_one(own, cand.group_id, now=now, ctx_factory=factory_on(own))
+            return try_one(own, cand.group_id, at)
         finally:
             own.close()
 
+    def try_one(c: sqlite3.Connection, gid: int, at: datetime) -> str:
+        # Still not settled and due? The console may have tried or settled it meanwhile.
+        if not eligible(c, gid, now=at, max_attempts=max_attempts):
+            return SKIPPED
+        return resolve_one(c, gid, now=at, ctx_factory=factory_on(c))
+
     def record(cand: Candidate, outcome: str | BaseException) -> None:
-        if outcome == LATE:
-            result.outcomes[LATE] += 1
+        if outcome in (LATE, SKIPPED):
+            result.outcomes[outcome] += 1
             return
         result.tried += 1
         if isinstance(outcome, ValueError):

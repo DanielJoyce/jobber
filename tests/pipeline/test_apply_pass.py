@@ -17,7 +17,7 @@ from jobhunter.config import Settings
 from jobhunter.console import activity_log
 from jobhunter.core import db
 from jobhunter.core.fetch import fetch_context_for_url, reset_shared_state
-from jobhunter.pipeline import apply_pass, applylink, runner
+from jobhunter.pipeline import apply_attempts, apply_pass, applylink, runner
 from jobhunter.scoring.profile import Profile
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
@@ -588,6 +588,8 @@ def test_ctrl_c_stops_within_about_one_request(file_db, tmp_path, server, monkey
 
 BOARD = "https://acme.dejobs.org/denver-co/analyst/ABC123/job/"
 GH = "https://boards.greenhouse.io/acme/jobs/567"
+TRACKER = "https://www.aplitrak.com/?adid=synthetic"
+USAJOBS = "https://www.usajobs.gov/job/123456789"
 
 
 def put_link(conn, gid: int, status: str, final: str, *, chosen_by=None, error=None) -> None:
@@ -612,21 +614,35 @@ def test_unresolved_and_board_copy_rows_are_retried(conn, settings, factory, ser
     board = add(conn, 2, skills=90)
     put_link(conn, board, "live", BOARD)
     server.routes[f"https://{host(2)}/j/2"] = httpx.Response(302, headers={"Location": GH})
-    settled = [add(conn, gid, skills=90) for gid in (3, 4, 5, 6, 7)]
+    tracker = add(conn, 8, skills=90)
+    put_link(conn, tracker, "live", TRACKER)  # a redirect not followed to the end
+    server.routes[f"https://{host(8)}/j/8"] = httpx.Response(302, headers={"Location": GH})
+    short_board = add(conn, 12, label="interesting")
+    put_link(conn, short_board, "live", BOARD)
+    server.routes[f"https://{host(12)}/j/12"] = httpx.Response(302, headers={"Location": GH})
+    settled = [add(conn, gid, skills=90) for gid in (3, 4, 5, 6, 7, 9, 10)]
     put_link(conn, 3, "live", GH)
     put_link(conn, 4, "live", f"https://{host(4)}/careers/4")  # not a board: settled
     put_link(conn, 5, "expired", GH)
     put_link(conn, 6, "blocked", f"https://{host(6)}/j/6", error=applylink.LOGIN_ERROR)
     put_link(conn, 7, "live", BOARD, chosen_by="user")
+    put_link(conn, 9, "live", USAJOBS)  # the federal apply entry point: settled
+    put_link(conn, 10, "unresolved", "https://apply.staffing.example.net/j/9", chosen_by="capture")
+    # shortlisted groups go through the same settled filter
+    settled += [add(conn, 11, label="interesting"), add(conn, 13, app="interested")]
+    put_link(conn, 11, "live", GH)
+    put_link(conn, 13, "live", f"https://{host(13)}/careers/13")
     picked = {c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NOW)}
-    assert picked == {unresolved, board}
+    assert picked == {unresolved, board, tracker, short_board}
     result = resolve(conn, settings, factory)
     assert applylink.get_apply_link(conn, unresolved).status.value == "live"
-    link = applylink.get_apply_link(conn, board)
-    assert link.status.value == "live" and link.final_url.startswith(GH)
-    assert tries(conn, unresolved) == (1, "live") and tries(conn, board) == (1, "live")
-    assert result.counts()["live"] == 2
-    assert server.hosts() == {host(1), host(2), "boards.greenhouse.io"}
+    for gid in (board, tracker, short_board):
+        link = applylink.get_apply_link(conn, gid)
+        assert link.status.value == "live" and link.final_url.startswith(GH)
+        assert tries(conn, gid) == (1, "live")
+    assert tries(conn, unresolved) == (1, "live")
+    assert result.counts()["live"] == 4
+    assert server.hosts() == {host(g) for g in (1, 2, 8, 12)} | {"boards.greenhouse.io"}
     assert all(tries(conn, gid) is None for gid in settled)
 
 
@@ -713,3 +729,162 @@ def test_late_groups_are_not_counted(conn, settings, factory):
         conn, settings, PROFILE, now=NOW, limit=10, max_seconds=0, ctx_factory=factory
     )
     assert result.counts()["late"] == 1 and tries(conn, 1) is None
+
+
+def test_a_capture_is_never_replaced_by_a_retry(conn, settings, factory, server):
+    """Review blocker: a capture's Apply destination (chosen_by='capture', unresolved, as
+    capture.offer_apply_link writes it) is settled and beats a board copy."""
+    gid = add(conn, 1, skills=90)
+    dest = "https://apply.staffing.example.net/jobs/9"
+    put_link(conn, gid, "unresolved", dest, chosen_by="capture")
+    conn.execute("UPDATE apply_link SET start_url = ?, final_url = NULL", (dest,))
+    server.routes[f"https://{host(1)}/j/1"] = httpx.Response(302, headers={"Location": BOARD})
+    assert apply_pass.select_groups(conn, PROFILE, now=NOW) == []
+    # even a walk that runs anyway (a direct retry) keeps it
+    link = applylink.resolve_group(conn, gid, now=NOW, ctx_factory=factory, only_if_better=True)
+    stored = applylink.get_apply_link(conn, gid)
+    assert link.chosen_by == stored.chosen_by == "capture" and stored.start_url == dest
+
+
+def test_never_tried_groups_come_before_retries(conn, settings, factory):
+    retry_hi = add(conn, 1, skills=95)
+    put_link(conn, retry_hi, "live", BOARD)
+    fresh_lo = add(conn, 2, skills=90)
+    short_retry = add(conn, 3, label="interesting")
+    put_link(conn, short_retry, "live", BOARD)
+    short_fresh = add(conn, 4, label="interesting")
+    picked = apply_pass.select_groups(conn, PROFILE, now=NOW)
+    assert [(c.group_id, c.why) for c in picked] == [
+        (short_fresh, "shortlist"),
+        (short_retry, "shortlist"),
+        (fresh_lo, "A"),
+        (retry_hi, "A"),
+    ]
+    assert (
+        apply_pass.resolve_likely(
+            conn, settings, PROFILE, now=NOW, limit=3, ctx_factory=factory
+        ).counts()["left"]
+        == 1
+    )
+    assert tries(conn, retry_hi) is None  # the retry waited, not the new group
+
+
+def test_a_better_walk_restarts_the_count(conn, settings, factory, monkeypatch):
+    gid = add(conn, 1, skills=90)
+    put_link(conn, gid, "live", BOARD)
+    conn.execute(
+        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at, walk_version) "
+        "VALUES (?, 5, ?, 1)",
+        (gid, (NOW - timedelta(days=3)).isoformat()),
+    )
+    assert apply_pass.select_groups(conn, PROFILE, now=NOW) == []
+    monkeypatch.setattr(applylink, "WALK_VERSION", 2)
+    monkeypatch.setattr(apply_attempts, "WALK_VERSION", 2)
+    monkeypatch.setattr(apply_pass, "WALK_VERSION", 2)
+    assert [c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NOW)] == [gid]
+    resolve(conn, settings, factory)
+    row = conn.execute("SELECT attempts, walk_version FROM apply_link_attempt").fetchone()
+    assert tuple(row) == (1, 2)
+
+
+def test_tries_are_stamped_when_they_start(conn, settings, factory):
+    add(conn, 1, skills=90)
+    add(conn, 2, skills=85)
+    ticks = iter([0.0, 600.0, 1800.0, 3600.0])  # start, group 1 at +10 min, group 2 at +30
+    apply_pass.resolve_likely(
+        conn, settings, PROFILE, now=NOW, limit=5, ctx_factory=factory, clock=lambda: next(ticks)
+    )
+    assert apply_attempts.get(conn, 1).last_at == NOW + timedelta(minutes=10)
+    assert apply_attempts.get(conn, 2).last_at == NOW + timedelta(minutes=30)
+    # a try that started earlier but is counted later never moves last_at back
+    apply_attempts.record(conn, 2, now=NOW, outcome="live")
+    assert apply_attempts.get(conn, 2).last_at == NOW + timedelta(minutes=30)
+
+
+def test_a_group_tried_elsewhere_after_selection_is_skipped(conn, settings, factory, server):
+    gid = add(conn, 1, skills=90)
+    real = apply_pass.select_groups
+
+    def select_then_console_tries(*a, **kw):
+        picked = real(*a, **kw)
+        apply_attempts.record(conn, gid, now=NOW, outcome="unresolved")  # the job page
+        return picked
+
+    apply_pass.select_groups = select_then_console_tries
+    try:
+        result = resolve(conn, settings, factory)
+    finally:
+        apply_pass.select_groups = real
+    assert result.counts()["skipped"] == 1 and result.tried == 0 and server.requests == []
+    assert tries(conn, gid) == (1, "unresolved")
+
+
+def test_a_better_link_stored_during_the_walk_is_kept(conn, settings, server):
+    """Review: only_if_better compares with the row as it is at write time, not as it was
+    read before the walk."""
+    gid = add(conn, 1, skills=90)
+    put_link(conn, gid, "live", BOARD)
+    server.routes[f"https://{host(1)}/j/1"] = httpx.Response(302, headers={"Location": BOARD})
+    clock = FakeClock()
+
+    def factory(url):
+        # another writer (a capture, the console) stores the ATS link mid-walk
+        conn.execute(
+            "UPDATE apply_link SET final_url = ?, status = 'live', resolved_at = ? "
+            "WHERE job_group_id = ?",
+            (GH, NOW.isoformat(), gid),
+        )
+        return fetch_context_for_url(
+            settings, conn, url, transport=server.transport, clock=clock, sleep=clock.sleep
+        )
+
+    applylink.resolve_group(conn, gid, now=NIGHT2, ctx_factory=factory, only_if_better=True)
+    assert applylink.get_apply_link(conn, gid).final_url == GH
+
+
+def test_a_live_employer_link_is_kept_although_another_start_failed(
+    conn, settings, factory, server
+):
+    """Review: a deferred try used to throw away a live link on the employer's site."""
+    gid = add(conn, 1, skills=90, url="https://careers.acmewidgets.com/jobs/1")
+    conn.execute("UPDATE job SET employer = 'Acmewidgets' WHERE id = ?", (gid,))
+    member(conn, gid, 1, "https://redirect.example.net/r/1")
+    server.routes["https://redirect.example.net/r/1"] = httpx.Response(503)
+    result = resolve(conn, settings, factory)
+    link = applylink.get_apply_link(conn, gid)
+    assert link.status.value == "live" and "acmewidgets" in link.final_url
+    assert result.counts()["deferred"] == 0 and tries(conn, gid) == (1, "live")
+
+
+@pytest.mark.parametrize(
+    ("answer", "replaced"),
+    [(httpx.Response(403), False), (httpx.Response(404), False), (None, True)],
+)
+def test_retry_keeps_an_employer_row_over_a_board_result(
+    conn, settings, factory, server, answer, replaced
+):
+    """link_rank: an unresolved row on the employer's site outranks an unresolved or dead
+    board result (host tier); an equal result replaces the row (ties go to the newer)."""
+    gid = add(conn, 1, skills=90, url="https://www.usnlx.com/uber/job/1")
+    conn.execute("UPDATE job SET employer = 'Uber' WHERE id = ?", (gid,))
+    loop = "https://jobs.uber.com/en/jobs/303432"
+    put_link(conn, gid, "unresolved", loop, error="redirect loop")
+    if answer is None:  # the same loop again: a tie
+        server.routes["https://www.usnlx.com/uber/job/1"] = httpx.Response(
+            302, headers={"Location": loop}
+        )
+        server.routes[loop] = httpx.Response(302, headers={"Location": loop})
+    else:
+        server.routes["https://www.usnlx.com/uber/job/1"] = answer
+    result = resolve(conn, settings, factory)
+    link = applylink.get_apply_link(conn, gid)
+    assert link.final_url == loop and link.status.value == "unresolved"
+    assert (link.resolved_at >= NOW) is replaced  # the stored row is two days old
+    assert result.counts()["kept"] == (0 if replaced else 1)
+
+
+def test_log_line_shows_board_and_kept():
+    r = apply_pass.PassResult(tried=5, candidates=5)
+    r.outcomes.update({"board": 3, "kept": 2})
+    first8 = list(r.counts())[:8]
+    assert {"tried", "live", "board", "kept", "deferred", "errors"} <= set(first8)
