@@ -952,3 +952,164 @@ def test_board_copies_from_an_older_walk_get_fresh_tries(conn, factory, server, 
     settings = Settings.model_validate({"fetch": {"max_retries": 0}})
     apply_pass.resolve_likely(conn, settings, PROFILE, now=NOW, limit=5, ctx_factory=factory)
     assert get_apply_link(conn, gid).final_url == EMPLOYER_POSTING + "?gh_jid=8189170"
+
+
+# ─── review round 3 of PR 188 ──────────────────────────────────────────────
+
+OTHER_DESC = f"<p>To apply for our Product Analyst opening: {OTHER_OPENING}</p>"
+
+
+def _store_board_copy(conn, gid: int) -> None:
+    at = NOW.isoformat()
+    conn.execute(
+        "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, status, "
+        "resolved_at, verified_at, why) VALUES (?, ?, ?, '[]', 'live', ?, ?, 'board')",
+        (gid, REDIRECTOR, DEJOBS_PAGE, at, at),
+    )
+
+
+@pytest.mark.parametrize("status", [403, 404])
+@pytest.mark.parametrize("only_if_better", [True, False])
+def test_retry_never_replaces_a_stored_board_copy_with_a_fallback(
+    conn, factory, server, status, only_if_better
+):
+    """A retry whose board pages answer 403 or 404 today: the stored live board copy of the
+    right posting stays; the cued link to another opening is never tried."""
+    serve_nlx_chain(server)
+    server.page(DEJOBS_PAGE, "blocked", status=status)
+    server.page(NLX_PAGE, "blocked", status=status)
+    server.page(OTHER_OPENING)
+    gid = nlx_group(conn, OTHER_DESC)
+    _store_board_copy(conn, gid)
+    resolve_group(
+        conn,
+        gid,
+        now=NOW,
+        ctx_factory=factory,
+        defer_transient=True,
+        only_if_better=only_if_better,
+    )
+    stored = get_apply_link(conn, gid)
+    assert (stored.final_url, stored.from_hint) == (DEJOBS_PAGE, False)
+    assert "mongodb.wd5.myworkdayjobs.com" not in server.hosts()
+
+
+def test_keeps_a_live_own_link_over_a_new_fallback(conn):
+    from jobhunter.core.models import ApplyLink
+    from jobhunter.pipeline.apply_rank import HostClasses
+    from jobhunter.pipeline.applylink import _keeps
+
+    current = ApplyLink(
+        job_group_id=1,
+        start_url=REDIRECTOR,
+        final_url=DEJOBS_PAGE,
+        status=ApplyStatus.live,
+        resolved_at=NOW,
+    )
+    new = current.model_copy(update={"final_url": OTHER_OPENING, "from_hint": True})
+    assert _keeps(current, new, HostClasses())
+    assert not _keeps(current, new.model_copy(update={"from_hint": False}), HostClasses())
+
+
+def test_a_pastes_fallback_link_never_groups_another_job_into_it(conn, factory, server):
+    from jobhunter.apply import paste
+    from jobhunter.pipeline.dedupe import group_pending
+
+    gid = paste.insert_pasted_posting(
+        conn,
+        url="https://www.linkedin.com/jobs/view/4012345678",
+        text=f"Senior Software Engineer at MongoDB.\n\nTo apply for our Product Analyst "
+        f"opening: {OTHER_OPENING}\n",
+        employer="MongoDB",
+        title="Senior Software Engineer",
+        now=NOW,
+    )
+    server.page(OTHER_OPENING)
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert link.from_hint and link.final_url.startswith(OTHER_OPENING)
+    jid = conn.execute(
+        "INSERT INTO job (source_key, external_id, url, title, employer, description_text, "
+        "stage, first_seen_at, last_seen_at) VALUES ('wa', 'wd-1300', ?, 'Product Analyst', "
+        "'MongoDB', 'Product analyst work.', 'normalized', ?, ?)",
+        (OTHER_OPENING, NOW.isoformat(), NOW.isoformat()),
+    ).lastrowid
+    group_pending(conn, now=NOW)
+    joined = conn.execute("SELECT job_group_id FROM job WHERE id = ?", (jid,)).fetchone()[0]
+    assert joined != gid
+
+
+def test_matched_employer_page_is_kept_when_the_redirector_fails(conn, factory, server):
+    """c369bcc keeps a live answer on the employer's site on a bad night; a link that names
+    the job is such an answer too."""
+    emp = "https://www.mongodb.com/careers/jobs/senior-software-engineer-8189170"
+    server.page(emp)
+    server.route(REDIRECTOR, httpx.Response(503))
+    server.route(NLX_PAGE, httpx.Response(503))
+    gid = nlx_group(conn, f"<p>[Apply here]({emp})</p>")
+    link = resolve_group(
+        conn, gid, now=NOW, ctx_factory=factory, defer_transient=True, only_if_better=True
+    )
+    assert (link.status, link.final_url, link.from_hint) == (ApplyStatus.live, emp, False)
+
+
+@pytest.mark.parametrize("code", [500, 502, 503, 429])
+def test_button_target_failing_never_marks_the_job_closed(conn, factory, server, code):
+    serve_nlx_chain(server)
+    server.route(EMPLOYER_POSTING, httpx.Response(code))
+    gid = nlx_group(conn)
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.status, link.final_url) == (ApplyStatus.live, DEJOBS_PAGE)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "https://click.appcast.io/track?url=http://[object%20Object]",
+        "https://click.appcast.io/track?url=https://[",
+    ],
+)
+def test_malformed_tracker_wrapped_button_keeps_the_board_copy(conn, factory, server, bad):
+    board = "https://jobs.utah.gov/jobs/13"
+    server.page(board, f'<a href="{bad}">Apply now</a>')
+    gid = add_member_group(conn, {"url": board})
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.status, link.final_url) == (ApplyStatus.live, board)
+
+
+def test_malformed_tracker_wrapped_application_link_keeps_the_board_copy(conn, factory, server):
+    serve_nlx_chain(server)
+    server.page(DE_LINK, "gone", status=404)
+    item = json.loads((FIX / "dejobs_detail.json").read_text())
+    item["other"] = json.dumps(
+        {"application_link": "https://click.appcast.io/track?url=http://[object%20Object]"}
+    )
+    server.route(DETAIL_JSON, httpx.Response(200, json=item))
+    gid = nlx_group(conn)
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.status, link.final_url) == (ApplyStatus.live, DEJOBS_PAGE)
+
+
+WD_POST = "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Austin-TX/Engineer_R123"
+WD_LOGIN = "https://acme.wd5.myworkdayjobs.com/en-US/External/login"
+TALEO_POST = "https://acme.taleo.net/careersection/2/jobdetail.ftl?job=123"
+TALEO_LOGIN = "https://acme.taleo.net/careersection/iam/accessmanagement/login.jsf?lang=en"
+
+
+@pytest.mark.parametrize(
+    ("post", "login", "final"),
+    [(WD_POST, WD_LOGIN, WD_POST + "/apply"), (TALEO_POST, TALEO_LOGIN, TALEO_POST)],
+    ids=["workday", "taleo"],
+)
+def test_button_to_a_posting_behind_its_ats_sign_in_is_never_closed(
+    conn, factory, server, post, login, final
+):
+    """Decision: an ATS posting that redirects to the same ATS's sign-in is the posting (the
+    walk's existing rule for the ATS's own sign-in step), never 'closed'; the sign-in page is
+    never requested."""
+    serve_nlx_chain(server)
+    server.redirect(DE_LINK, post, 301)
+    server.redirect(post.split("?")[0], login)
+    gid = nlx_group(conn)
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.status, link.final_url) == (ApplyStatus.live, final)
+    assert all(str(r.url).split("?")[0] != login.split("?")[0] for r in server.requests)

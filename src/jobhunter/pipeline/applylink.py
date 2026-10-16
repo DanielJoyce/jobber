@@ -261,12 +261,15 @@ def _is_html(resp: CachedResponse) -> bool:
 
 def _left_posting(rule: AtsRule | None, from_url: str, to_url: str) -> bool:
     """An ATS posting redirecting to a non-posting page on the same ATS (e.g. Greenhouse's
-    ``/acme?error=true``) means the posting is gone."""
+    ``/acme?error=true``) means the posting is gone. Its own sign-in page (Workday
+    ``/login``, Taleo ``login.jsf``) does not: that is a step on the way to applying, which
+    the walk's login rule handles."""
     return (
         rule is not None
         and rule.is_posting(from_url)
         and match_ats(to_url) is rule
         and not rule.is_posting(to_url)
+        and not is_login_wall(to_url)
     )
 
 
@@ -960,6 +963,13 @@ def resolve_group(
         and not r.login
         and classes.tier(r.final_url) == HostTier.aggregator
         for _, r in results
+    ) or (
+        # a retry: the board copy stored by an earlier walk counts too (review round 3)
+        existing is not None
+        and existing.status == ApplyStatus.live
+        and not existing.from_hint
+        and not is_login_link(existing)
+        and classes.tier(existing.final_url) == HostTier.aggregator
     )
     if (
         fallbacks
@@ -991,8 +1001,10 @@ def resolve_group(
     if defer_transient:
         failed = [r.error or "transient failure" for _, r in results if r.transient]
         own_failed = [r for c, r in results if r.transient and c.hint is None]
-        if own_failed and win_cand.hint is not None:
-            # A link from the text never stands in for the job's own link on a bad night.
+        if own_failed and win_cand.hint is not None and not on_employer:
+            # A link from the text never stands in for the job's own link on a bad night,
+            # unless it names the job and is live on the employer's site or ATS (c369bcc keeps
+            # such an answer).
             raise Deferred(group_id, failed)
         if (
             (failed or fallback_failed)
@@ -1039,6 +1051,13 @@ def _keeps(current: ApplyLink, new: ApplyLink, classes: HostClasses) -> bool:
         return True
     if current.chosen_by == "capture" and new.chosen_by != "capture":
         return True
+    if (
+        new.from_hint
+        and not current.from_hint
+        and current.status == ApplyStatus.live
+        and not is_login_link(current)
+    ):
+        return True  # a link to another opening never replaces a live link to this job
     return link_rank(new, classes) > link_rank(current, classes)
 
 

@@ -63,7 +63,9 @@ When a link lands on a job board's copy of the posting (NLx, dejobs.org, a state
 Apply button is followed on to the employer; the job page shows that step as
 **(Apply button)**. If it finds the posting closed on the employer's site or tracking
 system, the job shows as closed. If it ends at a sign-in page, an error or another job board,
-the board copy is kept. A USAJOBS posting is the federal apply page and is not walked past.
+the board copy is kept; a posting that asks you to sign in to the tracking system itself (a
+Workday or Taleo sign-in) counts as the posting. A link to another opening never replaces a
+board copy found earlier. A USAJOBS posting is the federal apply page and is not walked past.
 
 Only jobs whose apply link is not resolved yet are taken: no link yet, a link that could not
 be resolved, or a link that ends on a job board's copy of the posting (such as the NLX

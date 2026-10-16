@@ -79,14 +79,17 @@ GENERIC_DEST_PARAMS: tuple[str, ...] = (
 
 def _as_url(value: str) -> str | None:
     value = value.strip()
-    # Some trackers double-encode: one parse_qsl decode leaves "https%3A%2F%2F...".
-    for _ in range(3):
-        if is_http_url(value):
-            return value
-        if "%" not in value:
-            return None
-        value = unquote(value)
-    return value if is_http_url(value) else None
+    try:
+        # Some trackers double-encode: one parse_qsl decode leaves "https%3A%2F%2F...".
+        for _ in range(3):
+            if is_http_url(value):
+                return value
+            if "%" not in value:
+                return None
+            value = unquote(value)
+        return value if is_http_url(value) else None
+    except ValueError:  # a malformed destination such as "http://[object Object]"
+        return None
 
 
 def unwrap(url: str) -> str | None:
