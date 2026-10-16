@@ -267,7 +267,8 @@ def _url_rows(conn: sqlite3.Connection, needle: str) -> list[tuple[int, str]]:
         out.extend((r[0], u) for u in r[1:] if u)
     for r in conn.execute(
         "SELECT job_group_id, start_url, final_url FROM apply_link "
-        "WHERE start_url LIKE :l ESCAPE '\\' OR final_url LIKE :l ESCAPE '\\'",
+        "WHERE (start_url LIKE :l ESCAPE '\\' OR final_url LIKE :l ESCAPE '\\') "
+        "AND NOT from_hint",  # a fallback link does not name the job (bug 3bab68d)
         {"l": like},
     ):
         out.extend((r[0], u) for u in r[1:] if u)

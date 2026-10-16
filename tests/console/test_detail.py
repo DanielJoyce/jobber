@@ -16,6 +16,7 @@ from jobhunter.console import apply_bg, detail
 from jobhunter.console.app import create_app
 from jobhunter.core import db
 from jobhunter.core.fetch import fetch_context_for_url, reset_shared_state
+from jobhunter.pipeline.applylink import WALK_VERSION
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
 WD = "https://acme.wd5.myworkdayjobs.com/en-US/Acme/job/Albany-NY/Analyst_R-1234"
@@ -250,9 +251,9 @@ def test_unresolved_link_is_tried_again_until_the_limit(client, conn):
     t = client.get("/job/4").text
     assert "Open posting" in t and 'hx-get="/job/4/apply-button"' in t
     conn.execute(
-        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at, last_outcome) "
-        "VALUES (4, 5, ?, 'unresolved')",
-        ((NOW - timedelta(days=3)).isoformat(),),
+        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at, last_outcome, "
+        "walk_version) VALUES (4, 5, ?, 'unresolved', ?)",
+        ((NOW - timedelta(days=3)).isoformat(), WALK_VERSION),
     )
     t = client.get("/job/4").text
     assert "Open posting" in t and "apply-button" not in t
@@ -293,8 +294,9 @@ def test_board_copy_retry_moves_to_the_ats(client, conn, pages):
 
 def test_reset_gives_a_fresh_set_of_tries(client, conn):
     conn.execute(
-        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at) VALUES (2, 5, ?)",
-        (NOW.isoformat(),),
+        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at, walk_version) "
+        "VALUES (2, 5, ?, ?)",
+        (NOW.isoformat(), WALK_VERSION),
     )
     client.post("/job/2/apply-link", data={"url": MINE})
     assert conn.execute("SELECT COUNT(*) FROM apply_link_attempt").fetchone()[0] == 1
@@ -326,8 +328,9 @@ def test_max_attempts_setting_limits_the_job_page(client, conn, pages):
     set_max_attempts(client, 2)
     add_link(conn, 4, "unresolved", ats=None)
     conn.execute(
-        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at) VALUES (4, 2, ?)",
-        ((NOW - timedelta(days=3)).isoformat(),),
+        "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at, walk_version) "
+        "VALUES (4, 2, ?, ?)",
+        ((NOW - timedelta(days=3)).isoformat(), WALK_VERSION),
     )
     t = client.get("/job/4").text
     assert "gave up after 2 tries" in t and "apply-button" not in t

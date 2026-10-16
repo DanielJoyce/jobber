@@ -943,7 +943,7 @@ def offer_apply_link(conn: sqlite3.Connection, group_id: int, url: str, now: dat
         "final_url = NULL, chain = '[]', ats = excluded.ats, "
         "employer_host = excluded.employer_host, status = 'unresolved', "
         "resolved_at = excluded.resolved_at, verified_at = NULL, error = NULL, "
-        "chosen_by = 'capture', why = excluded.why",
+        "chosen_by = 'capture', why = excluded.why, from_hint = 0",
         (group_id, url, rule.name if rule else None, host_of(url), to_iso(now), why),
     )
     return True
@@ -1755,7 +1755,9 @@ def same_job_candidates(conn: sqlite3.Connection, group_id: int) -> list[paste.D
         keys.append(f"{r[0]}:{r[1]}")
         applies.append(r[2])
     link = conn.execute(
-        "SELECT start_url, final_url FROM apply_link WHERE job_group_id = ?", (group_id,)
+        "SELECT start_url, final_url FROM apply_link WHERE job_group_id = ? "
+        "AND NOT from_hint",  # a fallback link does not name the job (bug 3bab68d)
+        (group_id,),
     ).fetchone()
     if link is not None:
         applies += [link[0], link[1]]

@@ -132,7 +132,7 @@ def _collect_keys(conn: sqlite3.Connection) -> dict[str, set[int]]:
         "SELECT a.final_url, a.job_group_id FROM apply_link a "
         "JOIN job_group g ON g.id = a.job_group_id "
         "WHERE a.status IN ('live', 'expired') AND a.final_url IS NOT NULL "
-        "AND g.method != 'manual'"
+        "AND g.method != 'manual' AND NOT a.from_hint"
     ):
         add(r[0], r[1])
     return keys

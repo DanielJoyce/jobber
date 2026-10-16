@@ -412,7 +412,11 @@ class Group:
 def load_groups(conn: sqlite3.Connection) -> list[Group]:
     rows = conn.execute(
         "SELECT g.id AS gid, j.title, COALESCE(j.employer, j.agency_raw, '') AS employer, "
-        "j.first_seen_at, l.final_url, l.employer_host, a.id AS aid, a.status AS astatus, "
+        # A fallback link from the posting's text (bug 3bab68d) says nothing about the
+        # employer's host.
+        "j.first_seen_at, CASE WHEN l.from_hint THEN NULL ELSE l.final_url END AS final_url, "
+        "CASE WHEN l.from_hint THEN NULL ELSE l.employer_host END AS employer_host, "
+        "a.id AS aid, a.status AS astatus, "
         "COALESCE(a.applied_at, a.created_at) AS asince "
         "FROM job_group g JOIN job j ON j.id = g.canonical_job_id "
         "LEFT JOIN apply_link l ON l.job_group_id = g.id "

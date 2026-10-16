@@ -259,6 +259,10 @@ class ApplyHop(BaseModel):
     host: str
     method: Literal["unwrap", "3xx", "meta", "js", "browser"]
     status: int | None = None
+    # "button": a board copy's Apply button (bug 3bab68d). Stored as a separate key with
+    # method "meta" (a hop read from the page) so a console older than this field still parses
+    # the chain: pydantic ignores keys it does not know.
+    via: Literal["button"] | None = None
 
 
 class ApplyLink(BaseModel):
@@ -274,3 +278,6 @@ class ApplyLink(BaseModel):
     error: str | None = None
     chosen_by: Literal["capture", "user"] | None = None  # None: ranked by the resolver
     why: str | None = None  # one line shown under the Apply button
+    # The start was a link from the posting's text that names no id or title of this job (a
+    # fallback, bug 3bab68d): its final URL never merges groups (dedupe_url).
+    from_hint: bool = False

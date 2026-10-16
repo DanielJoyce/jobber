@@ -235,6 +235,8 @@ def _captured_url_index(conn: sqlite3.Connection) -> dict[str, int]:
     for r in conn.execute(
         "SELECT j.url, j.apply_url, j.page_url, a.start_url, a.final_url, j.job_group_id "
         "FROM job j LEFT JOIN apply_link a ON a.job_group_id = j.job_group_id "
+        # a fallback link from the posting's text does not name the job (bug 3bab68d)
+        "AND NOT a.from_hint "
         "WHERE j.source_key = ? AND j.job_group_id IS NOT NULL",
         (PASTE_MANUAL,),
     ):

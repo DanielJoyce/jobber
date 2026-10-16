@@ -20,6 +20,7 @@ URL (up to ``MAX_FETCH_STARTS`` of them) and keeps the best by where it ends
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import sqlite3
@@ -43,12 +44,21 @@ from jobhunter.core.fetch import (
 )
 from jobhunter.core.models import ApplyHop, ApplyLink, ApplyStatus
 from jobhunter.core.textnorm import html_to_text
+from jobhunter.pipeline.apply_hints import (
+    MAX_HINTS,
+    ats_posting,
+    description_hints,
+    matches_job,
+    page_apply_hrefs,
+)
 from jobhunter.pipeline.apply_rank import TIER_LABEL, HostClasses, HostTier
 from jobhunter.pipeline.ats_rules import (
     EXPIRED_PHRASES,
     EXPIRED_STATUSES,
+    TRACKER_HOSTS,
     AtsRule,
     ats_name,
+    host_in,
     host_of,
     is_http_url,
     is_login_wall,
@@ -58,6 +68,8 @@ from jobhunter.pipeline.ats_rules import (
 from jobhunter.pipeline.board_ids import is_board_host
 from jobhunter.pipeline.dedupe import group_members
 from jobhunter.pipeline.listing import _txn, from_iso, to_iso
+from jobhunter.sources.adapters.nlx import page_apply_urls as nlx_page_apply_urls
+from jobhunter.sources.adapters.nlx import page_guid as nlx_page_guid
 
 if TYPE_CHECKING:
     from jobhunter.config import Settings
@@ -70,7 +82,8 @@ MAX_FETCH_STARTS = 6
 # Bump when the walk learns to reach links it could not before (a new hop kind, a new board
 # step): tries counted by an older walk stop counting, so groups not resolved yet get a full
 # set of tries with the better walk (``apply_attempts``, bug c369bcc).
-WALK_VERSION = 1
+# 2: description hints and the board Apply-button step (bug 3bab68d).
+WALK_VERSION = 2
 # A page with a password field and less text than this is a login page, not a posting.
 LOGIN_PAGE_MAX_TEXT = 2500
 LOGIN_ERROR = "login wall"
@@ -106,6 +119,10 @@ class Resolution:
     # A failure that may pass (429, 5xx, a transport error, a host held by Retry-After, an
     # unreachable robots.txt): the walk says nothing about where the link really goes.
     transient: bool = False
+    start_status: int | None = None  # HTTP status of fetching start_url itself
+    # A board's Apply button led to the job's own ATS or employer page, but the walk kept the
+    # board copy (a wall or an error there): the job's posting exists, so no fallback runs.
+    own_posting_seen: bool = False
 
     @property
     def employer_host(self) -> str | None:
@@ -244,13 +261,109 @@ def _is_html(resp: CachedResponse) -> bool:
 
 def _left_posting(rule: AtsRule | None, from_url: str, to_url: str) -> bool:
     """An ATS posting redirecting to a non-posting page on the same ATS (e.g. Greenhouse's
-    ``/acme?error=true``) means the posting is gone."""
+    ``/acme?error=true``) means the posting is gone. Its own sign-in page (Workday
+    ``/login``, Taleo ``login.jsf``) does not: that is a step on the way to applying, which
+    the walk's login rule handles."""
     return (
         rule is not None
         and rule.is_posting(from_url)
         and match_ats(to_url) is rule
         and not rule.is_posting(to_url)
+        and not is_login_wall(to_url)
     )
+
+
+def _off_site(url: str, target: str) -> bool:
+    """A different site: neither host is the other or a subdomain of it."""
+    a, b = host_of(url), host_of(target)
+    return bool(b) and a != b and not a.endswith("." + b) and not b.endswith("." + a)
+
+
+_BUTTON_TIERS = (HostTier.ats, HostTier.employer, HostTier.tracker)
+# Job boards whose own posting is where you apply: USAJOBS is the federal entry point (bug
+# c369bcc), and its pages link questionnaire previews that look like Apply buttons.
+NO_BUTTON_HOSTS: tuple[str, ...] = ("usajobs.gov", "www.usajobs.gov")
+# Per-group memo of button walks (resolve_group passes one dict to every start's walk), so the
+# redirector start and the posting-page start of one NLx job do not walk the same chain twice.
+ButtonCache = dict[str, object]
+
+
+class _TransientButton(Exception):
+    """The board's button could not be read for a reason that may pass (429, 5xx, an
+    unreadable robots.txt): the board copy stands, but the walk is marked transient."""
+
+
+def _button_ok(url: str, href: str, classes: HostClasses) -> bool:
+    """An Apply target worth following off a board: another site, not a login page, not an ATS
+    link trusted without a request, and on an ATS, the employer's site or a tracker."""
+    try:
+        if not _off_site(url, href) or is_login_wall(href):
+            return False
+        rule = match_ats(href)
+        if rule is not None and not rule.fetch:
+            return False
+        return classes.tier(href) in _BUTTON_TIERS or unwrap(href) is not None
+    except ValueError:  # a malformed URL, e.g. one wrapping "http://[object Object]"
+        return False
+
+
+def board_apply_targets(
+    html: str,
+    url: str,
+    ctx: FetchContext,
+    classes: HostClasses | None = None,
+    cache: ButtonCache | None = None,
+) -> list[str]:
+    """Where a job board copy's Apply button goes (bug 3bab68d), best first.
+
+    The first off-site Apply link in the page that points at an ATS, the employer's site or
+    a click tracker (a state job bank's "Apply for benefits" never counts). For an NLx or
+    dejobs.org shell page, the posting's ``other.application_link`` when it qualifies the same
+    way, then its ``link`` (``de.jobsyn.org``, which redirects to the employer); one request
+    through ``ctx``, remembered in ``cache``. Raises :class:`_TransientButton` when that
+    request fails in a way that may pass."""
+    classes = classes or HostClasses()
+    out: list[str] = []
+    for href in page_apply_hrefs(html, url):
+        if _button_ok(url, href, classes):
+            out.append(href)
+            break
+    key = f"nlx-json:{nlx_page_guid(url) or url}"  # one JSON per posting, any NLx page
+    if cache is not None and key in cache:
+        app_link, link = cache[key]  # type: ignore[misc]
+    else:
+        try:
+            app_link, link = nlx_page_apply_urls(url, ctx)
+        except RobotsDisallowed as exc:
+            if robots_unavailable(exc):
+                raise _TransientButton(str(exc)) from exc
+            app_link = link = None
+        except TransientFetchError as exc:
+            raise _TransientButton(str(exc)) from exc
+        except FetchError:
+            app_link = link = None
+        if cache is not None:
+            cache[key] = (app_link, link)
+    if app_link and _button_ok(url, app_link, classes):
+        out.append(app_link)
+    try:
+        if link and _off_site(url, link) and not is_login_wall(link):
+            out.append(link)
+    except ValueError:
+        pass
+    return list(dict.fromkeys(out))
+
+
+def _reached_posting(res: Resolution, classes: HostClasses) -> bool:
+    """A button walk that got somewhere better than the board copy: live off the job boards,
+    not a wall; or the posting found closed on its ATS or the employer's site (a 404 or
+    closed text there is a real answer: the job is closed, review of PR 188)."""
+    final = res.final_url or res.start_url
+    if res.login:
+        return False
+    if res.status == ApplyStatus.live:
+        return not classes.is_aggregator(host_of(final))
+    return res.status == ApplyStatus.expired and classes.employer_or_ats(final)
 
 
 def resolve_url(
@@ -259,13 +372,25 @@ def resolve_url(
     *,
     max_hops: int = MAX_HOPS,
     browser_fallback: BrowserFallback | None = None,
+    classes: HostClasses | None = None,
+    button_cache: ButtonCache | None = None,
+    _seen: set[str] | None = None,
 ) -> Resolution:
-    """Follow one start URL to its destination. Never raises for fetch failures."""
+    """Follow one start URL to its destination. Never raises for fetch failures.
+
+    A page on a job board or aggregator (``classes.is_aggregator``) is not the employer's
+    posting: when it has an Apply button that leaves the board, the walk follows it
+    (``board_apply_targets``; a hop with ``via="button"``). The board copy stays the result
+    unless that walk reaches a live page off the boards: a login wall, an error, a closed page
+    or another board never replaces it. A passing failure on the way marks the result
+    ``transient`` so the nightly pass tries again instead of storing the board copy."""
+    boards = classes or HostClasses()
     res = Resolution(start_url=start_url, status=ApplyStatus.unresolved, final_url=start_url)
     if is_login_wall(start_url):
         _stop_at_login(res, start_url, start_url)
         return res
-    seen = {normalize_url(start_url)}
+    seen = _seen if _seen is not None else set()
+    seen.add(normalize_url(start_url))
     url = start_url
 
     def step(target: str, method: HopMethod) -> bool:
@@ -302,6 +427,60 @@ def resolve_url(
     def set_status(status: int) -> None:
         if res.chain:
             res.chain[-1].status = status
+        else:
+            res.start_status = status
+
+    def follow_button(html: str) -> bool:
+        """Walk the board's Apply button; True when ``res`` now holds that walk's result."""
+        try:
+            targets = board_apply_targets(html, url, ctx, boards, button_cache)
+        except _TransientButton as exc:
+            res.transient, res.error = True, f"Apply button not read: {exc}"[:300]
+            return False
+        for target in targets:
+            key = normalize_url(target)
+            if key in seen or not _http_target(target):
+                continue
+            left = max_hops - len(res.chain) - 1
+            if left < 0:
+                return False
+            cached = button_cache.get(f"walk:{key}") if button_cache is not None else None
+            if isinstance(cached, Resolution):
+                sub = copy.deepcopy(cached)
+            else:
+                sub = resolve_url(
+                    target,
+                    ctx,
+                    max_hops=left,
+                    browser_fallback=browser_fallback,
+                    classes=boards,
+                    button_cache=button_cache,
+                    _seen=set(seen),
+                )
+                if button_cache is not None:
+                    button_cache[f"walk:{key}"] = copy.deepcopy(sub)
+            if _reached_posting(sub, boards):
+                hop = ApplyHop(
+                    url=target,
+                    host=host_of(target),
+                    method="meta",
+                    via="button",
+                    status=sub.start_status,
+                )
+                res.chain.append(hop)
+                res.chain.extend(sub.chain)
+                res.status, res.final_url, res.ats = sub.status, sub.final_url, sub.ats
+                res.fetched, res.error = sub.fetched, sub.error
+                return True
+            if boards.employer_or_ats(sub.final_url or sub.start_url):
+                # The job's own posting was found (behind a wall, or failing): the board copy
+                # stands, but no link from the text may replace it.
+                res.own_posting_seen = True
+            if sub.transient:
+                res.transient = True
+                res.error = (sub.error or "transient failure after the Apply button")[:300]
+                return False
+        return False
 
     while True:
         while (dest := unwrap(url)) is not None:
@@ -370,8 +549,16 @@ def resolve_url(
             if looks_like_login(html):
                 _stop_at_login(res, previous, url)
                 return res
+            if (
+                boards.is_aggregator(host_of(url))
+                and not host_in(host_of(url), NO_BUTTON_HOSTS)
+                and len(res.chain) < max_hops
+                and follow_button(html)
+            ):
+                return res
 
         res.fetched = True
+        res.final_url = url
         res.ats = ats_name(url) or "unknown"
         if html and looks_expired(html):
             res.status = ApplyStatus.expired
@@ -394,6 +581,10 @@ class Candidate:
     members: set[int] = field(default_factory=set)
     seen_at: str = ""  # the latest last_seen_at among those members (ISO)
     capture: bool = False  # supplied by an extension capture linked to the group
+    # From the posting's text (bug 3bab68d): "matched" names this job (an id or the title),
+    # "fallback" is a cued ATS posting that does not and is tried only when nothing else
+    # reached an ATS or the employer's site.
+    hint: Literal["matched", "fallback"] | None = None
 
 
 def _usable(url: str | None) -> bool:
@@ -404,16 +595,23 @@ def _candidates(conn: sqlite3.Connection, group_id: int, classes: HostClasses) -
     """A group's distinct start URLs. Capture-supplied first: a board capture's decoded
     off-site Apply destination (``job_board_ref.apply_url``) and the pages of jobs added by an
     extension capture (``capture_log``). Then source-provided apply links (e.g. USAJOBS
-    ApplyURI), then posting URLs; canonical member first within each."""
+    ApplyURI), then posting URLs, then apply links named in the members' descriptions
+    (``_description_starts``); canonical member first within each."""
     members = group_members(conn, group_id)
     by_url: dict[str, Candidate] = {}
 
-    def add(url: str | None, member: int, seen: str | None, capture: bool) -> None:
+    def add(
+        url: str | None,
+        member: int,
+        seen: str | None,
+        capture: bool,
+        hint: Literal["matched", "fallback"] | None = None,
+    ) -> None:
         if not url or not _usable(url):
             return
         c = by_url.get(url)
         if c is None:
-            c = by_url[url] = Candidate(url, len(by_url))
+            c = by_url[url] = Candidate(url, len(by_url), hint=hint)
         c.members.add(member)
         c.seen_at = max(c.seen_at, seen or "")
         c.capture = c.capture or capture
@@ -450,7 +648,64 @@ def _candidates(conn: sqlite3.Connection, group_id: int, classes: HostClasses) -
     for col in ("apply_url", "url"):
         for m in members:
             add(m[col], m["id"], m["last_seen_at"], False)
+    for m in members:
+        for url, kind in _description_starts(m, classes):
+            if url not in by_url:  # a source's own link keeps its standing
+                add(url, m["id"], m["last_seen_at"], False, kind)
     return list(by_url.values())
+
+
+def _unwrapped(url: str) -> str | None:
+    """The destination a tracking link carries (up to three layers), else the URL itself;
+    None for a malformed one. Stored as the start, so a wrapper's other parameters (an Outlook
+    safelink's data=, which names the sender) never are."""
+    try:
+        for _ in range(3):
+            inner = unwrap(url)
+            if inner is None:
+                break
+            url = inner
+        return url if _usable(url) else None
+    except ValueError:  # urlsplit rejects e.g. "http://[object Object]"
+        return None
+
+
+def _description_starts(
+    member: sqlite3.Row, classes: HostClasses
+) -> list[tuple[str, Literal["matched", "fallback"]]]:
+    """A member's description links that may be starts (bug 3bab68d, review of PR 188).
+
+    Each link is graded by where it points once unwrapped. Never a tracker, an ATS link
+    trusted without a request (a USA Staffing questionnaire preview), or an ATS home or list
+    page. A link that names this job (``matches_job``) on an ATS posting or the employer's
+    site is ``matched``: an ordinary start. A cued ATS posting that does not name it (a stale
+    template link, another opening) is a ``fallback``. Everything else is dropped: uncued
+    links, and employer pages that do not name the job (careers home pages). When two links
+    both seem to name the job, neither is trusted as matched."""
+    own = [member["url"], member["apply_url"], member["external_id"]]
+    kept: list[tuple[str, bool, bool]] = []  # (url, matched, cued)
+    for h in description_hints(member["description_raw"], member["url"]):
+        url = _unwrapped(h.url)
+        if url is None or host_in(host_of(url), TRACKER_HOSTS):
+            continue
+        rule = match_ats(url)
+        if rule is not None and not rule.fetch:
+            continue
+        tier = classes.tier(url)
+        if tier == HostTier.ats and not ats_posting(url):
+            continue
+        if tier not in (HostTier.ats, HostTier.employer):
+            continue
+        matched = matches_job(url, title=member["title"], own=own)
+        if not matched and not (h.cued and tier == HostTier.ats):
+            continue
+        kept.append((url, matched, h.cued))
+    if sum(1 for _, matched, _ in kept if matched) > 1:
+        kept = [(u, False, c) for u, _, c in kept if c and classes.tier(u) == HostTier.ats]
+    out: list[tuple[str, Literal["matched", "fallback"]]] = []
+    for url, matched, _ in kept[:MAX_HINTS]:
+        out.append((url, "matched" if matched else "fallback"))
+    return out
 
 
 def _costs_requests(url: str) -> bool:
@@ -511,7 +766,8 @@ def rank_results(
     """Best first (bug 334d9eb): never a login wall while anything else exists; a capture of
     the employer's page; a closed page only on an ATS or the employer's site counts before
     live links (a dead tracker or board copy says nothing about the job, so it goes after
-    every live one); then by final host (ATS, employer, other, tracker, board); then status
+    every live one); then by final host (ATS, employer, other, tracker, board); the job's own
+    links before links from its text (bug 3bab68d); then status
     (live, expired, blocked, unresolved); then how many members reached the same final URL;
     then the most recently seen member."""
     agree: dict[str, set[int]] = {}
@@ -519,7 +775,9 @@ def rank_results(
         if res.final_url and not res.login:
             agree.setdefault(normalize_url(res.final_url), set()).update(cand.members)
 
-    def key(cr: tuple[Candidate, Resolution]) -> tuple[int, int, int, int, int, int, float, int]:
+    def key(
+        cr: tuple[Candidate, Resolution],
+    ) -> tuple[int, int, int, int, int, int, int, float, int]:
         cand, res = cr
         n = len(agree.get(normalize_url(res.final_url), ())) if res.final_url else 0
         tier = classes.tier(res.final_url)
@@ -529,6 +787,9 @@ def rank_results(
             0 if _capture_wins(cand, res, classes) else 1,
             int(dead_copy),
             int(tier),
+            # A link from the posting's text never beats the job's own link to the same tier,
+            # live or closed (review of PR 188).
+            int(cand.hint is not None),
             _RANK[res.status],
             -n,
             -_ts(cand.seen_at),
@@ -552,6 +813,8 @@ def _why(cand: Candidate, res: Resolution, classes: HostClasses, tried: int, tot
         reason = "this link no longer works, and no live copy was found"
     else:
         reason = TIER_LABEL[classes.tier(res.final_url)]
+    if cand.hint is not None:
+        reason += " · from a link in the posting's text"
     checked = f" · {tried} of {total} links checked" if total > 1 else ""
     return f"{route} · {reason}{checked}"
 
@@ -570,6 +833,7 @@ def _row_to_link(row: sqlite3.Row) -> ApplyLink:
         error=row["error"],
         chosen_by=row["chosen_by"],
         why=row["why"],
+        from_hint=bool(row["from_hint"]),
     )
 
 
@@ -579,17 +843,21 @@ def get_apply_link(conn: sqlite3.Connection, group_id: int) -> ApplyLink | None:
 
 
 def _save(conn: sqlite3.Connection, link: ApplyLink) -> None:
-    chain = json.dumps([h.model_dump() for h in link.chain])
+    # ``via`` only when set: chains stay as they were for every hop that is not a button.
+    chain = json.dumps(
+        [h.model_dump(exclude={"via"} if h.via is None else None) for h in link.chain]
+    )
     with _txn(conn):
         conn.execute(
             "INSERT INTO apply_link (job_group_id, start_url, final_url, chain, ats, "
-            "employer_host, status, resolved_at, verified_at, error, chosen_by, why) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "employer_host, status, resolved_at, verified_at, error, chosen_by, why, "
+            "from_hint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(job_group_id) DO UPDATE SET start_url = excluded.start_url, "
             "final_url = excluded.final_url, chain = excluded.chain, ats = excluded.ats, "
             "employer_host = excluded.employer_host, status = excluded.status, "
             "resolved_at = excluded.resolved_at, verified_at = excluded.verified_at, "
-            "error = excluded.error, chosen_by = excluded.chosen_by, why = excluded.why "
+            "error = excluded.error, chosen_by = excluded.chosen_by, why = excluded.why, "
+            "from_hint = excluded.from_hint "
             # A link the user set is never replaced automatically, even by a resolve or
             # re-verify that read the row before the user set it (bug e0d047b, review N1).
             "WHERE apply_link.chosen_by IS NOT 'user' OR excluded.chosen_by IS 'user'",
@@ -606,6 +874,7 @@ def _save(conn: sqlite3.Connection, link: ApplyLink) -> None:
                 link.error,
                 link.chosen_by,
                 link.why,
+                int(link.from_hint),
             ),
         )
 
@@ -649,26 +918,76 @@ def resolve_group(
     cands = _candidates(conn, group_id, classes)
     if not cands:
         raise ValueError(f"job_group {group_id} has no member with a usable URL")
-    results: list[tuple[Candidate, Resolution]] = []
-    fetches = 0
-    for cand in _fetch_order(cands, classes):
-        start = cand.url
+    own = [c for c in cands if c.hint != "fallback"]
+    fallbacks = [c for c in cands if c.hint == "fallback"]
+    cache: ButtonCache = {}
+
+    def walk(start: str) -> Resolution:
         if is_board_host(host_of(start)) and unwrap(start) is None:
             # No context at all: not even a robots.txt request goes to a board host.
-            res = Resolution(start, ApplyStatus.unresolved, start, error=NO_FETCH_ERROR)
-        else:
-            if _costs_requests(start):
-                if fetches >= max_fetches:
-                    continue
-                fetches += 1
-            ctx = ctx_factory(start)
-            try:
-                res = resolve_url(start, ctx, browser_fallback=browser_fallback)
-            finally:
-                ctx.close()
+            return Resolution(start, ApplyStatus.unresolved, start, error=NO_FETCH_ERROR)
+        ctx = ctx_factory(start)
+        try:
+            return resolve_url(
+                start,
+                ctx,
+                browser_fallback=browser_fallback,
+                classes=classes,
+                button_cache=cache,
+            )
+        finally:
+            ctx.close()
+
+    results: list[tuple[Candidate, Resolution]] = []
+    fetches = 0
+    for cand in _fetch_order(own, classes):
+        if _costs_requests(cand.url):
+            if fetches >= max_fetches:
+                continue
+            fetches += 1
+        res = walk(cand.url)
         results.append((cand, res))
         if _settled(cand, res, classes):
             break
+    # Fallbacks (cued ATS postings that do not name this job) only when no start of the job's
+    # own reached an ATS or the employer's site (live, closed, failing or behind a sign-in,
+    # directly or through a board's Apply button), none is a live board copy of the posting,
+    # and nothing failed in a way that may pass. Only a live ATS posting from one is kept
+    # (reviews of PR 188).
+    fallback_failed: list[str] = []
+    own_reached = any(
+        classes.employer_or_ats(r.final_url) or r.own_posting_seen for _, r in results
+    )
+    board_copy = any(
+        r.status == ApplyStatus.live
+        and not r.login
+        and classes.tier(r.final_url) == HostTier.aggregator
+        for _, r in results
+    ) or (
+        # a retry: the board copy stored by an earlier walk counts too (review round 3)
+        existing is not None
+        and existing.status == ApplyStatus.live
+        and not existing.from_hint
+        and not is_login_link(existing)
+        and classes.tier(existing.final_url) == HostTier.aggregator
+    )
+    if (
+        fallbacks
+        and not own_reached
+        and not board_copy
+        and not any(r.transient for _, r in results)
+    ):
+        for cand in fallbacks[:MAX_HINTS]:
+            res = walk(cand.url)
+            if (
+                res.status == ApplyStatus.live
+                and classes.tier(res.final_url) == HostTier.ats
+                and ats_posting(res.final_url or "")
+            ):
+                results.append((cand, res))
+                break
+            if res.transient:
+                fallback_failed.append(res.error or "transient failure")
     if not results:
         raise ValueError(f"job_group {group_id}: no start URL could be tried")
     win_cand, best = rank_results(results, classes)[0]
@@ -679,10 +998,20 @@ def resolve_group(
         and not best.login
         and classes.tier(best.final_url) <= HostTier.employer
     )
-    if defer_transient and not on_employer and not _settled(win_cand, best, classes):
+    if defer_transient:
         failed = [r.error or "transient failure" for _, r in results if r.transient]
-        if failed:
+        own_failed = [r for c, r in results if r.transient and c.hint is None]
+        if own_failed and win_cand.hint is not None and not on_employer:
+            # A link from the text never stands in for the job's own link on a bad night,
+            # unless it names the job and is live on the employer's site or ATS (c369bcc keeps
+            # such an answer).
             raise Deferred(group_id, failed)
+        if (
+            (failed or fallback_failed)
+            and not on_employer
+            and not _settled(win_cand, best, classes)
+        ):
+            raise Deferred(group_id, failed + fallback_failed)
     capture = _capture_wins(win_cand, best, classes)
     link = ApplyLink(
         job_group_id=group_id,
@@ -697,6 +1026,7 @@ def resolve_group(
         error=best.error,
         chosen_by="capture" if capture else None,
         why=_why(win_cand, best, classes, len(results), len(cands)),
+        from_hint=win_cand.hint == "fallback",
     )
     answered = best.status in (ApplyStatus.live, ApplyStatus.expired) or best.login
     if only_if_settled and existing is not None and not answered:
@@ -721,6 +1051,13 @@ def _keeps(current: ApplyLink, new: ApplyLink, classes: HostClasses) -> bool:
         return True
     if current.chosen_by == "capture" and new.chosen_by != "capture":
         return True
+    if (
+        new.from_hint
+        and not current.from_hint
+        and current.status == ApplyStatus.live
+        and not is_login_link(current)
+    ):
+        return True  # a link to another opening never replaces a live link to this job
     return link_rank(new, classes) > link_rank(current, classes)
 
 

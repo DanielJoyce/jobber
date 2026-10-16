@@ -124,7 +124,9 @@ def _blocks(conn: sqlite3.Connection) -> dict[tuple[str, str], list[_G]]:
         "SELECT a.final_url, a.job_group_id FROM apply_link a "
         "JOIN job_group g ON g.id = a.job_group_id "
         "WHERE a.status IN ('live', 'expired') AND a.final_url IS NOT NULL "
-        "AND g.method != 'manual'"
+        # A link from a posting's text that does not name the job (bug 3bab68d) says nothing
+        # about which job a group is.
+        "AND g.method != 'manual' AND NOT a.from_hint"
     ):
         k = normalize_apply_url(r[0])
         if k and _identifies_job(k):

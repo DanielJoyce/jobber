@@ -169,7 +169,7 @@ def chain_text(link: ApplyLink) -> str:
     """Compact chain: ``start-host → hop (unwrapped) → Workday · employer_host``."""
     parts = [host_of(link.start_url) or link.start_url]
     hops = [h.host for h in link.chain]
-    methods = [h.method for h in link.chain]
+    methods = [h.via or h.method for h in link.chain]
     tail = ats_display(link.ats) if link.ats and link.ats != "unknown" else None
     if tail and link.employer_host:
         tail = f"{tail} · {link.employer_host}"
@@ -179,7 +179,8 @@ def chain_text(link: ApplyLink) -> str:
         hops.pop()  # the last hop is the destination; the named ATS replaces it
         methods.pop()
     parts += [
-        f"{h} (unwrapped)" if m == "unwrap" else h for h, m in zip(hops, methods, strict=True)
+        f"{h} (unwrapped)" if m == "unwrap" else f"{h} (Apply button)" if m == "button" else h
+        for h, m in zip(hops, methods, strict=True)
     ]
     if tail:
         parts.append(tail)
