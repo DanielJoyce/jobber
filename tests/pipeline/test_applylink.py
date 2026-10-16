@@ -171,6 +171,65 @@ def test_3xx_chain_to_workday_canonicalized(resolve, server):
     assert res.status == ApplyStatus.live and res.final_url == WD + "/apply"
 
 
+class CountedBody(httpx.SyncByteStream):
+    """A response body that records each read, to prove which hops were downloaded."""
+
+    def __init__(self, data: bytes, reads: list[str], name: str) -> None:
+        self.data, self.reads, self.name = data, reads, name
+
+    def __iter__(self):
+        self.reads.append(self.name)
+        yield self.data
+
+
+def counted(status: int, body: str, reads: list[str], name: str, **headers: str) -> Handler:
+    def handle(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status, headers=headers, stream=CountedBody(body.encode(), reads, name)
+        )
+
+    return handle
+
+
+def test_redirect_hops_never_download_their_pages(resolve, server, conn):
+    """Bug a1cdb1d: an NLX-style 301 chain reads only status and Location at each redirect;
+    the one page the walk inspects (here a meta refresh, then the posting) is downloaded."""
+    reads: list[str] = []
+    junk = "<html><body>" + "x" * 40_000 + "</body></html>"
+    nlx, track = "https://nlx.example.org/a/1", f"{TRACK}/t/1"
+    hop = "https://careers.acme.example/go/1"
+    server.route(nlx, counted(301, junk, reads, "nlx", Location=track))
+    server.route(track, counted(302, junk, reads, "track", Location=hop))
+    meta = f'<meta http-equiv="refresh" content="0;url={WD}">'
+    server.route(hop, counted(200, meta, reads, "meta", **{"Content-Type": "text/html"}))
+    server.route(WD, counted(200, OPEN_PAGE, reads, "posting", **{"Content-Type": "text/html"}))
+    res = resolve(nlx)
+    assert [(h.method, h.status) for h in res.chain] == [
+        ("3xx", 302),
+        ("3xx", 200),
+        ("meta", 200),
+    ]
+    assert res.status == ApplyStatus.live and res.final_url == WD + "/apply"
+    assert reads == ["meta", "posting"]  # neither redirector's body was read
+    sizes = {
+        r["url"]: r["bytes"]
+        for r in conn.execute("SELECT url, bytes FROM fetch_log WHERE url NOT LIKE '%robots.txt'")
+    }
+    assert sizes == {nlx: 0, track: 0, hop: len(meta), WD: len(OPEN_PAGE)}
+
+
+def test_redirect_to_closed_posting_still_reads_the_final_page(resolve, server):
+    reads: list[str] = []
+    closed = "<p>This posting has closed.</p>"
+    server.route(f"{BOARD}/jobs/2", counted(301, "moved", reads, "board", Location=f"{TRACK}/c"))
+    server.route(
+        f"{TRACK}/c", counted(200, closed, reads, "closed", **{"Content-Type": "text/html"})
+    )
+    res = resolve(f"{BOARD}/jobs/2")
+    assert res.status == ApplyStatus.expired
+    assert reads == ["closed"]
+
+
 def test_already_apply_url_not_doubled(resolve, server):
     server.page(WD + "/apply")
     res = resolve(WD + "/apply")
