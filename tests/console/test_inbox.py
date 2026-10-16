@@ -745,3 +745,61 @@ def test_text_salary_hint_is_announced_to_screen_readers(client, seeded):
     t = client.get("/inbox").text
     assert '<span aria-hidden="true">~</span>' in t
     assert '<span class="sr-only">(parsed from the description)</span>' in t
+
+
+# --- minimum score filter (b2b8e5e) --------------------------------------------------------
+
+
+def _overalls(profile, conn):
+    data = inbox.inbox_items(conn, profile, bucket="A,B,C,D,E,F,G")
+    return {i.title: i.overall for b in data.buckets.values() for i in b}
+
+
+def test_min_score_hides_below_and_keeps_at_minimum(seeded, profile):
+    o = _overalls(profile, seeded)
+    cut = o["Strong"]
+    data = inbox.inbox_items(seeded, profile, min_score=cut)
+    titles = {i.title for b in data.buckets.values() for i in b}
+    assert {"Strong", "Bullseye"} <= titles  # at the minimum and above stay
+    assert not titles & {t for t, v in o.items() if v < cut}
+    assert data.below_min == sum(1 for t, v in o.items() if v < cut and t != "Mismatch")
+    assert data.counts["F"] == sum(1 for t in ("Stale one", "Stale two") if o[t] >= cut)
+
+
+def test_min_param_page_text_cookie_and_clear(client, profile, seeded):
+    o = _overalls(profile, seeded)
+    cut = o["Strong"]
+    below = [t for t, v in o.items() if v < cut and t != "Mismatch"]
+    assert below
+    r = client.get(f"/inbox?min={cut}")
+    assert r.status_code == 200
+    assert ">Bullseye</a>" in r.text and ">Strong</a>" in r.text
+    for t in below:
+        assert f">{t}</a>" not in r.text
+    assert f"{len(below)} below {cut} hidden" in r.text
+    assert f'value="{cut}"' in r.text and 'id="min-clear"' in r.text
+    again = client.get("/inbox")  # remembered: no ?min on the next visit
+    assert f"below {cut} hidden" in again.text and ">Stale one</a>" not in again.text
+    assert f"&amp;min={cut}" in again.text  # chips keep it
+    cleared = client.get("/inbox?min=")
+    assert "hidden; counts" not in cleared.text and ">Strong</a>" in cleared.text
+    assert "hidden; counts" not in client.get("/inbox").text  # cookie forgotten
+
+
+@pytest.mark.parametrize("raw", ["abc", "-5", "500", "1e999", "nan", "  "])
+def test_min_param_invalid_values_never_500(client, raw):
+    assert client.get("/inbox", params={"min": raw}).status_code == 200
+
+
+def test_min_param_clamps_and_text_is_ignored(client):
+    assert "below 100 hidden" in client.get("/inbox?min=500").text
+    client.get("/inbox?min=")
+    assert "hidden; counts" not in client.get("/inbox?min=abc").text
+    assert "below 0 hidden" in client.get("/inbox?min=-5").text
+
+
+def test_min_filter_combines_with_other_filters(client):
+    r = client.get("/inbox?min=50&state=CO&bucket=A,B&triaged=1")
+    assert r.status_code == 200
+    assert 'name="state" value="CO"' in r.text and 'name="bucket" value="A,B"' in r.text
+    assert 'name="triaged" value="1"' in r.text

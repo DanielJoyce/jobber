@@ -71,6 +71,8 @@ class Inbox:
     stale_summary: list[tuple[str, int]]
     shown: list[str]
     weekly_cost: float | None = None
+    min_score: int | None = None
+    below_min: int = 0  # shown-bucket jobs hidden by ``min_score``
 
 
 def _money(x: float) -> str:
@@ -229,6 +231,7 @@ def inbox_items(
     limit: int = 500,
     now: datetime | None = None,
     rejection_days: int = rejections.DEFAULT_WINDOW_DAYS,
+    min_score: int | None = None,
 ) -> Inbox:
     """Group untriaged job groups by bucket A..G (G only when asked for).
 
@@ -239,6 +242,10 @@ def inbox_items(
     ``triaged`` also lists the groups you already shortlisted or dismissed (marked on their
     row), still leaving out rejected postings you never acted on: the lists the Today
     outcomes chart links to.
+
+    ``min_score`` drops jobs whose overall is below it, before the counts are taken, so the
+    bucket counts reflect the filter; ``below_min`` is how many that hid (bucket G, hidden
+    unless asked for, is not counted). Every job has an overall, so none is exempt.
     """
     now = now or datetime.now(UTC)
     where = "" if (include_triaged or triaged) else " WHERE l.job_group_id IS NULL"
@@ -247,6 +254,9 @@ def inbox_items(
     index = rejections.RejectionIndex.load(conn, now, rejection_days)
     rejected = rejections.rejected_group_ids(conn, index) if index and not include_triaged else ()
     buckets: dict[str, list[InboxItem]] = {b: [] for b in BUCKETS}
+    picked = parse_letters(bucket)  # "A,B" -> ["A", "B"]; a lone "G" shows the hidden bucket
+    shown = picked or [b for b in BUCKETS if b != "G"]
+    below_min = 0
     for row in rows:
         if keep is not None and row["group_id"] not in keep:
             continue
@@ -254,6 +264,10 @@ def inbox_items(
         if row["group_id"] in rejected and not (triaged and acted):
             continue
         item = _item(conn, row, profile, now, index)
+        if min_score is not None and item.overall < min_score:
+            if item.bucket in shown:
+                below_min += 1
+            continue
         buckets[item.bucket].append(item)
     for items in buckets.values():
         items.sort(key=lambda i: (-i.overall, i.group_id))
@@ -261,14 +275,14 @@ def inbox_items(
     stale: Counter[str] = Counter()
     for item in buckets["F"]:
         stale.update(set(item.stale_skills))
-    picked = parse_letters(bucket)  # "A,B" -> ["A", "B"]; a lone "G" shows the hidden bucket
-    shown = picked or [b for b in BUCKETS if b != "G"]
     return Inbox(
         buckets={b: buckets[b][:limit] if b in shown else [] for b in BUCKETS},
         counts=counts,
         stale_summary=stale.most_common(5),
         shown=shown,
         weekly_cost=weekly_cost(conn, now),
+        min_score=min_score,
+        below_min=below_min,
     )
 
 

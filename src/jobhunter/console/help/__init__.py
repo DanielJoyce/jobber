@@ -37,6 +37,7 @@ class Topic:
 # The fixed list: a request names a topic only by looking it up here, never as a file path.
 TOPICS: tuple[Topic, ...] = (
     Topic("getting-started", "Getting started", "The order a fresh install meets things"),
+    Topic("inbox", "The Inbox", "Buckets, the minimum score filter"),
     Topic("profile-and-resume", "Profile and resume", "Preferences, the resume, what re-scores"),
     Topic("scorers", "Choosing a scorer", "Providers, keys and models"),
     Topic("models", "Choosing models", "Per-use models, models.toml and the Models page"),

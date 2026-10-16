@@ -85,6 +85,7 @@ pages are served by the console at `http://127.0.0.1:8808/help`.
 | Topic | What |
 |---|---|
 | [Getting started](src/jobhunter/console/help/getting-started.md) | The order a fresh install meets things |
+| [The Inbox](src/jobhunter/console/help/inbox.md) | Buckets, the minimum score filter |
 | [Profile and resume](src/jobhunter/console/help/profile-and-resume.md) | Preferences, the resume, what re-scores |
 | [Choosing a scorer](src/jobhunter/console/help/scorers.md) | Providers, keys and models |
 | [Choosing models](src/jobhunter/console/help/models.md) | Per-use models, models.toml and the Models page |

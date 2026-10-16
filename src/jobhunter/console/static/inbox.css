@@ -58,3 +58,6 @@ summary.bucket-head { cursor: pointer; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 24px; font-size: 0.8rem; color: var(--text-secondary); }
 kbd { font-family: inherit; font-size: 0.75rem; border: 1px solid var(--axis); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; margin-right: 3px; color: var(--text-primary); background: var(--surface-1); }
 .flag.employer-rejection { text-decoration: none; border-color: var(--status-warning); }
+
+.minscore { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 12px; color: var(--text-primary); }
+.minscore input[type="number"] { width: 5.5em; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); color: var(--text-primary); font: inherit; }
