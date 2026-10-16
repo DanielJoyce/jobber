@@ -822,7 +822,7 @@ so a new field defaults to restart until someone looks at it.
 
 | Reload in place | Restart |
 |---|---|
-| `fetch.respect_robots`, `default_rps`, `user_agent_contact`, `timeout_s`, `max_retries` (read per `FetchContext`: `core/fetch/context.py:140`, `165`, `168`, `382`, `484`) | `paths.*` (all five) |
+| `fetch.respect_robots`, `default_rps`, `user_agent_contact`, `timeout_s`, `max_retries`, `hosts` (read per `FetchContext`: `core/fetch/context.py:140`, `165`, `168`, `382`, `484`) | `paths.*` (all five) |
 | `scoring.screen_scorer`, `deep_scorer`, `daily_cap_usd`, `weekly_cap_usd`, `deep_shortlist`, `employer_rejection_days` | `console.host`, `port`, `public_port` |
 | `scoring.openrouter.*`, `openai_compat.*`, `local.*` except `api_key_env` and `catalog_cache` (scorers are built per run) | `fetch.global_concurrency` |
 | `mail.alerts_address`, `label`, `fallback_sender_domains`, `fallback_senders` (S9), `client_secrets_path` (read on use; the console only stats it) | `scoring.*.api_key_env`, `scoring.openrouter.catalog_cache` |

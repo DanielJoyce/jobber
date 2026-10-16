@@ -84,7 +84,11 @@ def _validators() -> list[tuple[str, str]]:
 # Reviewed: neither raises with the input in its message. A new validator fails this test until
 # someone checks its messages against the value-free rule (validation_lines hides any
 # value_error message for a field not on SHOWN_VALUES anyway).
-REVIEWED_VALIDATORS = [("Paths", "_resolve_defaults"), ("Settings", "_derive_catalog_cache")]
+REVIEWED_VALIDATORS = [
+    ("Fetch", "_merge_host_defaults"),
+    ("Paths", "_resolve_defaults"),
+    ("Settings", "_derive_catalog_cache"),
+]
 
 
 def test_custom_validators_are_reviewed():

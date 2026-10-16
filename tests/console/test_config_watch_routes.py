@@ -10,6 +10,7 @@ from typing import Any, get_args
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from jobhunter import config
 from jobhunter import config_watch as cw
@@ -90,7 +91,12 @@ def apply(client: TestClient, console: Console, **kw: Any):
 
 # --- every reloadable field changed --------------------------------------------------------------
 
-LITERAL_ALT = {"apply.runner": "api", "apply.effort": "high"}
+LITERAL_ALT = {
+    "apply.runner": "api",
+    "apply.effort": "high",
+    # Every built-in host, so the merged table is exactly this (config.DEFAULT_HOST_RATES).
+    "fetch.hosts": {"nlx.jobsyn.org": {"rps": 2.0}, "usnlx.com": {"rps": 1.5}},
+}
 
 
 def changed_value(leaf: str, old: Any) -> Any:
@@ -121,7 +127,7 @@ def toml_value(v: Any) -> str:
     if isinstance(v, list):
         return "[" + ", ".join(f'"{x}"' for x in v) + "]"
     if isinstance(v, dict):
-        return "{ " + ", ".join(f"{k} = {toml_value(x)}" for k, x in v.items()) + " }"
+        return "{ " + ", ".join(f'"{k}" = {toml_value(x)}' for k, x in v.items()) + " }"
     return f'"{v}"'
 
 
@@ -154,6 +160,8 @@ def test_apply_swaps_every_reloadable_field_and_pages_show_it(console):
     for leaf in config.leaf_fields():
         want = changed_value(leaf, config.field_value(old, leaf))
         got = config.field_value(new, leaf)
+        if isinstance(got, dict):  # fetch.hosts holds models
+            got = {k: v.model_dump() if isinstance(v, BaseModel) else v for k, v in got.items()}
         if leaf in config.RELOADABLE:
             assert str(got) == str(want) or got == want, leaf
         else:

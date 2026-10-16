@@ -402,7 +402,7 @@ class FetchContext:
         client = self.session()
         url = str(request.url)
         attempts = self.settings.fetch.max_retries + 1
-        interval = 1.0 / self.rate_limit.rps
+        interval, _ = self._rate_interval(request.url.host)
         gsem = ratelimit.global_semaphore(self.settings.fetch.global_concurrency)
         detail = ""
         status: int | None = None
@@ -474,11 +474,20 @@ class FetchContext:
         raise TransientFetchError(url, f"{detail} after {attempt + 1} attempt(s)", status=status)
 
     def spacing(self, url: str) -> tuple[float, str]:
-        """Seconds between requests to ``url``'s host, and why: the source's rate limit, or the
-        robots Crawl-delay when that is larger (read from cache only). For progress logging."""
-        interval = 1.0 / self.rate_limit.rps
+        """Seconds between requests to ``url``'s host, and why: the source's rate limit or the
+        host's ``[fetch.hosts]`` override, or the robots Crawl-delay when that is larger (read
+        from cache only). For progress logging."""
+        interval, why = self._rate_interval(httpx.URL(url).host)
         crawl = self._crawl_delay(url)
-        return (crawl, "robots Crawl-delay") if crawl > interval else (interval, "rate limit")
+        return (crawl, "robots Crawl-delay") if crawl > interval else (interval, why)
+
+    def _rate_interval(self, host: str) -> tuple[float, str]:
+        """Seconds between requests to ``host`` before Crawl-delay, and why: a
+        ``[fetch.hosts]`` override (specs/008#defaults) beats the source's rate limit."""
+        override = self.settings.fetch.host_rps(host)
+        if override is not None:
+            return 1.0 / override, "per-host override"
+        return 1.0 / self.rate_limit.rps, "rate limit"
 
     def _crawl_delay(self, url: str) -> float:
         """Robots Crawl-delay for the URL's origin, if its rules are already cached; else 0.
@@ -558,7 +567,7 @@ class FetchContext:
             try:
                 self._limiter.acquire(
                     _host_key(httpx.URL(request.url)),
-                    1.0 / self.rate_limit.rps,
+                    self._rate_interval(httpx.URL(request.url).host)[0],
                     clock=self._clock,
                     sleep=self._sleep,
                     jitter=self.rate_limit.jitter,
