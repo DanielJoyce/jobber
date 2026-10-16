@@ -1040,16 +1040,47 @@ def test_a_pastes_fallback_link_never_groups_another_job_into_it(conn, factory, 
 
 def test_matched_employer_page_is_kept_when_the_redirector_fails(conn, factory, server):
     """c369bcc keeps a live answer on the employer's site on a bad night; a link that names
-    the job is such an answer too."""
+    the job by its id number is such an answer too."""
     emp = "https://www.mongodb.com/careers/jobs/senior-software-engineer-8189170"
     server.page(emp)
     server.route(REDIRECTOR, httpx.Response(503))
     server.route(NLX_PAGE, httpx.Response(503))
-    gid = nlx_group(conn, f"<p>[Apply here]({emp})</p>")
+    gid = nlx_group(conn, f"<p>[Apply here]({emp})</p>", external_id="8189170")
     link = resolve_group(
         conn, gid, now=NOW, ctx_factory=factory, defer_transient=True, only_if_better=True
     )
     assert (link.status, link.final_url, link.from_hint) == (ApplyStatus.live, emp, False)
+
+
+SIBLING = "https://www.mongodb.com/careers/jobs/senior-software-engineer-denver-7778"
+SIB_DESC = f'<p>We are also hiring in Denver: <a href="{SIBLING}">apply here</a></p>'
+
+
+def test_title_matched_employer_page_never_stands_in_on_a_bad_night(conn, factory, server):
+    """Bug 5c1d738: a link in the text that names the job by title words alone may be a
+    same-title opening elsewhere (Denver). When the job's own links fail tonight, nothing is
+    stored; the walk is tried again."""
+    server.page(SIBLING)
+    server.route(REDIRECTOR, httpx.Response(503))
+    server.route(NLX_PAGE, httpx.Response(503))
+    gid = nlx_group(conn, SIB_DESC)
+    with pytest.raises(Deferred):
+        resolve_group(
+            conn, gid, now=NOW, ctx_factory=factory, defer_transient=True, only_if_better=True
+        )
+    assert get_apply_link(conn, gid) is None
+
+
+def test_title_matched_employer_page_loses_to_the_own_posting_on_a_good_night(
+    conn, factory, server
+):
+    serve_nlx_chain(server)
+    server.page(SIBLING)
+    gid = nlx_group(conn, SIB_DESC)
+    link = resolve_group(
+        conn, gid, now=NOW, ctx_factory=factory, defer_transient=True, only_if_better=True
+    )
+    assert link.final_url == EMPLOYER_POSTING + "?gh_jid=8189170"
 
 
 @pytest.mark.parametrize("code", [500, 502, 503, 429])
@@ -1113,3 +1144,142 @@ def test_button_to_a_posting_behind_its_ats_sign_in_is_never_closed(
     link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
     assert (link.status, link.final_url) == (ApplyStatus.live, final)
     assert all(str(r.url).split("?")[0] != login.split("?")[0] for r in server.requests)
+
+
+# ─── an ATS posting behind its own sign-in, downstream (bug 5c1d738) ───────
+
+
+def _signin_group(conn, server) -> int:
+    """NLx board copy whose Apply button reaches a Workday posting that 302s to Workday's
+    own sign-in page."""
+    serve_nlx_chain(server)
+    server.redirect(DE_LINK, WD_POST, 301)
+    server.redirect(WD_POST, WD_LOGIN)
+    return nlx_group(conn)
+
+
+def test_posting_behind_its_ats_sign_in_is_a_settled_live_link(conn, factory, server):
+    from jobhunter.console import detail
+    from jobhunter.pipeline import applylink
+    from jobhunter.pipeline.apply_attempts import unsettled
+
+    gid = _signin_group(conn, server)
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.status, link.final_url) == (ApplyStatus.live, WD_POST + "/apply")
+    assert link.chain[-1].url == WD_LOGIN  # the sign-in step stays on record
+    stored = get_apply_link(conn, gid)
+    assert not applylink.is_login_link(stored)
+    assert not applylink.needs_reresolve(stored)
+    assert gid not in applylink.login_wall_groups(conn, 25)
+    assert detail.apply_button(conn, gid, NOW, stored).label == "Apply on Workday ↗"
+    assert not unsettled(conn, stored)  # an ATS posting: nothing to retry
+    assert applylink.reverify_due(stored, NOW + timedelta(days=3))
+
+
+def test_posting_behind_its_ats_sign_in_is_not_rewalked_nightly(conn, factory, server):
+    """It used to read as a login wall: re-walked every night, and one bad night at Workday
+    swapped it for the board copy for good."""
+    from jobhunter.pipeline.applylink import reresolve_login_walls
+
+    gid = _signin_group(conn, server)
+    resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    server.route(WD_POST, httpx.Response(503))
+    before = len(server.requests)
+    reresolve_login_walls(conn, now=NOW + timedelta(days=1), ctx_factory=factory)
+    assert len(server.requests) == before
+    assert get_apply_link(conn, gid).final_url == WD_POST + "/apply"
+
+
+@pytest.mark.parametrize(
+    ("post", "login", "final"),
+    [(WD_POST, WD_LOGIN, WD_POST + "/apply"), (TALEO_POST, TALEO_LOGIN, TALEO_POST)],
+    ids=["workday", "taleo"],
+)
+def test_reverify_agrees_with_the_walk_at_the_ats_sign_in(
+    conn, factory, server, post, login, final
+):
+    """The walk keeps a posting that sends to its ATS's own sign-in as live; a re-verify that
+    meets the same redirect keeps it live and verified, never blocked or closed."""
+    from jobhunter.pipeline import applylink
+
+    server.redirect(post.split("?")[0], login)
+    gid = add_member_group(conn, {"url": post, "apply_url": post})
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert (link.status, link.final_url) == (ApplyStatus.live, final)
+    assert not applylink.is_login_link(link)
+    server.redirect(final.split("?")[0], login)
+    later = NOW + timedelta(days=2)
+    got = applylink.reverify(conn, gid, now=later, ctx_factory=factory)
+    assert (got.status, got.error, got.verified_at) == (ApplyStatus.live, None, later)
+    assert all(str(r.url).split("?")[0] != login.split("?")[0] for r in server.requests)
+
+
+@pytest.mark.parametrize(
+    ("post", "home"),
+    [
+        ("https://boards.greenhouse.io/cas/jobs/4012345", "https://boards.greenhouse.io/cas"),
+        ("https://boards.greenhouse.io/sso/jobs/4012345", "https://boards.greenhouse.io/sso"),
+        ("https://boards.greenhouse.io/saml/jobs/4012345", "https://boards.greenhouse.io/saml"),
+        ("https://boards.greenhouse.io/login/jobs/4012345", "https://boards.greenhouse.io/login"),
+        (
+            "https://www.governmentjobs.com/careers/cas/jobs/4012345/analyst",
+            "https://www.governmentjobs.com/careers/cas",
+        ),
+        (
+            "https://acme.wd5.myworkdayjobs.com/en-US/CAS/job/Austin/Analyst_R1",
+            "https://acme.wd5.myworkdayjobs.com/en-US/CAS",
+        ),
+        (
+            "https://acme.wd5.myworkdayjobs.com/en-US/SSO/job/Austin/Analyst_R1",
+            "https://acme.wd5.myworkdayjobs.com/en-US/SSO",
+        ),
+    ],
+)
+def test_closed_posting_on_a_board_with_a_login_word_slug_is_closed(
+    conn, factory, server, post, home
+):
+    """Bug 5c1d738: a board slug that reads like a sign-in word (cas, sso, saml, login) is a
+    board home, not the ATS's sign-in page: a posting sent there is closed, by the walk and by
+    a re-verify."""
+    from jobhunter.pipeline import applylink
+
+    server.redirect(post, home + "?error=true")
+    gid = add_member_group(conn, {"url": post, "apply_url": post})
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert link.status == ApplyStatus.expired
+    final = applylink.match_ats(post).canonical(post)
+    conn.execute(
+        "UPDATE apply_link SET status = 'live', final_url = ?, verified_at = ?",
+        (final, (NOW - timedelta(days=2)).isoformat()),
+    )
+    server.redirect(applylink._fetchable(final), home + "?error=true")
+    got = applylink.reverify(conn, gid, now=NOW, ctx_factory=factory)
+    assert got.status == ApplyStatus.expired
+
+
+def test_only_the_ats_own_sign_in_paths_count():
+    from jobhunter.pipeline.ats_rules import match_ats
+
+    wd, taleo = match_ats(WD_POST), match_ats(TALEO_POST)
+    assert wd.is_sign_in(WD_LOGIN)
+    assert wd.is_sign_in("https://acme.wd5.myworkdayjobs.com/External/login")
+    assert not wd.is_sign_in("https://acme.wd5.myworkdayjobs.com/en-US/CAS")
+    assert not wd.is_sign_in("https://acme.wd5.myworkdayjobs.com/en-US/SSO?error=true")
+    assert not wd.is_sign_in("https://other.taleo.net/careersection/iam/accessmanagement/login.jsf")
+    assert taleo.is_sign_in(TALEO_LOGIN)
+    assert not taleo.is_sign_in("https://acme.taleo.net/careersection/sso/jobsearch.ftl")
+    gh = match_ats("https://boards.greenhouse.io/cas/jobs/1")
+    assert not gh.is_sign_in("https://boards.greenhouse.io/cas")
+    assert not gh.is_sign_in("https://boards.greenhouse.io/login")
+
+
+def test_another_sign_in_after_an_ats_page_still_stops_the_walk(conn, factory, server):
+    """Only the ATS's own sign-in counts as a step: a Workday posting sent to an employer's
+    SSO is still a wall, and the row is a login link."""
+    from jobhunter.pipeline import applylink
+
+    server.redirect(WD_POST, "https://sso.acme.com/login")
+    gid = add_member_group(conn, {"url": WD_POST, "apply_url": WD_POST})
+    link = resolve_group(conn, gid, now=NOW, ctx_factory=factory)
+    assert link.status == ApplyStatus.blocked
+    assert applylink.is_login_link(link)

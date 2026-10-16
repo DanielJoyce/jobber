@@ -148,9 +148,19 @@ class AtsRule:
     canonicalize: Callable[[str], str]
     # False: trust the URL as given and make no request (USA Staffing via USAJOBS ApplyURI).
     fetch: bool = True
+    # The ATS's own sign-in page, which a posting may redirect to on the way to applying
+    # (bug 5c1d738). Only this path counts: a board slug such as ``cas`` or ``sso`` on the
+    # same ATS is a board home, where a closed posting lands.
+    sign_in: re.Pattern[str] | None = None
 
     def is_posting(self, url: str) -> bool:
         return bool(self.posting.search(urlsplit(url).path))
+
+    def is_sign_in(self, url: str) -> bool:
+        """This ATS's own sign-in page (Workday ``.../login``, Taleo ``login.jsf``)."""
+        if self.sign_in is None or match_ats(url) is not self:
+            return False
+        return bool(self.sign_in.search(urlsplit(url).path))
 
     def canonical(self, url: str) -> str:
         return self.canonicalize(url) if self.is_posting(url) else url
@@ -162,6 +172,7 @@ ATS_RULES: tuple[AtsRule, ...] = (
         ("*.myworkdayjobs.com", "*.myworkdaysite.com"),
         re.compile(r"/(?:job|details)/[^/]+"),
         _append_segment("apply"),
+        sign_in=re.compile(r"^/(?:[a-z]{2}-[a-z]{2}/)?(?:recruiting/[^/]+/)?[^/]+/login/?$", re.I),
     ),
     AtsRule(
         "greenhouse",
@@ -195,7 +206,13 @@ ATS_RULES: tuple[AtsRule, ...] = (
         re.compile(r"^/[^/]+/\d+"),
         _as_is,
     ),
-    AtsRule("taleo", ("*.taleo.net",), re.compile(r"jobdetail|requisition", re.I), _as_is),
+    AtsRule(
+        "taleo",
+        ("*.taleo.net",),
+        re.compile(r"jobdetail|requisition", re.I),
+        _as_is,
+        sign_in=re.compile(r"/careersection/iam/accessmanagement/login\.jsf$", re.I),
+    ),
     AtsRule(
         "neogov",
         ("governmentjobs.com", "www.governmentjobs.com", "schooljobs.com", "www.schooljobs.com"),
