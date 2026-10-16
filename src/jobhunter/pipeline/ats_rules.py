@@ -234,6 +234,7 @@ OTHER_ATS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("paycom", ("*.paycomonline.net",)),
     ("comeet", ("www.comeet.com",)),
     ("dover", ("app.dover.com",)),
+    ("infor", ("*.inforcloudsuite.com",)),
 )
 
 

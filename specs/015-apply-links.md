@@ -29,11 +29,42 @@ New pipeline step after `resolve` ([004](004-ingest-pipeline.md)), implemented i
    response includes an `ApplyURI` field, so federal jobs usually resolve with no extra
    requests. For other sources, the adapter's `resolve()` extracts the "Apply" link from the
    detail page it has already fetched.
+   Links the stored description gives (`pipeline/apply_hints.py`, bug 3bab68d), read from
+   `description_raw` at resolve time (no refetch, no column backfill), each graded by where it
+   points once unwrapped:
+   - *matched* (it shares a number of four digits or more with the job's own links or id, or
+     carries every word of the title, and no own link on the same host names another number):
+     an ordinary start on an ATS posting or the employer's site. Ranked after the job's own
+     results on the same tier, live or closed.
+   - *fallback* (cued by "apply" text, an ATS posting, not matched): tried only when no own or
+     matched start reached an ATS or the employer's site (live, closed, failing or behind a
+     sign-in, directly or through a board's button), no own start is a live board copy, and
+     nothing failed transiently; kept only when it ends live on an ATS posting
+     (`ats_posting`). The row has `from_hint = 1`, and its URLs are never used to merge groups
+     (`dedupe_url`, `dedupe_xstate`) or to match mail alerts, pastes, captures or pages.
+   - dropped: uncued links that are not matched, ATS home and list pages (`ats_posting`: hosts
+     known only by name count only with a posting shape, e.g. Infor short links), employer
+     pages that are not matched, trackers, other hosts, USA Staffing links (trusted only from
+     ApplyURI), and boilerplate (privacy, arbitration, accommodation, accessibility, EEO,
+     referral, talent pool, "how to apply"), read before and after the link. Two matched
+     links in one description are both demoted to fallbacks.
 2. **Unwrap known redirectors without fetching.** Many tracking links carry the destination in a
    query parameter (`url=`, `dest=`, `target=`, `u=`). A table of known redirector hosts and their
    parameter names unwraps them locally, which needs no request.
 3. **Follow the rest.** HTTP 3xx via `Location`, `<meta http-equiv="refresh">`, and simple
    `window.location = "…"` assignments in an inline script. At most 8 hops, with loop detection.
+   A page on a job board or aggregator (a board copy, e.g. a dejobs.org or usnlx.com page) is
+   not the posting: its off-site Apply button (to an ATS, the employer or a tracker; never a
+   login page or a USA Staffing link) is walked, and that walk replaces the board copy only
+   when it ends live off the boards, or closed on an ATS or the employer's site (the job is
+   then closed); a wall, an error or another board keeps the board copy,
+   and a passing failure marks the result transient (the nightly pass defers). The hop is
+   stored with `method: "meta"` and `via: "button"`, so older code still parses the chain.
+   USAJOBS postings are never walked past. One button walk and one detail-JSON request per
+   posting per group.
+   NLx and dejobs.org pages are client-rendered shells, so their button is the detail JSON's
+   `other.application_link` when it qualifies (often a state job bank, which does not), else
+   its `link` (`de.jobsyn.org/<GUID>10`; one request to `microsites.dejobs.org`).
 4. **Stop at a known applicant tracking system** and canonicalize to its apply URL. Rules per
    ATS, each tested against fixtures:
 

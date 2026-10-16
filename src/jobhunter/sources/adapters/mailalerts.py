@@ -142,7 +142,8 @@ class DedupeIndex:
         full = {j["id"] for j in jobs}
         for r in conn.execute(
             "SELECT a.final_url, g.canonical_job_id FROM apply_link a "
-            "JOIN job_group g ON g.id = a.job_group_id WHERE a.final_url IS NOT NULL"
+            "JOIN job_group g ON g.id = a.job_group_id WHERE a.final_url IS NOT NULL "
+            "AND NOT a.from_hint"  # a fallback link does not name the job (bug 3bab68d)
         ):
             key = normalize_apply_url(r[0])
             if key and r[1] in full:

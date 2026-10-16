@@ -40,6 +40,31 @@ the Apply button do not wait on a slow site the next morning:
 
 On an equal score, a job never tried goes before one being tried again.
 
+Where a link can start: the source's own apply link and the posting page, plus links the
+posting's description gives for applying ("Apply at https://...", an **Apply here** link):
+
+- A link that names this job (its requisition number, or every word of its title, levels
+  such as "I" and "II" included) on an
+  applicant tracking system such as Workday or Greenhouse, or on the employer's own site, is
+  tried like the job's own links; a live tracking-system posting wins straight away, with no
+  walk through the job board's redirect. It never beats the job's own link to the same kind
+  of site, even a closed one.
+- A link that says "apply" but does not name the job (a template paragraph, another opening)
+  is tried only when nothing of the job's own reached a tracking system or the employer's site
+  (even closed, failing or behind a sign-in) and no job board copy of the posting was found,
+  and only a live tracking-system posting from it is kept. The job page says such a link came
+  "from a link in the posting's text", and it never merges two jobs into one or matches mail
+  or pages to the job.
+- Never used: careers home pages and job lists, staffing agencies and other job boards, and
+  links about privacy, arbitration, accommodations, accessibility, EEO, referrals or talent
+  pools, or "how to apply" guides.
+
+When a link lands on a job board's copy of the posting (NLx, dejobs.org, a state job bank), its
+Apply button is followed on to the employer; the job page shows that step as
+**(Apply button)**. If it finds the posting closed on the employer's site or tracking
+system, the job shows as closed. If it ends at a sign-in page, an error or another job board,
+the board copy is kept. A USAJOBS posting is the federal apply page and is not walked past.
+
 Only jobs whose apply link is not resolved yet are taken: no link yet, a link that could not
 be resolved, or a link that ends on a job board's copy of the posting (such as the NLX
 `*.dejobs.org` mirrors) or a tracking redirect rather than the employer's site or applicant

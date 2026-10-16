@@ -156,8 +156,9 @@ def _url_matches(conn: sqlite3.Connection, key: str) -> set[int]:
     if one:
         for r in conn.execute(
             "SELECT a.job_group_id, a.start_url, a.final_url FROM apply_link a "
-            "WHERE instr(lower(a.start_url), ?) > 0 "
-            "OR instr(lower(coalesce(a.final_url, '')), ?) > 0",
+            "WHERE (instr(lower(a.start_url), ?) > 0 "
+            "OR instr(lower(coalesce(a.final_url, '')), ?) > 0) "
+            "AND NOT a.from_hint",  # a fallback link does not name the job (bug 3bab68d)
             (host, host),
         ):
             if key in (_key(r[1]), _key(r[2])):

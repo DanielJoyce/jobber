@@ -126,9 +126,14 @@ def _other(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _http(url: Any) -> str | None:
-    if isinstance(url, str) and urlsplit(url).scheme in ("http", "https") and urlsplit(url).netloc:
-        return url
-    return None
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url)
+        _ = parts.hostname  # raises for a malformed host such as "[object Object]"
+    except ValueError:
+        return None
+    return url if parts.scheme in ("http", "https") and parts.netloc else None
 
 
 def apply_link(item: dict[str, Any]) -> str | None:
@@ -141,6 +146,46 @@ def apply_link(item: dict[str, Any]) -> str | None:
         return link
     guid = item.get("guid")
     return APPLY_REDIRECTOR.format(guid=guid) if guid else None
+
+
+# A posting page on an NLx site or a DirectEmployers microsite (``<company>.dejobs.org``):
+# ``/<location>/<title>/<GUID>/job/`` or ``/<GUID>/job/``.
+_PAGE_HOSTS = re.compile(r"(?:^|\.)(?:usnlx\.com|dejobs\.org)$")
+_PAGE_GUID = re.compile(r"/([0-9A-Fa-f]{32})/job/?$")
+
+
+def page_guid(url: str) -> str | None:
+    """The posting GUID of an NLx or dejobs.org job page, else None."""
+    parts = urlsplit(url)
+    if not _PAGE_HOSTS.search((parts.hostname or "").lower()):
+        return None
+    m = _PAGE_GUID.search(parts.path)
+    return m.group(1).upper() if m else None
+
+
+def page_apply_urls(url: str, ctx: FetchContext) -> tuple[str | None, str | None]:
+    """Where an NLx or dejobs.org job page's Apply button goes (bug 3bab68d), as
+    ``(application_link, link)`` from the posting's detail JSON.
+
+    The pages are client-rendered shells with no button in the HTML; the button opens the
+    posting's ``other.application_link`` when it has one (often a state job bank), else its
+    ``link`` (``de.jobsyn.org/<GUID>10``, which redirects to the employer). One request through
+    ``ctx``; ``(None, None)`` when the page is not a posting or the JSON is not an object.
+    Fetch errors propagate, so the caller can tell a passing failure (429, 5xx, an unreadable
+    robots.txt) from a missing posting."""
+    guid = page_guid(url)
+    if guid is None:
+        return None, None
+    resp = ctx.get(DETAIL_API.format(guid=guid), headers={"Accept": "application/json"})
+    if not 200 <= resp.status < 300:
+        return None, None  # gone (404) or refused: no button to follow
+    try:
+        item = resp.json()
+    except ValueError:
+        return None, None
+    if not isinstance(item, dict):
+        return None, None
+    return _http(_other(item).get("application_link")), _http(item.get("link"))
 
 
 _MD_HEADING = re.compile(r"^#{1,6}\s*(.*)$")

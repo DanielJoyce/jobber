@@ -791,17 +791,18 @@ def test_a_better_walk_restarts_the_count(conn, settings, factory, monkeypatch):
     put_link(conn, gid, "live", BOARD)
     conn.execute(
         "INSERT INTO apply_link_attempt (job_group_id, attempts, last_at, walk_version) "
-        "VALUES (?, 5, ?, 1)",
-        (gid, (NOW - timedelta(days=3)).isoformat()),
+        "VALUES (?, 5, ?, ?)",
+        (gid, (NOW - timedelta(days=3)).isoformat(), applylink.WALK_VERSION),
     )
     assert apply_pass.select_groups(conn, PROFILE, now=NOW) == []
-    monkeypatch.setattr(applylink, "WALK_VERSION", 2)
-    monkeypatch.setattr(apply_attempts, "WALK_VERSION", 2)
-    monkeypatch.setattr(apply_pass, "WALK_VERSION", 2)
+    newer = applylink.WALK_VERSION + 1
+    monkeypatch.setattr(applylink, "WALK_VERSION", newer)
+    monkeypatch.setattr(apply_attempts, "WALK_VERSION", newer)
+    monkeypatch.setattr(apply_pass, "WALK_VERSION", newer)
     assert [c.group_id for c in apply_pass.select_groups(conn, PROFILE, now=NOW)] == [gid]
     resolve(conn, settings, factory)
     row = conn.execute("SELECT attempts, walk_version FROM apply_link_attempt").fetchone()
-    assert tuple(row) == (1, 2)
+    assert tuple(row) == (1, newer)
 
 
 def test_tries_are_stamped_when_they_start(conn, settings, factory):
